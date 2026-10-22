@@ -487,10 +487,15 @@ export interface RunEvent {
 
 /** A layout file this young may belong to a run another process has not saved to the index yet. */
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
-const MAX_RUNS_KEPT = 300;
+const DEFAULT_RUNS_KEPT = 300;
+const DEFAULT_ARCHIVED_KEPT = 500;
+/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs (live ones are never pruned) the index keeps. */
+function keepLimit(name: string, fallback: number): number {
+  const n = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
-const MAX_ARCHIVED_KEPT = 500;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
 const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
@@ -1871,8 +1876,8 @@ export class RunStore extends EventEmitter {
       if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
     }
     const stalePool = [
-      ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
-      ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
+      ...all.filter((r) => !r.archived).slice(keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)),
+      ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
@@ -1950,7 +1955,7 @@ export class RunStore extends EventEmitter {
    * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 1 s debounce
    * for as long as an agent is streaming, so this runs about once a second on the main thread of
    * the process also serving the cockpit's SSE, while retention lets the index reach
-   * `MAX_RUNS_KEPT + MAX_ARCHIVED_KEPT` records — and in the ordinary single-process case every one
+   * the configured run caps — and in the ordinary single-process case every one
    * of them is ours, so a `z.array(...)` parse would spend all of its time validating records the
    * next line throws away. The id check is cheap and rejects nearly everything; zod sees what is
    * left, which is normally nothing. Per-record also degrades better than `open()` can afford to:

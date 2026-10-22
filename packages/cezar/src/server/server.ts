@@ -4541,7 +4541,16 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
   const runsRoutes = new Hono<ProjectApiEnv>()
-    .get('/runs', (c) => c.json(c.get('project').store.listRuns().map(withUsage)))
+    // `workflowDef` is ~1.3 MB per run; the list leaves it out (`?full=1` opts back in, GET /runs/:id is always complete).
+    .get('/runs', (c) => {
+      const full = c.req.query('full') === '1';
+      return c.json(
+        c
+          .get('project')
+          .store.listRuns()
+          .map((run) => withUsage(full || !run.workflowDef ? run : { ...run, workflowDef: undefined })),
+      );
+    })
 
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
