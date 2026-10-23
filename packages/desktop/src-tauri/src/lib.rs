@@ -199,6 +199,45 @@ const INIT_SCRIPT: &str = r#"
   })();
 "#;
 
+/// Runs in every frame; acts only in a DIRECT child of the cockpit — the task Preview's page. It
+/// reports where that page is after it moves without a load (`pushState`, `replaceState`, a hash
+/// change), so the Preview's address bar and Reload follow it. Same protocol as the Design Mode
+/// picker's copy (`packages/cezar/src/server/preview/location-reporter.ts`); it only reports,
+/// to the parent's own origin, and only when that parent is a cockpit origin.
+const FRAME_SCRIPT: &str = r#"
+  (function () {
+    if (window.parent === window || window.parent !== window.top || window.__cezarLocation) return;
+    var ancestors = location.ancestorOrigins;
+    var parentOrigin = ancestors && ancestors.length > 0 ? ancestors[0] : null;
+    if (!parentOrigin || !/^(https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?|tauri:\/\/localhost|https?:\/\/tauri\.localhost)$/.test(parentOrigin)) return;
+    window.__cezarLocation = true;
+    var last = null;
+    var length = history.length;
+    function report(how) {
+      var url = location.href;
+      if (url === last) return;
+      last = url;
+      length = history.length;
+      try { window.parent.postMessage({ source: 'cezar-preview', type: 'location', url: url, how: how }, parentOrigin); } catch (e) {}
+    }
+    function wrap(name, how) {
+      var original = history[name];
+      if (typeof original !== 'function') return;
+      history[name] = function () {
+        var result = original.apply(this, arguments);
+        report(how);
+        return result;
+      };
+    }
+    wrap('pushState', 'push');
+    wrap('replaceState', 'replace');
+    function moved() { report(history.length > length ? 'push' : 'pop'); }
+    window.addEventListener('popstate', moved);
+    window.addEventListener('hashchange', moved);
+    report('load');
+  })();
+"#;
+
 fn platform_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -221,6 +260,7 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
         // default size and position before jumping to where the user left it.
         .visible(false)
         .initialization_script(INIT_SCRIPT.replace("__PLATFORM__", platform_name()))
+        .initialization_script_for_all_frames(FRAME_SCRIPT)
         // The cockpit's own drag-and-drop (view tabs onto the workspace, column headers, files into
         // the composer) is HTML5; Tauri's native file-drop handler swallows those events on macOS.
         .disable_drag_drop_handler()
