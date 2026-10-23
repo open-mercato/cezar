@@ -24,6 +24,7 @@ import {
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -238,6 +239,8 @@ async function configuredModelProvider(
 }
 /** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
 const CANCEL_GRACE_MS = 1_000;
+/** How long a settled task's agent CLI gets to exit on its own before its leftovers are reaped (#1411). */
+const LEFTOVER_SETTLE_GRACE_MS = 5_000;
 /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
  *  On an idle cockpit a task starts the instant it is created, so the wait begins together with
  *  the namer call — and a cold `claude -p` alone takes more than five seconds (run 269606ac
@@ -1993,6 +1996,14 @@ export class RunManager {
     // Startup is the one moment we know which runs are still live, so sweep every other
     // per-run directory here — bounded to `<dataDir>/tmp`, never a sibling.
     sweepAgentTmpDirs(this.dataDir, live.map((r) => r.id));
+    // Same moment for processes (#1411): a run that settled while cezar was down, or whose
+    // session crashed, never reached `dropActive`'s reap.
+    const liveIds = new Set(live.map((r) => r.id));
+    this.reapLeftoverProcesses(
+      this.store.listRuns().filter((r) => !liveIds.has(r.id)).map((r) => r.id),
+      0,
+      'left running by a settled task (found at startup)',
+    );
     for (const run of live) {
       if (this.lifecycle.isBlocked(run.id)) {
         this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
@@ -2248,6 +2259,39 @@ export class RunManager {
     // there is no keep-count to respect and nothing left to recover from it. A
     // Continue (or an auto-resume) re-creates it through `agentEnv`.
     removeAgentTmpDir(this.dataDir, runId);
+    // Whatever the task started and left running (#1411) — same single terminal hook.
+    this.reapLeftoverProcesses([runId], LEFTOVER_SETTLE_GRACE_MS, 'still running after the task settled');
+  }
+
+  /** Is this run settled and not owned by a session again (a Continue inside the grace)? */
+  private runSettled(runId: string): boolean {
+    const run = this.store.getRun(runId);
+    return !!run && !this.active.has(runId) && isTerminalStatus(run.status);
+  }
+
+  /**
+   * Stop every process still carrying one of these runs' `CEZ_TASK_ID` (#1411) after `graceMs`,
+   * skipping any run that became live again, and note what was stopped on the run.
+   * Fire-and-forget: never delays or throws into the lifecycle.
+   */
+  private reapLeftoverProcesses(runIds: string[], graceMs: number, reason: string): void {
+    if (!taskProcessReapEnabled() || runIds.length === 0) return;
+    const ids = new Set(runIds);
+    const timer = setTimeout(() => {
+      void reapTaskProcesses({ match: (id) => ids.has(id), stillSettled: (id) => this.runSettled(id) })
+        .then((reaped) => {
+          for (const runId of ids) {
+            const mine = reaped.filter((p) => p.taskId === runId);
+            if (mine.length === 0) continue;
+            this.store.appendEvent(runId, {
+              type: 'lifecycle',
+              message: `stopped ${describeReaped(mine)} — ${reason}`,
+            });
+          }
+        })
+        .catch(() => undefined);
+    }, graceMs);
+    timer.unref?.();
   }
 
   // ---- task dispatch (spec 2026-09-10-dispatch) ----------------------------------------------

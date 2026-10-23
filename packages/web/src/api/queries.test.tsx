@@ -7,7 +7,7 @@ import { ApiError } from './client'
 import { createQueryClient } from './query-client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { ProjectScopeContext } from './project-scope-context'
-import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
+import type { GithubRefStatusData, HealthResponse } from '@open-mercato/cezar-api-client'
 import {
   refStatusRecheckAfter,
   useReferenceProjectId,
@@ -18,6 +18,8 @@ import {
   useRetryProviderAuth,
   useHealth,
   useHealthSubscription,
+  healthRecheckInterval,
+  FORGE_RECHECK_MS,
   useRunnerModels,
   useMarkRunSeen,
   useMarkRunUnseen,
@@ -655,6 +657,49 @@ describe('useHealth', () => {
     // The subscription lives once at the root (useHealthSubscription), NOT per useHealth reader,
     // so mounting a reader must open no socket and flap no subscribe/unsubscribe frame.
     expect(FakeHealthSocket.instances).toHaveLength(0)
+  })
+
+  // #1412: a remote cockpit has no health push, so an unresolved forge probe is re-read on a timer.
+  it.each([
+    ['local cockpit, cold forge', true, { kind: 'github' }, false],
+    ['remote, no forge remote', false, null, false],
+    ['remote, cold forge', false, { kind: 'github' }, FORGE_RECHECK_MS],
+    ['remote, failed forge', false, { kind: 'github', available: false, reason: 'x' }, FORGE_RECHECK_MS],
+    ['remote, working forge', false, { kind: 'github', available: true }, false],
+  ] as const)('healthRecheckInterval: %s', (_label, localHandoff, forge, expected) => {
+    const health = { ...HEALTH, forge, capabilities: { ...HEALTH.capabilities, localHandoff } } as unknown as HealthResponse
+    expect(healthRecheckInterval(health)).toBe(expected)
+  })
+
+  it('healthRecheckInterval never polls without an explicit remote answer', () => {
+    expect(healthRecheckInterval(undefined)).toBe(false)
+    expect(healthRecheckInterval({ forge: { kind: 'github' } } as unknown as HealthResponse)).toBe(false)
+  })
+
+  it('re-reads health on a remote cockpit until the forge probe answers, then stops', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const remote = { ...HEALTH, capabilities: { ...HEALTH.capabilities, localHandoff: false } }
+      let probed = false
+      fetchMock.mockImplementation(async () => {
+        const forge = probed ? { kind: 'github', available: true } : { kind: 'github' }
+        probed = true
+        return json({ ...remote, forge })
+      })
+      const { result } = renderHook(() => useHealth(), { wrapper: wrapper() })
+
+      await waitFor(() => expect(result.current.data?.forge).toEqual({ kind: 'github' }))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await act(() => vi.advanceTimersByTimeAsync(FORGE_RECHECK_MS))
+      await waitFor(() => expect(result.current.data?.forge).toEqual({ kind: 'github', available: true }))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+
+      await act(() => vi.advanceTimersByTimeAsync(FORGE_RECHECK_MS * 3))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // #369 moved server-side: the branch-switched-in-a-terminal case is now the `health` topic on

@@ -10,6 +10,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { promisify } from 'node:util';
 
 import { z } from 'zod';
@@ -63,7 +64,7 @@ async function viaGh(repo: string): Promise<OpenPull[]> {
   const { stdout } = await exec(
     'gh',
     ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(LIMIT), '--json', 'number,title,author,headRefName,isDraft,updatedAt,url'],
-    { timeout: TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 },
+    { timeout: TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024, env: ghEnv() },
   );
   return z
     .array(ghRowSchema)

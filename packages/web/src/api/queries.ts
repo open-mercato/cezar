@@ -954,13 +954,29 @@ export function useHealthSubscription(): void {
  * A pure read: the HTTP query is the authoritative bootstrap and the reconcile target
  * (global-events.tsx invalidates it on reconnect/visibility), and live updates arrive by the
  * one local-only `useHealthSubscription` at the root folding pushed `/api/v1/ws` frames into this same cache
- * (#369 — this replaced the old 5 s `refetchInterval` per tab). Safe to call from as many
+ * (#369 — this replaced the old 5 s `refetchInterval` per tab; the one timer left is the remote
+ * forge recheck below, #1412). Safe to call from as many
  * components as need health; they all read one cache and none of them touches the socket. */
 export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
     queryFn: ({ signal }) => getHealth({ signal }),
+    refetchInterval: (query) => healthRecheckInterval(query.state.data),
   })
+}
+
+/** How often a remote cockpit re-reads health while its forge probe is unresolved (#1412). */
+export const FORGE_RECHECK_MS = 30_000
+
+/**
+ * Remote cockpits get no health push (`useHealthSubscription` is local-only), so a forge probe
+ * that was cold or failing when health was read would stay that way until a reload — hiding PR
+ * actions long after GitHub answered (#1412). Re-read only while a recognized forge is unconfirmed.
+ */
+export function healthRecheckInterval(health: HealthResponse | undefined): number | false {
+  // Only an explicit remote answer polls — the same fail-closed read as useHealthSubscription.
+  if (health?.capabilities?.localHandoff !== false) return false
+  return health.forge != null && health.forge.available !== true ? FORGE_RECHECK_MS : false
 }
 
 /**

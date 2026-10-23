@@ -708,7 +708,10 @@ function codexAskQuestions(value: unknown): AskQuestion[] | null {
   return parseAskRequest({ questions })?.questions ?? null;
 }
 
-function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
+/** Read the ask card's `Header: answer` lines back into Codex's per-question answers. Only a
+ *  multi-select answer is a comma list — a single-select one may be the user's own text, and
+ *  "Use X, but only for Y" is one answer, not two. */
+export function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
   const lines = text.split(/\r?\n/);
   const hasStructuredAnswer = questions.some((question) => lines.some((line) => line.startsWith(`${question.header}:`)));
   const answers: Record<string, { answers: string[] }> = {};
@@ -717,7 +720,12 @@ function userInputAnswers(questions: AskQuestion[], text: string): Record<string
     const matching = lines.find((line) => line.startsWith(prefix));
     const raw = matching?.slice(prefix.length).trim() ?? (!hasStructuredAnswer && index === 0 ? text.trim() : '');
     answers[question.id ?? String(index)] = {
-      answers: raw === '' ? [] : raw.split(',').map((answer) => answer.trim()).filter(Boolean),
+      answers:
+        raw === ''
+          ? []
+          : question.multiSelect === true
+            ? raw.split(',').map((answer) => answer.trim()).filter(Boolean)
+            : [raw],
     };
   }
   return answers;
