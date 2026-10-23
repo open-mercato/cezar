@@ -8,6 +8,7 @@ import {
   connectProvider,
   continueRun,
   createRun,
+  createRunPr,
   deleteRun,
   finishRun,
   getGithub,
@@ -569,6 +570,49 @@ describe('response parsing', () => {
     const data = await getGithub()
     expect(data.available).toBe(false)
     expect(data.reason).toBe('gh is not installed')
+  })
+})
+
+/** telemetry 9119d21a: the PR POST lost its connection while push + `gh pr create` ran on. */
+describe('createRunPr survives a lost response', () => {
+  const created = () =>
+    new Response(JSON.stringify({ url: 'https://github.com/acme/demo/pull/9', dryRun: false }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    })
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('asks once more after a dropped request and returns the PR', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(created())
+    const result = createRunPr('run-1', { draft: false })
+    await vi.runAllTimersAsync()
+    await expect(result).resolves.toEqual({ url: 'https://github.com/acme/demo/pull/9', dryRun: false })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastCall().body).toEqual({ draft: false })
+  })
+
+  it('keeps the first error when the server stays unreachable', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    const result = createRunPr('run-1').catch((e: unknown) => e)
+    await vi.runAllTimersAsync()
+    const error = (await result) as ApiError
+    expect(error.status).toBe(0)
+    expect(error.message).toBe('cannot reach the cezar server (/api/v1/runs/run-1/pr)')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a refusal the server answered', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'git push failed — denied', manual: 'git merge cez/abc' }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const error = (await createRunPr('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(409)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 

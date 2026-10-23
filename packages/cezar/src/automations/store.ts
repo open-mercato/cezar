@@ -4,13 +4,13 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import lockfile from 'proper-lockfile';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { join } from 'node:path';
 import {
@@ -351,7 +351,7 @@ export class AutomationStore {
   }
 
   private load(): void {
-    mkdirSync(this.dataDir, { recursive: true });
+    // Read-only: every writer creates the dir itself, so an uncreatable one cannot fail boot (5af5aec6).
     this.loadDefinitions();
     this.stateFile = this.readJson(STATE, automationStateFileSchema, {
       version: 1,
@@ -436,7 +436,7 @@ export class AutomationStore {
     const path = join(this.dataDir, filename);
     const temporary = `${path}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, path);
+    renameSyncWithRetry(temporary, path);
   }
 
   private appendNdjson(filename: string, value: unknown): void {
@@ -456,7 +456,7 @@ export class AutomationStore {
     writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
       mode: 0o600,
     });
-    renameSync(temporary, path);
+    renameSyncWithRetry(temporary, path);
   }
 
   private warnOnce(key: string, message: string): void {

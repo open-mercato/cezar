@@ -192,6 +192,23 @@ describe('model identity wiring (dry run)', () => {
     expect(saved?.steps.find((step) => step.id === 'second')?.modelIdentity).toBe('anthropic/haiku');
   }, 40_000);
 
+  it('a step pinned to another runner does not inherit the task model (telemetry 43bdda11)', async () => {
+    const claudeStep: WorkflowDef = {
+      name: 'step-runner-override',
+      source: 'built-in',
+      steps: [
+        { id: 'work', runner: 'claude', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    writeFileSync(argsFile, '', 'utf8');
+    const record = manager.startRun(claudeStep, { task: 'do the thing', runner: 'codex', model: 'gpt-5.6-luna' });
+    await settle(record.id);
+    // The task's codex model never reaches Claude's `--model`; Claude picks its own default.
+    expect(capturedModel()).toBeUndefined();
+    expect(store.getRun(record.id)?.status).toBe('done');
+  }, 30_000);
+
   it('Claude gateway models run with their provider-qualified wire id', async () => {
     const id = await runToEnd({ task: 'do the thing', model: 'deepseek/deepseek-v4-flash' });
     const record = store.getRun(id);

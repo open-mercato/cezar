@@ -14,6 +14,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Settings → Agents (R6 Step 1.5): the form round-trip against a stateful `/api/v1/config` stub
@@ -28,6 +29,7 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
@@ -129,6 +131,7 @@ function serve({
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
+    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
     ...config,
   }
   const json = (payload: unknown, status = 200) =>
@@ -232,10 +235,12 @@ function renderAt(entry: string) {
   const client = gateSeededClient()
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client

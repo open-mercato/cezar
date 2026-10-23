@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
+import { workspaceQueryKeys } from '@/api/queries'
 
 import bashAndScreenshot from '../../../../cezar/src/core/__fixtures__/claude/bash-and-screenshot.expected.json'
 import failedAndDenied from '../../../../cezar/src/core/__fixtures__/claude/failed-and-denied.expected.json'
@@ -15,6 +16,7 @@ import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claud
 import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
 import {
+  AgentUpdateRequiredCard,
   ContextGroup,
   isNearBottom,
   OUTPUT_CLAMP_LINES,
@@ -55,6 +57,89 @@ describe('ProviderAuthRequiredCard', () => {
     const link = screen.getByRole('link', { name: 'Open provider settings' })
     expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
     expect(link.getAttribute('tabindex')).not.toBe('-1')
+  })
+
+  it('names the rejected agent account and links to Agent accounts (telemetry 9e4a95db)', () => {
+    // The listing never answers, so the label below can only come from the seeded cache.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.agentProfiles, { profiles: [
+      { id: 'work', provider: 'codex', label: 'Codex work' },
+      { id: 'work', provider: 'claude', label: 'Work login' },
+    ] })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+          <ProviderAuthRequiredCard incident={{
+            kind: 'provider-auth-required',
+            id: 'v1:2',
+            provider: 'claude',
+            authFailureId: 'incident-1',
+            profileId: 'work',
+          }} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(screen.getByRole('alert').textContent).toContain('This run needed Claude Code account “Work login” to be signed in')
+    expect(screen.queryByRole('link', { name: 'Open provider settings' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Open agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('AgentUpdateRequiredCard', () => {
+  const renderCard = () =>
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'opencode' }} />
+      </QueryClientProvider>,
+    )
+
+  it('asks the server to open the CLI update', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ opened: true, command: "'opencode' upgrade" }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      renderCard()
+      expect(screen.getByRole('alert').textContent).toContain('OpenCode needs an update')
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+      expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('/providers/opencode/update')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('shows the command to run when no terminal could be opened', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify({
+        error: 'No terminal emulator could be opened. Run this command manually.',
+        command: "'opencode' upgrade",
+      }), { status: 409, headers: { 'content-type': 'application/json' } }),
+    ))
+    try {
+      renderCard()
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Update OpenCode' })))
+      const manual = await screen.findByText("'opencode' upgrade")
+      expect(manual.tagName).toBe('CODE')
+      expect(screen.getByText(/No terminal emulator could be opened/)).toBeTruthy()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('offers no button for a CLI that cannot update itself', () => {
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <AgentUpdateRequiredCard incident={{ kind: 'agent-update-required', id: 'v2:3:update', provider: 'codex' }} />
+      </QueryClientProvider>,
+    )
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByRole('alert').textContent).toContain('the way you installed it')
   })
 })
 

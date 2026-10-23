@@ -18,7 +18,8 @@
  * after the agent; a bash launcher stays as it is unless its runner unwraps it (`cursor-agent`).
  *
  * Anywhere else — no desktop shell, not macOS, a program that does not resolve — the command is
- * returned untouched, so a missing binary still fails the spawn with the usual ENOENT and hint.
+ * returned untouched (bar a Windows `.cmd` shim, unwrapped by `spawnableCommand`), so a missing
+ * binary still fails the spawn with the usual ENOENT and hint.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -37,6 +38,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { spawnableCommand } from './windows-shim.ts';
 
 export const DISCLAIM_EXEC_FLAG = '--cez-disclaim-exec';
 
@@ -64,7 +66,7 @@ export function disclaimedCommand(
   childEnv: NodeJS.ProcessEnv | undefined,
   opts: DisclaimOptions = {},
 ): [string, string[]] {
-  if (!disclaimActive(opts)) return [program, [...args]];
+  if (!disclaimActive(opts)) return spawnableCommand(program, args, { platform: opts.platform });
   const trampoline = (opts.hostEnv ?? process.env).CEZ_DISCLAIM_EXEC!;
   const path = childEnv?.PATH ?? process.env.PATH;
   const resolved = resolveProgram(program, path);

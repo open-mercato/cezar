@@ -1,10 +1,24 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, type SpawnOptions } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import type { WorkflowDef } from './types.ts';
+
+// Root-lease fixtures measure command overlap, not developer login-profile
+// startup. Keep real command processes and stdio while excluding profile side effects.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (file: string, args: readonly string[], options?: SpawnOptions) => actual.spawn(
+      file,
+      file === 'bash' && args[0] === '-lc' ? ['--noprofile', '--norc', ...args] : args,
+      options ?? {},
+    ),
+  };
+});
 
 vi.mock('../git-worktree.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../git-worktree.ts')>();

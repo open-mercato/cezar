@@ -39,6 +39,40 @@ const LEGACY_RUN = {
   steps: [],
 };
 
+describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
+  let parent: string;
+
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), 'cez-store-ro-'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  it('opens a working in-memory store instead of throwing, and persists once the dir becomes creatable', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A FILE where `.ai` should be: mkdir fails on every platform and as root, like EPERM did.
+    const blocker = join(parent, '.ai');
+    writeFileSync(blocker, '');
+    const dataDir = join(blocker, 'cezar');
+
+    const store = RunStore.open(dataDir);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('task history in this project will not be saved'));
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'one' })).not.toThrow();
+    expect(live).toHaveLength(1);
+    expect(store.getRun(run.id)?.id).toBe(run.id);
+
+    rmSync(blocker);
+    store.appendEvent(run.id, { type: 'note', text: 'two' });
+    expect(readFileSync(join(dataDir, 'runs', `${run.id}.ndjson`), 'utf8')).toContain('"text":"two"');
+  });
+});
+
 describe('RunStore — directional usage persistence', () => {
   let dataDir: string;
 
@@ -2485,5 +2519,39 @@ describe('RunStore — janitor cost once its answer is settled (#540)', () => {
     });
 
     expect(store.getRun(run.id)?.referencedIssueCandidates).toEqual([issue(8)]);
+  });
+});
+
+describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-prune-'));
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps an old running parent and its dispatch root when new runs push it past the cap', () => {
+    const store = RunStore.open(dataDir);
+    let clock = Date.parse('2026-01-01T00:00:00.000Z');
+    const create = (title: string) => {
+      vi.setSystemTime((clock += 1_000));
+      return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
+    };
+    const root = create('root');
+    const parent = create('parent');
+    const stale = create('stale done run');
+    store.updateRun(root.id, { status: 'review', dispatch: { rootRunId: root.id } });
+    store.updateRun(parent.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    store.updateRun(stale.id, { status: 'done' });
+    for (let i = 0; i < 300; i++) create(`filler ${i}`);
+
+    expect(store.getRun(parent.id)).toBeDefined();
+    expect(store.getRun(root.id)).toBeDefined();
+    expect(store.getRun(stale.id)).toBeUndefined();
+    // The dispatch path's next write after creating a child: it threw `unknown run` before.
+    expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
   });
 });

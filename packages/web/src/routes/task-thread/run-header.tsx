@@ -1,10 +1,11 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
   CircleStopIcon,
   CopyIcon,
   EllipsisIcon,
@@ -17,21 +18,14 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
-import { Link, useNavigate } from '@/lib/project-router'
+import { cloneElement, Fragment, isValidElement, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
+import { Link } from '@/lib/project-router'
 
-import { ApiError, archiveRun, cancelRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
 import {
-  queryKeys,
   useHealth,
-  useMarkRunSeen,
-  useMarkRunUnseen,
-  useOpenTargets,
   usePatchRun,
-  usePinRun,
   useProjectRepoBase,
   useReferenceProjectId,
-  useProviderStatus,
   useRuns,
 } from '@/api/queries'
 import type { ApiRun, OpenTarget } from '@open-mercato/cezar-api-client'
@@ -59,9 +53,9 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
+import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
-import { usableRunners } from '@/lib/provider-status'
 import {
   formatCost,
   prNumber,
@@ -74,19 +68,17 @@ import { usageMetricVisibility } from '@/lib/token-metrics'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
-  cliTargetResumes,
-  cliTargetRunner,
   isRunActive,
   resumeHint,
   runActionFlags,
 } from './run-actions'
-import { GIT_ACTION_ICONS, GitActions } from '../task-git/git-toolbar'
+import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
-import { RunConfirmDialog, type RunConfirmKind } from './run-confirm-dialog'
+import { RunConfirmDialog } from './run-confirm-dialog'
 import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
-import { useFinishRun } from './use-finish-run'
 import { useDraft } from './thread-draft'
+import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -98,14 +90,12 @@ import { useDraft } from './thread-draft'
  * Two deliberate omissions, both seams rather than gaps:
  *  - **VS Code** (spec: `POST /api/runs/:id/open-in-editor`) — the endpoint does not exist yet;
  *    R5 adds it driver-detected. Faking the button against nothing would be dishonest.
- *  - **Hosted mode** (spec §"Deployment modes"): when R5's `capabilities.localHandoff` lands in
- *    `/api/health`, Terminal (and VS Code) must disappear entirely and the resume hint must drop
- *    its `cd`. Today's HealthResponse carries no such field, so Terminal renders per current
- *    (local-only) behavior — the gate goes in where the flags are read, `runActionFlags` callers.
+ *  - **Hosted mode** (spec §"Deployment modes"): Terminal disappears when `capabilities.localHandoff`
+ *    is false (`useCanOpenTerminal`); the resume hint still carries its `cd`.
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes'
+export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph' | 'notes' | 'terminal' | 'preview'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
  *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
@@ -128,6 +118,12 @@ interface RunHeaderProps {
   /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
    *  they share this header but do not own the continuation draft or its pending selection. */
   continuationEngine?: ReactNode
+  /** Replaces the route tab links — the task workspace's layout strip (spec `2026-10-07-task-workspace` §5.2). */
+  tabs?: ReactNode
+  /** Icon controls in the title row, just before the collapse button — the workspace's full view. */
+  headerActions?: ReactNode
+  /** Span the whole window, like the workspace columns under it, instead of the reading measure. */
+  wide?: boolean
 }
 
 // Every prop must participate: adding one without a comparator is a compile error.
@@ -136,6 +132,9 @@ const headerPropComparators = {
   tab: (before, after) => before.tab === after.tab,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
+  tabs: (before, after) => before.tabs === after.tabs,
+  headerActions: (before, after) => before.headerActions === after.headerActions,
+  wide: (before, after) => before.wide === after.wide,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
     before.planTally?.total === after.planTally?.total,
 } satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
@@ -151,12 +150,15 @@ function RunHeaderView({
   tab = 'session',
   onMarkedUnread,
   continuationEngine,
+  tabs,
+  headerActions,
+  wide = false,
 }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const budget = budgetStop(run)
-  const flags = runActionFlags(run)
+  const canTerminal = useCanOpenTerminal(run)
   const hint = resumeHint(run)
-  const actions = useRunActions(run, onMarkedUnread)
+  const actions = useRunActions(run, { onMarkedUnread })
   // The Session tab's composer carries Continue (its send button) and ■ Stop, so the header only
   // repeats them on the tabs that have no composer of their own to hold them.
   const composerOwnsRunControls = tab === 'session'
@@ -184,6 +186,7 @@ function RunHeaderView({
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
   const refs = useRunReferences(run)
+  const [collapsed, setCollapsed] = useHeaderCollapsed()
 
   return (
     <ReferenceStatusProvider projectId={refs.projectId} requests={refs.requests}>
@@ -191,7 +194,7 @@ function RunHeaderView({
         data-slot="run-header"
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
       >
-        <div className="mx-auto w-full max-w-[var(--measure)]">
+        <div className={cn('mx-auto w-full', !wide && 'max-w-[var(--measure)]')}>
           {/* `min-h-[30px]` is the git button's own height (Button size `sm`): the row keeps it
               whether or not a git step is on offer, so the header — and the thread under it —
               does not jump when the button appears or goes. */}
@@ -203,6 +206,21 @@ function RunHeaderView({
             <span className="ml-auto flex shrink-0 items-center gap-2.5">
               {/* The run's state, top right, beside the git button it decides. */}
               <RunStatus attention={attention} queuePosition={queuePosition} />
+              {headerActions}
+              {/* Desktop: fold the meta row, the step rail and the resume hint away, leaving the
+                  title and the tabs. Phones have their own disclosure (#765) below. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                data-action="collapse-header"
+                className="hidden text-muted-foreground md:inline-flex"
+                aria-label={collapsed ? 'Expand header' : 'Collapse header'}
+                aria-expanded={!collapsed}
+                title={collapsed ? 'Expand header' : 'Collapse header'}
+                onClick={() => setCollapsed(!collapsed)}
+              >
+                {collapsed ? <ChevronsUpDownIcon aria-hidden="true" /> : <ChevronsDownUpIcon aria-hidden="true" />}
+              </Button>
               {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
                   it would be a permanently disabled-looking chevron next to always-visible content. */}
               <Button
@@ -230,7 +248,11 @@ function RunHeaderView({
               accessibility tree instead of lingering as invisible-but-focusable chips. `md:block`
               keeps the desktop header exactly as it was — this is a narrow-viewport fix, and a
               desktop reader who has always seen these at a glance should not have to click for them. */}
-          <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
+          <div
+            id={detailsId}
+            data-slot="run-details"
+            className={cn(detailsOpen ? 'block' : 'hidden', collapsed ? 'md:hidden' : 'md:block')}
+          >
             <MetaRow
               run={run}
               references={refs.references}
@@ -239,11 +261,13 @@ function RunHeaderView({
               // button is the title row's, top right. There is no Finish here: ending a waiting
               // session sits beside the "waiting for your reply" hint over the composer, and
               // accepting a review is the review panel's ✓ Accept.
+              // No `ml-auto` on the actions: the usage before them already pushes right, and a second
+              // auto margin would split the free space and strand cost and agent mid-row.
               actions={
-                <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 md:flex">
+                <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
                   <TaskItemActions run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
                   {/* Terminal is folded into the Open in… menu to save room. */}
-                  <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+                  <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
                 </div>
               }
               continuationEngine={continuationEngine}
@@ -266,56 +290,64 @@ function RunHeaderView({
 
           <div
             data-slot="run-tabs"
-            // Up to six segments (Graph and Notes included) no longer fit a 320px phone (the narrowest viewport this header
+            // Up to seven segments (Graph, Notes and Preview included) no longer fit a 320px phone (the narrowest viewport this header
             // supports) — contained scroll here, not page-wide overflow on `main`.
             className="mt-1.5 flex items-end gap-1 overflow-x-auto md:mt-2.5 md:overflow-x-visible"
           >
-            <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
-              Session
-            </TabLink>
-            <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
-              Changes
-            </TabLink>
-            <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
-              Commits
-            </TabLink>
-            <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
-              Files
-            </TabLink>
-            {/* The live workflow graph (#1322) — every run with a definition: a step list opens as
-                its graph. */}
-            {run.workflowDef ? (
-              <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
-                Graph
-              </TabLink>
-            ) : null}
-            <TabLink to={`/tasks/${run.id}/notes`} active={tab === 'notes'}>
-              Notes
-            </TabLink>
-
-            {/* What the run has spent, and on what — on the tabs line, out of the way of the
-                actions above. Desktop only; phones read it in the details row. */}
-            <RunUsage
-              run={run}
-              showTokens={metricVisibility.tokens}
-              showCost={metricVisibility.cost}
-              continuationEngine={continuationEngine}
-              className="ml-auto hidden pb-1.5 md:flex"
-            />
+            {tabs ?? (
+              <>
+                <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+                  Session
+                </TabLink>
+                <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+                  Changes
+                </TabLink>
+                <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+                  Commits
+                </TabLink>
+                <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+                  Files
+                </TabLink>
+                {/* The live workflow graph (#1322) — every run with a definition: a step list opens as
+                    its graph. */}
+                {run.workflowDef ? (
+                  <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
+                    Graph
+                  </TabLink>
+                ) : null}
+                <TabLink to={`/tasks/${run.id}/notes`} active={tab === 'notes'}>
+                  Notes
+                </TabLink>
+                {/* The task's app, with Design Mode (spec 2026-10-09-design-mode). */}
+                <TabLink to={`/tasks/${run.id}/preview`} active={tab === 'preview'}>
+                  Preview
+                </TabLink>
+                {health.data?.capabilities?.terminal ? (
+                  <TabLink to={`/tasks/${run.id}/terminal`} active={tab === 'terminal'}>
+                    Terminal
+                  </TabLink>
+                ) : null}
+              </>
+            )}
           </div>
 
           {run.steps.length > 0 ? (
-            <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
+            <div className={cn('border-t border-border pt-1 pb-0 md:pt-2 md:pb-1', collapsed && 'md:hidden')}>
               <WorkflowSteps runId={run.id} steps={run.steps} />
             </div>
           ) : null}
 
-          {hint ? <ResumeHintLine hint={hint} /> : null}
+          {hint ? (
+            <div className={collapsed ? 'md:hidden' : undefined}>
+              <ResumeHintLine hint={hint} />
+            </div>
+          ) : null}
         </div>
 
         <RunConfirmDialog
           run={run}
           confirming={actions.confirming}
+          lifecycleDelete={actions.lifecycleDelete}
           onOpenChange={(open) => !open && actions.setConfirming(null)}
           onConfirm={(kind) => (kind === 'delete' ? actions.delete.mutate() : actions.cancel.mutate())}
         />
@@ -395,7 +427,9 @@ function TaskItemActions({
   const live = liveRunReason(run)
   const moreStop = showRunControls && flags.cancel
   // "End session" for a waiting run, on the tabs whose composer is not there to carry it.
-  const moreEnd = showRunControls && run.status === 'waiting'
+  const moreEnd = showRunControls && run.status === 'waiting' && flags.finish
+  // A worktree operation owns the task until it is resolved (#1358), live or not.
+  const gatedReason = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
   return (
     <span data-slot="task-item-actions" className="mx-1 flex items-center gap-0.5">
       {/* The three state toggles — read, pinned, archived — share ONE on-state (TOGGLE_ON_CLASS:
@@ -426,7 +460,7 @@ function TaskItemActions({
         pressed={Boolean(run.pinned)}
         unavailable={flags.pin ? undefined : 'Archived tasks can’t be pinned'}
         pending={actions.pin.isPending}
-        onClick={actions.pin.mutate}
+        onClick={() => actions.pin.mutate()}
         className={cn(run.pinned && TOGGLE_ON_CLASS)}
       >
         <PinIcon aria-hidden="true" />
@@ -438,7 +472,7 @@ function TaskItemActions({
         pressed={Boolean(run.archived)}
         unavailable={live}
         pending={actions.archive.isPending}
-        onClick={() => actions.archive.mutate()}
+        onClick={() => actions.archive.mutate(undefined)}
         className={cn(run.archived && TOGGLE_ON_CLASS)}
       >
         <ArchiveIcon aria-hidden="true" />
@@ -449,7 +483,7 @@ function TaskItemActions({
         slot="delete-run"
         label="Delete"
         title="Delete the task, its worktree and its branch"
-        unavailable={live}
+        unavailable={live ?? gatedReason}
         danger
         onClick={() => actions.setConfirming('delete')}
         className="ml-1"
@@ -549,37 +583,7 @@ function OpenInMenuForRun({
   canResume: boolean
   onResume: () => void
 }) {
-  const targets = useOpenTargets()
-  const providers = useProviderStatus()
-  const open = useMutation({
-    mutationFn: (target: string) => openRunIn(run.id, target),
-    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
-  })
-  const availableRunners = usableRunners(providers.data)
-  // The action routes remain authoritative for a stale browser. Once the complete status has
-  // arrived, hide only unavailable *agent* handoffs; editors, Finder, and file tools stay
-  // available because they do not launch a provider.
-  const agentAvailable = (runner: ApiRun['runner']) =>
-    !providers.isSuccess || availableRunners.includes(runner ?? 'claude')
-  const canResumeHere = canResume && agentAvailable(run.runner)
-  const choices: OpenInChoice[] = run.worktreePath
-    ? (targets.data?.targets ?? [])
-        .filter((target) => {
-          const runner = cliTargetRunner(target.id)
-          return runner === undefined || agentAvailable(runner)
-        })
-        // Agent-CLI targets (#402): the one matching this run's own runner resumes THIS run's
-        // session when one exists — label that explicitly so it reads as different from just
-        // opening the editor/file-manager entries. Every other CLI (wrong backend, or no session
-        // yet) still opens, just starts clean — no silent cross-backend resume attempt.
-        .map((target) => {
-          const resumes = cliTargetResumes(run, target.id)
-          return {
-            target,
-            ...(resumes ? { suffix: ' (resume)', title: "Resume this run's session" } : {}),
-          }
-        })
-    : []
+  const { choices, canResumeHere, open } = useRunOpenChoices(run, canResume)
   if (!canResumeHere && choices.length === 0) return null
 
   const copyPath = () => {
@@ -594,7 +598,7 @@ function OpenInMenuForRun({
   return (
     <OpenInMenu
       choices={choices}
-      onPick={(target) => open.mutate(target)}
+      onPick={open}
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (
@@ -617,110 +621,6 @@ function OpenInMenuForRun({
       }
     />
   )
-}
-
-/** The mutations + confirm state, bundled so the desktop bar and the mobile kebab drive the
- *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
-function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
-  const queryClient = useQueryClient()
-  const navigate = useNavigate()
-  const [confirming, setConfirming] = useState<RunConfirmKind | null>(null)
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-  const onError = (error: Error) => {
-    // Every 409 here says the same thing: the record these buttons were drawn from is not the run
-    // the server has (Continue on a run that is running again, Cancel on one that just finished).
-    // Refetch it, so the bar redraws to the truth instead of offering the same refused action —
-    // the composer's rule (deliver-prompt.ts) and the thread's healer (run-reconcile.ts), applied
-    // to the actions. `useSendMessage` in queries.ts has always done exactly this.
-    if (error instanceof ApiError && error.status === 409) void invalidate()
-    toast(error.message, { tone: 'danger' })
-  }
-
-  // Shared with the review panel's ✓ Accept (use-finish-run.ts) — the review-accept semantics
-  // must be ONE implementation, not two buttons that happen to agree today.
-  const finish = useFinishRun(run.id)
-  const archive = useMutation({
-    mutationFn: () => archiveRun(run.id, !run.archived),
-    onSuccess: invalidate,
-    onError,
-  })
-  // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
-  // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
-  // record, exactly like archive above.
-  const pinMutation = usePinRun()
-  const pin = {
-    isPending: pinMutation.isPending,
-    mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
-  }
-  // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
-  // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
-  // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
-  // and reinstate the receipt before the server's own answer lands.
-  const markUnreadMutation = useMarkRunUnseen()
-  const markUnread = {
-    isPending: markUnreadMutation.isPending,
-    mutate: () => {
-      // Before the mutation, so the Session tab's suppression is in place by the time the
-      // optimistic write re-renders the thread and re-evaluates its auto-mark-read effect.
-      onMarkedUnread?.()
-      markUnreadMutation.mutate(run.id, { onError })
-    },
-  }
-  // Mark read — the twin of the above, through the same optimistic hook the thread's own
-  // auto-read uses, so a click here and opening the task stamp the receipt identically.
-  const markReadMutation = useMarkRunSeen()
-  const markRead = {
-    isPending: markReadMutation.isPending,
-    mutate: () => markReadMutation.mutate(run.id, { onError }),
-  }
-  const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
-  const deleteMutation = useMutation({
-    mutationFn: () => deleteRun(run.id),
-    onSuccess: () => {
-      invalidate()
-      // The run is gone — so is this page. Home is the only honest destination.
-      void navigate('/')
-    },
-    onError,
-  })
-  const terminal = useMutation({
-    mutationFn: () => openRunInCli(run.id),
-    onError: (error: Error) => {
-      // The legacy 409 fallback: no terminal emulator → the server sends the manual command;
-      // put it on the clipboard so "no terminal" still ends with the user one paste away.
-      if (error instanceof ApiError && error.command) {
-        void copyToClipboard(error.command, 'No terminal found — command copied to clipboard.')
-        return
-      }
-      onError(error)
-    },
-  })
-
-  return {
-    finish,
-    archive,
-    pin,
-    markUnread,
-    markRead,
-    cancel,
-    delete: deleteMutation,
-    terminal,
-    confirming,
-    setConfirming,
-  }
-}
-
-type RunActions = ReturnType<typeof useRunActions>
-
-async function copyToClipboard(text: string, doneMessage: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-    toast(doneMessage)
-  } catch {
-    // No clipboard access (permissions, http) — show the command itself; it is the payload.
-    toast(`Run manually: ${text}`)
-  }
 }
 
 /**
@@ -936,23 +836,23 @@ function MetaRow({
           {part}
         </Fragment>
       ))}
-      {actions}
-      {/* Phones: usage stays here, behind the details disclosure (#765); from `md` it sits on the
-          tabs line. */}
+      {/* What the run has spent, and on what: at the row's end, before the actions, so the tab
+          row below carries navigation only. On phones it sits behind the details disclosure (#765). */}
       <RunUsage
         run={run}
         showTokens={showTokens}
         showCost={showCost}
         continuationEngine={continuationEngine}
-        className="ml-auto md:hidden"
+        className="ml-auto"
       />
+      {actions}
     </div>
   )
 }
 
 /** The task's references, resolved once for the whole header so every chip — the PR chips by the
  *  git button, the issue chip in the details row — is answered by the same status batch. */
-function useRunReferences(run: ApiRun) {
+export function useRunReferences(run: ApiRun) {
   // #526: a chip may be synthesized from a CEZ:PR / CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
@@ -1364,7 +1264,7 @@ function GitStepAndKebab({
     <>
       {/* The one git button, top right. Desktop only: on phones it leads the menu instead. */}
       <span className="hidden md:contents">
-        <GitActions action={git.action} onAction={git.onAction} />
+        <GitActions action={git.action} pending={git.pending} onAction={git.onAction} />
       </span>
       <ActionsKebab run={run} actions={actions} git={git} showRunControls={showRunControls} />
       {git.dialogs}
@@ -1373,8 +1273,11 @@ function GitStepAndKebab({
 }
 
 /** The <md action surface: everything the desktop rows offer, folded into one menu next to the
- *  status (the mockup's mobile pattern). Mirrors desktop item for item — the git step first, the
- *  state toggles in their one ON pattern, Stop only where the composer is not there to carry it. */
+ *  status (the mockup's mobile pattern). Rendered from the ⌘P palette's command list
+ *  (`buildTaskCommands`), so the two cannot disagree about what a run offers: the git step first,
+ *  then the state toggles in their one ON pattern, Stop only where the composer is not there to
+ *  carry it. Unlike the palette, a menu this small hides what is unavailable — except the git
+ *  step, whose disabled reason is the point. */
 function ActionsKebab({
   run,
   actions,
@@ -1386,10 +1289,47 @@ function ActionsKebab({
   git: RunGitStep
   showRunControls: boolean
 }) {
-  const flags = runActionFlags(run)
-  const live = liveRunReason(run)
-  const step = git.action
-  const unread = flags.markRead
+  const canTerminal = useCanOpenTerminal(run)
+  const commands = buildTaskCommands(
+    { run, canResume: canTerminal, git: git.action, gitPending: git.pending, workspace: null, terminalAvailable: false, openChoices: [], taskUrl: '' },
+    {
+      markRead: () => actions.markRead.mutate(),
+      markUnread: () => actions.markUnread.mutate(),
+      pin: () => actions.pin.mutate(),
+      archive: () => actions.archive.mutate(undefined),
+      rename: () => {},
+      finish: () => actions.finish.mutate(),
+      confirmStop: () => actions.setConfirming('cancel'),
+      confirmDelete: () => actions.setConfirming('delete'),
+      resumeInTerminal: () => actions.terminal.mutate(),
+      gitAction: git.onAction,
+      openIn: () => {},
+      navigate: () => {},
+      openUrl: () => {},
+      copy: () => {},
+    },
+  )
+  const byId = new Map(commands.map((command) => [command.id, command]))
+  const pick = (id: string) => {
+    const command = byId.get(id)
+    return command && command.unavailable === undefined ? command : undefined
+  }
+  const steps = commands.filter((command) => command.group === 'git' && command.id.startsWith('git:'))
+  const middle = [
+    // Off the Session tab only: there the hint over the composer carries End session.
+    showRunControls ? pick('end-session') : undefined,
+    pick('open:terminal-resume'),
+    pick('toggle-read'),
+    pick('pin'),
+    pick('archive'),
+  ].filter((command): command is TaskCommand => command !== undefined)
+  // On the Session tab the composer's ■ carries Stop, exactly as on desktop.
+  const stop = showRunControls ? pick('stop') : undefined
+  const remove = pick('delete')
+  const pending: Record<string, boolean> = {
+    'toggle-read': actions.markRead.isPending || actions.markUnread.isPending,
+    pin: actions.pin.isPending,
+  }
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -1398,84 +1338,58 @@ function ActionsKebab({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
-        {step ? (
+        {steps.length > 0 ? (
           <>
-            {[step, ...(step.alternatives ?? [])].map((choice) => (
+            {steps.map((step) => (
               <DropdownMenuItem
-                key={choice.id}
-                data-action={choice.id}
-                disabled={!choice.enabled}
-                title={choice.reason}
-                onSelect={() => git.onAction(choice.id)}
+                key={step.id}
+                data-action={step.id.slice('git:'.length)}
+                disabled={step.unavailable !== undefined}
+                title={step.unavailable}
+                onSelect={() => step.perform()}
               >
-                {GIT_ACTION_ICONS[choice.id]}
-                {choice.label}
+                {step.icon}
+                {step.label}
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
           </>
         ) : null}
-        {/* Off the Session tab only: there the hint over the composer carries it. */}
-        {showRunControls && run.status === 'waiting' ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> End session
-          </DropdownMenuItem>
-        ) : null}
-        {flags.terminal ? (
-          <DropdownMenuItem onSelect={() => actions.terminal.mutate()}>
-            <SquareTerminalIcon aria-hidden="true" /> Terminal
-          </DropdownMenuItem>
-        ) : null}
-        {/* The state toggles: one icon each, ON in the same violet-filled way as on desktop. */}
-        {flags.markRead || flags.markUnread ? (
+        {middle.map((command) => (
           <DropdownMenuItem
-            data-slot="unread-toggle"
-            aria-pressed={unread}
-            disabled={actions.markRead.isPending || actions.markUnread.isPending}
-            onSelect={() => (unread ? actions.markRead.mutate() : actions.markUnread.mutate())}
+            key={command.id}
+            data-slot={KEBAB_SLOTS[command.id]}
+            // The same `aria-pressed` the desktop twins carry — a toggle should announce its
+            // state in every spelling, not only the ones with room for the word.
+            aria-pressed={command.id in KEBAB_SLOTS || command.id === 'archive' ? Boolean(command.pressed) : undefined}
+            disabled={pending[command.id]}
+            onSelect={() => command.perform()}
           >
-            <MailIcon aria-hidden="true" className={cn(unread && TOGGLE_ON_ICON_CLASS)} />
-            {unread ? 'Mark read' : 'Mark unread'}
+            {command.pressed ? onIcon(command.icon) : command.icon}
+            {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
-        ) : null}
-        {flags.pin ? (
-          <DropdownMenuItem
-            data-slot="pin-run"
-            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
-            // announce its state in every spelling, not only the ones with room for the word.
-            aria-pressed={Boolean(run.pinned)}
-            disabled={actions.pin.isPending}
-            onSelect={() => actions.pin.mutate()}
-          >
-            <PinIcon aria-hidden="true" className={cn(run.pinned && TOGGLE_ON_ICON_CLASS)} />
-            {run.pinned ? 'Unpin' : 'Pin'}
-          </DropdownMenuItem>
-        ) : null}
-        {flags.archive ? (
-          <DropdownMenuItem aria-pressed={Boolean(run.archived)} onSelect={() => actions.archive.mutate()}>
-            <ArchiveIcon aria-hidden="true" className={cn(run.archived && TOGGLE_ON_ICON_CLASS)} />
-            {run.archived ? 'Unarchive' : 'Archive'}
-          </DropdownMenuItem>
-        ) : null}
-        {(showRunControls && flags.cancel) || flags.deleteRun ? <DropdownMenuSeparator /> : null}
-        {/* On the Session tab the composer's ■ carries Stop, exactly as on desktop. */}
-        {showRunControls && flags.cancel ? (
-          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
-            <CircleStopIcon aria-hidden="true" /> Stop
-          </DropdownMenuItem>
-        ) : null}
-        {flags.deleteRun ? (
-          <DropdownMenuItem
-            variant="destructive"
-            disabled={live !== undefined}
-            onSelect={() => actions.setConfirming('delete')}
-          >
-            <Trash2Icon aria-hidden="true" /> Delete
-          </DropdownMenuItem>
-        ) : null}
+        ))}
+        {stop || remove ? <DropdownMenuSeparator /> : null}
+        {[stop, remove].map((command) =>
+          command ? (
+            <DropdownMenuItem key={command.id} variant="destructive" onSelect={() => command.perform()}>
+              {command.icon} {KEBAB_LABELS[command.id] ?? command.label}
+            </DropdownMenuItem>
+          ) : null,
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   )
+}
+
+const KEBAB_SLOTS: Record<string, string> = { 'toggle-read': 'unread-toggle', pin: 'pin-run' }
+// A menu item's own words where the palette's would read oddly here.
+const KEBAB_LABELS: Record<string, string> = { 'open:terminal-resume': 'Terminal', stop: 'Stop', delete: 'Delete' }
+
+/** The ON pattern on a toggle's icon — violet and filled, like its desktop twin. */
+function onIcon(icon: ReactNode): ReactNode {
+  if (!isValidElement<{ className?: string }>(icon)) return icon
+  return cloneElement(icon, { className: cn(icon.props.className, TOGGLE_ON_ICON_CLASS) })
 }
 
 /** "take over interactively: cd … && claude --resume …" — the legacy `#d-resume` line, now
@@ -1494,4 +1408,27 @@ function ResumeHintLine({ hint }: { hint: string }) {
       <span className="truncate">take over interactively: {hint}</span>
     </button>
   )
+}
+
+const HEADER_COLLAPSED_KEY = 'cez:run-header-collapsed'
+
+/** Whether the desktop header is folded — one answer for every task, kept in this browser. */
+function useHeaderCollapsed(): [boolean, (next: boolean) => void] {
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(HEADER_COLLAPSED_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+  const update = (next: boolean) => {
+    setCollapsed(next)
+    try {
+      if (next) window.localStorage.setItem(HEADER_COLLAPSED_KEY, '1')
+      else window.localStorage.removeItem(HEADER_COLLAPSED_KEY)
+    } catch {
+      // A browser without storage still folds for this visit.
+    }
+  }
+  return [collapsed, update]
 }

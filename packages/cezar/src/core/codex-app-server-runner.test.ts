@@ -79,6 +79,55 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
+
+  it('surfaces a turn/completed whose status is failed as an AgentEvent error', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-completed-failed', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+});
+
+/** Telemetry 4c9de01a: Continue resumed a thread a still-live app-server held the writer lock for. */
+describe('resuming a thread another Codex process still holds', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+  const resume = async (locked: string) => {
+    const events: AgentEvent[] = [];
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
+      { userPrompt: 'continue', cwd: process.cwd(), sessionId: 'th_old', resume: true, env: { MOCK_CODEX_RESUME_LOCKED: locked } },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    return { events, result };
+  };
+
+  it('resumes the same thread once the other writer lets go', async () => {
+    const { events, result } = await resume('2');
+    expect(result.sessionId).toBe('th_old');
+    expect(events).toContainEqual({ type: 'session', sessionId: 'th_old' });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(result.text).toBe('Checking the working tree.');
+  }, 15_000);
+
+  it('continues in a fork of the thread when the lock is never released', async () => {
+    const { events, result } = await resume('always');
+    expect(result.sessionId).toBe('fork_of_th_old');
+    expect(events).toContainEqual({ type: 'session', sessionId: 'fork_of_th_old' });
+    expect(events.some((e) => e.type === 'note' && e.message.includes('continuing in a fork'))).toBe(true);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(result.text).toBe('Checking the working tree.');
+  }, 15_000);
 });
 
 describe('late Codex teardown events (#1105)', () => {

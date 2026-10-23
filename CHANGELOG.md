@@ -1,3 +1,123 @@
+# 0.16.1 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(desktop): load the task Preview in the app, keep colored ports in detected addresses (shell 0.1.9) by @patzick in https://github.com/open-mercato/cezar/pull/1545
+* fix(provider-auth): hold Copilot's probe stdin open until session/new is answered (telemetry 298c2e1f) by @patzick in https://github.com/open-mercato/cezar/pull/1547
+* fix(provider-auth): report Cursor and pi not-installed when the binary on PATH isn't the CLI (telemetry 8d304c50, f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1549
+* fix(codex): wait out or fork a thread another app-server still holds on resume (telemetry 4c9de01a) by @patzick in https://github.com/open-mercato/cezar/pull/1557
+* fix(telemetry): group usage-limit agent errors across reset instants; honor a weekly reset's day (telemetry 987e8238) by @patzick in https://github.com/open-mercato/cezar/pull/1562
+* fix(provider-auth): ask OpenCode 2.x with a private server when its background service fails (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1563
+* fix(settings): disable Add project for a launch folder the server refuses (telemetry 48dc0f71) by @patzick in https://github.com/open-mercato/cezar/pull/1564
+* fix(telemetry): scrub every attachable file name from toast reports (telemetry 5fc3ffbb, d77d0047) by @patzick in https://github.com/open-mercato/cezar/pull/1565
+* fix(provider-auth): keep a dead Claude login latched instead of self-checking it away (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1566
+### Other changes
+* fix(desktop): let the macOS app use the microphone for dictation (shell 0.1.10, telemetry c55c7b0b) by @patzick in https://github.com/open-mercato/cezar/pull/1558
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.0...v0.16.1
+
+# 0.16.0 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c4c3ebab5f17426abaa8c4d2f54a12ffe3930da9 -->
+
+## What's Changed
+### ✨ Features
+* feat(telemetry): label task archive/pin events with the button used by @patzick in https://github.com/open-mercato/cezar/pull/1452
+* feat: task terminal and workspace layouts from brutus, with the terminal as a view by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1424
+* feat(telemetry): report agent errors shown in a thread; offer Update for an outdated agent CLI by @patzick in https://github.com/open-mercato/cezar/pull/1481
+* feat(worktrees): run lifecycle scripts with explicit recovery by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1495
+* feat(settings): one full-screen settings surface with a shared sidebar by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1413
+* feat(web): ⌘P task palette — act on tasks, switch fast, keyboard shortcuts by @patzick in https://github.com/open-mercato/cezar/pull/1505
+* feat(self-update): update when idle by @patzick in https://github.com/open-mercato/cezar/pull/1512
+* feat(web): task tab row, Terminal as a view, layouts saved by name for every task by @patzick in https://github.com/open-mercato/cezar/pull/1525
+* feat(web): agent-driven git steps with loading states in the run header by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1529
+* ci(release): release lines — cut, patch-first release and backport workflows; main → 0.16.0 by @patzick in https://github.com/open-mercato/cezar/pull/1531
+### 🐛 Fixes
+* fix: accept attachment-only tasks on POST /runs (telemetry 18c930de) by @patzick in https://github.com/open-mercato/cezar/pull/1451
+* feat(attachments): stage uploads on attach — up to 20 per message, 20 MB of images by @patzick in https://github.com/open-mercato/cezar/pull/1448
+* fix(dictation): hide the mic where it can't work, group dictation failures as one (telemetry 38ccdbdc) by @patzick in https://github.com/open-mercato/cezar/pull/1453
+* fix(provider-auth): probe Copilot with --no-auto-update and name a non-ACP copilot by @patzick in https://github.com/open-mercato/cezar/pull/1456
+* fix(cockpit): reload once when a stale shell's chunk fails to load by @patzick in https://github.com/open-mercato/cezar/pull/1454
+* fix(cockpit): hide Terminal resume in hosted mode (telemetry f179cc7d) by @patzick in https://github.com/open-mercato/cezar/pull/1455
+* fix(pr): survive a dropped response to the PR publish (telemetry 9119d21a) by @patzick in https://github.com/open-mercato/cezar/pull/1458
+* fix(repo): don't offer to switch to a branch another worktree holds (telemetry da5ca728) by @patzick in https://github.com/open-mercato/cezar/pull/1462
+* fix(install): retry with a cezar-owned npm cache when ~/.npm is root-owned (telemetry 7a3f659a) by @patzick in https://github.com/open-mercato/cezar/pull/1461
+* fix(spawn): run Windows npm .cmd shims as node <script> (telemetry a330744e) by @patzick in https://github.com/open-mercato/cezar/pull/1460
+* fix(pr): don't offer or push an empty branch as a PR (telemetry 16aef26d) by @patzick in https://github.com/open-mercato/cezar/pull/1459
+* fix(provider-auth): re-ask a CLI that exits 0 having printed nothing (telemetry 35838a52) by @patzick in https://github.com/open-mercato/cezar/pull/1466
+* fix(thread): wait out a session gap instead of failing a reply with 409 session closed (telemetry 1408d7cb) by @patzick in https://github.com/open-mercato/cezar/pull/1467
+* fix(spawn): run npm's .ps1 and native-binary shims without a shell (telemetry 3626ac13) by @patzick in https://github.com/open-mercato/cezar/pull/1470
+* fix(thread): a one-click Continue on an already-live run is not a failure (telemetry 77117b95) by @patzick in https://github.com/open-mercato/cezar/pull/1473
+* test(thread): address #1473 review — pin review send-back recovery, keep footer Continue out of message_sent by @patzick in https://github.com/open-mercato/cezar/pull/1474
+* fix(automations): copy filters and skill steps from another project's automation; flag prompt-only author conditions by @patzick in https://github.com/open-mercato/cezar/pull/1472
+* fix(composer): accept HTML, CSV, JSON and source files as attachments (telemetry 6c4b3066) by @patzick in https://github.com/open-mercato/cezar/pull/1482
+* fix(provider-gate): name a signed-out selected account, and check it before Start (telemetry ac53a6ef) by @patzick in https://github.com/open-mercato/cezar/pull/1497
+* fix(opencode): answer permission prompts so a run never hangs on one by @patzick in https://github.com/open-mercato/cezar/pull/1500
+* fix(provider-auth): resolve Cursor's cursor-agent first, read older CLIs' plain status (telemetry 8d304c50) by @patzick in https://github.com/open-mercato/cezar/pull/1503
+* fix(telemetry): scrub file names from toast reports so attachment refusals group (telemetry 0f1255b6) by @patzick in https://github.com/open-mercato/cezar/pull/1502
+* fix(provider-auth): a version-manager shim with nothing behind it is not-installed (telemetry f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1504
+* fix(web): highlight each diff hunk and side separately by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1457
+* fix(attachments): take any file as a path-only binary attachment instead of refusing it (telemetry 48850f4a) by @patzick in https://github.com/open-mercato/cezar/pull/1510
+* fix(provider-auth): latch a runtime auth rejection on the agent account that ran (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1511
+* fix(windows): retry transient EPERM in the async atomic writers too by @patzick in https://github.com/open-mercato/cezar/pull/1515
+* fix(provider-auth): re-ask a status probe a signal interrupted instead of reporting it (telemetry ce0c5d1f) by @patzick in https://github.com/open-mercato/cezar/pull/1516
+* fix(provider-auth): ask a timed-out status probe once more with a longer budget (telemetry e316b141) by @patzick in https://github.com/open-mercato/cezar/pull/1517
+* fix(agent-profiles): resolve an unregistered boot project when saving an account selection (telemetry d81f8db7) by @patzick in https://github.com/open-mercato/cezar/pull/1518
+* fix(provider-auth): a hung status probe keeps a recent connected answer (telemetry b28d2993) by @patzick in https://github.com/open-mercato/cezar/pull/1519
+* fix(runs): never prune a live run or its dispatch ancestors (telemetry 73c6e796) by @patzick in https://github.com/open-mercato/cezar/pull/1520
+* fix(web): stop the host widget's per-frame effect setState from tripping React #185 (telemetry 21762d83) by @patzick in https://github.com/open-mercato/cezar/pull/1521
+* fix(runs): honor a cancel that lands while a continuation awaits its lifecycle gate by @patzick in https://github.com/open-mercato/cezar/pull/1522
+* fix(runs): honor Finish while a closed session is still settling (telemetry 6a3cecee) by @patzick in https://github.com/open-mercato/cezar/pull/1527
+* fix(self-update): show a worktree-linked version as -dev by @patzick in https://github.com/open-mercato/cezar/pull/1530
+* fix(self-update): count running tasks across every project; when idle for every picker by @patzick in https://github.com/open-mercato/cezar/pull/1524
+* fix(provider-auth): fall back on any --format rejection, read more plain Cursor status shapes (telemetry 1cd541cc) by @patzick in https://github.com/open-mercato/cezar/pull/1536
+* fix(boot): don't exit when a project's .ai/cezar cannot be created (telemetry 5af5aec6) by @patzick in https://github.com/open-mercato/cezar/pull/1541
+### Other changes
+* fix(skills): follow a dropped skills-update apply to its result by @patzick in https://github.com/open-mercato/cezar/pull/1447
+* chore(desktop): bump the shell to 0.1.7 (#1461 npm-cache fix) by @patzick in https://github.com/open-mercato/cezar/pull/1463
+* feat(web): sort Tasks by last activity, with a Recent/Created toggle by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1433
+* feat: Design Mode and Preview as the task workspace's Browser view (supersedes #1422, #1423) by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1492
+* test(worktrees): wait for the record to release a settled lifecycle operation by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1501
+* fix(windows): retry transient EPERM when atomically replacing state files by @patzick in https://github.com/open-mercato/cezar/pull/1514
+* perf(web): make the Changes tab instant to revisit and responsive on large diffs by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1523
+* feat(git): Source-Control sync for the main checkout + in-place tasks on a new branch by @kinelm in https://github.com/open-mercato/cezar/pull/1528
+* feat(preview): run the task's app from an empty Preview, with per-project start recipes by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1494
+* fix(opencode): don't fail a run whose server starts slowly or prints its URL elsewhere (telemetry 2d01c3c9) by @patzick in https://github.com/open-mercato/cezar/pull/1538
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.15.2...v0.16.0
+
+# 0.15.2 (2026-10-14)
+
+## Highlights
+GitHub Enterprise works on any domain, and sidebar rows get pin and archive actions on hover. The rest is fixes, most of them found through the new error reports: Continue works on tasks whose Claude conversation was pruned, a task's selected skill and its companions are installed into its worktree, runs check the agent account you actually picked, and publishing a PR adopts one that already exists.
+
+## ✨ Features
+- ✨ GitHub Enterprise works on any domain: the GitHub tab, PRs and automations follow each repo's own host, with no new config. (#1426) *(@hunger-programmer)*
+- ✨ Hovering a sidebar task shows pin and archive actions; the Tasks table groups pinned tasks under their own header. (#1417) *(@martaradziszewska)*
+- ✨ Telemetry counts session-resume fallbacks and task failures per backend, after you opt in. (#1440) *(@patzick)*
+- ✨ "Cannot reach the cezar server" error reports say which transport failure caused them (fixes #1437). (#1441) *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 Continue on a task whose Claude conversation was pruned starts a fresh session in the same worktree instead of failing. (#1435) *(@martaradziszewska)*
+- 🐛 A task's selected skill and the skills it names are installed into its worktree, so the agent can run them. (#1429) *(@patzick)*
+- 🐛 Runs check the selected agent account's sign-in, not only the default login. (#1428) *(@patzick)*
+- 🐛 Publishing a PR adopts one that already exists for the branch and retries GitHub's transient errors once. (#1430) *(@patzick)*
+- 🐛 Connect opens the agent's login when its auth state cannot be read, instead of a "Try again" dead end. (#1431) *(@patzick)*
+- 🐛 The server outlives the browser's keep-alive pool, so a request no longer lands on a closed socket ("cannot reach the cezar server" in Safari). (#1436) *(@patzick)*
+- 🐛 Issue and PR numbers from another repository are no longer linked into the project's repo (fixes #819, #854). (#1390) *(@wojciechszyjka, via @lbajsarowicz)*
+
+## 👥 Contributors
+
+- @patzick
+- @martaradziszewska
+- @wojciechszyjka
+- @lbajsarowicz
+- @hunger-programmer
+
 # 0.15.1 (2026-10-13)
 
 ## Highlights

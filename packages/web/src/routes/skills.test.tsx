@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { Skill, SkillsUpdateState, WorkflowsResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * `/skills` (R6 Step 1.4): the catalog + detail against fixture payloads, the #377
@@ -169,11 +170,13 @@ function renderAt(
   }
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        {onNavigate && <CaptureNavigate />}
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          {onNavigate && <CaptureNavigate />}
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client

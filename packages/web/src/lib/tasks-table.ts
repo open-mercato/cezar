@@ -113,13 +113,14 @@ export function finishedRunCount(runs: readonly RunRecord[]): number {
   return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status) && !isAwaitingAnswer(run)).length
 }
 
-/** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the
+/** A git remote as a GitHub web root (`https://github.com/owner/repo`, or the Enterprise host's) — the caller passes the
  *  remote `/api/v1/health` reports (`repo.remote`), via `useProjectRepoBase`. Handles the scheme forms
  *  (`https://`, `ssh://`, credentials, port) and the scp-like `git@github.com:owner/repo.git`;
- *  undefined for every non-github.com host, local path, or absent remote — the cockpit only knows
- *  how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
+ *  undefined for every non-github.com host unless `anyHost` (the server resolved the remote's forge
+ *  as GitHub, which is how an Enterprise domain is recognized), local path, or absent remote — the
+ *  cockpit only knows how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
  *  duplicated rather than imported because that module is server-only. */
-export function githubRepoBase(remote: string | undefined): string | undefined {
+export function githubRepoBase(remote: string | undefined, anyHost = false): string | undefined {
   if (!remote) return undefined
   const trimmed = remote.trim().replace(/\/+$/, '')
   const url = /^(?:https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(trimmed)
@@ -128,11 +129,11 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
   const match = url ?? scp
   if (!match) return undefined
   const [, host, path] = match
-  if (!path || host?.toLowerCase() !== 'github.com') return undefined
+  if (!path || !host || (!anyHost && host.toLowerCase() !== 'github.com')) return undefined
   const parts = path.replace(/\.git$/i, '').split('/').filter(Boolean)
   const owner = parts[parts.length - 2]
   const repo = parts[parts.length - 1]
-  return owner && repo ? `https://github.com/${owner}/${repo}` : undefined
+  return owner && repo ? `https://${host.toLowerCase()}/${owner}/${repo}` : undefined
 }
 
 /** The URL a PR *display* chip shows: the PR the task created, else the PR the conversation
@@ -448,8 +449,8 @@ function synthesizeUrl(
 /** The strongest known tracker reference — what a row with space for exactly one shows (the
  *  sidebar row, the per-project table). PRs win once one exists; issue-driven queued runs still
  *  expose their already-known issue immediately. */
-export function taskReference(run: TaskReferenceInput): TaskReference | undefined {
-  return taskReferences(run)[0]
+export function taskReference(run: TaskReferenceInput, repoBase?: string): TaskReference | undefined {
+  return taskReferences(run, repoBase)[0]
 }
 
 /** The PR chip's `#402`. Null when the URL's last segment is not a number — a forge we don't

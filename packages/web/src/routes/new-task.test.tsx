@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -139,10 +139,11 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
-const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], baseBranch: null }
+const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], checkedOutElsewhere: {}, baseBranch: null }
 
 const CONFIG: ConfigResponse = {
   baseBranch: null,
@@ -156,6 +157,7 @@ const CONFIG: ConfigResponse = {
   worktreeRetention: 10,
   liveTitleUpdates: null,
   reviewGate: null,
+  profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
 }
 
 const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
@@ -223,6 +225,8 @@ function serve(overrides: {
   /** Agent accounts (spec 2026-07-29-agent-profiles). Omitted answers a 404, which is how every
    *  pre-existing test here keeps a composer with no account pill at all. */
   agentProfiles?: AgentProfilesResponse
+  /** What `GET …/agent-profiles/:id/status` probes, per account id — read per request. */
+  accountStatus?: Record<string, 'connected' | 'disconnected'>
 } = {}) {
   const data = {
     health: HEALTH,
@@ -279,6 +283,10 @@ function serve(overrides: {
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(data.workspaceConfig)
       if (url === '/api/v1/workspace/agent-profiles' && method === 'GET' && data.agentProfiles) {
         return json(data.agentProfiles)
+      }
+      const accountStatus = url.match(/^\/api\/v1\/workspace\/agent-profiles\/([^/?]+)\/status/)
+      if (accountStatus && data.accountStatus?.[accountStatus[1]!]) {
+        return json({ status: { provider: 'claude', status: data.accountStatus[accountStatus[1]!], profileId: accountStatus[1] } })
       }
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
@@ -383,6 +391,20 @@ describe('the hero surface', () => {
     expect(textarea().value).toContain('failing or flaky test')
     expect(requests.some((r) => r.method === 'POST')).toBe(false)
     expect(location()).toBe('/new')
+  })
+
+  it('starts an attachment-only task: empty task text, the attachment in images (telemetry 18c930de)', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    await startTask()
+
+    const body = postedBody() as { task: string; images?: unknown[] }
+    expect(body.task).toBe('')
+    expect(body.images).toHaveLength(1)
   })
 })
 
@@ -1310,7 +1332,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -1970,6 +1992,65 @@ describe('the composer runner pill carries the account', () => {
     expect(postedBody()).toMatchObject({ agentProfile: 'default' })
   })
 
+  // Telemetry ac53a6ef (0.15.2): `GET /providers/status` describes the discovered login only, so a
+  // project on a signed-out named account looked startable and every Start came back a 409 that
+  // pointed at a Providers card showing Claude connected.
+  describe('a signed-out selected account', () => {
+    const SIGNED_OUT_MESSAGE =
+      'Claude Code account "Klaudiusz" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.'
+    const signedOut = (): AgentProfilesResponse => ({
+      ...ACCOUNTS,
+      selections: { '/repo': { claude: 'klaudiusz' } },
+      profiles: ACCOUNTS.profiles.map((profile: (typeof ACCOUNTS)['profiles'][number]) =>
+        profile.isDefault ? profile : { ...profile, status: { provider: 'claude', status: 'disconnected', profileId: 'klaudiusz' } }),
+    })
+
+    it('says so before Start, and does not post a run the server would refuse', async () => {
+      serve({ agentProfiles: signedOut(), accountStatus: { klaudiusz: 'disconnected' } })
+      renderNewTask()
+      await pillReady()
+      const alert = await waitFor(() => {
+        const node = document.querySelector('[data-slot="account-signed-out"]')
+        expect(node).not.toBeNull()
+        return node as HTMLElement
+      })
+      expect(alert.textContent).toContain(SIGNED_OUT_MESSAGE)
+      expect(within(alert).getByRole('link', { name: 'Agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+
+      fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
+      // Verified fresh before refusing, exactly like the server gate.
+      await waitFor(() => expect(requests.some((r) => r.url.endsWith('/klaudiusz/status?refresh=1'))).toBe(true))
+      await screen.findAllByText(SIGNED_OUT_MESSAGE) // the toast; the alert also carries its link
+      expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
+      expect(textarea().value).toBe('do the thing')
+    })
+
+    it('starts once the fresh probe finds the account signed in — a terminal login is honoured', async () => {
+      const accountStatus: Record<string, 'connected' | 'disconnected'> = { klaudiusz: 'disconnected' }
+      serve({ agentProfiles: signedOut(), accountStatus })
+      renderNewTask()
+      await pillReady()
+      await waitFor(() => expect(document.querySelector('[data-slot="account-signed-out"]')).not.toBeNull())
+
+      accountStatus.klaudiusz = 'connected'
+      fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+      await startTask()
+      expect(postedBody()).not.toHaveProperty('agentProfile')
+    })
+
+    it('never blocks on the listing alone — its cached status can be arbitrarily old', async () => {
+      serve({ agentProfiles: signedOut(), accountStatus: { klaudiusz: 'connected' } })
+      renderNewTask()
+      await pillReady()
+      await waitFor(() => expect(requests.some((r) => r.url.endsWith('/klaudiusz/status'))).toBe(true))
+
+      fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+      await startTask()
+      expect(document.querySelector('[data-slot="account-signed-out"]')).toBeNull()
+    })
+  })
+
   it('drops an account belonging to another runner when the runner switches', async () => {
     // A Claude account must not ride along into a codex run: the id means nothing there, and
     // sending it would assert a choice the user never made for that engine.
@@ -2216,5 +2297,68 @@ describe('the Dispatch toggle', () => {
     fireEvent.change(textarea(), { target: { value: 'Server says no' } })
     await startTask()
     expect(postedBody()).not.toHaveProperty('dispatch')
+  })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const TRUNK_SKILLS: Skill[] = [
+    ...SKILLS,
+    { name: 'ingest', description: 'File a note', body: '', path: '/p/ingest.md', source: 'ai' },
+    { name: 'ask', description: 'Answer from the notes', body: '', path: '/p/ask.md', source: 'ai' },
+  ]
+  const TRUNK_CONFIG: Partial<ConfigResponse> = {
+    profile: 'trunk',
+    taskWorkspace: 'in-place',
+    landing: 'auto',
+    defaultSkill: 'ingest',
+    askSkill: 'ask',
+  }
+  const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
+
+  it('files a note in place with the default skill', async () => {
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    expect(note()).toContain('review the changes, then Commit lands them on the base branch')
+    fireEvent.change(textarea(), { target: { value: '1on1 with Bjorn, I owe him the deck by Friday' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({
+      worktree: false,
+      steps: [{ skill: 'ingest' }],
+    })
+    expect(postedBody()).not.toHaveProperty('readOnly')
+    // The default skill must not make the task autonomous: that would land it unreviewed.
+    expect(postedBody()).not.toHaveProperty('autonomous')
+  })
+
+  it('asks a question read-only with the Ask skill', async () => {
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    fireEvent.change(textarea(), { target: { value: "what's open with Daniel?" } })
+    await waitFor(() => expect(document.querySelector('[data-slot="ask-toggle"]')?.getAttribute('aria-checked')).toBe('true'))
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).toBeNull()
+    await startTask()
+    expect(postedBody()).toMatchObject({ readOnly: true, steps: [{ skill: 'ask' }] })
+    expect(postedBody()).not.toHaveProperty('worktree')
+  })
+
+  it('lets the project default win over a Worktree choice remembered from before it changed', async () => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ worktree: true }))
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    const chip = () => document.querySelector('[data-slot="worktree-toggle"]')
+    expect(chip()?.getAttribute('aria-checked')).toBe('false')
+    // Ticking it now is a choice made under this setting, so it sticks.
+    fireEvent.click(chip() as HTMLButtonElement)
+    await waitFor(() => expect(chip()?.getAttribute('aria-checked')).toBe('true'))
+  })
+
+  it('leaves a branch-per-task project without the Ask chip', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(document.querySelector('[data-slot="ask-toggle"]')).toBeNull()
   })
 })

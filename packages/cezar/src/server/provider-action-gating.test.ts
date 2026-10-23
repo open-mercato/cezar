@@ -411,6 +411,22 @@ describe('the gate verifies before it refuses', () => {
     expect(startRun).not.toHaveBeenCalled();
   });
 
+  // 0.15.2 regression of ac53a6ef: the machine-wide account is signed out while the discovered
+  // login — the only one `GET /providers/status` describes — is fine. The refusal must say which.
+  it('names the signed-out workspace-default account instead of pointing at Providers', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    await mergeWriteAgentAccounts((accounts) => { accounts.defaults.claude = 'work'; });
+    state.claudeLoggedIn = true;
+
+    const response = await start(app, 'claude');
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Claude Code account "Work" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.',
+    });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
   /** A run whose `work` step owns session `sess-1`, recorded on `profileId` (none = the default login). */
   const sessionRun = (status: RunRecord['status'], profileId?: string) => {
     const run = store.createRun({

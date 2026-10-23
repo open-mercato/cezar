@@ -23,7 +23,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { cezarHomeDir } from './paths.ts';
-import { detectInstallKind } from './self-update/layout.ts';
+import { runsFromCheckout } from './self-update/layout.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './workspace/config.ts';
 
 export const DEFAULT_TELEMETRY_URL = 'https://stats.openmercato.cloud';
@@ -165,7 +165,7 @@ export function telemetryVersion(raw: string, checkout = false): string {
  *  dev build whatever its package.json says. Resolves once the stored answer is known. */
 export async function initTelemetry(opts: { version: string }): Promise<void> {
   fullVersion = opts.version;
-  version = telemetryVersion(opts.version, detectInstallKind(process.argv[1] ?? '') === 'checkout');
+  version = telemetryVersion(opts.version, runsFromCheckout(process.argv[1] ?? ''));
   refreshProjectRoots();
   await loadTelemetryConsent();
 }
@@ -305,7 +305,9 @@ export const TELEMETRY_EVENTS = [
   'project_added', 'diff_comment_added', 'task_archived', 'task_unarchived', 'task_pinned',
   'task_unpinned', 'task_deleted', 'project_create_failed', 'add_project_opened', 'error',
   'provider_login_opened', 'provider_login_not_opened', 'provider_connected', 'skills_provisioned',
-  'skill_missing_in_session', 'session_resume_fallback', 'task_failed',
+  'skill_missing_in_session', 'session_resume_fallback', 'task_failed', 'skills_update_apply_dropped',
+  'attachments_sent', 'attachments_restaged', 'palette_opened', 'task_command_run', 'task_shortcut_used',
+  'task_switched', 'palette_mode_used', 'palette_dismissed', 'shortcut_rebound',
 ] as const;
 
 /** Once per UTC day while telemetry is on: `cezar_run`. Without consent: nothing at all. */

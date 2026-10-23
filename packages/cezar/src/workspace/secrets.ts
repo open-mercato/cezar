@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { promises as fs, constants } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { renameWithRetry } from '../fs-rename.ts';
 import { z } from 'zod';
 import {
   SECRET_AUDIENCES,
@@ -373,7 +374,7 @@ export class SecretStore {
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {
       await fs.writeFile(temporary, text, { mode: 0o600, flag: 'wx' });
-      await fs.rename(temporary, path);
+      await renameWithRetry(temporary, path);
     } finally {
       await fs.unlink(temporary).catch(() => {});
     }

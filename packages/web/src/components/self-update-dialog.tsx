@@ -4,7 +4,9 @@ import { useQueryClient } from '@tanstack/react-query'
 import { getHealth, getSelfUpdate } from '@/api/client'
 import {
   useApplySelfUpdate,
+  useCancelScheduledSelfUpdate,
   useRefreshSelfUpdate,
+  useScheduleSelfUpdate,
   useSelfUpdate,
   useSetSelfUpdateChannel,
   workspaceQueryKeys,
@@ -23,6 +25,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils'
 
 import { DevelopmentPanel, pullOfVersion } from './self-update-development'
+import { offerWhenIdle, targetName, WhenIdleButton } from './self-update-when-idle'
 
 /**
  * The dialog behind the footer's version chip (self-update PoC): which channel cezar follows,
@@ -52,6 +55,8 @@ export function SelfUpdateDialog({
   const refresh = useRefreshSelfUpdate()
   const setChannel = useSetSelfUpdateChannel()
   const apply = useApplySelfUpdate()
+  const schedule = useScheduleSelfUpdate()
+  const cancelScheduled = useCancelScheduledSelfUpdate()
   const [picked, setPicked] = useState<string>('')
   const data = status.data
   const contentRef = useRef<HTMLDivElement>(null)
@@ -113,27 +118,55 @@ export function SelfUpdateDialog({
               checking={refresh.isPending}
               onCheck={() => refresh.mutate()}
               onApply={(version) => apply.mutate(version)}
-              applying={apply.isPending}
+              onSchedule={(version) => schedule.mutate(version)}
+              applying={apply.isPending || schedule.isPending}
             />
 
             {data.channel === 'development' ? (
-              <DevelopmentPanel data={data} onApply={(target) => apply.mutate(target)} applying={apply.isPending} />
+              <DevelopmentPanel
+                data={data}
+                onApply={(target) => apply.mutate(target)}
+                onSchedule={(target) => schedule.mutate(target)}
+                applying={apply.isPending || schedule.isPending}
+              />
             ) : (
               <VersionPicker
                 data={data}
                 picked={picked}
                 onPick={setPicked}
                 onApply={(version) => apply.mutate(version)}
-                applying={apply.isPending}
+                onSchedule={(version) => schedule.mutate(version)}
+                applying={apply.isPending || schedule.isPending}
               />
             )}
 
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
-            {data.activeRuns > 0 && data.canSelfUpdate ? (
+            {/* Not gated on `job`: a failed earlier job stays on the status, and starting the
+                scheduled apply clears `scheduled` anyway. */}
+            {data.scheduled ? (
+              <div
+                data-slot="self-update-scheduled"
+                className="flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[12.5px]"
+              >
+                <p className="min-w-0">
+                  {brandName} switches to <span className="font-semibold">{targetName(data.scheduled.target)}</span> as soon
+                  as no task is running. You can close this window and keep working.
+                </p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => cancelScheduled.mutate()}
+                  disabled={cancelScheduled.isPending}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : data.activeRuns > 0 && data.canSelfUpdate ? (
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
                 them; {brandName} re-queues or resumes them on the way back up.
+                {' '}The &ldquo;when idle&rdquo; buttons wait for them to finish instead.
               </p>
             ) : null}
 
@@ -149,6 +182,8 @@ export function SelfUpdateDialog({
             ) : null}
 
             {apply.error ? <p className="text-[12.5px] text-danger">{apply.error.message}</p> : null}
+            {schedule.error ? <p className="text-[12.5px] text-danger">{schedule.error.message}</p> : null}
+            {cancelScheduled.error ? <p className="text-[12.5px] text-danger">{cancelScheduled.error.message}</p> : null}
 
             {data.job ? <JobPanel data={data} /> : null}
           </div>
@@ -224,12 +259,14 @@ function LatestCard({
   checking,
   onCheck,
   onApply,
+  onSchedule,
   applying,
 }: {
   data: SelfUpdateStatus
   checking: boolean
   onCheck: () => void
   onApply: (version: string) => void
+  onSchedule: (version: string) => void
   applying: boolean
 }) {
   const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
@@ -309,11 +346,13 @@ function LatestCard({
     <div
       data-slot="self-update-latest"
       className={cn(
-        'flex items-center justify-between gap-3 rounded-md border px-3 py-2.5',
+        'flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-md border px-3 py-2.5',
         target ? 'border-primary/40 bg-primary/5' : 'border-border bg-card',
       )}
     >
-      <div className="min-w-0 text-[13px]">
+      {/* A floor on the text so a third button wraps the row instead of squeezing a long nightly
+          version into a word-per-line column. */}
+      <div className="min-w-[14rem] flex-1 text-[13px] break-words">
         {!data.checkedAt ? (
           <span className="text-muted-foreground">The npm registry has not answered yet.</span>
         ) : target ? (
@@ -330,10 +369,18 @@ function LatestCard({
           <div className="text-[11.5px] text-muted-foreground">checked {new Date(data.checkedAt).toLocaleTimeString()}</div>
         ) : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
           {checking ? 'Checking…' : 'Check again'}
         </Button>
+        {/* Only worth offering when a restart would interrupt something: idle, it applies at once. */}
+        {offerWhenIdle(data, target) ? (
+          <WhenIdleButton
+            doing={`installs ${targetName(target)}`}
+            onClick={() => onSchedule(target)}
+            disabled={!data.canSelfUpdate || applying || jobBusy}
+          />
+        ) : null}
         {target ? (
           <Button size="sm" onClick={() => onApply(target)} disabled={!data.canSelfUpdate || applying || jobBusy}>
             Update &amp; restart
@@ -349,12 +396,14 @@ function VersionPicker({
   picked,
   onPick,
   onApply,
+  onSchedule,
   applying,
 }: {
   data: SelfUpdateStatus
   picked: string
   onPick: (version: string) => void
   onApply: (version: string) => void
+  onSchedule: (version: string) => void
   applying: boolean
 }) {
   const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
@@ -403,6 +452,14 @@ function VersionPicker({
             ))}
           </SelectContent>
         </Select>
+        {selected && !selected.active && offerWhenIdle(data, selected.value) ? (
+          <WhenIdleButton
+            label="When idle"
+            doing={`${selected.installed ? 'switches to' : 'installs'} ${targetName(selected.value)}`}
+            onClick={() => onSchedule(selected.value)}
+            disabled={!data.canSelfUpdate || applying || jobBusy}
+          />
+        ) : null}
         <Button
           size="sm"
           variant="contrast"

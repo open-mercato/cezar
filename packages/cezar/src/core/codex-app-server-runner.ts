@@ -30,6 +30,7 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnError,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
@@ -41,7 +42,12 @@ export interface CodexRunnerOptions {
   bin?: string;
   /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** Waits between `thread/resume` retries while another process holds the thread. */
+  resumeLockRetryMs?: readonly number[];
 }
+
+/** ~16s: outlasts a previous session's own EOF→TERM→KILL teardown (12s) before forking. */
+const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 4_000, 4_000];
 
 /**
  * `AgentRunner` over `codex app-server` — the same JSONL transport the VS Code
@@ -63,11 +69,13 @@ export class CodexAppServerRunner implements AgentRunner {
 
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly resumeLockRetryMs: readonly number[];
   private lastSession: CodexSession | null = null;
 
   constructor(opts: CodexRunnerOptions = {}) {
     this.bin = resolveCodexExecutable(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
   }
 
   run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
@@ -83,7 +91,7 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new CodexSession(this.bin, this.timeoutMs, spec, onEvent, opts);
+    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
   }
@@ -152,6 +160,7 @@ class CodexSession implements AgentSession {
   constructor(
     private readonly bin: string,
     timeoutMs: number,
+    private readonly resumeLockRetryMs: readonly number[],
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
@@ -424,8 +433,7 @@ class CodexSession implements AgentSession {
       config: this.privateMcpConfig(),
     };
     if (this.spec.resume && this.spec.sessionId) {
-      await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
-      this.threadId = this.spec.sessionId;
+      this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {
       const res = await this.rpc.request('thread/start', clean(overrides));
       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
@@ -443,6 +451,35 @@ class CodexSession implements AgentSession {
     // of the opening message.
     const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
     await this.startOrSteerTurn(first);
+  }
+
+  /**
+   * `thread/resume`, tolerating another live app-server that still holds the thread's writer
+   * lock — the previous session draining its turn after a Continue or a cezar restart. Wait
+   * for it to let go; if it never does, fork the stored thread (forking takes no writer lock)
+   * so the run keeps its history instead of failing on a lock it cannot break.
+   */
+  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.rpc.request('thread/resume', { threadId, ...overrides });
+        return threadId;
+      } catch (err) {
+        if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
+        const delay = this.resumeLockRetryMs[attempt];
+        if (delay === undefined) break;
+        await new Promise((resolve) => setTimeout(resolve, delay).unref?.());
+        if (!this.stdinOpen) throw err;
+      }
+    }
+    const res = await this.rpc.request('thread/fork', { threadId, ...overrides });
+    const forkedId = threadIdOf(res);
+    if (!forkedId) throw new Error(`codex: thread ${threadId} is open in another Codex process and could not be forked`);
+    this.emit({
+      type: 'note',
+      message: `codex: thread ${threadId} is still open in another Codex process — continuing in a fork of it (${forkedId})`,
+    });
+    return forkedId;
   }
 
   private async startOrSteerTurn(text: string): Promise<void> {
@@ -587,14 +624,13 @@ class CodexSession implements AgentSession {
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
         // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
-        // boundary carries it: a `turn/failed` already emits an authoritative error, and
+        // boundary carries it: a failed turn already emits an authoritative error, and
         // stacking a "keep going" reason on top of it would be two verdicts for one turn.
-        const compacted = method === 'turn/completed' && this.compactionEndedTurn;
+        const turnError = codexTurnError(method, params);
+        const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
+        if (turnError !== undefined && !this.terminatedByCezar) {
+          this.emit({ type: 'error', message: turnError });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
@@ -730,6 +766,11 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === 'string' ? v : undefined;
+}
+
+/** Codex's per-thread writer lock is held by another live process (codex-rs `writer_lock.rs`). */
+function isActiveWriterError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('already has an active writer');
 }
 
 function threadIdOf(res: Record<string, unknown>): string | undefined {

@@ -134,7 +134,7 @@ export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
     `**Workflow:** ${run.workflow}\n` +
     (run.branch ? `**Branch:** ${run.branch}\n` : '') +
     (run.worktreePath ? `**Worktree:** ${run.worktreePath}\n` : '') +
-    `\n## Goal\n\n${run.task.trim()}\n\n` +
+    `\n## Goal\n\n${run.task.trim() || '(given as attachments only)'}\n\n` +
     `## Progress log\n\n` +
     `## Resume notes\n`;
   try {
@@ -257,7 +257,7 @@ Structured question marker: when you are blocked on a decision that is genuinely
 Task reference markers: as soon as you know which GitHub pull request or issue this task is ABOUT (it was named in the task, or you just opened it), declare it by emitting, on its own line in your message text: CEZ:PR=<number> and/or CEZ:ISSUE=<number>. Re-emit with the new number if the subject changes (e.g. you open a PR later in the task). Declare only the task's own subject — never a PR/issue you merely mention, list, or compare against. You may also emit CEZ:TITLE=<terse gerund phrase, max 40 chars, e.g. "implementing comment threads"> once the work has a clearer shape than its current title; cez uses these instead of guessing from the transcript. Put markers in plain message text, never inside a code fence, and above any CEZ:DONE / CEZ:MONITORING line — those two always come last.
 
 ## Pasted attachments
-User-attached screenshots and files (PDF, TXT, MD) are saved as real files; their absolute paths are listed in the message that carries them. Read a file from its path when you need its contents, and use the path when a task needs the file itself (saving, uploading, attaching to issues/PRs). An image also rides along inline, but that copy is for viewing only; a non-image attachment exists ONLY as the file at that path.`;
+User-attached screenshots and files (PDF, text, archives — any type) are saved as real files; their absolute paths are listed in the message that carries them. Read a file from its path when you need its contents, and use the path when a task needs the file itself (saving, uploading, attaching to issues/PRs). An image also rides along inline, but that copy is for viewing only; a non-image attachment exists ONLY as the file at that path.`;
 
 export const FOLLOWUP_INSTRUCTIONS = `## Follow-ups (cezar)
 

@@ -1,11 +1,12 @@
 import { parseRemote } from '../../git-remotes.ts';
+import { isGithubHost } from '../../github-hosts.ts';
 import type { RepoInfo } from '../git.ts';
 import { createGithubDriver } from './github.ts';
 import type { ForgeDriver, ForgeKind } from './types.ts';
 
 /**
  * Forge resolution (cockpit-ui redesign spec §"Forge-driver seam"): map the
- * repo's origin remote to a driver — github.com → the GitHub driver, anything
+ * repo's origin remote to a driver — github.com or a GitHub Enterprise host → the GitHub driver, anything
  * else (GitLab, self-hosted, no remote, not a repo) → null. The health route
  * serializes the result as `forge: {kind, available, reason?} | null`; a null
  * forge means plain-git features only (diffs, commit, push, branches).
@@ -13,9 +14,12 @@ import type { ForgeDriver, ForgeKind } from './types.ts';
 
 export { parseRemote, type ParsedRemote } from '../../git-remotes.ts';
 
-/** Remote host → forge kind. The one host table both `resolveForge` and the
- *  registry probe read; GitLab lands here later as one more row. */
-const FORGE_HOSTS: Record<string, ForgeKind> = { 'github.com': 'github' };
+/** Remote host → forge kind. The one lookup both `resolveForge` and the registry probe read;
+ *  GitHub means github.com or any GitHub Enterprise host (`github-hosts.ts`). GitLab lands
+ *  here later as one more case. */
+function forgeKindOfHost(host: string): ForgeKind | null {
+  return isGithubHost(host) ? 'github' : null;
+}
 
 /**
  * Which forge a remote URL belongs to, without building a driver (#698): the
@@ -25,7 +29,7 @@ const FORGE_HOSTS: Record<string, ForgeKind> = { 'github.com': 'github' };
  */
 export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null {
   const parsed = remote ? parseRemote(remote) : null;
-  return parsed ? (FORGE_HOSTS[parsed.host] ?? null) : null;
+  return parsed ? forgeKindOfHost(parsed.host) : null;
 }
 
 /**
@@ -38,7 +42,7 @@ export function forgeKindOfRemote(remote: string | undefined): ForgeKind | null 
  */
 export function forgeWebRoot(remote: string | undefined): string | null {
   const parsed = remote ? parseRemote(remote) : null;
-  if (!parsed || !(parsed.host in FORGE_HOSTS)) return null;
+  if (!parsed || !forgeKindOfHost(parsed.host)) return null;
   return `https://${parsed.host}/${parsed.owner}/${parsed.repo}`;
 }
 
@@ -47,8 +51,8 @@ export function resolveForge(repoInfo: RepoInfo | null): ForgeDriver | null {
   if (!repoInfo?.remote) return null;
   const parsed = parseRemote(repoInfo.remote);
   if (!parsed) return null;
-  if (FORGE_HOSTS[parsed.host] === 'github') {
-    return createGithubDriver(repoInfo.root, { owner: parsed.owner, repo: parsed.repo });
+  if (forgeKindOfHost(parsed.host) === 'github') {
+    return createGithubDriver(repoInfo.root, { host: parsed.host, owner: parsed.owner, repo: parsed.repo });
   }
   return null;
 }

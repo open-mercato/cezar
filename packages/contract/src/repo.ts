@@ -42,6 +42,7 @@ export const repoResponseSchema = z.union([
     status: z.array(z.never()),
     log: z.array(z.never()),
     branches: z.array(z.never()),
+    checkedOutElsewhere: z.record(z.string(), z.never()),
     baseBranch: z.null(),
   }),
   z.object({
@@ -49,6 +50,8 @@ export const repoResponseSchema = z.union([
     status: z.array(statusEntrySchema),
     log: z.array(logEntrySchema),
     branches: z.array(z.string()),
+    /** Branch → path of the OTHER worktree that has it checked out; git refuses to switch to these. */
+    checkedOutElsewhere: z.record(z.string(), z.string()),
     baseBranch: z.string().nullable(),
   }),
 ]);
@@ -61,6 +64,48 @@ export const repoBranchResponseSchema = z.object({
   created: z.boolean(),
 });
 export type RepoBranchResponse = z.infer<typeof repoBranchResponseSchema>;
+
+/** One local branch against its upstream; counts are `null` without one, `gone` when the
+ *  upstream was deleted on the remote. */
+export const branchTrackingSchema = z.object({
+  name: z.string(),
+  upstream: z.string().nullable(),
+  ahead: z.number().nullable(),
+  behind: z.number().nullable(),
+  gone: z.boolean(),
+});
+export type BranchTracking = z.infer<typeof branchTrackingSchema>;
+
+/**
+ * `GET /api/v1/repo/sync` — the main checkout against its remote, Source-Control style: the
+ * current branch's upstream and ↑ahead ↓behind, the outgoing commits (on HEAD, not on the
+ * upstream) and the incoming ones (on the upstream, not on HEAD), and every local branch's
+ * tracking. Offline: read from remote-tracking refs as last fetched (`lastFetchedAt`).
+ */
+export const repoSyncSchema = z.object({
+  /** `null` on a detached HEAD. */
+  branch: z.string().nullable(),
+  upstream: z.string().nullable(),
+  ahead: z.number().nullable(),
+  behind: z.number().nullable(),
+  /** Short hashes of the commits `git push` would send. */
+  outgoing: z.array(z.string()),
+  incoming: z.array(logEntrySchema),
+  /** The remote a branch without an upstream would be pushed to; `null` with no remote. */
+  pushRemote: z.string().nullable(),
+  /** ISO time of the last fetch (`FETCH_HEAD`), `null` when this clone never fetched. */
+  lastFetchedAt: z.string().nullable(),
+  branches: z.array(branchTrackingSchema),
+});
+export type RepoSync = z.infer<typeof repoSyncSchema>;
+
+/** `POST /api/v1/repo/{fetch,pull,push,sync}` — what happened, plus the fresh status. Every
+ *  predictable git failure (no upstream, non-fast-forward, auth) is a 409 `{ error }`. */
+export const repoSyncActionResponseSchema = z.object({
+  message: z.string(),
+  sync: repoSyncSchema,
+});
+export type RepoSyncActionResponse = z.infer<typeof repoSyncActionResponseSchema>;
 
 /** The aggregate line counts every structured-diff payload carries. Module-local: the runs family
  *  carries its own `DiffStat` of the same shape, and two `export`s of one name would collide when

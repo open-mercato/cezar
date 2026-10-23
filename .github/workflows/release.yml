@@ -1,27 +1,24 @@
 name: Release
 
-# Stable `latest` releases are owner-driven and MANUAL — never a push
-# (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482). Pushes to `develop`
-# and same-repo PRs publish previews via ci.yml's `publish-snapshot`; only this
-# workflow moves the `latest` dist-tag.
+# Publishes the next version of ONE release line (docs/publishing.md § Release lines). Run it from
+# the `release/vX.Y.x` branch you want to ship — the "Use workflow from" picker is the only input
+# that matters. It bumps the patch first (or ships a fresh line's x.y.0 as committed), commits that
+# bump to the branch, then verifies, builds and publishes exactly that commit. Only the newest
+# line moves `latest`; an older line publishes under `latest-X.Y`. Never runs from a push
+# (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
 on:
   workflow_dispatch:
     inputs:
-      bump:
-        description: 'Version bump (`existing` publishes the version already in packages/cezar/package.json)'
-        required: true
-        default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
-          - existing
+      dry_run:
+        description: 'Compute and build the release without committing, publishing or tagging anything'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
-  contents: write # create the release tag + GitHub Release via the API
+  contents: write # the bump commit, the tag and the GitHub Release
   id-token: write # npm provenance attestation
-  pull-requests: write # open the version-bump PR for patch/minor/major releases
+  pull-requests: write # the PR carrying the changelog entry back to main
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,25 +26,20 @@ concurrency:
 
 jobs:
   release:
-    name: Release ${{ inputs.bump }} to npm (latest)
+    name: Release ${{ github.ref_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # Releases from `main` (the stable trunk) or a `release/*` maintenance branch —
-    # the latter is how a patch line (e.g. `release/0.9.x`) ships fixes without the
-    # newer features already merged to `main`. Dispatch from the BRANCH, never a tag:
-    # workflow_dispatch reads this file from the ref it runs on, and a tag's copy is
-    # frozen, so a tag would still evaluate the old gate.
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
-    # Gate the publish behind a required-reviewer approval. If the environment
-    # isn't configured yet, GitHub creates it on first use without reviewers
-    # (non-blocking); add reviewers at Settings → Environments → production.
+    timeout-minutes: 30
+    # Dispatch from the BRANCH: workflow_dispatch reads this file from the ref it runs on.
+    # `main` is never released directly — cut a line from it with release-cut.yml.
+    if: startsWith(github.ref, 'refs/heads/release/v')
+    # Gate the publish behind a required-reviewer approval (Settings → Environments → production).
     environment: production
 
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # every v* tag: the next version is chosen from them
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -58,6 +50,25 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # scripts/release-line.mjs imports the release decisions from packages/cezar/dist.
+      - name: Build release tooling
+        run: npm run build:server
+
+      - name: Bump the release branch
+        id: prepare
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+        run: node scripts/release-line.mjs prepare ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      # The bump commit was made through the API (signed); build and publish exactly that commit.
+      - name: Check out the bump commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          SHA: ${{ steps.prepare.outputs.sha }}
+        run: |
+          git fetch --no-tags origin "$SHA"
+          git checkout --force --detach "$SHA"
 
       - name: Verify before release
         run: |
@@ -75,97 +86,39 @@ jobs:
           CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
         run: node packages/cezar/scripts/stamp-telemetry-service.mjs
 
-      - name: Publish release
+      - name: Publish to npm
         id: release
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: node scripts/release.mjs "${{ inputs.bump }}"
+          DIST_TAG: ${{ steps.prepare.outputs.distTag }}
+        run: node scripts/release.mjs existing --dist-tag "$DIST_TAG" ${{ inputs.dry_run && '--dry-run' || '' }}
 
-      # `main` is a protected branch (PR-only, signed commits required), so a
-      # release never pushes a commit to it directly — that push is rejected with
-      # GH013 "Cannot update this protected ref". Instead:
-      #   - `existing` (the version is already on main via its own PR) records
-      #     nothing new here; the tag + Release below capture the release point.
-      #   - patch/minor/major bump the manifests to a version that is NOT yet on
-      #     main, so they open a follow-up PR with the bump instead of pushing.
-      # The release tag itself is created from the released commit by the
-      # `Create GitHub Release` step via the API, which branch protection allows.
-      - name: Open version-bump PR (patch/minor/major only)
-        if: steps.release.outputs.published == 'true' && inputs.bump != 'existing'
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          BRANCH="release/v${VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json alias-cezar-run/package.json
-          git commit -m "chore(release): v${VERSION}"
-          git push origin "$BRANCH"
-          gh pr create --base "${{ github.ref_name }}" --head "$BRANCH" \
-            --title "chore(release): v${VERSION}" \
-            --body "Record the \`v${VERSION}\` version bump that the Release workflow published to npm \`latest\`. Merge to keep \`${{ github.ref_name }}\`'s manifests in sync with the published version."
-
-      - name: Create GitHub Release
+      - name: Tag, GitHub Release and changelog PR
         if: steps.release.outputs.published == 'true'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        id: announce
         env:
-          RESULT: ${{ steps.release.outputs.version }}
-          ROOT_NAME: ${{ steps.release.outputs.rootName }}
-          API_CLIENT_NAME: ${{ steps.release.outputs.apiClientName }}
-          ALIAS_NAME: ${{ steps.release.outputs.aliasName }}
-          RUN_ALIAS_NAME: ${{ steps.release.outputs.runAliasName }}
-        with:
-          script: |
-            const version = process.env.RESULT;
-            const root = process.env.ROOT_NAME;
-            const apiClient = process.env.API_CLIENT_NAME;
-            const alias = process.env.ALIAS_NAME;
-            const runAlias = process.env.RUN_ALIAS_NAME;
-            const body = [
-              '## Published packages',
-              '',
-              '| Package | Version |',
-              '|---|---|',
-              `| \`${root}\` | \`${version}\` |`,
-              `| \`${apiClient}\` | \`${version}\` |`,
-              `| \`${runAlias}\` | \`${version}\` |`,
-              `| \`${alias}\` | \`${version}\` |`,
-              '',
-              '### Install',
-              '',
-              '```bash',
-              `npx ${runAlias}@${version}`,
-              '```',
-            ].join('\n');
-            // Creates the tag at the released commit if it doesn't exist yet —
-            // this is the release's only write to the repo, and one the branch
-            // protection ruleset permits (unlike a direct push to main).
-            await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: `v${version}`,
-              target_commitish: context.sha,
-              name: `v${version}`,
-              body,
-              draft: false,
-              prerelease: false,
-            });
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+          SHA: ${{ steps.prepare.outputs.sha }}
+          DIST_TAG: ${{ steps.prepare.outputs.distTag }}
+        run: node scripts/release-line.mjs announce --version "$VERSION" --sha "$SHA" --dist-tag "$DIST_TAG"
 
       - name: Write workflow summary
-        if: always() && steps.release.outputs.version != ''
+        if: always() && steps.prepare.outputs.version != ''
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ steps.prepare.outputs.version }}
+          DIST_TAG: ${{ steps.prepare.outputs.distTag }}
           PUBLISHED: ${{ steps.release.outputs.published }}
           RUN_ALIAS_NAME: ${{ steps.release.outputs.runAliasName }}
+          CHANGELOG_PR: ${{ steps.announce.outputs.changelogPr }}
         run: |
           {
-            echo "## 🚀 Release ${VERSION}"
+            echo "## 🚀 Release ${VERSION} from ${GITHUB_REF_NAME}"
             echo ""
             if [ "$PUBLISHED" = "true" ]; then
-              echo "Published \`${RUN_ALIAS_NAME}@${VERSION}\` to \`latest\` and tagged \`v${VERSION}\`."
+              echo "Published \`${RUN_ALIAS_NAME}@${VERSION}\` under \`${DIST_TAG}\` and tagged \`v${VERSION}\`."
+              [ -n "$CHANGELOG_PR" ] && echo "" && echo "Changelog entry carried to main: ${CHANGELOG_PR}"
             else
-              echo "⚠️ Dry run — \`NPM_TOKEN\` is not configured, nothing was published. See \`docs/publishing.md\`."
+              echo "⚠️ Dry run — nothing was committed, published or tagged (\`dry_run\` input, or \`NPM_TOKEN\` missing; see \`docs/publishing.md\`)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"

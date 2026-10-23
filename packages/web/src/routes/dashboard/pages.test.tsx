@@ -19,6 +19,7 @@ it('finds a staged question that moved into reviews instead of claiming it no lo
     title: 'Question moved',
     status: 'waiting',
     createdAt: '2026-09-18T00:00:00.000Z',
+    lastActivityAt: '2026-09-18T00:00:00.000Z',
     archived: false,
     workflow: 'quick',
   }

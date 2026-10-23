@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, ProjectsResponse, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Projects (multi-project spec, step 4.4; mockup `settings-global.html`).
@@ -82,6 +83,8 @@ type Answers = {
   del?: { status: number; payload: unknown }
   /** Serve the boot folder as an unregistered row (and make it `bootProject`). */
   unregisteredBoot?: boolean
+  /** Flag that boot row `notAddable` (a `$HOME` / task-worktree launch folder). */
+  notAddable?: boolean
   /** What `POST /api/v1/projects` answers — the unregistered row's Add button. */
   post?: { status: number; payload: unknown }
 }
@@ -92,7 +95,10 @@ function serve(answers: Answers = {}) {
   const registry: ProjectsResponse = {
     // Copies, not the shared PROJECTS objects: the PATCH handler mutates entries.
     projects: answers.unregisteredBoot
-      ? [UNREGISTERED_BOOT, ...PROJECTS.map((p) => ({ ...p }))]
+      ? [
+          answers.notAddable ? { ...UNREGISTERED_BOOT, notAddable: true as const } : UNREGISTERED_BOOT,
+          ...PROJECTS.map((p) => ({ ...p })),
+        ]
       : PROJECTS.map((p) => ({ ...p })),
     bootProject: answers.unregisteredBoot ? UNREGISTERED_BOOT.id : 'cezar',
     projectsDir: '~/cezar/projects',
@@ -184,26 +190,30 @@ function serve(answers: Answers = {}) {
 }
 
 /** Seeds the step-3.2 route gates so the (unscoped) global settings shell renders immediately. */
-function gateSeededClient(unregisteredBoot = false) {
+function gateSeededClient(unregisteredBoot = false, notAddable = false) {
   const client = createQueryClient()
   const bootProject = unregisteredBoot ? UNREGISTERED_BOOT.id : 'cezar'
   client.setQueryData(queryKeys.health, { bootProject })
   client.setQueryData(workspaceQueryKeys.projects, {
-    projects: unregisteredBoot ? [UNREGISTERED_BOOT, ...PROJECTS] : PROJECTS,
+    projects: unregisteredBoot
+      ? [notAddable ? { ...UNREGISTERED_BOOT, notAddable: true as const } : UNREGISTERED_BOOT, ...PROJECTS]
+      : PROJECTS,
     bootProject,
     projectsDir: '~/cezar/projects',
   })
   return client
 }
 
-function renderProjects(unregisteredBoot = false) {
-  const client = gateSeededClient(unregisteredBoot)
+function renderProjects(unregisteredBoot = false, notAddable = false) {
+  const client = gateSeededClient(unregisteredBoot, notAddable)
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/settings/global/projects']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/projects']}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
@@ -252,6 +262,18 @@ describe('Global settings → Projects', () => {
     // The `missing` row (step 3.3 greys it out in the sidebar) is actionable HERE.
     expect(row('old-spike')?.textContent).toContain('folder not found')
     expect(removeButton('old-spike')?.disabled).toBe(false)
+  })
+
+  it('links each usable project into its own settings — explicitly scoped, none for a missing one', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    const link = (id: string) => row(id)?.querySelector('[data-action="project-settings"]')
+    // Unified settings (spec 2026-10-13): this pane renders OUTSIDE every project scope, so the
+    // path must carry its own `/p/<id>` — a scoped Link would have nothing to prefix with.
+    expect(link('shop-backend')?.getAttribute('href')).toBe('/p/shop-backend/settings')
+    expect(link('cezar')?.getAttribute('href')).toBe('/p/cezar/settings')
+    expect(link('old-spike')).toBeNull()
   })
 
   it('renders the 400 reason from the writability probe INLINE, verbatim', async () => {
@@ -709,6 +731,17 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(removeButton('scratch')).not.toBeNull())
     expect(maxParallelSelect('scratch')).not.toBeNull()
     expect(await screen.findByText(/scratch added to your projects/)).not.toBeNull()
+  })
+
+  it('disables Add for a served folder the server flags notAddable, sending no request', async () => {
+    serve({ unregisteredBoot: true, notAddable: true })
+    renderProjects(true, true)
+    await waitFor(() => expect(rows()).toHaveLength(4))
+
+    const add = row('scratch')!.querySelector<HTMLButtonElement>('[data-action="project-add-boot"]')!
+    expect(add.disabled).toBe(true)
+    fireEvent.click(add)
+    expect(requests.filter((r) => r.method === 'POST')).toEqual([])
   })
 
   it('surfaces the server’s refusal when the served folder is not addable', async () => {

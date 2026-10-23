@@ -1,11 +1,11 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FileDiffIcon, GitCommitHorizontalIcon } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useParams, useSearchParams } from 'react-router'
 
-import { ApiError, createRunPr, getRunFile, openRunFileInApp, pushRun, runFileRawUrl } from '@/api/client'
+import { ApiError, getRunFile, openRunFileInApp, runFileRawUrl } from '@/api/client'
 import { queryKeys, useHealth, useRepo, useRun, useRunChanges } from '@/api/queries'
-import type { ApiRun } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ChangedFile } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { canPreviewMarkdown, Diff, type DiffHandle, type DiffMode, type DiffRevealTarget } from '@/components/diff'
 import { toast } from '@/components/ui/toaster'
@@ -19,6 +19,8 @@ import { TaskComposer, TaskDock } from '../task-thread/task-composer'
 import { useDraft } from '../task-thread/thread-draft'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
 import { isRunActive } from '../task-thread/run-actions'
+import { cn } from '@/lib/utils'
+import { useRememberedState } from '@/lib/view-memory'
 import { RunHeader } from '../task-thread/run-header'
 import { ChangesTree } from './changes-tree'
 import { buildFileTree } from './file-tree'
@@ -54,7 +56,17 @@ export function TaskChangesRoute() {
   return <ChangesView key={run.data.id} run={run.data} />
 }
 
-function ChangesView({ run }: { run: ApiRun }) {
+export function ChangesView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  /** `embedded` drops the run header for a task-workspace column (spec `2026-10-07-task-workspace` §5.1);
+   *  `stateKey` remembers the selection across layout switches (`lib/view-memory.ts`). */
+  embedded?: boolean
+  stateKey?: string
+}) {
   const health = useHealth()
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder, so a cezar booted outside a git
@@ -67,7 +79,7 @@ function ChangesView({ run }: { run: ApiRun }) {
   const [mode, setMode] = useState<DiffMode>('unified')
   const [wrap, setWrap] = useState(false)
   const [preview, setPreview] = useState(false)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
   const diffRef = useRef<DiffHandle | null>(null)
   // Line comments for the agent (self-review): drafted here, and sent from the SAME composer the
   // Session tab docks — floated here while there is something to send, so the review can be given
@@ -131,7 +143,12 @@ function ChangesView({ run }: { run: ApiRun }) {
   // A 409 from /changes is an answer, not an outage: "no worktree — …" (or a git failure).
   const changesRefused = changes.isError && changes.error instanceof ApiError && changes.error.status === 409
 
-  const files = changes.data?.files ?? []
+  const files = changes.data?.files ?? NO_FILES
+  // The toolbar, totals and tree are cheap and paint at once; the diff renders in the background
+  // as a deferred value, which React interrupts for anything urgent — a click on Chat never waits
+  // for a big diff to finish rendering. Until its first pass lands the pane says so.
+  const diffFiles = useDeferredValue(files, NO_FILES)
+  const diffRendering = diffFiles !== files
   const diffShown = !changes.isPending && !changes.isError && files.length > 0
   const tree = useMemo(() => buildFileTree(files), [files])
   const hasMarkdown = useMemo(() => files.some(canPreviewMarkdown), [files])
@@ -141,18 +158,47 @@ function ChangesView({ run }: { run: ApiRun }) {
   const effectiveWrap = desktop ? wrap : true
 
   // Through the facade's handle, not the DOM: past `diff-scroll.ts`'s threshold the diff is
-  // virtualized and the picked file may not be mounted to scroll to.
-  const selectFile = (path: string) => {
-    setSelected(path)
-    diffRef.current?.scrollToPath(path)
-  }
-  /** To one comment or line — the exact spot, not the top of its file — wherever the renderer can. */
-  const revealOrScroll = useCallback((target: DiffRevealTarget) => {
-    setSelected(target.path)
+  // virtualized and the picked file may not be mounted to scroll to. A file alone scrolls to its
+  // top (and leaves a held-back large file closed); a comment or line reveals that exact spot.
+  type Jump = { path: string } | DiffRevealTarget
+  const jump = useCallback((target: Jump) => {
     const handle = diffRef.current
-    if (handle?.reveal) handle.reveal(target)
+    if ('side' in target && handle?.reveal) handle.reveal(target)
     else handle?.scrollToPath(target.path)
   }, [])
+  // The tree and the dock paint before the diff: a jump asked for meanwhile waits for the diff and
+  // its lazily loaded renderer, the way a reveal from the URL does below.
+  const [pendingJump, setPendingJump] = useState<Jump | null>(null)
+  const jumpOrWait = useCallback(
+    (target: Jump) => {
+      if (diffRef.current && !diffRendering) jump(target)
+      else setPendingJump(target)
+    },
+    [diffRendering, jump],
+  )
+  useEffect(() => {
+    if (pendingJump === null || diffRendering) return
+    let tries = 0
+    const timer = setInterval(() => {
+      if (!diffRef.current && ++tries < 40) return
+      clearInterval(timer)
+      jump(pendingJump)
+      setPendingJump(null)
+    }, 75)
+    return () => clearInterval(timer)
+  }, [diffRendering, jump, pendingJump])
+  const selectFile = (path: string) => {
+    setSelected(path)
+    jumpOrWait({ path })
+  }
+  /** To one comment or line — the exact spot, not the top of its file — wherever the renderer can. */
+  const revealOrScroll = useCallback(
+    (target: DiffRevealTarget) => {
+      setSelected(target.path)
+      jumpOrWait(target)
+    },
+    [jumpOrWait, setSelected],
+  )
 
   // Arrived from a link to a comment or a line (a chip on the Session tab, a review in the
   // transcript): reveal it once the diff has rendered. The renderer is a lazy chunk, so its handle
@@ -161,7 +207,7 @@ function ChangesView({ run }: { run: ApiRun }) {
   const searchTarget = useMemo(() => revealFromSearch(searchParams), [searchParams])
   const revealed = useRef<string | null>(null)
   useEffect(() => {
-    if (!searchTarget || !diffShown) return
+    if (!searchTarget || !diffShown || diffRendering) return
     const key = searchParams.toString()
     if (revealed.current === key) return
     let tries = 0
@@ -172,11 +218,13 @@ function ChangesView({ run }: { run: ApiRun }) {
       revealOrScroll(searchTarget)
     }, 75)
     return () => clearInterval(timer)
-  }, [diffShown, revealOrScroll, searchParams, searchTarget])
+  }, [diffRendering, diffShown, revealOrScroll, searchParams, searchTarget])
 
   return (
-    <div data-route="task-changes" className="flex min-h-full flex-col md:h-full">
-      <RunHeader run={run} tab="changes" />
+    // Embedded, the tree follows the COLUMN's width (container query), not the window's: a third
+    // of a wide screen has no room for a 240px tree beside the diff.
+    <div data-route="task-changes" className={cn('flex min-h-full flex-col md:h-full', embedded && '@container')}>
+      {embedded ? null : <RunHeader run={run} tab="changes" />}
 
       <GitToolbar
         branch={run.branch}
@@ -229,7 +277,10 @@ function ChangesView({ run }: { run: ApiRun }) {
               bottoms out in it from chaining into anything else. */}
           <aside
             data-slot="changes-tree-pane"
-            className="hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))] md:block lg:w-72"
+            className={cn(
+              'hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))]',
+              embedded ? 'md:@xl:block @4xl:w-72' : 'md:block lg:w-72',
+            )}
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>
@@ -242,33 +293,39 @@ function ChangesView({ run }: { run: ApiRun }) {
             data-diff-scroller={desktop ? '' : undefined}
             className="min-w-0 flex-1 md:overflow-y-auto md:overscroll-contain"
           >
-            <Diff
-              // Keyed by run: the open comment editor and its unsent text are keyed by path + line
-              // only, so a half-written note must not reappear on the same path + line of another
-              // task. NOT keyed by breakpoint: crossing md swaps the scroller (this column ↔ `main`),
-              // and the Diff rebinds its virtualized list itself, keeping an unsent note.
-              key={run.id}
-              files={files}
-              viewRef={diffRef}
-              mode={effectiveMode}
-              wrap={effectiveWrap}
-              preview={desktop && hasMarkdown && preview}
-              loadFileText={(path) => loadWorktreeText(run.id, path)}
-              imageSrc={(path) => runFileRawUrl(run.id, path)}
-              onOpenInApp={
-                health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
-              }
-              comments={diffComments.comments}
-              // Not until the stored comments have loaded — see `DiffComments.ready`.
-              onAddComment={diffComments.ready ? addComment : undefined}
-              onEditComment={diffComments.update}
-              onRemoveComment={diffComments.remove}
-              // The column runs under the floating dock, so its content pads its end by the dock's
-              // height, and reveals keep their target above the box. Diff targets only: scroll
-              // padding on a scroller also affects the dock textarea, and Chromium scrolls the page
-              // on every keystroke trying to bring its caret above the very dock it lives in.
-              className="min-w-0 md:pt-4 md:pb-[calc(1rem_+_var(--changes-dock,0px))] [&_[data-slot=diff-comment-editor]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line-comment]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line]]:scroll-mb-[var(--changes-dock,0px)]"
-            />
+            {diffFiles.length === 0 ? (
+              <p data-slot="diff-rendering" className="px-1 pt-4 text-xs text-soft-foreground">
+                Rendering {files.length.toLocaleString()} {files.length === 1 ? 'file' : 'files'}…
+              </p>
+            ) : (
+              <Diff
+                // Keyed by run: the open comment editor and its unsent text are keyed by path + line
+                // only, so a half-written note must not reappear on the same path + line of another
+                // task. NOT keyed by breakpoint: crossing md swaps the scroller (this column ↔ `main`),
+                // and the Diff rebinds its virtualized list itself, keeping an unsent note.
+                key={run.id}
+                files={diffFiles}
+                viewRef={diffRef}
+                mode={effectiveMode}
+                wrap={effectiveWrap}
+                preview={desktop && hasMarkdown && preview}
+                loadFileText={(path) => loadWorktreeText(run.id, path)}
+                imageSrc={(path) => runFileRawUrl(run.id, path)}
+                onOpenInApp={
+                  health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
+                }
+                comments={diffComments.comments}
+                // Not until the stored comments have loaded — see `DiffComments.ready`.
+                onAddComment={diffComments.ready ? addComment : undefined}
+                onEditComment={diffComments.update}
+                onRemoveComment={diffComments.remove}
+                // The column runs under the floating dock, so its content pads its end by the dock's
+                // height, and reveals keep their target above the box. Diff targets only: scroll
+                // padding on a scroller also affects the dock textarea, and Chromium scrolls the page
+                // on every keystroke trying to bring its caret above the very dock it lives in.
+                className="min-w-0 md:pt-4 md:pb-[calc(1rem_+_var(--changes-dock,0px))] [&_[data-slot=diff-comment-editor]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line-comment]]:scroll-mb-[var(--changes-dock,0px)] [&_[data-slot=diff-line]]:scroll-mb-[var(--changes-dock,0px)]"
+              />
+            )}
           </div>
         </div>
       )}
@@ -311,6 +368,9 @@ function DockedComposer(props: Omit<ComponentProps<typeof TaskComposer>, 'contin
   useKeyboardInsetVar()
   return <TaskComposer {...props} continueAction={continueAction} />
 }
+
+/** One stable empty list: `useDeferredValue` re-renders on every new identity it is handed. */
+const NO_FILES: ChangedFile[] = []
 
 /** The facade's expandable-context source: the file's current text from the worktree, or
  *  null wherever the server can't honestly serve it (dir, binary, too large, gone). */

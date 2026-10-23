@@ -28,6 +28,11 @@ describe('freshContinuationContext', () => {
     expect(context).toContain('User:\nAttached files:\n- /repo/.ai/cezar/runs/r1-images/pasted-3.png');
   });
 
+  it('lists the files of a task given as attachments only', () => {
+    const context = freshContinuationContext(run({ task: '  ', taskImages: ['/api/v1/runs/r1/images/spec.pdf'] }), [], DIR);
+    expect(context).toContain('## Original task\n(given as attachments only)\nAttached files:\n- /repo/.ai/cezar/runs/r1-images/spec.pdf');
+  });
+
   it('carries task state and the persisted conversation without a handoff file', () => {
     const context = freshContinuationContext(run(), [
       event(1, 'user-message', { text: 'Please start with the API.' }),

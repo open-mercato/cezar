@@ -160,7 +160,7 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
     case 'turn/started':
       return mapTurnStarted(params, state);
     case 'turn/completed':
-      return mapTurnEnd(params, state, /* failed */ false);
+      return mapTurnEnd(params, state, codexTurnError('turn/completed', params) !== undefined);
     case 'turn/failed':
       return mapTurnEnd(params, state, /* failed */ true);
     case 'turn/plan/updated':
@@ -267,7 +267,16 @@ function turnStopReason(params: Record<string, unknown>, failed: boolean): StopR
   const turn = isRecord(params.turn) ? params.turn : {};
   if (turn.status === 'interrupted') return 'cancelled';
   if (!failed) return 'end_turn';
-  return /interrupt/i.test(errorMessage(params.error) ?? '') ? 'cancelled' : 'error';
+  return /interrupt/i.test(codexTurnError('turn/failed', params) ?? '') ? 'cancelled' : 'error';
+}
+
+/** The error a turn frame ends on, or undefined for a clean turn. Current app-servers report a
+ *  failure as `turn/completed` with `turn.status: 'failed'` and the error on `turn.error`; older
+ *  ones sent `turn/failed` with a top-level `error`. */
+export function codexTurnError(method: string, params: Record<string, unknown>): string | undefined {
+  const turn = isRecord(params.turn) ? params.turn : {};
+  if (method !== 'turn/failed' && turn.status !== 'failed') return undefined;
+  return errorMessage(params.error) ?? errorMessage(turn.error) ?? 'codex turn failed';
 }
 
 // ---- plan -------------------------------------------------------------------

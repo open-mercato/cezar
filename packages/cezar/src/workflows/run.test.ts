@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { parseAskMarker } from '../core/ask.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -956,6 +957,78 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
   }, 30_000);
 });
 
+/** spec 2026-10-19-repo-git-sync: an in-place run with `newBranch` forks the checkout itself. */
+describe('worktree off + newBranch switches the repo checkout to a branch off base', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const workflow: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+  };
+  const settle = async (id: string) => {
+    const deadline = Date.now() + 20_000;
+    while (!['done', 'review', 'failed', 'cancelled'].includes(store.getRun(id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return store.getRun(id);
+  };
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-inplace-branch-'));
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, '.gitignore'), '.ai/\nnotes.md\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    // The checkout stands on another branch: the new one still forks from `main`.
+    await run('git', ['checkout', '-q', '-b', 'elsewhere'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'x.txt'), 'x\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'elsewhere only'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ baseBranch: 'main' }));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(async () => {
+    manager.dispose();
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    await removeTempDir(repoRoot);
+  });
+
+  it('creates the named branch from base, records it, and keeps it out of the worktree path', async () => {
+    const record = manager.startRun(workflow, {
+      task: 'mock:done tweak',
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/tweak',
+    });
+    const done = await settle(record.id);
+    expect(done).toMatchObject({ worktree: false, inPlaceBranch: true, branch: 'feat/tweak' });
+    expect(done?.worktreePath).toBeUndefined();
+    const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    expect(head).toBe('feat/tweak');
+    const mainSha = (await run('git', ['rev-parse', 'main'], { cwd: repoRoot })).stdout.trim();
+    expect(done?.baseBranch).toBe(mainSha);
+  }, 30_000);
+
+  it('without newBranch an in-place run leaves the checkout where it is', async () => {
+    await run('git', ['checkout', '-q', 'elsewhere'], { cwd: repoRoot });
+    const record = manager.startRun(workflow, { task: 'mock:done look', worktree: false });
+    const done = await settle(record.id);
+    expect(done?.inPlaceBranch).toBeUndefined();
+    expect(done?.branch).toBeUndefined();
+    const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    expect(head).toBe('elsewhere');
+  }, 30_000);
+});
+
 /**
  * Regression for #1079: command steps can mutate tracked files, but those
  * mutations are verification residue rather than agent work. The agent's
@@ -1544,6 +1617,102 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       active.delete(record.id);
       vi.useRealTimers();
     }
+  });
+
+  describe('Finish while the session is settling (telemetry 6a3cecee)', () => {
+    const createWaiting = (title: string) => {
+      const record = store.createRun({ title, workflow: 'quick-task', task: title, steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+      store.updateRun(record.id, { status: 'waiting' });
+      return record;
+    };
+    const activeMap = () => (manager as unknown as { active: Map<string, object> }).active;
+    const lifecycleMessages = (id: string) =>
+      readEvents(id).filter((event) => event.type === 'lifecycle').map((event) => event.message);
+
+    it('a closed-but-unsettled session takes Finish as the settlement intent instead of a 409', () => {
+      const record = createWaiting('closing');
+      const state = { cancelled: false, sessionEverOpened: true, idleClosed: true, askPark: 'waiting', session: { open: false } };
+      activeMap().set(record.id, state);
+      try {
+        expect(manager.finish(record.id)).toBe(true);
+        expect(state.idleClosed).toBeUndefined();
+        expect(state.askPark).toBe('abandoned');
+        // A repeat click is the same request, not a second event.
+        expect(manager.finish(record.id)).toBe(true);
+        expect(lifecycleMessages(record.id).filter((m) => m === 'finished by user while the session was closing')).toHaveLength(1);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
+
+    it('also covers the gap after teardown cleared the session object', () => {
+      const record = createWaiting('torn down');
+      activeMap().set(record.id, { cancelled: false, sessionEverOpened: true });
+      try {
+        expect(manager.finish(record.id)).toBe(true);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
+
+    it('accepts a review that is still unwinding once the engine lets go', () => {
+      const record = createWaiting('review unwinding');
+      store.updateRun(record.id, { status: 'review' });
+      const state = { cancelled: false, sessionEverOpened: true };
+      activeMap().set(record.id, state);
+      expect(manager.finish(record.id)).toBe(true);
+      expect(store.getRun(record.id)?.status).toBe('review');
+      (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
+      expect(store.getRun(record.id)?.status).toBe('done');
+    });
+
+    it('a repeated End session that lands after the review settle does not accept the review', () => {
+      const record = createWaiting('double click');
+      const end = vi.fn();
+      const session = { open: true, end };
+      const state = { cancelled: false, sessionEverOpened: true, session };
+      activeMap().set(record.id, state);
+      expect(manager.finish(record.id)).toBe(true);
+      expect(end).toHaveBeenCalledOnce();
+      session.open = false;
+      store.updateRun(record.id, { status: 'review' });
+      expect(manager.finish(record.id)).toBe(true);
+      (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
+      expect(store.getRun(record.id)?.status).toBe('review');
+    });
+
+    it('still refuses a cancelled run and a run that never opened a session', () => {
+      const cancelled = createWaiting('cancelled');
+      const fresh = createWaiting('never opened');
+      activeMap().set(cancelled.id, { cancelled: true, sessionEverOpened: true });
+      activeMap().set(fresh.id, { cancelled: false });
+      try {
+        expect(manager.finish(cancelled.id)).toBe(false);
+        expect(manager.finish(fresh.id)).toBe(false);
+      } finally {
+        activeMap().delete(cancelled.id);
+        activeMap().delete(fresh.id);
+      }
+    });
+
+    it('a Finish that lands while the idle settle checks the review gate still wins', async () => {
+      const record = createWaiting('finish mid gate');
+      const state = { cancelled: false, sessionEverOpened: true, idleClosed: true as boolean | undefined };
+      activeMap().set(record.id, state);
+      const internals = manager as unknown as {
+        reviewGateApplies: (id: string) => Promise<boolean>;
+        idleClosedFails: (id: string, s: object) => Promise<boolean>;
+      };
+      internals.reviewGateApplies = async () => {
+        expect(manager.finish(record.id)).toBe(true);
+        return false;
+      };
+      try {
+        expect(await internals.idleClosedFails(record.id, state)).toBe(false);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
   });
 
   it('keeps the configured timeout armed at both new-run and reply continuation parks (#992)', async () => {

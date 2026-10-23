@@ -80,11 +80,12 @@ function schedule(fn: () => void, ms: number): void {
  *
  * `action` appends one link; `durationMs` overrides the five-second default, for the rare toast
  * that asks the reader to decide something rather than telling them what already happened. Both
- * are optional and both default to exactly the previous behavior.
+ * are optional and both default to exactly the previous behavior. `reported` marks a `danger`
+ * toast whose failure the caller already reported with its own fingerprint, so the observers skip it.
  */
 export function toast(
   message: string,
-  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number } = {},
+  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean } = {},
 ): void {
   const item: ToastItem = {
     id: nextId++,
@@ -95,7 +96,7 @@ export function toast(
   }
   const lifetime = opts.durationMs ?? TOAST_MS
   publish([...items, item])
-  if (item.tone === 'danger') {
+  if (item.tone === 'danger' && !opts.reported) {
     for (const listener of dangerListeners) {
       try {
         listener(message)

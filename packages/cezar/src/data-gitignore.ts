@@ -26,8 +26,13 @@ export const DATA_GITIGNORE_ENTRIES = [
   // is not named here is covered by nothing at all. `data-gitignore.test.ts` guards that rule.
   'attachments/',
   'worktrees/',
+  'lifecycle/', // independent durable worktree preparation/cleanup history
+  'config.lifecycle.lock/',
+  'config.json.*.tmp',
   'tmp/', // per-run agent temp directories (#785)
-  'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
+  'drafts/',
+  // Per-task workspace layouts (spec `2026-10-07-task-workspace` §5.3): a screen preference, not repo content.
+  'layouts/', // unsent composer text + pasted screenshots (#939) — never in git history
   'todos.json',
   'todos.json.tmp',
   // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.
@@ -51,6 +56,11 @@ export const DATA_GITIGNORE_ENTRIES = [
   'automation-mutation.lock.guard/',
   'automation-mutation.lock',
 ] as const;
+
+/** cezar's own data directory as a git pathspec exclusion. An in-place task's Changes and its
+ *  landing commit leave it out (spec 2026-10-20-trunk-based-projects): its config, ui-state and
+ *  .gitignore are not untracked by default, but they are never the task's work. */
+export const CEZAR_DATA_EXCLUDE = ':(exclude).ai/cezar';
 
 export function ensureDataGitignore(repoRoot: string): void {
   const path = join(repoRoot, '.ai/cezar', '.gitignore');

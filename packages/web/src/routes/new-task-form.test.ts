@@ -4,6 +4,8 @@ import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/ce
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  looksLikeQuestion,
+  projectDefaultSource,
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
@@ -309,6 +311,20 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
   })
 
+  it('newBranch rides only an in-place single run (spec 2026-10-19-repo-git-sync)', () => {
+    const base = { task: 't', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+    const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+      JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+    expect(wire({ worktree: false, newBranch: true, branch: ' feat/x ' })).toMatchObject({
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/x',
+    })
+    expect(wire({ worktree: false, newBranch: true, branch: '' })).not.toHaveProperty('branch')
+    expect(wire({ worktree: true, newBranch: true, branch: 'feat/x' })).not.toHaveProperty('newBranch')
+    expect(wire({ worktree: false, newBranch: true, variants: 2 })).not.toHaveProperty('newBranch')
+  })
+
   it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
     const body = buildCreateRunBody({
       task: 'just do it',
@@ -499,5 +515,38 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const base = { task: 'x', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+  const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+    JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+
+  it('sends an Ask task as readOnly, with no worktree or branch keys', () => {
+    expect(wire({ readOnly: true, worktree: false, newBranch: true })).toEqual({ task: 'x', workflow: 'quick-task', readOnly: true })
+    // Variants and dispatch always isolate, so they win over Ask.
+    expect(wire({ readOnly: true, variants: 2 })).not.toHaveProperty('readOnly')
+    expect(wire({ readOnly: true, dispatch: {} })).not.toHaveProperty('readOnly')
+  })
+
+  it('asks for a worktree explicitly only against an in-place project default', () => {
+    expect(wire({ worktree: true, inPlaceByDefault: true })).toMatchObject({ worktree: true })
+    expect(wire({ worktree: false, inPlaceByDefault: true })).toMatchObject({ worktree: false })
+    expect(wire({ worktree: true })).not.toHaveProperty('worktree')
+  })
+
+  it("preselects the project's default or Ask skill, only when it exists", () => {
+    const skills = [{ name: 'ingest' }, { name: 'ask' }] as Skill[]
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, skills)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
+    expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('reads a trailing question mark as a question', () => {
+    expect(looksLikeQuestion("what's open with Daniel? ")).toBe(true)
+    expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)
   })
 })

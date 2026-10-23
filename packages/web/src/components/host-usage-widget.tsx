@@ -70,20 +70,16 @@ function HostUsageWidgetRow() {
   const sample = useHostUsage()
   const history = useHostHistory()
   const lastFrameAt = useHostLastFrameAt()
-  const [stale, setStale] = useState(false)
+  // The frame that went stale, not a boolean: a new frame un-stales by itself, so the effect
+  // never calls setState on a frame commit. A per-frame setState there left default-lane work
+  // behind every sync store commit and a burst of frames tripped React #185 (telemetry 21762d83).
+  const [staleFrameAt, setStaleFrameAt] = useState<number | undefined>(undefined)
+  const stale = lastFrameAt !== undefined && staleFrameAt === lastFrameAt
 
   useEffect(() => {
-    if (lastFrameAt === undefined) {
-      setStale(false)
-      return
-    }
-    const remaining = lastFrameAt + HOST_WIDGET_STALE_MS - Date.now()
-    if (remaining <= 0) {
-      setStale(true)
-      return
-    }
-    setStale(false)
-    const timer = setTimeout(() => setStale(true), remaining)
+    if (lastFrameAt === undefined) return
+    const remaining = Math.max(0, lastFrameAt + HOST_WIDGET_STALE_MS - Date.now())
+    const timer = setTimeout(() => setStaleFrameAt(lastFrameAt), remaining)
     return () => clearTimeout(timer)
   }, [lastFrameAt])
 

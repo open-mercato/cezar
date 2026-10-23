@@ -5,6 +5,7 @@ import type { ConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
+import { TrunkBasedFields } from './trunk-based-fields'
 import { SettingsField } from './settings-field'
 import { useConfigSave } from './use-config-save'
 
@@ -47,6 +48,8 @@ function TasksForm({ config }: { config: ConfigResponse }) {
       data-slot="tasks-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      <TrunkBasedFields config={config} />
+
       <SettingsField
         title="Base branch"
         hint="New task worktrees branch from this and draft PRs target it. Also settable from the Git view."

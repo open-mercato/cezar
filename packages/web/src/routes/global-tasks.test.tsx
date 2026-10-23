@@ -70,6 +70,7 @@ const RUNS: RunIndexEntry[] = [
     title: 'Add checkout endpoint',
     status: 'running',
     createdAt: '2026-07-14T10:00:00Z',
+    lastActivityAt: '2026-07-14T10:00:00Z',
     archived: false,
     workflow: 'quick-task',
     branch: 'feat/checkout',
@@ -85,6 +86,7 @@ const RUNS: RunIndexEntry[] = [
     title: 'Checkout page',
     status: 'review',
     createdAt: '2026-07-14T09:00:00Z',
+    lastActivityAt: '2026-07-14T09:00:00Z',
     archived: false,
     workflow: 'plan-first',
     issueNumber: 7,
@@ -96,6 +98,7 @@ const RUNS: RunIndexEntry[] = [
     title: 'Bump the runner',
     status: 'done',
     createdAt: '2026-07-14T08:00:00Z',
+    lastActivityAt: '2026-07-14T08:00:00Z',
     archived: false,
     workflow: 'quick-task',
   },
@@ -366,6 +369,7 @@ describe('global tasks page', () => {
       title: 'Review the checkout endpoint',
       status: 'running',
       createdAt: '2026-07-14T10:30:00Z',
+      lastActivityAt: '2026-07-14T10:30:00Z',
       archived: false,
       workflow: 'quick-task',
       dispatch: { rootRunId: 'a1', parentRunId: 'a1', kind: 'review' },
@@ -1072,7 +1076,7 @@ describe('global tasks page', () => {
       expect(sent.find((request) => request.method === 'POST')).toEqual({
         method: 'POST',
         path: '/api/v1/p/infra/runs/i1/archive',
-        body: { archived: true },
+        body: { archived: true, surface: 'all_tasks' },
       }),
     )
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
@@ -1088,7 +1092,7 @@ describe('global tasks page', () => {
 
     fireEvent.click(document.querySelector<HTMLButtonElement>('[data-action="unarchive-run"]')!)
     await waitFor(() =>
-      expect(sent.find((request) => request.method === 'POST')?.body).toEqual({ archived: false }),
+      expect(sent.find((request) => request.method === 'POST')?.body).toEqual({ archived: false, surface: 'all_tasks' }),
     )
     await waitFor(() => expect(rowIds()).toEqual([]))
   })
@@ -1157,9 +1161,29 @@ describe('global tasks page', () => {
     stubFetch({ truncated: ['api'] })
     renderPage()
 
-    const notice = await screen.findByText(/Showing the newest 200 tasks per project/)
+    const notice = await screen.findByText(/Showing the 200 most recently active tasks per project/)
     // Named by its registry name, not its slug.
     expect(notice.textContent).toContain('API')
+  })
+
+  it('sorts by recent activity by default, and by creation (Created) from the toolbar', async () => {
+    // The server sends last-activity order; i1 was created last-but-one yet finished most recently.
+    const [a1, w1, i1] = RUNS as [RunIndexEntry, RunIndexEntry, RunIndexEntry]
+    stubFetch({ runs: [{ ...i1, finishedAt: '2026-07-14T11:00:00Z', lastActivityAt: '2026-07-14T11:00:00Z' }, a1, w1] })
+    renderPage()
+
+    await screen.findByText('Bump the runner')
+    const sortBy = within(document.querySelector('[data-slot="sort-by"]') as HTMLElement)
+    expect(sortBy.getByRole('button', { name: 'Recent' }).getAttribute('aria-pressed')).toBe('true')
+    expect(rowIds()).toEqual(['i1', 'a1', 'w1'])
+    expect(screen.getByRole('columnheader', { name: 'Updated' })).toBeTruthy()
+    expect(search()).toBe('')
+
+    fireEvent.click(sortBy.getByRole('button', { name: 'Created' }))
+
+    expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+    expect(screen.getByRole('columnheader', { name: 'Created' })).toBeTruthy()
+    expect(search()).toBe('?sort=created')
   })
 
   it('points at Settings when the workspace has no tags at all', async () => {
@@ -1193,6 +1217,7 @@ describe('global tasks page — who started a task', () => {
       title: 'Nightly dependency sweep',
       status: 'done',
       createdAt: '2026-07-14T07:00:00Z',
+      lastActivityAt: '2026-07-14T07:00:00Z',
       archived: false,
       workflow: 'quick-task',
       automationId: 'auto-nightly',
@@ -1204,6 +1229,7 @@ describe('global tasks page — who started a task', () => {
       title: 'Sweep: bump lodash',
       status: 'done',
       createdAt: '2026-07-14T07:05:00Z',
+      lastActivityAt: '2026-07-14T07:05:00Z',
       archived: false,
       workflow: 'quick-task',
       dispatch: { rootRunId: 'a2', parentRunId: 'a2' },

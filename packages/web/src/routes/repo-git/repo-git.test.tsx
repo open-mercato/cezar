@@ -11,6 +11,7 @@ import type {
   HealthResponse,
   RepoCommitPayload,
   RepoResponse,
+  RepoSync,
   RepoTree,
   WorktreeEntry,
 } from '@open-mercato/cezar-api-client'
@@ -34,6 +35,7 @@ const REPO: RepoResponse = {
     { hash: 'def5678', subject: 'fix: stop the bug', author: 'Linus', when: '3 days ago' },
   ],
   branches: ['feature', 'main'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
@@ -46,7 +48,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -114,6 +116,22 @@ const GITHUB: GithubData = {
   ],
 }
 
+/** One local commit to push, one teammate commit to pull (spec 2026-10-19-repo-git-sync). */
+const SYNC: RepoSync = {
+  branch: 'main',
+  upstream: 'origin/main',
+  ahead: 1,
+  behind: 1,
+  outgoing: ['abc1234'],
+  incoming: [{ hash: '9990000', subject: 'feat: teammate work', author: 'Grace', when: '5 minutes ago' }],
+  pushRemote: 'origin',
+  lastFetchedAt: '2026-10-19T10:00:00.000Z',
+  branches: [
+    { name: 'feature', upstream: null, ahead: null, behind: null, gone: false },
+    { name: 'main', upstream: 'origin/main', ahead: 1, behind: 1, gone: false },
+  ],
+}
+
 interface SentRequest {
   path: string
   method: string
@@ -137,6 +155,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       if (override) return override()
       if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
       if (method === 'GET' && path === '/api/v1/repo/changes') return jsonResponse(CHANGES)
+      if (method === 'GET' && path === '/api/v1/repo/sync') return jsonResponse(SYNC)
       if (method === 'GET' && path === '/api/v1/repo/tree') return jsonResponse(TREE)
       if (method === 'GET' && path === '/api/v1/repo/commit/abc1234?structured=1') return jsonResponse(COMMIT)
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(HEALTH)
@@ -275,7 +294,7 @@ describe('the repo view Changes segment', () => {
   it('outside a git repository the whole view degrades honestly', async () => {
     stubFetch({
       'GET /api/v1/repo': () =>
-        jsonResponse({ info: null, status: [], log: [], branches: [], baseBranch: null }),
+        jsonResponse({ info: null, status: [], log: [], branches: [], checkedOutElsewhere: {}, baseBranch: null }),
     })
     renderAt('/git')
     await waitFor(() =>
@@ -365,6 +384,17 @@ describe('the repo view Branches segment', () => {
     const other = document.querySelector('[data-slot="branch-row"][data-branch="feature"]')
     expect(other?.querySelector('[data-slot="branch-current"]')).toBeNull()
     expect(other?.querySelector('[data-action="switch-branch"]')).not.toBeNull()
+  })
+
+  it('offers no Switch for a branch another worktree holds (telemetry da5ca728)', async () => {
+    stubFetch({
+      'GET /api/v1/repo': () => jsonResponse({ ...REPO, checkedOutElsewhere: { feature: '/elsewhere' } }),
+    })
+    renderAt('/git/branches')
+    await waitFor(() => expect(document.querySelector('[data-slot="branch-elsewhere"]')).not.toBeNull())
+    const row = document.querySelector('[data-slot="branch-row"][data-branch="feature"]')
+    expect(row?.querySelector('[data-action="switch-branch"]')).toBeNull()
+    expect(row?.querySelector('[data-slot="branch-elsewhere"]')?.getAttribute('title')).toContain('/elsewhere')
   })
 
   it('Switch POSTs /api/v1/repo/branch and toasts the outcome', async () => {
@@ -797,5 +827,70 @@ describe('the repo Files tree keyboard access', () => {
     await waitFor(() => expect(activePath()).toBe('docs'))
     for (let i = 0; i < 10; i += 1) fireEvent.keyDown(tree(), { key: 'ArrowDown' })
     await waitFor(() => expect(activePath()).toBe('README.md'))
+  })
+})
+
+// ---- sync (spec 2026-10-19-repo-git-sync) ------------------------------------------------------
+
+describe('the repo view sync strip', () => {
+  it('names the upstream and shows ↑ahead ↓behind in the header', async () => {
+    stubFetch()
+    renderAt('/git')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-upstream"]')?.textContent).toBe('→ origin/main'))
+    expect(document.querySelector('[data-sync="ahead"]')?.textContent).toBe('↑1')
+    expect(document.querySelector('[data-sync="behind"]')?.textContent).toBe('↓1')
+  })
+
+  it('Commits lists incoming commits first and marks the local one', async () => {
+    stubFetch()
+    renderAt('/git/commits')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-incoming"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="repo-incoming"]')?.textContent).toContain('feat: teammate work')
+    const local = document.querySelector('[data-slot="repo-commits"] [data-sha="abc1234"] [data-slot="commit-sync"]')
+    expect(local?.getAttribute('data-sync')).toBe('outgoing')
+    expect(document.querySelector('[data-slot="repo-commits"] [data-sha="def5678"] [data-slot="commit-sync"]')).toBeNull()
+  })
+
+  it('Pull POSTs /api/v1/repo/pull, toasts the outcome and adopts the returned status', async () => {
+    const sent = stubFetch({
+      'POST /api/v1/repo/pull': () =>
+        jsonResponse({ message: 'pulled 1 commit', sync: { ...SYNC, behind: 0, incoming: [] } }),
+    })
+    renderAt('/git')
+    await waitFor(() => expect(document.querySelector('[data-action="repo-pull"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="repo-pull"]')!)
+    await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/repo/pull')).toBe(true))
+    await waitFor(() => expect(document.body.textContent).toContain('pulled 1 commit'))
+    await waitFor(() => expect(document.querySelector('[data-sync="behind"]')).toBeNull())
+  })
+
+  it('a refused pull shows git\'s reason as a danger toast', async () => {
+    stubFetch({
+      'POST /api/v1/repo/pull': () => jsonResponse({ error: 'origin/main has diverged' }, 409),
+    })
+    renderAt('/git')
+    await waitFor(() => expect(document.querySelector('[data-action="repo-pull"]')).not.toBeNull())
+    fireEvent.click(document.querySelector('[data-action="repo-pull"]')!)
+    await waitFor(() => expect(document.body.textContent).toContain('origin/main has diverged'))
+  })
+
+  it('an unpublished branch offers Publish instead of Pull/Push', async () => {
+    stubFetch({
+      'GET /api/v1/repo/sync': () =>
+        jsonResponse({ ...SYNC, branch: 'feature', upstream: null, ahead: null, behind: null, incoming: [] }),
+    })
+    renderAt('/git')
+    await waitFor(() => expect(document.querySelector('[data-slot="repo-upstream"]')?.textContent).toBe('not published'))
+    expect(document.querySelector('[data-action="repo-push"]')?.textContent).toContain('Publish branch')
+    expect(document.querySelector('[data-action="repo-pull"]')).toBeNull()
+  })
+
+  it('branch rows carry their tracking state', async () => {
+    stubFetch()
+    renderAt('/git/branches')
+    await waitFor(() =>
+      expect(document.querySelector('[data-branch="feature"] [data-slot="branch-tracking"]')?.textContent).toBe('local only'),
+    )
+    expect(document.querySelector('[data-branch="main"] [data-sync="ahead"]')?.textContent).toBe('↑1')
   })
 })

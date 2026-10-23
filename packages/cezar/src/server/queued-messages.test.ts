@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -9,6 +9,7 @@ import { attachmentLibraryDir, type RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
 import { createApp } from './server.ts';
+import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENTS_TOTAL_BASE64 } from '@open-mercato/cezar-contract';
 
 /**
  * #472 — the queued prompt stack over HTTP: the three-rung delivery ladder on
@@ -197,7 +198,7 @@ describe('queued prompt stack routes (#472)', () => {
   it('rejects an over-cap image count across the stack', async () => {
     store.updateRun(record.id, {
       queuedMessages: [
-        { id: 'msg-1', text: 'with images', images: Array.from({ length: 7 }, (_, i) => `/i/${i}.png`), createdAt: 'x' },
+        { id: 'msg-1', text: 'with images', images: Array.from({ length: 2 * MAX_ATTACHMENTS_PER_MESSAGE - 1 }, (_, i) => `/i/${i}.png`), createdAt: 'x' },
       ],
     });
     const res = await post({
@@ -208,7 +209,52 @@ describe('queued prompt stack routes (#472)', () => {
       ],
     });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('8 attachment limit');
+    expect(((await res.json()) as { error: string }).error).toContain(`${2 * MAX_ATTACHMENTS_PER_MESSAGE} attachment limit`);
+  });
+
+  /** The opening turn carries the task's images AND every stacked message's (#472), so the
+   *  per-message image budget is held across them — files travel as paths and never count. */
+  describe('the image budget across the opening turn', () => {
+    const onDisk = (name: string, bytes: number): string => {
+      const dir = join(repoRoot, '.ai/cezar', 'runs', `${record.id}-images`);
+      mkdirSync(dir, { recursive: true });
+      const fd = openSync(join(dir, name), 'w');
+      ftruncateSync(fd, bytes);
+      closeSync(fd);
+      return `/api/v1/runs/${record.id}/images/${name}`;
+    };
+    // Decoded bytes whose base64 lands just under the budget.
+    const nearlyFull = Math.floor(MAX_ATTACHMENTS_TOTAL_BASE64 / 4) * 3 - 3;
+
+    it('refuses a stacked image that would push the opening turn past it', async () => {
+      store.updateRun(record.id, {
+        taskImages: [onDisk('pasted-1.png', nearlyFull)],
+        queuedMessages: [{ id: 'msg-1', text: 'more', createdAt: 'x' }],
+      });
+      const res = await post({ text: 'one more', images: [{ mediaType: 'image/png', data: 'AAAAAAAA' }] });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toContain('20 MB of images across the task');
+    });
+
+    it('never counts files, and lets an image that fits through', async () => {
+      store.updateRun(record.id, {
+        taskImages: [onDisk('pasted-1.pdf', nearlyFull)],
+        queuedMessages: [{ id: 'msg-1', text: 'more', images: [onDisk('pasted-2.png', 3)], createdAt: 'x' }],
+      });
+      const res = await post({ text: 'one more', images: [{ mediaType: 'image/png', data: 'AAAAAAAA' }] });
+      expect(res.status).toBe(200);
+    });
+
+    it('holds an edit that adds images to the same budget', async () => {
+      store.updateRun(record.id, {
+        taskImages: [onDisk('pasted-1.png', nearlyFull)],
+        queuedMessages: [{ id: 'msg-1', text: 'more', createdAt: 'x' }],
+      });
+      const res = await send(`/api/v1/runs/${record.id}/queued-messages/msg-1`, 'PATCH', {
+        images: [{ mediaType: 'image/png', data: 'AAAAAAAA' }],
+      });
+      expect(res.status).toBe(400);
+    });
   });
 
   /**

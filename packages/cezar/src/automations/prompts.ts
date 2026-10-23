@@ -108,6 +108,8 @@ A schedule — same "name", "description" and "task", but "kind": "schedule" and
   "task": { "prompt": "Run npm outdated, bump patch and minor versions, run the tests, open a draft PR if anything changed. Today is {{date}}." }
 }
 
+Only "filters" decide which items launch a task; the prompt never does. A condition the user states — "when user octocat opens a PR", "only bugs", "unless labelled wip" — goes into authors, labels or the other filters, never only into the prompt text: a condition left in prose launches a task for every item.
+
 For a GitHub poll, name, events, intervalSeconds, filters and task are required; for a tracker poll, name, kind, trackerTrigger, intervalSeconds, filters and task; for a schedule, name, kind, schedule and task. No other top-level key is accepted. Schedules run in the cockpit's own time zone.
 
 Prompt placeholders, substituted per launch — GitHub poll: {{github.kind}} (issue | pull request), {{github.number}}, {{github.title}}, {{github.url}}, {{github.author}}, {{github.assignees}}, {{github.labels}} and {{github.event}}; schedule: {{date}}, {{time}}, {{project}} and {{automation}}. Any other {{…}} is rejected. The matched item's title, author, labels and URL (or the scheduled instant) are also appended to every launched task as untrusted context, so the prompt need not repeat them.

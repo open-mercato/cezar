@@ -2,9 +2,16 @@ import { lazy, useEffect, type ComponentType, type LazyExoticComponent } from 'r
 import { useLocation } from 'react-router'
 
 import {
+  attachmentCountBucket,
+  PALETTE_DISMISS_VIEWS,
+  PALETTE_KINDS,
+  PALETTE_MODES,
+  TASK_SWITCH_WAYS,
+  taskCommandLabel,
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
   type MessageSurface,
+  type SkillsUpdateDropOutcome,
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
@@ -12,6 +19,7 @@ import { useHealth, useProjects } from '@/api/queries'
 import { onDangerToast } from '@/components/ui/toaster'
 import { recentFailedRequest, type FailedRequest } from '@/lib/failed-request'
 import { SID_HEADER, sid } from '@/lib/sid'
+import { reloadForStaleBuild } from '@/lib/stale-build'
 
 /**
  * Cockpit half of the opt-in telemetry (`packages/cezar/src/telemetry.ts`, docs/telemetry.md). The
@@ -54,20 +62,137 @@ export function trackDiffCommentAdded(kind: 'single_line' | 'multi_line'): void 
   send('/api/v1/telemetry/event', { event: 'diff_comment_added', label: kind })
 }
 
+/** A sent message carried attachments (telemetry 7054e5f2) — only the count's bucket, after the
+ *  send landed. */
+export function trackAttachmentsSent(count: number): void {
+  if (count < 1) return
+  send('/api/v1/telemetry/event', { event: 'attachments_sent', label: attachmentCountBucket(count) })
+}
+
+/** A send that hit an expired staged upload, after the automatic re-stage and resend settled. */
+export function trackAttachmentsRestaged(outcome: 'recovered' | 'failed'): void {
+  send('/api/v1/telemetry/event', { event: 'attachments_restaged', label: outcome })
+}
+
 /** One of the "Add project" dialogs was opened (New project, Clone from GitHub, Open local folder). */
 export function trackAddProjectOpened(dialog: AddProjectDialog): void {
   send('/api/v1/telemetry/event', { event: 'add_project_opened', label: dialog })
 }
 
+/** A skills-update apply got no answer; how following the server's state ended. A `recovered`
+ *  drop shows no error, so this is the only signal it happened (telemetry edd8c83e). */
+export function trackSkillsUpdateApplyDropped(outcome: SkillsUpdateDropOutcome): void {
+  send('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: outcome })
+}
+
+// ---- the palettes (spec 2026-10-17-task-palette) ---------------------------------------------
+
+export type PaletteKind = (typeof PALETTE_KINDS)[number]
+export type TaskSwitchWay = (typeof TASK_SWITCH_WAYS)[number]
+export type PaletteMode = (typeof PALETTE_MODES)[number]
+export type PaletteDismissView = (typeof PALETTE_DISMISS_VIEWS)[number]
+
+/** ⌘K or ⌘P opened — once per opening, not per re-scope. */
+export function trackPaletteOpened(kind: PaletteKind): void {
+  send('/api/v1/telemetry/event', { event: 'palette_opened', label: kind })
+}
+
+/** Moved to another task from a palette, and how. */
+export function trackTaskSwitched(way: TaskSwitchWay): void {
+  send('/api/v1/telemetry/event', { event: 'task_switched', label: way })
+}
+
+/** The search modes one palette session used, sent once each when it closes. */
+export function trackPaletteModes(modes: Iterable<PaletteMode>): void {
+  for (const mode of modes) send('/api/v1/telemetry/event', { event: 'palette_mode_used', label: mode })
+}
+
+/** Closed with nothing chosen — the view it was in. */
+export function trackPaletteDismissed(view: PaletteDismissView): void {
+  send('/api/v1/telemetry/event', { event: 'palette_dismissed', label: view })
+}
+
+/** A command got (or lost) a shortcut. Commands telemetry does not name are not sent. */
+export function trackShortcutRebound(commandId: string): void {
+  const label = taskCommandLabel(commandId)
+  if (label) send('/api/v1/telemetry/event', { event: 'shortcut_rebound', label })
+}
+
+/**
+ * How a palette session searched — its SHAPE, never the text. `query` is what is searched, prefix
+ * already stripped; `mode` is the prefix mode the palette actually put in effect (`paletteMode`),
+ * absent where none was (⌘K has no prefixes; ⌘P's default list). Deriving it from the palette's
+ * own mode, not from the raw text, is what keeps `>` with no task open counted as the task search
+ * it really is. An empty query is not a search: ⌘P pre-fills a bare `@` itself.
+ */
+export function searchModes(query: string, mode?: 'tasks' | 'commands' | 'files'): PaletteMode[] {
+  const rest = query.trim().toLowerCase()
+  if (rest === '') return []
+  const modes: PaletteMode[] = mode ? [mode] : []
+  // A file search's `#1482` is a path fragment, not a reference.
+  if (mode === 'files') return modes
+  if (/^(?:(?:pr|issue)\s*)?#?\d{1,7}$/.test(rest)) modes.push('pr_number')
+  if (/\bauto/.test(rest)) modes.push('automation')
+  return modes
+}
+
+/**
+ * Summed counts, flushed as one event per (event, label) with `value` — a shortcut can fire many
+ * times a minute, and the tracking guide asks for one request per batch rather than per press.
+ * Flushes on its timer, and when the tab is hidden or unloads, so a closing tab loses nothing.
+ */
+export function createCountBatch(
+  sendCount: (event: string, label: string, value: number) => void,
+  intervalMs = 60_000,
+): { add: (event: string, label: string) => void; flush: () => void } {
+  const counts = new Map<string, number>()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const flush = () => {
+    clearTimeout(timer)
+    timer = undefined
+    for (const [key, value] of counts) {
+      const [event, label] = key.split('\u0000') as [string, string]
+      // The relay caps a batch at 1000; a minute of more is split rather than dropped.
+      for (let left = value; left > 0; left -= 1000) sendCount(event, label, Math.min(left, 1000))
+    }
+    counts.clear()
+  }
+  return {
+    add: (event, label) => {
+      const key = `${event}\u0000${label}`
+      counts.set(key, (counts.get(key) ?? 0) + 1)
+      timer ??= setTimeout(flush, intervalMs)
+    },
+    flush,
+  }
+}
+
+const commandCounts = createCountBatch((event, label, value) =>
+  send('/api/v1/telemetry/event', { event, label, value }),
+)
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', commandCounts.flush)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') commandCounts.flush()
+  })
+}
+
+/** A task command ran — from the palette or from its shortcut. Batched (`createCountBatch`). */
+export function countTaskCommand(commandId: string, source: 'palette' | 'shortcut'): void {
+  const label = taskCommandLabel(commandId)
+  if (!label) return
+  commandCounts.add(source === 'palette' ? 'task_command_run' : 'task_shortcut_used', label)
+}
+
 /** Whether a pathname is a page the user actually sees. Everything else outside these roots is
  *  a legacy flat URL that redirects into a project (`/` → `/p/<boot>/`) — counting it would put
- *  a phantom step before every real one. */
+ *  a phantom step before every real one. Bare `/settings/global` is one of those redirects: it
+ *  lands on the first global section (spec 2026-10-13-unified-settings). */
 export function isCanonicalRoute(pathname: string): boolean {
   return (
     pathname.startsWith('/p/') ||
     pathname === '/tasks' ||
     pathname === '/dashboard' ||
-    pathname === '/settings/global' ||
     pathname.startsWith('/settings/global/')
   )
 }
@@ -182,7 +307,7 @@ function assetFile(url: string | undefined): string | null {
 /** Errors already reported, so the window hooks don't report a chunk failure a second time. */
 const reported = new WeakSet<object>()
 /** Last report per throttle slot: toasts get their own, so a repeated toast never hides a crash. */
-const lastErrorAt = { error: 0, toast: 0 }
+const lastErrorAt = { error: 0, toast: 0, staging: 0 }
 
 /** An uncaught `ApiError(0)` — the server never answered — carries its transport cause too. */
 function unreachableContext(err: Error): Context {
@@ -203,7 +328,8 @@ function reportClientError(
   session.errors += 1
   // Don't flood: at most one cockpit error report per 10 s (the server throttles per error too).
   const now = Date.now()
-  const slot = handler === 'toast' ? 'toast' : 'error'
+  // Own slots, so a burst of toasts or staging failures cannot mute a real crash report.
+  const slot = handler === 'toast' ? 'toast' : handler === 'attachment-staging' ? 'staging' : 'error'
   if (now - lastErrorAt[slot] < 10_000) return
   lastErrorAt[slot] = now
   // A thrown non-Error (a string, a bare `window.error` message) has no stack of its own. Never
@@ -291,13 +417,19 @@ let knownProjects: string[] = []
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
+// The composer takes any file since #1510, so the common document, archive and media types too.
+const FILE_NAME =
+  /(?<![\w./-])[\w-][\w.-]*\.(?:png|jpe?g|gif|webp|bmp|heic|avif|tiff?|ico|svg|pdf|txt|md|markdown|log|html?|csv|tsv|json|ya?ml|xml|rtf|docx?|xlsx?|pptx?|od[tsp]|zip|tar|t?gz|bz2|xz|7z|rar|mp[34]|mov|wav|webm|bin)(?![\w.-])/gi
+
 /** A toast's text without the user's data it interpolates (docs/telemetry.md, "What is never
- *  sent"): quoted values, emails, API URLs (as their route shape), slash-bearing tokens — paths,
+ *  sent"): quoted values, emails, file names, API URLs (as their route shape), slash-bearing tokens — paths,
  *  branches, `owner/repo` —, the names and ids of the user's projects, and anything after `: `. */
 export function scrubToastMessage(message: string, projects: readonly string[] = knownProjects): string {
   let out = message
     .replace(/“[^”]*”|‘[^’]*’|"[^"]*"|`[^`]*`|(?<!\w)'[^'\n]+'(?!\w)/g, '<value>')
     .replace(/[^\s()[\]{}<>,;]+@[^\s()[\]{}<>,;]+\.\w+/g, '<email>')
+    // Bare file names (`image.png`): one per upload would make each its own error group (0f1255b6).
+    .replace(FILE_NAME, '<file>')
     .replace(/[^\s()[\]{}<>,;]*\/[^\s()[\]{}<>,;]*/g, (token) => {
       if (!/^(https?:\/\/[^/\s]+)?\/api\//.test(token)) return '<path>'
       try {
@@ -321,6 +453,32 @@ function reportErrorToast(message: string): void {
   reportClientError(scrubToastMessage(message), 'toast', { type, context })
 }
 
+/** A composer attachment that could not be staged (telemetry 7054e5f2). The send still works —
+ *  the bytes ride inline — which is exactly why nobody would notice a broken uploads store
+ *  without this report. */
+export function reportAttachmentStagingFailed(error: unknown): void {
+  const status = (error as { status?: unknown } | null)?.status
+  reportClientError(error, 'attachment-staging', {
+    code: 'attachment_stage_failed',
+    context: { 'request.route': '/api/v1/workspace/uploads', ...(typeof status === 'number' ? { 'request.status': status } : {}) },
+  })
+}
+
+/** A dictation the browser refused or broke off (telemetry 38ccdbdc, 252d00a6). One fingerprint
+ *  for every Web Speech error code — the code rides in context — so `not-allowed` and
+ *  `service-not-allowed` stop splitting into separate groups by their toast text. */
+export function reportDictationFailed(errorCode: string): void {
+  reportClientError(new Error('Dictation failed'), 'toast', {
+    type: 'DictationError',
+    code: 'dictation_failed',
+    fingerprint: 'cockpit:dictation_failed',
+    context: {
+      'dictation.error': /^[a-z][a-z-]{0,63}$/.test(errorCode) ? errorCode : 'other',
+      'dictation.secure_context': window.isSecureContext !== false,
+    },
+  })
+}
+
 /** `React.lazy` that says WHICH page failed when its bundle can't load. Engines word the failure
  *  differently (WebKit: "Importing a module script failed.", Chromium: "Failed to fetch
  *  dynamically imported module") and WebKit sends no stack, so these share one code and one
@@ -332,6 +490,8 @@ export function lazyRoute<T extends ComponentType<any>>(
 ): LazyExoticComponent<T> {
   return lazy(() =>
     load().catch((error: unknown) => {
+      // Stale shell after an update: keep the Suspense fallback up while the page reloads.
+      if (reloadForStaleBuild()) return new Promise<never>(() => {})
       reportClientError(error, 'lazy-route', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
@@ -380,12 +540,15 @@ export function Telemetry() {
       reportClientError(e.reason, 'unhandledrejection'),
     )
     // Vite's own signal that a preloaded dependency of a dynamic import failed to load.
-    window.addEventListener('vite:preloadError', (e) =>
+    window.addEventListener('vite:preloadError', (e) => {
+      // A reload is the recovery. No preventDefault: that makes Vite resolve the import with
+      // `undefined`, and callers expect the rejection (lazyRoute holds its fallback on it).
+      if (reloadForStaleBuild()) return
       reportClientError((e as Event & { payload?: unknown }).payload, 'vite:preloadError', {
         code: 'chunk_load_failed',
         fingerprint: 'cockpit:chunk_load_failed',
-      }),
-    )
+      })
+    })
     onDangerToast(reportErrorToast)
   }, [])
 

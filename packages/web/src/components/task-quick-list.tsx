@@ -1,6 +1,6 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useArchiveRun, useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '@/api/queries'
+import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useReferenceProjectId, useRunsForProject } from '@/api/queries'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -19,6 +19,7 @@ import { isRunActive } from '@/lib/run-status'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
+  lastActivityAt,
   listCounts,
   refPrefixMatches,
   runTitle,
@@ -43,6 +44,10 @@ import { cn } from '@/lib/utils'
  * group collapses) is made by `lib/task-groups.ts` and `lib/attention.ts`, which are pure and
  * table-tested. What is left here is markup, the router, and the expand/collapse toggle.
  */
+/** The repo web root of the project a list of rows belongs to — what turns a reference known only
+ *  by number into a link. Provided by whichever container knows the project; absent = no link. */
+export const RepoBaseContext = React.createContext<string | undefined>(undefined)
+
 export function TaskQuickList({
   runs,
   view,
@@ -437,7 +442,8 @@ const RunRow = React.memo(function RunRow({
   // The strongest tracker reference the run knows about — the PR once one exists, else the issue
   // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
   // prefix (#788, option C): the number is painted once, as a link, instead of twice as digits.
-  const reference = taskReference(run)
+  // With the row's project repo, so a PR known only by number (`CEZ:PR=…`) is still a link.
+  const reference = taskReference(run, React.useContext(RepoBaseContext))
   const title = runTitle(run)
   // Only when the two numbers are the same number — see `refPrefixMatches`. A run opened on issue
   // #788 that shipped as PR #790 keeps its prefix, because the chip is no longer saying it.
@@ -453,7 +459,7 @@ const RunRow = React.memo(function RunRow({
     ? ''
     : queuePosition !== null
       ? `#${queuePosition}`
-      : shortAge(run.finishedAt ?? run.createdAt, now)
+      : shortAge(lastActivityAt(run), now)
 
   const subtasks = subtaskLabel(childCount)
   const dispatchKind = dispatchKindLabel(run)
@@ -645,7 +651,7 @@ export function TaskQuickListContainer() {
   const health = useHealth()
   const activeProjectId = useActiveProjectId()
   const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
-  const pinMutation = usePinRun()
+  const pinMutation = usePinRun('sidebar')
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
   // The remembered Regular | Automations | All split the Tasks tables set — the sidebar shows the
@@ -667,7 +673,7 @@ export function TaskQuickListContainer() {
       ),
     [pinMutation.mutate],
   )
-  const archiveMutation = useArchiveRun()
+  const archiveMutation = useArchiveRun('sidebar')
   const onToggleArchive = React.useCallback(
     (run: RunRecord, archived: boolean) =>
       archiveMutation.mutate(
@@ -679,6 +685,7 @@ export function TaskQuickListContainer() {
   // The sidebar's chips are the same chips as the tables', so they get their status the same way:
   // one batched request for the whole list, mounted here where the list is.
   const projectId = useReferenceProjectId()
+  const repoBase = useProjectRepoBase()
   const referenceRequests = React.useMemo(
     () =>
       projectId === undefined
@@ -699,6 +706,7 @@ export function TaskQuickListContainer() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <RepoBaseContext.Provider value={repoBase}>
       <TaskQuickList
         runs={shown}
         view={view}
@@ -713,6 +721,7 @@ export function TaskQuickListContainer() {
         onTogglePin={onTogglePin}
         onToggleArchive={onToggleArchive}
       />
+      </RepoBaseContext.Provider>
     </ReferenceStatusProvider>
   )
 }

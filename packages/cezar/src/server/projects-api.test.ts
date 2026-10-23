@@ -53,6 +53,7 @@ interface HealthBody {
   forge: unknown;
   capabilities: {
     localHandoff: boolean;
+    terminal: boolean;
     followups: boolean;
     singleProject: boolean;
     automations: boolean;
@@ -254,6 +255,20 @@ describe('workspace projects API', () => {
       });
       // Listed, never written: nothing reached the registry.
       expect((await loadWorkspaceConfig()).projects).toEqual([]);
+    });
+
+    it('flags a boot folder the register route would refuse as notAddable (telemetry 48dc0f71)', async () => {
+      const worktree = join(repoRoot, '.ai', 'cezar', 'worktrees', 'task1');
+      mkdirSync(worktree, { recursive: true });
+
+      const body = await getProjects({ repoRoot: worktree });
+      expect(body.projects.find((p) => p.id === body.bootProject)).toMatchObject({
+        unregistered: true,
+        notAddable: true,
+      });
+      // An ordinary folder stays addable.
+      const ordinary = await getProjects();
+      expect(ordinary.projects[0]?.notAddable).toBeUndefined();
     });
 
     it('omits the boot folder once the registry holds any project, and still names it', async () => {
@@ -923,6 +938,8 @@ describe('workspace projects API', () => {
       expect(body.forge).toBeNull();
       expect(body.capabilities).toEqual({
         localHandoff: true,
+        terminal: true,
+        designMode: true,
         followups: false,
         singleProject: false,
         automations: true,

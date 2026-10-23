@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FoldersIcon, XIcon } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { Link as RouterLink } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import {
@@ -393,9 +394,29 @@ function ProjectRow({
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
         {project.unregistered ? '—' : shortDate(project.addedAt)}
       </td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        {/* Into the project's own settings (unified settings, spec 2026-10-13). An EXPLICIT
+            `/p/<id>` path — this pane renders outside every project scope, so the scoped Link
+            would have nothing to prefix with. Neither a missing project (its panes all 409) nor
+            the unregistered launch folder (not a project) gets one. */}
+        {!project.unregistered && project.status !== 'missing' ? (
+          <Button asChild variant="ghost" size="sm">
+            <RouterLink
+              to={`/p/${encodeURIComponent(project.id)}/settings`}
+              data-action="project-settings"
+              aria-label={`Settings for ${project.name}`}
+            >
+              Settings
+            </RouterLink>
+          </Button>
+        ) : null}
         {project.unregistered ? (
-          <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} />
+          <AddBootProjectButton
+            root={project.root}
+            name={project.name}
+            disabled={disabled}
+            notAddable={project.notAddable === true}
+          />
         ) : (
           <Button
             type="button"
@@ -435,10 +456,13 @@ export function AddBootProjectButton({
   root,
   name,
   disabled = false,
+  notAddable = false,
 }: {
   root: string
   name: string
   disabled?: boolean
+  /** The server refuses this folder (`$HOME`, a task worktree): explain instead of 400-ing. */
+  notAddable?: boolean
 }) {
   const register = useRegisterProject()
   return (
@@ -448,8 +472,12 @@ export function AddBootProjectButton({
       size="sm"
       data-action="project-add-boot"
       aria-label={`Add ${name} to your projects`}
-      title="cezar is serving this folder — save it to your projects"
-      disabled={disabled || register.isPending}
+      title={
+        notAddable
+          ? 'Your home directory or a cezar task worktree cannot be a project — start cezar in a project folder, or use Open local folder'
+          : 'cezar is serving this folder — save it to your projects'
+      }
+      disabled={disabled || notAddable || register.isPending}
       onClick={() =>
         register.mutate(root, {
           onSuccess: () => toast(`${name} added to your projects`),

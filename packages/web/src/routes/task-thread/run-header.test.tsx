@@ -4,12 +4,21 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
+import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RunHeader, type RunTab } from './run-header'
-import { fixChecksPrompt, resolveConflictsPrompt, updateBranchPrompt } from './run-actions'
+import {
+  commitPrompt,
+  createPrPrompt,
+  fixChecksPrompt,
+  pushPrompt,
+  resolveConflictsPrompt,
+  updateBranchPrompt,
+} from './run-actions'
+import { __resetGitStepFlights } from '../task-git/run-git-step'
 
 beforeEach(() => {
   // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
@@ -24,6 +33,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  __resetGitStepFlights()
   act(() => resetToasts())
   cleanup()
   vi.useRealTimers()
@@ -129,6 +139,7 @@ function renderHeader(
   )
 }
 
+const gitButtonText = () => document.querySelector('[data-slot="git-button"] button')?.textContent
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
 /** The title row's task-management icons (Pin · Archive · Delete · ⋯). */
 const itemActions = () => within(document.querySelector('[data-slot="task-item-actions"]') as HTMLElement)
@@ -341,7 +352,7 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(buttonNames(actionBar())).toEqual(visible)
   })
 
-  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes'])(
+  it.each<RunTab>(['session', 'changes', 'commits', 'files', 'notes', 'preview'])(
     'the %s tab offers no header Continue — the chat box’s send is Continue',
     async (tab) => {
       stubFetch()
@@ -443,17 +454,31 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(diff.compareDocumentPosition(pr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('tokens, cost and the agent badge sit on the tabs line on desktop', () => {
+  it('collapses the desktop header to its title and tabs, and remembers it', () => {
+    stubFetch()
+    try {
+      window.localStorage.removeItem('cez:run-header-collapsed')
+    } catch {}
+    renderHeader(run('done'))
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    expect(details.className).toContain('md:block')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse header' }))
+    expect(details.className).toContain('md:hidden')
+    expect(screen.getByRole('button', { name: 'Expand header' }).getAttribute('aria-expanded')).toBe('false')
+    expect(window.localStorage.getItem('cez:run-header-collapsed')).toBe('1')
+    fireEvent.click(screen.getByRole('button', { name: 'Expand header' }))
+    expect(details.className).toContain('md:block')
+    expect(window.localStorage.getItem('cez:run-header-collapsed')).toBeNull()
+  })
+
+  it('tokens, cost and the agent badge sit once in the meta row, leaving the tabs line to navigation', () => {
     stubFetch()
     renderHeader(run('done', { costUsd: 12, inputTokens: 152, outputTokens: 37_300 }))
-    const desktop = document.querySelector('[data-slot="run-tabs"] [data-slot="run-usage"]') as HTMLElement
-    expect(desktop.className).toContain('hidden')
-    expect(desktop.className).toContain('md:flex')
-    expect(desktop.textContent).toContain('$12')
-    expect(desktop.querySelector('[data-slot="agent-badge"]')).not.toBeNull()
-    // Phones read it in the collapsible details row instead.
-    const phone = document.querySelector('[data-slot="run-meta"] [data-slot="run-usage"]') as HTMLElement
-    expect(phone.className).toContain('md:hidden')
+    expect(document.querySelector('[data-slot="run-tabs"] [data-slot="run-usage"]')).toBeNull()
+    const usage = document.querySelectorAll('[data-slot="run-meta"] [data-slot="run-usage"]')
+    expect(usage).toHaveLength(1)
+    expect(usage[0]!.textContent).toContain('$12')
+    expect(usage[0]!.querySelector('[data-slot="agent-badge"]')).not.toBeNull()
   })
 
   it('the git button sits top right; the other actions close the details row', async () => {
@@ -514,26 +539,351 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
     expect(message.body).toMatchObject({ text: prompt })
   })
 
-  it('a branch behind its base offers Update branch instead of Create PR, sent to the task’s agent', async () => {
+  it('no PR yet but behind: Create PR stays the button, Update branch is under its chevron', async () => {
     const sent = stubFetch({
-      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 4 }),
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 4, ahead: 1 }),
       '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
     })
-    renderHeader(run('running', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'origin/main' }))
-    const button = await waitFor(() => {
-      const el = document.querySelector('[data-slot="git-button"] button') as HTMLButtonElement | null
-      expect(el?.textContent).toBe('Update branch')
-      return el!
-    })
-    expect(document.querySelector('[data-action="create-pr"]')).toBeNull()
-    fireEvent.click(button)
+    renderHeader(run('waiting', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'origin/main' }))
+    await waitFor(() =>
+      expect((document.querySelector('[data-slot="git-button"] [data-action="create-pr"]') as HTMLButtonElement | null)?.disabled).toBe(false),
+    )
+    fireEvent.pointerDown(document.querySelector('[data-slot="git-button"] [aria-label="More ways to create pr"]')!)
+    const menu = await screen.findByRole('menu')
+    fireEvent.click(menu.querySelector('[data-action="update-branch"]')!)
     const message = await waitFor(() => {
       const found = sent.find((r) => r.method === 'POST' && r.path.endsWith('/messages'))
       if (!found) throw new Error('nothing was sent')
       return found
     })
-    expect(message.body).toMatchObject({ text: updateBranchPrompt('origin/main') })
-    expect((message.body as { text: string }).text).toContain('origin/main')
+    expect(message.body).toMatchObject({ text: 'Update branch from main' })
+    // Busy under the in-flight step's label, whichever button is showing.
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] button')?.textContent).toBe('Updating branch…'))
+  })
+
+  it('every git step says just its name to the agent — no cezar playbook in the thread', () => {
+    expect(createPrPrompt(false)).toBe('Create PR')
+    expect(createPrPrompt(true)).toBe('Create draft PR')
+    expect(updateBranchPrompt()).toBe('Update branch')
+    // The base rides along, so a task whose base is not the repo default (a dispatch child, a
+    // feature-branch task) is never opened against or merged from `main` by mistake.
+    expect(createPrPrompt(false, 'origin/main')).toBe('Create PR against main')
+    expect(createPrPrompt(true, 'cez/1a2b3c4d')).toBe('Create draft PR against cez/1a2b3c4d')
+    expect(updateBranchPrompt('origin/release/2.x')).toBe('Update branch from release/2.x')
+    // A raw sha (detached fork point) is not a branch to target.
+    expect(createPrPrompt(false, '0a1b2c3d4e5f')).toBe('Create PR')
+    expect(commitPrompt(false)).toBe('Commit')
+    expect(commitPrompt(true)).toBe('Commit and push')
+    expect(pushPrompt()).toBe('Push')
+    expect(resolveConflictsPrompt(1311)).toBe('Resolve conflicts in PR 1311')
+    expect(fixChecksPrompt(1311)).toBe('Fix failing checks in PR 1311')
+    expect(fixChecksPrompt()).toBe('Fix failing checks')
+  })
+
+  describe('the agent runs the git step itself; the server only stands in without one', () => {
+    const textSent = (sent: SentRequest[], text: string) =>
+      sent.find((r) => r.method === 'POST' && (r.body as { text?: string } | undefined)?.text === text)
+    const prRun = (status: RunStatus, extra: Partial<ApiRun> = {}) =>
+      run(status, {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
+        ...extra,
+      })
+    const unpushed = (extra: Record<string, () => Response> = {}) =>
+      stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: 2, behind: 0, ahead: 2 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+        '/api/v1/repo': () => jsonResponse({ info: { remote: 'git@github.com:open-mercato/cezar.git' } }),
+        ...extra,
+      })
+    async function enabled(action: string) {
+      return waitFor(() => {
+        const el = document.querySelector(`[data-slot="git-button"] [data-action="${action}"]`) as HTMLButtonElement | null
+        expect(el?.disabled).toBe(false)
+        // Blocked by the policy is aria-disabled, not disabled — usable means neither.
+        expect(el?.getAttribute('aria-disabled')).toBeNull()
+        return el!
+      })
+    }
+
+    it('Push: the agent is asked to push — cezar does not push itself', async () => {
+      const sent = unpushed()
+      renderHeader(prRun('waiting'))
+      fireEvent.click(await enabled('push'))
+      await waitFor(() => {
+        if (!textSent(sent, pushPrompt())) throw new Error('the agent was not asked')
+      })
+      expect(sent.some((r) => r.path.endsWith('/git/push'))).toBe(false)
+      await waitFor(() => expect(gitButtonText()).toBe('Pushing…'))
+      // The busy button is the feedback — no "Sent to the task" / "Task reopened" toast on top.
+      expect(screen.queryByText(/Sent to the task|Task reopened/)).toBeNull()
+    })
+
+    it('Push works mid-turn too: the agent takes it after the turn it is on', async () => {
+      unpushed()
+      renderHeader(prRun('running'))
+      expect((await enabled('push')).disabled).toBe(false)
+    })
+
+    it('Create PR on a "needs you" session: the agent gets just "Create PR"', async () => {
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 0, ahead: 1 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+      })
+      renderHeader(run('waiting', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'origin/main' }))
+      fireEvent.click(await enabled('create-pr'))
+      await waitFor(() => {
+        if (!textSent(sent, 'Create PR against main')) throw new Error('the agent was not asked')
+      })
+      expect(sent.some((r) => r.path.endsWith('/pr'))).toBe(false)
+    })
+
+    it('Commit and push: the agent commits with its own message — no commit dialog', async () => {
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 1 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+        '/api/v1/repo': () => jsonResponse({ info: { remote: 'git@github.com:open-mercato/cezar.git' } }),
+      })
+      renderHeader(prRun('waiting'))
+      fireEvent.click(await enabled('commit-push'))
+      await waitFor(() => {
+        if (!textSent(sent, commitPrompt(true))) throw new Error('the agent was not asked')
+      })
+      expect(screen.queryByRole('dialog')).toBeNull()
+      expect(sent.some((r) => r.path.endsWith('/git/commit'))).toBe(false)
+    })
+
+    it('no agent session to reach: Push falls back to cezar pushing', async () => {
+      const sent = unpushed({
+        '/api/v1/runs/r1/git/push': () =>
+          jsonResponse({ pushed: true, branch: 'cez/r1', remote: 'origin', upstreamSet: false }),
+      })
+      // No session id on any step: nothing to resume, so the agent cannot be asked.
+      renderHeader(prRun('done', { steps: [step()] }))
+      fireEvent.click(await enabled('push'))
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/git/push'))).toBe(true))
+      expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toBe(false)
+    })
+
+    it('no agent session to reach: Commit and push falls back to the commit dialog — nothing sent to an agent', async () => {
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 3, unpushed: 0, behind: 0, ahead: 1 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+        '/api/v1/repo': () => jsonResponse({ info: { remote: 'git@github.com:open-mercato/cezar.git' } }),
+      })
+      renderHeader(prRun('done', { steps: [step()] }))
+      fireEvent.click(await enabled('commit-push'))
+      await waitFor(() => expect(document.querySelector('[data-slot="commit-message"]')).not.toBeNull())
+      expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toBe(false)
+      expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/continue'))).toBe(false)
+    })
+
+    it('one in-flight step per task, shared by every surface: a step sent from one blocks the other', async () => {
+      const sent = unpushed()
+      // Two surfaces for the same task (the header and, say, the palette), one query client.
+      const client = createQueryClient()
+      const surface = (
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route path="/tasks/:id" element={<RunHeader run={prRun('waiting')} />} />
+          </Routes>
+        </MemoryRouter>
+      )
+      render(
+        <QueryClientProvider client={client}>
+          {surface}
+          {surface}
+        </QueryClientProvider>,
+      )
+      const buttons = await waitFor(() => {
+        const all = [...document.querySelectorAll<HTMLButtonElement>('[data-slot="git-button"] [data-action="push"]')]
+        expect(all).toHaveLength(2)
+        expect(all.every((el) => !el.disabled)).toBe(true)
+        return all
+      })
+      fireEvent.click(buttons[0]!)
+      await waitFor(() => expect(buttons[1]!.textContent).toBe('Pushing…'))
+      expect(buttons[1]!.disabled).toBe(true)
+      fireEvent.click(buttons[1]!)
+      expect(sent.filter((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toHaveLength(1)
+    })
+  })
+
+  describe('an agent step stays busy for the turn it started — not the session', () => {
+    const behind = () =>
+      stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 4, ahead: 1 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+      })
+    // With a PR, a branch that is behind shows Update branch as the button itself.
+    const live = (status: RunStatus, withPr = true) =>
+      run(status, {
+        worktreePath: '/tmp/wt/r1',
+        branch: 'cez/r1',
+        baseBranch: 'origin/main',
+        ...(withPr ? { pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311' } : {}),
+      })
+    const gitButton = () => document.querySelector('[data-slot="git-button"] button') as HTMLButtonElement | null
+    /** One query client across rerenders, so only the run record changes between them. */
+    function renderLive(status: RunStatus, withPr = true) {
+      const client = createQueryClient()
+      const tree = (record: ApiRun) => (
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/tasks/r1']}>
+            <Routes>
+              <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+      const view = render(tree(live(status, withPr)))
+      return (next: RunStatus) => view.rerender(tree(live(next, withPr)))
+    }
+    async function clickUpdateBranch(sent: SentRequest[]) {
+      const button = await waitFor(() => {
+        expect(gitButton()?.textContent).toBe('Update branch')
+        return gitButton()!
+      })
+      fireEvent.click(button)
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toBe(true))
+      await waitFor(() => expect(gitButton()?.textContent).toBe('Updating branch…'))
+    }
+
+    it('a "needs you" session: busy through the turn, back once it returns to waiting', async () => {
+      const sent = behind()
+      const setStatus = renderLive('waiting')
+      await clickUpdateBranch(sent)
+      setStatus('running')
+      expect(gitButton()?.textContent).toBe('Updating branch…')
+      expect(gitButton()?.disabled).toBe(true)
+      // The turn ends; the session stays open. The step must not stay busy for the session's life.
+      setStatus('waiting')
+      await waitFor(() => expect(gitButton()?.textContent).toBe('Update branch'))
+      expect(gitButton()?.disabled).toBe(false)
+    })
+
+    it('after a Create PR turn, the PR the agent opened is looked up by branch and recorded', async () => {
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 0, ahead: 1 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+        '/api/v1/runs/r1/pr/adopt': () => jsonResponse({ found: true, url: 'https://github.com/o/r/pull/9' }),
+      })
+      const setStatus = renderLive('waiting', false)
+      const button = await waitFor(() => {
+        const el = document.querySelector('[data-slot="git-button"] [data-action="create-pr"]') as HTMLButtonElement | null
+        expect(el?.disabled).toBe(false)
+        return el!
+      })
+      fireEvent.click(button)
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toBe(true))
+      // Not while the agent is still at it — only once its turn ends.
+      setStatus('running')
+      expect(sent.some((r) => r.path.endsWith('/pr/adopt'))).toBe(false)
+      setStatus('waiting')
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/pr/adopt'))).toBe(true))
+    })
+
+    it('mid-turn the button turns into the next step (Push) — busy, and a click sends nothing more', async () => {
+      let gitStatus = { uncommitted: 3, unpushed: 0, behind: 0, ahead: 1 }
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse(gitStatus),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+        '/api/v1/repo': () => jsonResponse({ info: { remote: 'git@github.com:open-mercato/cezar.git' } }),
+      })
+      const client = createQueryClient()
+      const tree = (status: RunStatus) => (
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/tasks/r1']}>
+            <Routes>
+              <Route
+                path="/tasks/:id"
+                element={
+                  <RunHeader
+                    run={run(status, {
+                      worktreePath: '/tmp/wt/r1',
+                      branch: 'cez/r1',
+                      pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1311',
+                    })}
+                  />
+                }
+              />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+      const view = render(tree('waiting'))
+      const commitPush = await waitFor(() => {
+        const el = document.querySelector('[data-slot="git-button"] [data-action="commit-push"]') as HTMLButtonElement | null
+        expect(el?.disabled).toBe(false)
+        return el!
+      })
+      fireEvent.click(commitPush)
+      const messages = () => sent.filter((r) => r.method === 'POST' && r.path.endsWith('/messages'))
+      await waitFor(() => expect(messages()).toHaveLength(1))
+      view.rerender(tree('running'))
+      // The agent's commit lands; the push has not happened yet.
+      gitStatus = { uncommitted: 0, unpushed: 2, behind: 0, ahead: 2 }
+      await act(() => client.invalidateQueries({ queryKey: queryKeys.runs.gitStatus('r1') }))
+      const push = await waitFor(() => {
+        const el = document.querySelector('[data-slot="git-button"] [data-action="push"]') as HTMLButtonElement | null
+        expect(el).not.toBeNull()
+        return el!
+      })
+      expect(push.disabled).toBe(true)
+      expect(push.textContent).toBe('Committing and pushing…')
+      fireEvent.click(push)
+      expect(messages()).toHaveLength(1)
+    })
+
+    it('sent mid-turn: the turn already running is not the step’s — busy until its own turn ends, adoption only then', async () => {
+      const sent = stubFetch({
+        '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 0, ahead: 1 }),
+        '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+        '/api/v1/runs/r1/pr/adopt': () => jsonResponse({ found: true, url: 'https://github.com/o/r/pull/9' }),
+      })
+      const setStatus = renderLive('running', false)
+      const button = await waitFor(() => {
+        const el = document.querySelector('[data-slot="git-button"] [data-action="create-pr"]') as HTMLButtonElement | null
+        expect(el?.disabled).toBe(false)
+        return el!
+      })
+      fireEvent.click(button)
+      await waitFor(() => expect(sent.some((r) => r.method === 'POST' && r.path.endsWith('/messages'))).toBe(true))
+      const adopted = () => sent.some((r) => r.method === 'POST' && r.path.endsWith('/pr/adopt'))
+      // The turn that was running at the click ends — the agent has not reached the message yet.
+      setStatus('waiting')
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+      expect(gitButton()?.textContent).toBe('Creating PR…')
+      expect(adopted()).toBe(false)
+      // Its own turn runs and ends: now the step is done and the PR is looked up.
+      setStatus('running')
+      setStatus('waiting')
+      await waitFor(() => expect(adopted()).toBe(true))
+      await waitFor(() => expect(gitButton()?.textContent).not.toBe('Creating PR…'))
+    })
+
+    it('a turn that never shows up releases the step after the grace period', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const sent = behind()
+      renderLive('waiting')
+      await clickUpdateBranch(sent)
+      act(() => {
+        vi.advanceTimersByTime(30_000)
+      })
+      await waitFor(() => expect(gitButton()?.textContent).toBe('Update branch'))
+    })
+  })
+
+  it('no PR and nothing changed: no git button at all — there is nothing to open a PR from', async () => {
+    const sent = stubFetch({
+      '/api/v1/runs/r1/git/status': () => jsonResponse({ uncommitted: 0, unpushed: null, behind: 0, ahead: 0 }),
+      '/api/v1/health': () => jsonResponse({ forge: { kind: 'github', available: true } }),
+    })
+    renderHeader(run('running', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'main' }))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/git/status')).toBe(true))
+    await act(async () => {})
+    expect(document.querySelector('[data-slot="git-button"]')).toBeNull()
   })
 
   it('a merged PR leaves nothing to commit or push — the git button goes, the PR chip stays', async () => {
@@ -802,7 +1152,7 @@ describe('actions hit their endpoints', () => {
     renderHeader(run('done', { archived: true }))
     fireEvent.click(itemActions().getByRole('button', { name: 'Unarchive' }))
     await waitFor(() => {
-      expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false, surface: 'task_view' })
     })
   })
 
@@ -811,7 +1161,7 @@ describe('actions hit their endpoints', () => {
     renderHeader(run('done'))
     fireEvent.click(itemActions().getByRole('button', { name: 'Pin' }))
     await waitFor(() => {
-      expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true, surface: 'task_view' })
     })
 
     cleanup()
@@ -821,7 +1171,7 @@ describe('actions hit their endpoints', () => {
     expect(unpin.getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(unpin)
     await waitFor(() => {
-      expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
+      expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false, surface: 'task_view' })
     })
   })
 
@@ -978,6 +1328,28 @@ describe('Terminal — the copy-command 409 fallback', () => {
   })
 })
 
+describe('Terminal — hosted mode (telemetry f179cc7d)', () => {
+  const hostedHealth = () => jsonResponse({ capabilities: { localHandoff: false } })
+
+  it('a hosted cockpit offers no Terminal resume, so it never POSTs a refused open-in-cli', async () => {
+    const sent = stubFetch({ '/api/v1/health': hostedHealth })
+    renderHeader(run('done'))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
+    await waitFor(() => expect(actionBar().queryByRole('button', { name: 'Open in…' })).toBeNull())
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/open-in-cli')).toBe(false)
+  })
+
+  it('the phone kebab drops Terminal too', async () => {
+    const sent = stubFetch({ '/api/v1/health': hostedHealth })
+    renderHeader(run('done'))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
+    await waitFor(() => expect(actionBar().queryByRole('button', { name: 'Open in…' })).toBeNull())
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.queryByRole('menuitem', { name: 'Terminal' })).toBeNull()
+  })
+})
+
 describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   const CLI_LABELS: Record<string, string> = {
     'cli:claude': 'Claude CLI',
@@ -1110,6 +1482,17 @@ describe('notes tab', () => {
     const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
     expect(tabs.getByRole('link', { name: 'Notes' }).getAttribute('href')).toBe('/tasks/r1/notes')
     expect(actionBar().queryByRole('button', { name: 'Notes' })).toBeNull()
+  })
+})
+
+describe('preview tab', () => {
+  it('Preview is a deep-linkable tab, after Notes', () => {
+    stubFetch()
+    renderHeader(run('done'))
+    const tabs = within(document.querySelector('[data-slot="run-tabs"]') as HTMLElement)
+    expect(tabs.getByRole('link', { name: 'Preview' }).getAttribute('href')).toBe('/tasks/r1/preview')
+    const names = tabs.getAllByRole('link').map((link) => link.textContent)
+    expect(names.indexOf('Preview')).toBe(names.indexOf('Notes') + 1)
   })
 })
 
@@ -1291,7 +1674,7 @@ describe('meta line, tabs, pill and resume hint', () => {
       '/api/v1/health': () =>
         jsonResponse({
           capabilities: {
-            localHandoff: true, followups: false, singleProject: false, automations: true,
+            localHandoff: true, terminal: false, followups: false, singleProject: false, automations: true,
             tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
           },
         }),
@@ -1307,7 +1690,7 @@ describe('meta line, tabs, pill and resume hint', () => {
       '/api/v1/health': () =>
         jsonResponse({
           capabilities: {
-            localHandoff: true, followups: false, singleProject: false, automations: false,
+            localHandoff: true, terminal: false, followups: false, singleProject: false, automations: false,
             tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
           },
         }),
@@ -1328,6 +1711,7 @@ describe('meta line, tabs, pill and resume hint', () => {
         jsonResponse({
           capabilities: {
             localHandoff: true,
+    terminal: false,
             followups: false,
             singleProject: false,
             tokenMetrics: false,
@@ -1947,5 +2331,37 @@ describe('dispatch lines', () => {
     renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
     await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
+  })
+})
+
+describe('lifecycle-aware task deletion', () => {
+  const operation = {id:'11111111-1111-4111-8111-111111111111',worktreeId:'22222222-2222-4222-8222-222222222222',generation:1,phase:'teardown',intent:'delete-task',state:'queued',revision:0,createdAt:'now',updatedAt:'now',history:[],entries:[],allowedActions:['stop']}
+  it.each([true, false])('requests cleanup and keeps the task page for a %s managed projection', async managed => {
+    const sent = stubFetch({
+      '/api/v1/config': () => jsonResponse({worktreeLifecycle:{afterCreate:[],beforeRemove:[{id:'33333333-3333-4333-8333-333333333333',command:'echo cleanup'}]}}),
+      '/api/v1/worktree-lifecycle/operations': () => jsonResponse({operation}, 202),
+    })
+    renderHeader(run('done', {worktreePath:'/project/.ai/cezar/worktrees/r1', ...(managed ? {worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,needsAttention:false}} : {})}))
+    fireEvent.click(actionBar().getByRole('button',{name:'Delete'}))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button',{name:'Delete'}))
+    await waitFor(() => expect(sent.some(request => request.path === '/api/v1/worktree-lifecycle/operations' && request.method === 'POST')).toBe(true))
+    expect(sent.some(request => request.method === 'DELETE')).toBe(false)
+    expect(sent.find(request => request.path === '/api/v1/worktree-lifecycle/operations')?.body).toMatchObject({runId:'r1',intent:'delete-task',requestId:expect.any(String)})
+    await screen.findByText('Cleanup requested. The task is kept until cleanup completes.')
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+  it('greys Delete out for a finished task whose cleanup is still running', () => {
+    stubFetch()
+    renderHeader(run('done',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'teardown',state:'running',needsAttention:false}}))
+    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('hides ordinary task actions while lifecycle recovery owns the worktree', () => {
+    stubFetch()
+    renderHeader(run('waiting',{worktreeLifecycle:{worktreeId:operation.worktreeId,generation:1,activeOperationId:operation.id,phase:'setup',state:'needs_attention',needsAttention:true}}))
+    for (const name of ['Finish','Cancel','Continue']) expect(actionBar().queryByRole('button',{name})).toBeNull()
+    // Delete stays in place, greyed out like a live run's (Pin · Archive · Delete, always in place).
+    expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
   })
 })

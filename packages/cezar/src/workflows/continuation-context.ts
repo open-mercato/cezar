@@ -87,7 +87,7 @@ export function freshContinuationContext(
     'You are continuing an existing Cezar task in a fresh provider session. The previous provider session cannot be resumed. Use this persisted Cezar state and conversation as the hand-off; inspect the existing worktree before changing anything.',
     '',
     '## Original task',
-    withAttachments(run.task, attachmentLines(run.taskImages, attachmentsDir)),
+    withAttachments(run.task.trim() || '(given as attachments only)', attachmentLines(run.taskImages, attachmentsDir)),
     '',
     '## Cezar task state before this continuation',
     // A queued/running status is this continuation's own bookkeeping, not where the task stood;

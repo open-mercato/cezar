@@ -19,8 +19,8 @@
 //! port wildcard (the cockpit's port is picked at launch), so the narrowing happens HERE: every
 //! command refuses a caller that is not the splash or the cockpit on the port this shell
 //! spawned (`caller_is_trusted`) — the failure page's `restart_app` and `send_error_report` the
-//! splash alone (`caller_is_splash`) — and the window itself never navigates to another local server
-//! (`is_own_origin`). A dev server on `localhost:3000` is somebody else's page.
+//! splash alone (`caller_is_splash`) — and the window itself never stays on another local server
+//! (`is_own_origin`, enforced at page load: the navigation hook also sees the Preview's iframes). A dev server on `localhost:3000` is somebody else's page.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -71,6 +71,8 @@ struct Shell {
     supervising: AtomicBool,
     /// Set once the failure page's "Restart cezar" is under way; a second click does nothing.
     restarting: AtomicBool,
+    /// The last page of ours the window finished loading — where it returns after a foreign page.
+    cockpit_url: Mutex<Option<url::Url>>,
 }
 
 /// Runs at document start on EVERY page the window loads — the splash and, after navigation,
@@ -80,7 +82,9 @@ struct Shell {
 const INIT_SCRIPT: &str = r#"
   (function () {
     var platform = "__PLATFORM__";
-    window.__CEZ_DESKTOP__ = { platform: platform };
+    // `microphone`: this shell is entitled to it — an older macOS one refuses every dictation
+    // (telemetry c55c7b0b), so the cockpit disables the mic there instead.
+    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true };
     // At document start the root element may not exist yet; the flag is a convenience, the
     // rest of this script is not.
     if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
@@ -207,6 +211,7 @@ fn platform_name() -> &'static str {
 
 fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<WebviewWindow> {
     let shell_for_navigation = shell.clone();
+    let shell_for_page_load = shell.clone();
     let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Cezar")
         .inner_size(1360.0, 900.0)
@@ -216,6 +221,9 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
         // default size and position before jumping to where the user left it.
         .visible(false)
         .initialization_script(INIT_SCRIPT.replace("__PLATFORM__", platform_name()))
+        // The cockpit's own drag-and-drop (view tabs onto the workspace, column headers, files into
+        // the composer) is HTML5; Tauri's native file-drop handler swallows those events on macOS.
+        .disable_drag_drop_handler()
         // One window, on purpose. Anything that asks for another — `target="_blank"` links (the
         // cockpit's PR and tracker links), `window.open`, the context menu's "Open Link in New
         // Window" — goes to the default browser instead of silently doing nothing.
@@ -223,15 +231,32 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
             open_url(url.as_str());
             tauri::webview::NewWindowResponse::Deny
         })
-        // Same-window navigation stays inside the cockpit (and the splash); a link to anywhere
-        // else — another server on this machine included — is handed to the browser. The shell
-        // is the cockpit, not a general browser, and a page it shows holds its IPC grants.
+        // wry asks this for EVERY frame on macOS and Linux, with no way to tell which one — so a
+        // web address must pass here, or the task Preview's iframe can never load. A web page
+        // reaching the WINDOW itself is caught at `on_page_load` below instead.
         .on_navigation(move |url| {
-            if is_own_origin(url, shell_for_navigation.port.load(Ordering::SeqCst)) {
+            if is_own_origin(url, shell_for_navigation.port.load(Ordering::SeqCst)) || may_be_a_frame(url) {
                 return true;
             }
             open_url(url.as_str());
             false
+        })
+        // Main frame only. The window stays the cockpit (and the splash): any other page —
+        // another server on this machine included — is handed to the browser and the window goes
+        // back to where it was. The shell is not a general browser.
+        .on_page_load(move |window, payload| {
+            let url = payload.url();
+            if is_own_origin(url, shell_for_page_load.port.load(Ordering::SeqCst)) {
+                if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                    *shell_for_page_load.cockpit_url.lock().unwrap() = Some(url.clone());
+                }
+                return;
+            }
+            open_url(url.as_str());
+            let back = shell_for_page_load.cockpit_url.lock().unwrap().clone();
+            if let Some(back) = back.or_else(|| url::Url::parse(app_origin()).ok()) {
+                let _ = window.navigate(back);
+            }
         });
     // macOS: no title text; the traffic lights keep their NATIVE placement (a standard title bar
     // is 28pt tall and puts them at the system offset) and float over the 28px band the cockpit
@@ -447,11 +472,13 @@ fn update_cezar_command(app: AppHandle, window: WebviewWindow, shell: tauri::Sta
 }
 
 /// semver-ish ordering for what cezar publishes (`0.11.1`, `0.11.1-nightly.20260924.49`):
-/// numeric core, a release above any prerelease of the same core, then identifiers.
+/// numeric core, a release above any prerelease of the same core, then identifiers. A
+/// checkout's `0.15.2-dev` (#1530, display only) reads as its release, never as older.
 fn version_newer(candidate: &str, current: &str) -> bool {
     fn parse(raw: &str) -> Option<([u64; 3], Vec<String>)> {
         let raw = raw.trim().trim_start_matches('v').split('+').next()?;
         let (core, pre) = match raw.split_once('-') {
+            Some((core, "dev")) => (core, Vec::new()),
             Some((core, pre)) => (core, pre.split('.').map(str::to_owned).collect::<Vec<_>>()),
             None => (raw, Vec::new()),
         };
@@ -563,6 +590,7 @@ pub fn run() {
         update_available: Mutex::new(None),
         supervising: AtomicBool::new(false),
         restarting: AtomicBool::new(false),
+        cockpit_url: Mutex::new(None),
     });
     let shell_for_setup = shell.clone();
     let shell_for_menu = shell.clone();
@@ -1137,30 +1165,16 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
     let mut lines: Vec<String> = Vec::new();
     let installed = install_into(&versions, |staging| {
         let spec = format!("{PACKAGE}@{tag}");
-        let prefix = staging.to_string_lossy();
-        let mut command = tool_command(
-            npm_program(),
-            &["install", "--prefix", &prefix, "--omit=dev", "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=notice", &spec],
-        );
-        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let mut child = command.spawn().map_err(|error| format!("could not start npm: {error}. Is Node 20+ on your PATH?"))?;
-        for reader in [
-            child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
-            child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            // Sequential drain is fine: npm's chatter is small and stdout closes at the end.
-            for line in BufReader::new(reader).lines().map_while(Result::ok) {
-                splash_log(&window, &line);
-                lines.push(line);
+        let mut log = |line: &str| splash_log(&window, line);
+        let first_attempt = lines.len();
+        match npm_install(staging, &spec, None, &mut lines, &mut log) {
+            // A root-owned ~/.npm (an old `sudo npm`) must not block the install (telemetry 7a3f659a).
+            Err(_) if npm_cache_unwritable(&lines[first_attempt..]) => {
+                let cache = npm_fallback_cache();
+                log(&format!("npm's cache is not writable; retrying with {}", cache.display()));
+                npm_install(staging, &spec, Some(&cache), &mut lines, &mut log)
             }
-        }
-        match child.wait() {
-            Ok(status) if status.success() => Ok(()),
-            Ok(status) => Err(format!("npm exited with {status}. Is Node 20+ on your PATH?")),
-            Err(error) => Err(error.to_string()),
+            other => other,
         }
     });
     let ok = match installed {
@@ -1593,6 +1607,70 @@ fn activate(versions: &Path, id: &str) -> Result<(), String> {
     }
 }
 
+/// `npm install <spec>` into `staging`, every output line into `lines` and `log`. `cache`
+/// overrides npm's own cache folder.
+fn npm_install(staging: &Path, spec: &str, cache: Option<&Path>, lines: &mut Vec<String>, log: &mut dyn FnMut(&str)) -> Result<(), String> {
+    let prefix = staging.to_string_lossy();
+    let cache = cache.map(|dir| dir.to_string_lossy().into_owned());
+    let mut args = vec!["install", "--prefix", &prefix, "--omit=dev", "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=notice"];
+    if let Some(cache) = cache.as_deref() {
+        args.extend(["--cache", cache]);
+    }
+    args.push(spec);
+    let mut command = tool_command(npm_program(), &args);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| format!("could not start npm: {error}. Is Node 20+ on your PATH?"))?;
+    let first = lines.len();
+    for reader in [
+        child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
+        child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        // Sequential drain is fine: npm's chatter is small and stdout closes at the end.
+        for line in BufReader::new(reader).lines().map_while(Result::ok) {
+            log(&line);
+            lines.push(line);
+        }
+    }
+    match child.wait() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(status) => Err(npm_exit_reason(&status.to_string(), &lines[first..])),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// npm ran and failed: name its error code, not a Node problem it did not have.
+fn npm_exit_reason(status: &str, log: &[String]) -> String {
+    match npm_error_field(log, "code") {
+        Some(code) => format!("npm exited with {status} ({code})"),
+        None => format!("npm exited with {status}"),
+    }
+}
+
+/// The value of npm's `npm error <field> <value>` line (`npm ERR!` before npm 10).
+fn npm_error_field<'a>(log: &'a [String], field: &str) -> Option<&'a str> {
+    log.iter().find_map(|line| {
+        let rest = line.trim().strip_prefix("npm error ").or_else(|| line.trim().strip_prefix("npm ERR! "))?;
+        rest.strip_prefix(field)?.strip_prefix(' ').map(str::trim).filter(|value| !value.is_empty())
+    })
+}
+
+/// npm failed because it may not write its cache folder (root-owned files left by `sudo npm`),
+/// not because of the package.
+fn npm_cache_unwritable(log: &[String]) -> bool {
+    let denied = matches!(npm_error_field(log, "code"), Some("EACCES" | "EPERM"));
+    let in_cache = npm_error_field(log, "path").is_some_and(|path| ["_cacache", "_logs", "_npx"].iter().any(|dir| path.contains(dir)))
+        || log.iter().any(|line| line.contains("cache folder contains root-owned files"));
+    denied && in_cache
+}
+
+/// A cache folder cezar owns, for when npm's own is not writable.
+fn npm_fallback_cache() -> PathBuf {
+    cezar_home().join("npm-cache")
+}
+
 /// Install one version into `versions` and make it current. `run_npm` fills the staging
 /// directory it is given (`npm install --prefix <staging>`); everything else is files:
 /// read the version npm resolved, refuse an id that is not a plain version, move staging into
@@ -1669,6 +1747,12 @@ fn is_own_origin(url: &url::Url, port: u16) -> bool {
         ("http", Some("127.0.0.1" | "localhost")) => port != 0 && url.port_or_known_default() == Some(port),
         _ => false,
     }
+}
+
+/// What an iframe of the cockpit may load — the task Preview frames any web page. Everything
+/// else (`mailto:`, `file:`, …) is the browser's or the OS's to open.
+fn may_be_a_frame(url: &url::Url) -> bool {
+    matches!(url.scheme(), "http" | "https" | "about" | "blob" | "data")
 }
 
 /// The guard every IPC command starts with: the page asking must be one of ours. The capability
@@ -2024,6 +2108,13 @@ mod tests {
     }
 
     #[test]
+    fn a_checkout_dev_version_is_not_older_than_its_release() {
+        assert!(!version_newer("0.15.2", "0.15.2-dev"));
+        assert!(version_newer("0.15.3", "0.15.2-dev"));
+        assert!(version_newer("0.15.2", "0.15.2-nightly.20261019.4"));
+    }
+
+    #[test]
     fn a_linked_worktree_reads_as_its_branch() {
         assert_eq!(version_label("0.13.0", "link", Some("cez/cb28888e")), "cez/cb28888e — 0.13.0 (worktree)");
         assert_eq!(version_label("0.13.0", "link", None), "0.13.0 (worktree)");
@@ -2036,6 +2127,20 @@ mod tests {
         assert!(!switcher_has_choices(0));
         assert!(!switcher_has_choices(1));
         assert!(switcher_has_choices(2));
+    }
+
+    #[test]
+    fn the_bundle_may_use_the_microphone_it_advertises() {
+        // telemetry c55c7b0b: hardened runtime + no usage strings = every dictation `not-allowed`.
+        let dir = env!("CARGO_MANIFEST_DIR");
+        let read = |name: &str| std::fs::read_to_string(format!("{dir}/{name}")).unwrap();
+        let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+        let entitlements = conf["bundle"]["macOS"]["entitlements"].as_str().unwrap();
+        assert!(read(entitlements).contains("com.apple.security.device.audio-input"));
+        let info = read("Info.plist");
+        assert!(info.contains("NSMicrophoneUsageDescription"));
+        assert!(info.contains("NSSpeechRecognitionUsageDescription"));
+        assert!(INIT_SCRIPT.contains("microphone: true"));
     }
 
     #[test]
@@ -2077,6 +2182,17 @@ mod tests {
         assert!(!is_own_origin(&url("https://example.com/"), 4321));
         // No sidecar yet: nothing on loopback is trusted.
         assert!(!is_own_origin(&url("http://127.0.0.1:4321/"), 0));
+    }
+
+    /// The Preview's iframe goes through the navigation hook too; refusing it there left every
+    /// framed dev server blank in the app while it worked in a browser.
+    #[test]
+    fn a_frame_may_load_any_web_page_but_not_other_schemes() {
+        assert!(may_be_a_frame(&url("http://localhost:5177/#1")));
+        assert!(may_be_a_frame(&url("https://example.com/")));
+        assert!(may_be_a_frame(&url("about:blank")));
+        assert!(!may_be_a_frame(&url("mailto:someone@example.com")));
+        assert!(!may_be_a_frame(&url("file:///etc/passwd")));
     }
 
     #[test]
@@ -2411,6 +2527,44 @@ require('node:http').createServer((req, res) => {
         let _ = child.kill();
         let _ = child.wait();
         assert_eq!(version.as_deref(), Some("9.9.9-test"), "sidecar output: {:?}", log.lock().unwrap());
+    }
+
+    fn log_lines(raw: &str) -> Vec<String> {
+        raw.lines().map(str::to_owned).collect()
+    }
+
+    /// The tail telemetry 7a3f659a carried: a root-owned ~/.npm, reported as a missing Node.
+    const ROOT_OWNED_CACHE: &str = "npm warn ERESOLVE overriding peer dependency
+npm error code EACCES
+npm error syscall mkdir
+npm error path /Users/ann/.npm/_cacache/index-v5/57/89
+npm error errno EACCES
+npm error
+npm error Your cache folder contains root-owned files, due to a bug in previous versions of npm which has since been addressed.
+npm error
+npm error To permanently fix this problem, please run:
+npm error   sudo chown -R 502:20 \"/Users/ann/.npm\"";
+
+    #[test]
+    fn a_root_owned_npm_cache_is_recognized() {
+        assert!(npm_cache_unwritable(&log_lines(ROOT_OWNED_CACHE)));
+        // npm 9 and older spell it `npm ERR!`.
+        assert!(npm_cache_unwritable(&log_lines("npm ERR! code EPERM\nnpm ERR! path C:\\Users\\ann\\AppData\\Local\\npm-cache\\_cacache\\tmp")));
+    }
+
+    #[test]
+    fn other_npm_failures_are_not_a_cache_problem() {
+        assert!(!npm_cache_unwritable(&[]));
+        assert!(!npm_cache_unwritable(&log_lines("npm error code E404\nnpm error 404 Not Found - GET https://registry.npmjs.org/nope")));
+        // Permission denied somewhere that is not npm's cache: a fresh cache would not help.
+        assert!(!npm_cache_unwritable(&log_lines("npm error code EACCES\nnpm error path /Users/ann/.cezar/versions/.staging-shell-1")));
+        assert!(!npm_cache_unwritable(&log_lines("npm error code ETIMEDOUT\nnpm error path /Users/ann/.npm/_cacache/tmp")));
+    }
+
+    #[test]
+    fn an_npm_failure_names_npms_error_not_node() {
+        assert_eq!(npm_exit_reason("exit status: 1", &log_lines(ROOT_OWNED_CACHE)), "npm exited with exit status: 1 (EACCES)");
+        assert_eq!(npm_exit_reason("exit status: 1", &[]), "npm exited with exit status: 1");
     }
 
     /// npm itself, through the same command the shell builds: a real (small) install into a

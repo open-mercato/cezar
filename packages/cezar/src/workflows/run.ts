@@ -1,3 +1,4 @@
+import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { createHash, randomUUID } from 'node:crypto';
@@ -52,6 +53,7 @@ import {
   isImageMediaType,
   PENDING_ASK_MAX_QUESTIONS,
   sanitizeAttachmentName,
+  storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
@@ -61,12 +63,16 @@ import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
-import { loadConfig, resolveWorktreeRetention } from '../config.ts';
+import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
+import { generateCommitMessage } from './commit-message.ts';
+import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
+import { deleteRunLayouts } from '../runs/layouts.ts';
 import {
   autosaveCommit,
+  branchFor,
   chooseForkBase,
   commitAll,
-  createWorktree,
   pushBranch,
   resolveBaseRef,
   syncWithBase,
@@ -78,6 +84,7 @@ import {
 } from '../git-worktree.ts';
 import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
+import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -212,6 +219,9 @@ type GraphParkOutcome =
   | { kind: 'cancelled' };
 
 /** Most recent graph transitions kept on the record — loops are bounded, but a record is not a log. */
+/** Runs a restart interrupts — the self-update dialog's "N tasks are running" (#1524). */
+const RESTART_SENSITIVE: ReadonlySet<RunRecord['status']> = new Set<RunRecord['status']>(['queued', 'waiting', 'running']);
+
 const GRAPH_TAKEN_CAP = 500;
 
 /** Tail of an agent node's last turn kept as `{{nodes.<id>.summary}}`. */
@@ -469,6 +479,7 @@ interface ActiveRun {
   /** Identity of this async owner; stale promises must not mutate a replacement owner. */
   ownerToken: symbol;
   cancelled: boolean;
+  releaseWorktree?: () => void;
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
   cwd: string;
@@ -488,6 +499,10 @@ interface ActiveRun {
   idleTimer?: NodeJS.Timeout;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
+  /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
+  finishRequested?: boolean;
+  /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
+  acceptReviewOnDrop?: boolean;
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -568,6 +583,11 @@ interface ActiveRun {
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
+  /** Auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects). Set at BOTH
+   *  construction sites (`execute`, `runContinuation`) through `landingPolicy`. */
+  autoLand?: { checks: string[]; baseBranch?: string; baseLabel: string; attempts: number; inFlight?: Promise<LandResult> };
+  /** A read-only Ask task: read-only tools, no repo-root lease. */
+  readOnly?: boolean;
   /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
    *  for its dispatched children — gives the exclusive working-tree lease back while it sits
    *  (`parkRepoRoot`), so other in-place tasks are not stuck behind a session that is not
@@ -590,6 +610,36 @@ interface ActiveRun {
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
+/** Auto-land failures handed back to the agent before the run gives up (spec 2026-10-20-trunk-based-projects). */
+export const MAX_LAND_ATTEMPTS = 3;
+
+/** What the header's Commit step answers (`POST /runs/:id/land`). */
+export interface LandAnswer {
+  outcome: 'landed' | 'nothing' | 'failed' | 'busy' | 'unavailable';
+  message: string;
+  sha?: string;
+  pushed?: boolean;
+}
+
+function landFailurePrompt(outcome: Extract<LandResult, { result: 'failed' }>): string {
+  return `cezar could not land your changes — ${outcome.stage} failed:\n\n${outcome.error}\n\nFix this, then end your turn with CEZ:DONE again.`;
+}
+
+function landAnswer(outcome: LandResult, base: string, withAgent: boolean): LandAnswer {
+  if (outcome.result === 'landed') {
+    return {
+      outcome: 'landed',
+      message: `landed ${outcome.sha.slice(0, 8)} on ${base}${outcome.pushed ? ' and pushed' : ' (committed locally — no upstream)'}`,
+      sha: outcome.sha,
+      pushed: outcome.pushed,
+    };
+  }
+  if (outcome.result === 'nothing') return { outcome: 'nothing', message: 'nothing to commit' };
+  return {
+    outcome: 'failed',
+    message: withAgent ? `${outcome.stage} failed — sent back to the agent to fix` : `${outcome.stage} failed`,
+  };
+}
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
@@ -738,6 +788,13 @@ export interface StartRunInput {
    *  working tree instead of an isolated worktree. Undefined/`true` keeps the
    *  default per-task worktree. Ignored for variants (they always isolate). */
   worktree?: boolean;
+  /** With `worktree: false`: switch the repo checkout to a branch forked from the base first
+   *  (spec 2026-10-19-repo-git-sync). `branch` names it; else the namer, else `cez/<id8>`. */
+  newBranch?: boolean;
+  branch?: string;
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, read-only tools,
+   *  no repo-root lease, never lands. Wins over `worktree`, `newBranch` and dispatch. */
+  readOnly?: boolean;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
@@ -997,6 +1054,9 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
   return content.filter((b): b is ContentBlock => b.type !== 'file');
 }
 
+/** The opening prompt of a task given as attachments alone (telemetry 18c930de). */
+export const ATTACHMENT_ONLY_TASK = 'The user attached the files below without a written task — work out what they need from them.';
+
 /**
  * Plain-text note listing the absolute paths of pasted attachments, appended
  * to the message that carries them (#357). The base64 image blocks stay in
@@ -1088,6 +1148,8 @@ interface PreparedUserMessage {
  * The user's working tree is never touched.
  */
 export class RunManager {
+  readonly lifecycle: WorktreeLifecycleCoordinator;
+
   private readonly active = new Map<string, ActiveRun>();
   /** Check ownership survives a parked continuation without persisting transient state. */
   private readonly checkArtifactSnapshots = new Map<string, Map<string, string>>();
@@ -1098,6 +1160,9 @@ export class RunManager {
   // registering in `active`, so parallel-slot counting is never racy.
   private readonly queue: string[] = [];
   private readonly starting = new Set<string>();
+  // Runs cancelled inside that window: there is no `ActiveRun` to flag yet, so the starter checks
+  // here once it has one to build (`abandonCancelledStart`).
+  private readonly cancelledStarting = new Set<string>();
   // Runs parked at `waiting` (open session, ball in the user's court). They
   // don't consume a `maxParallel` slot (#347) — an idle claude process costs
   // memory but no tokens, queued work progressing matters more, and the idle
@@ -1231,6 +1296,33 @@ export class RunManager {
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
+      activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status)).length,
+    });
+    this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
+      semaphore: this.semaphore,
+      deferCleanup: true,
+      busySlots: () => this.busySlots(),
+      isActive: id => this.isActive(id),
+      cancelAndWait: id => this.cancelAndWait(id),
+      onWorktreeRemoved: () => this.sweepPrHeadRefs(),
+      onTaskDeleted: id => deleteRunLayouts(this.dataDir, id),
+      cancelPending: id => {
+        const queued = this.queue.indexOf(id);
+        if (queued >= 0) this.queue.splice(queued, 1);
+        this.pendingJobs.delete(id); this.pendingContinuations.delete(id);
+      },
+      resume: async (id, launch) => {
+        const run = this.store.getRun(id);
+        if (!run) throw new Error('Task cannot be resumed because it is missing');
+        if (this.queue.includes(id)) { void this.pump(); return; }
+        if (this.isActive(id)) throw new Error('Task cannot be resumed while active');
+        this.store.updateRun(id, {status: 'queued', error: undefined, finishedAt: undefined});
+        if (launch?.kind === 'continuation' && typeof launch.stepId === 'string' && typeof launch.backend === 'string' && typeof launch.prompt === 'string') {
+          this.pendingContinuations.set(id, launch as unknown as PendingContinuation);
+          this.queue.push(id);
+        } else await this.reviveQueuedRun(this.store.getRun(id)!, 'worktree setup recovery');
+        void this.pump();
+      },
     });
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
@@ -1250,6 +1342,7 @@ export class RunManager {
    * dispose only guarantees the manager makes no further moves on its own.
    */
   dispose(): void {
+    this.lifecycle.dispose();
     this.offUsage();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
@@ -1257,6 +1350,13 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.clearAutosaveTimer(state);
+      // Project disposal deliberately leaves providers alive. Their directory lease must
+      // survive the manager too, until the actual provider result confirms its exit.
+      const releaseWorktree = state.releaseWorktree;
+      state.releaseWorktree = undefined;
+      if (state.session && releaseWorktree) {
+        void state.session.result.then(releaseWorktree, releaseWorktree);
+      } else releaseWorktree?.();
       state.releaseRepoRoot?.();
       state.releaseRepoRoot = undefined;
     }
@@ -1269,6 +1369,7 @@ export class RunManager {
     this.monitoring.clear();
     this.unitParents.clear();
     this.starting.clear();
+    this.cancelledStarting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
     this.pendingBranchNames.clear();
@@ -1428,6 +1529,9 @@ export class RunManager {
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
+    if (input.readOnly && !group) {
+      input = { ...input, worktree: false, newBranch: undefined, dispatchIntent: undefined, forkRef: undefined };
+    }
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
@@ -1440,7 +1544,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
+      title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
@@ -1469,6 +1573,11 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // On the record, not only the input: restart recovery rebuilds the run from it.
+    if (run.worktree === false && input.newBranch) {
+      this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
+    }
+    if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -1515,7 +1624,12 @@ export class RunManager {
     // the model answers. Never awaited here, never fails the run. The same call
     // also answers the task branch when instructions are set; `execute` waits
     // for that part, bounded, before it forks.
-    this.pendingBranchNames.set(run.id, this.autoNameRun(run.id, skillHint, input.task));
+    // An attachment-only task gives the namer nothing to read; the turn-end refresh names it instead
+    // (under `branchNaming` its branch keeps the default `cez/<id8>`).
+    this.pendingBranchNames.set(
+      run.id,
+      input.task.trim() ? this.autoNameRun(run.id, skillHint, input.task) : Promise.resolve(undefined),
+    );
     // `default` = no explicit pick; the runner/CLI chose. Never the prompt itself.
     track(
       'task_start',
@@ -1723,7 +1837,8 @@ export class RunManager {
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
-              this.starting.delete(runId);
+              // A cancel that landed before the throw still owes the parent its report.
+              if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
             });
             continue;
           }
@@ -1847,6 +1962,7 @@ export class RunManager {
         dispatch: run.dispatch,
         // Preserve an explicit worktree opt-out across a queued restart.
         worktree: run.worktree,
+        ...(run.readOnly ? { readOnly: true } : {}),
       }),
     });
     this.queue.push(run.id);
@@ -1868,6 +1984,7 @@ export class RunManager {
    * Call once, before the server starts taking requests.
    */
   async recover(): Promise<void> {
+    await this.lifecycle.reconcile();
     const live = this.store
       .listRuns()
       .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
@@ -1877,6 +1994,10 @@ export class RunManager {
     // per-run directory here — bounded to `<dataDir>/tmp`, never a sibling.
     sweepAgentTmpDirs(this.dataDir, live.map((r) => r.id));
     for (const run of live) {
+      if (this.lifecycle.isBlocked(run.id)) {
+        this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
+        continue;
+      }
       if (run.status === 'queued') {
         await this.reviveQueuedRun(run, 'cezar restarted');
         continue;
@@ -2041,6 +2162,18 @@ export class RunManager {
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
 
+  /**
+   * A run cancelled while still `starting` (see `cancelOne`): leave the window without a session,
+   * settling the way `dropActive` does — report to a parent, free the slot.
+   */
+  private abandonCancelledStart(runId: string): boolean {
+    if (!this.cancelledStarting.delete(runId)) return false;
+    this.starting.delete(runId);
+    this.reportSettledChildToParent(runId);
+    this.releaseSlot();
+    return true;
+  }
+
   /** Fence a continuation failure to the async owner that started it. */
   private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
@@ -2060,6 +2193,15 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
+    const acceptReview = state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
+    // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
+    // the tree is released below, through the same path as Finish on a settled review.
+    const landOnAccept = acceptReview && this.store.getRun(runId)?.worktree === false;
+    if (acceptReview && !landOnAccept) {
+      this.store.updateRun(runId, { status: 'done' });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+    }
+    state?.releaseWorktree?.();
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     if (state?.cancellationTimer) clearTimeout(state.cancellationTimer);
@@ -2094,12 +2236,13 @@ export class RunManager {
     // resumed through the queue is already queued when the pump sweeps.
     this.reportSettledChildToParent(runId);
     this.releaseSlot();
+    if (landOnAccept) void this.finishReview(runId);
     // A run leaving the active registry is a terminal transition (done/review/
     // failed/cancelled) — the one moment the finished-worktree count can grow.
     // Enforce count-based retention (#483) here so a single hook covers every
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
-    void this.enforceRetention();
+    this.retentionPass = this.enforceRetention();
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
@@ -2376,8 +2519,9 @@ export class RunManager {
    * reason back as the route's 409 body. A parent that had no `dispatch` record becomes a root the
    * first time it dispatches: its tree directory is created and its brief written from its own
    * task text. The child forks its worktree off the parent's branch, inherits runner and model
-   * unless the order names others, gets a budget carved out of the parent's, and always runs
-   * autonomously — a child parked at `waiting` after every turn would need a human per rung.
+   * unless the order names others (a model only on the runner it was picked for), gets a budget
+   * carved out of the parent's, and always runs autonomously — a child parked at `waiting` after
+   * every turn would need a human per rung.
    */
   dispatch(
     parentId: string,
@@ -2439,13 +2583,20 @@ export class RunManager {
         },
       ],
     };
+    const childRunner = input.runner ?? intent?.runner ?? parent.runner;
+    // An inherited model only follows its own runner: a codex parent's `gpt-*` handed to a
+    // `--runner claude` child fails at spawn (telemetry 43bdda11). Otherwise the child's runner picks.
+    const sameRunner = (runner: RunnerId | undefined) => (runner ?? 'claude') === (childRunner ?? 'claude');
+    const childModel = input.model
+      ?? (intent?.model && sameRunner(intent.runner ?? parent.runner) ? intent.model : undefined)
+      ?? (parent.model && sameRunner(parent.runner) ? parent.model : undefined);
     const record = this.startRun(opts.workflow ?? workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
-      runner: input.runner ?? intent?.runner ?? parent.runner,
-      ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
+      runner: childRunner,
+      ...(childModel ? { model: childModel } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,
@@ -2978,10 +3129,12 @@ export class RunManager {
   /** Reclaim finished worktrees beyond the keep-limit (#483) — directory only,
    *  `cez/<id8>` branch kept. Best-effort; a failure never affects run
    *  lifecycle. `review`/live runs are excluded by the selector. */
+  /** The latest terminal retention pass — tests await it before pinning refs it may sweep. */
+  private retentionPass: Promise<void> = Promise.resolve();
   private async enforceRetention(): Promise<void> {
     try {
       const keep = await resolveWorktreeRetention(this.repoRoot);
-      await reclaimWorktrees(this.repoRoot, this.store, keep);
+      await reclaimWorktrees(this.repoRoot, this.store, keep, {lifecycle: this.lifecycle});
     } catch {
       // retention is best-effort; swallow so terminal transitions never break.
     }
@@ -3133,6 +3286,7 @@ export class RunManager {
    * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
    */
   cancel(runId: string): boolean {
+    if (this.lifecycle.isBlocked(runId)) return false;
     this.cancelDescendants(runId, new Set([runId]));
     return this.cancelOne(runId);
   }
@@ -3155,7 +3309,15 @@ export class RunManager {
       return true;
     }
     const state = this.active.get(runId);
-    if (!state) return false;
+    if (!state) {
+      // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
+      // Refusing here let the run start right after the user cancelled it.
+      if (!this.starting.has(runId)) return false;
+      this.cancelledStarting.add(runId);
+      this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString(), currentStepId: undefined });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+      return true;
+    }
     state.cancelled = true;
     this.clearIdleTimer(state);
     try {
@@ -3193,6 +3355,40 @@ export class RunManager {
       state.cancellationTimer.unref?.();
     }
     return true;
+  }
+
+  /** Removal waits for the captured provider result, never merely the cancel flag. */
+  async cancelAndWait(runId: string): Promise<boolean> {
+    const state = this.active.get(runId);
+    const result = state?.session?.result;
+    if (!this.isActive(runId)) return true;
+    if (!this.cancel(runId)) return false;
+    // A run cancelled while `starting` has no session yet: it leaves once its gate await returns.
+    if (!result) return this.cancelledStarting.has(runId) ? this.waitInactive(runId, 10_000) : !this.isActive(runId);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settled = await Promise.race([
+      result.then(() => true, () => true),
+      new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), 10_000); }),
+    ]);
+    if (timer) clearTimeout(timer);
+    return settled && !this.isActive(runId);
+  }
+
+  private async waitInactive(runId: string, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.isActive(runId) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+    return !this.isActive(runId);
+  }
+
+  private parkLifecycle(runId: string, state: ActiveRun, operationId?: string): void {
+    this.clearIdleTimer(state); this.clearAutosaveTimer(state); this.clearMonitoringWakeTimer(state, runId);
+    state.releaseWorktree?.();
+    state.releaseRepoRoot?.();
+    this.active.delete(runId); this.starting.delete(runId); this.waiting.delete(runId);
+    this.monitoring.delete(runId); this.unitParents.delete(runId);
+    this.store.updateRun(runId, {status: 'waiting', error: `Worktree scripts need attention${operationId ? ` (${operationId})` : ''}`});
+    this.store.appendEvent(runId, {type: 'note', message: `Worktree preparation paused${operationId ? ` — operation ${operationId}` : ''}; use Worktrees settings to Retry, Start task anyway, or Cancel task.`});
+    this.releaseSlot();
   }
 
   isActive(runId: string): boolean {
@@ -3281,6 +3477,11 @@ export class RunManager {
     };
   }
 
+  /** Where `persistAttachment` writes a run's pasted files. */
+  private attachmentsDir(runId: string): string {
+    return join(this.dataDir, 'runs', `${runId}-images`);
+  }
+
   /**
    * Re-read persisted attachments at dequeue/restart (#472): an image comes back as a viewable
    * block AND a path, a file (#950) as a path only. The branch is on the NAME's extension, never
@@ -3290,10 +3491,6 @@ export class RunManager {
    * A file is still `stat`-checked here rather than trusted: an attachment the user deleted must
    * drop out of the paths handed to the agent, exactly as a missing image does.
    */
-  private attachmentsDir(runId: string): string {
-    return join(this.dataDir, 'runs', `${runId}-images`);
-  }
-
   private readPersistedAttachments(
     runId: string,
     urls: string[],
@@ -3304,7 +3501,7 @@ export class RunManager {
     for (const url of urls) {
       const name = url.split('/').pop();
       if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
-      const path = join(this.dataDir, 'runs', `${runId}-images`, name);
+      const path = join(this.attachmentsDir(runId), name);
       try {
         if (isImageAttachmentName(name)) {
           const data = readFileSync(path);
@@ -3480,7 +3677,7 @@ export class RunManager {
     // the state — seconds before the session opens — so checking `starting`
     // alone would reopen exactly the drop this rung exists to close.
     const state = this.active.get(runId);
-    const startingUp = this.starting.has(runId) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
+    const startingUp = (this.starting.has(runId) && !this.cancelledStarting.has(runId)) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
     if (!startingUp) return false;
     const pending = this.deferredMessages.get(runId) ?? [];
     pending.push(content);
@@ -3524,6 +3721,7 @@ export class RunManager {
     userAuthored: boolean,
     preparedUserMessage?: PreparedUserMessage,
   ): boolean {
+    if (this.lifecycle.isBlocked(runId)) return false;
     const state = this.active.get(runId);
     // A graph gate/question parked with no session (1c) takes the user's reply as its answer.
     // Only a USER-authored message answers it: a child report or a wake nudge must not approve a gate.
@@ -3645,6 +3843,25 @@ export class RunManager {
       state.graphFinish();
       return true;
     }
+    if (
+      state?.session?.open &&
+      state.autoLand &&
+      !state.autonomous &&
+      !state.repoRootParked &&
+      this.store.getRun(runId)?.status === 'waiting'
+    ) {
+      // A trunk-based interactive run: Finish is the user's approval to land (spec
+      // 2026-10-20-trunk-based-projects). A failure goes back to the agent; success closes. Mid-turn
+      // or parked off the tree, the ordinary Finish below closes first and settle lands after.
+      this.clearIdleTimer(state);
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user — landing the changes' });
+      return this.landWithAgent(runId, state, state.currentStepId, () => {
+        state.finishRequested = true;
+        state.session?.end();
+      }) !== undefined;
+    }
     if (state?.session?.open) {
       this.clearIdleTimer(state);
       // Finish is explicit user intent, even if the watchdog callback already ran
@@ -3656,11 +3873,34 @@ export class RunManager {
       // other Finish (`done`, or `review` when the worktree holds changes)
       // instead of the `failed` an abandoned live park would settle as.
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      state.finishRequested = true;
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
       return true;
     }
     const run = this.store.getRun(runId);
+    // The session already closed (agent's DONE, idle watchdog, an earlier Finish) but the engine
+    // has not settled yet, so the record still says `waiting`. Finish in that window is the same
+    // explicit intent as above — honor it on the settlement instead of answering 409 (6a3cecee).
+    if (state && !state.cancelled && state.sessionEverOpened && run?.status === 'waiting') {
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      if (!state.finishRequested) {
+        state.finishRequested = true;
+        this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user while the session was closing' });
+      }
+      return true;
+    }
+    // Settled at `review`, but still unwinding (autosave, teardown): accept once it lets go. A
+    // repeat of a Finish already pressed on this session is not an accept — it stays at review.
+    if (state && !state.cancelled && run?.status === 'review') {
+      if (!state.finishRequested) state.acceptReviewOnDrop = true;
+      return true;
+    }
+    if (run?.status === 'review' && !this.isActive(runId) && run.worktree === false && !run.readOnly) {
+      void this.finishReview(runId);
+      return true;
+    }
     if (run?.status === 'review' && !this.isActive(runId)) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
@@ -3690,10 +3930,11 @@ export class RunManager {
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
+    if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
-    if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
+    if (this.active.has(runId) || this.starting.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
@@ -3701,7 +3942,13 @@ export class RunManager {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
-    if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
+    if (!sessionStep?.sessionId) {
+      if (run.worktreeLifecycle?.phase === 'setup' && run.worktreeLifecycle.state === 'cancelled') {
+        void this.lifecycle.reopenSetup(runId).catch(error => this.store.updateRun(runId, {error: String(error)}));
+        return {ok: true};
+      }
+      return { ok: false, error: 'no agent session to resume' };
+    }
     const targetRunner = opts.runner ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
@@ -3801,6 +4048,9 @@ export class RunManager {
       return { ok: true };
     }
     const ownerToken = Symbol('run-owner');
+    // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
+    // registers it in `active`.
+    this.starting.add(runId);
     void this.runContinuation(
       runId,
       stepId,
@@ -3815,6 +4065,8 @@ export class RunManager {
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
+        // A cancel that landed before the throw still owes the parent its report.
+        if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
       },
     );
     return { ok: true };
@@ -3845,7 +4097,29 @@ export class RunManager {
     // the stamp so the session regains its isolated tree and the run is eligible
     // for retention again — otherwise it keeps a dir on disk while staying
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
-    await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+    const beforePreparation = this.store.getRun(runId);
+    const gatedContinuation = !!beforePreparation?.worktreePath && await this.lifecycle.requiresGate(runId).catch(() => true);
+    if (this.abandonCancelledStart(runId)) return;
+    if (beforePreparation?.worktreePath && gatedContinuation) {
+      // Keep the original continuation intent durable before any script can start.
+      const preparing: ActiveRun = {
+        ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined,
+        cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0,
+        autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
+        checkInProgress: false, autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
+      };
+      this.active.set(runId, preparing); this.starting.delete(runId);
+      const preparationController = new AbortController();
+      preparing.interrupt = () => preparationController.abort();
+      const gate = await this.lifecycle.prepare(runId, beforePreparation.baseBranch ?? 'HEAD', {
+        kind: 'continuation', runId, stepId, sessionId, backend, prompt, images, persistedImages, persistedAttachments,
+      }, preparationController.signal, {branch: beforePreparation.branch});
+      if (preparing.cancelled) { this.dropActive(runId, preparing); return; }
+      if (!gate.ready) { this.parkLifecycle(runId, preparing, gate.operationId); return; }
+    } else {
+      await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
+      if (this.abandonCancelledStart(runId)) return;
+    }
     const record = this.store.getRun(runId);
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
@@ -3868,7 +4142,7 @@ export class RunManager {
     // follow-ups after it is switched off.
     const generateFollowups = followupsEnabled() && record?.generateFollowups !== false;
     const cwd =
-      record?.worktreePath && existsSync(record.worktreePath)
+      record?.worktreePath && (gatedContinuation || existsSync(record.worktreePath))
         ? record.worktreePath
         : this.repoRoot;
     // `autonomous` comes off the RECORD, not off an input: a continuation builds its OWN
@@ -3891,7 +4165,12 @@ export class RunManager {
     this.checkArtifactSnapshots.set(runId, state.autosaveExcludedPaths);
     this.active.set(runId, state);
     this.starting.delete(runId);
+    if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
+    state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
     if (state.cwd === this.repoRoot) {
+      state.autoLand = await this.landingPolicy(record, await loadConfig(this.repoRoot));
+    }
+    if (state.cwd === this.repoRoot && !state.readOnly) {
       if (repositoryRootLockDisabled()) {
         this.store.appendEvent(runId, {
           type: 'note',
@@ -4073,9 +4352,12 @@ export class RunManager {
         }
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
-          this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
-          appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
-          state.session?.end();
+          const close = () => {
+            this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
+            appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
+            state.session?.end();
+          };
+          if (!this.landOnDone(runId, state, stepId, close)) close();
           return;
         }
         // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to
@@ -4292,8 +4574,8 @@ export class RunManager {
             : contextualOpeningPrompt,
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
-          allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          bashAllowlist: toolsStep?.bashAllowlist,
+          allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
             additionalDirectories: agentDirectories(
               join(this.dataDir, 'runs'),
               state.grantedAttachmentLibrary,
@@ -4455,9 +4737,32 @@ export class RunManager {
     // happened yet here, so the run goes back to the queue untouched (spec
     // 2026-08-03-auto-resume-after-usage-limit).
     if (this.requeueWhileHeld(runId, workflow, input, taskBackend)) return;
+    // The project's default workspace (spec 2026-10-20-trunk-based-projects), for every caller
+    // that left it open — the composer, automations, the CLI. Never for variants, dispatch or a PR head.
+    const defaultable = this.store.getRun(runId);
+    if (
+      input.worktree === undefined &&
+      config.taskWorkspace === 'in-place' &&
+      !defaultable?.groupId &&
+      !defaultable?.dispatch &&
+      !input.dispatchIntent &&
+      !input.forkRef
+    ) {
+      input = { ...input, worktree: false };
+      this.store.updateRun(runId, { worktree: false });
+    }
+    state.readOnly = input.readOnly === true && input.worktree === false;
+    state.autoLand = await this.landingPolicy(this.store.getRun(runId), config, (message) =>
+      this.store.appendEvent(runId, { type: 'note', message }),
+    );
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
-    // the record so the UI/API can show what the run actually used.
-    const extraSystemPrompt = resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt);
+    // the record so the UI/API can show what the run actually used. The landing permission or the
+    // read-only rule rides along, so a Continue (which reads the record) keeps it.
+    const extraSystemPrompt = composeSystemPrompt(
+      resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt),
+      state.autoLand ? landingPromptPart(state.autoLand.baseLabel, state.autoLand.checks, state.autonomous === true) : undefined,
+      state.readOnly ? READ_ONLY_PROMPT : undefined,
+    ) || undefined;
     // Canonical provider/model identity (#405) — the normalised `provider/model`
     // the task ran with, persisted for cost attribution / reproducible replay
     // beside the free-text `model`. Best-effort here (a per-step `runner`/`model`
@@ -4492,17 +4797,35 @@ export class RunManager {
       this.dropActive(runId, state);
       return;
     }
+    let switchInPlaceTo: string | undefined;
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs by default; the explicit
       // CEZ_DISABLE_REPO_LOCK=1 escape hatch allows unsafe overlap.
-      // Pin the starting commit: the session's Changes and Commits views use it
-      // as their stable lower bound while reading the current working copy.
-      const startingCommit = await getHeadCommit(repo.root);
-      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
-      // In-place runs never fork, so nothing will ever read the namer's branch answer.
-      this.pendingBranchNames.delete(runId);
-      emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
+      const recordedRun = this.store.getRun(runId);
+      if (recordedRun?.inPlaceBranch) {
+        // spec 2026-10-19-repo-git-sync: fork the checkout itself onto a task branch. A recorded
+        // branch that already exists (restart, or the user's own name) is switched to instead.
+        const branch =
+          recordedRun.branch ??
+          (await this.awaitGeneratedBranch(runId, config.branchNaming, (message) => emit({ type: 'note', message }))) ??
+          branchFor(runId);
+        if (state.cancelled) {
+          this.dropActive(runId, state);
+          return;
+        }
+        // Recorded now so a requeue keeps the name; switched once the repo-root lease is held.
+        this.store.updateRun(runId, { branch });
+        switchInPlaceTo = branch;
+      } else {
+        // In-place runs never fork, so nothing will ever read the namer's branch answer.
+        this.pendingBranchNames.delete(runId);
+        emit({ type: 'note', message: 'worktree off — running in the repo working tree' });
+        // Pin the starting commit: the session's Changes and Commits views use it
+        // as their stable lower bound while reading the current working copy.
+        const startingCommit = await getHeadCommit(repo.root);
+        if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
+      }
     } else if (repo) {
       emit({
         type: 'note',
@@ -4540,34 +4863,31 @@ export class RunManager {
           this.dropActive(runId, state);
           return;
         }
-        let wt: Awaited<ReturnType<typeof createWorktree>>;
-        try {
-          wt = await createWorktree(this.repoRoot, runId, base, { branch });
-        } catch (err) {
-          // A generated name git still refuses (ref race, an exotic conflict) must degrade to
-          // `cez/<id8>`, never fail the task. A recorded branch is the run's own: no fallback.
-          const generated = branch !== undefined && recordedRun?.branch === undefined;
-          if (!generated || state.cancelled) throw err;
-          const reason = err instanceof Error ? err.message : String(err);
-          emit({
+        const preparationController = new AbortController();
+        state.interrupt = () => preparationController.abort();
+        // A generated name git still refuses (ref race, an exotic conflict) degrades to
+        // `cez/<id8>`, never fails the task. A recorded branch is the run's own: no fallback.
+        const wt = await this.lifecycle.prepare(runId, base, {kind: 'initial', runId}, preparationController.signal, {
+          branch,
+          generated: branch !== undefined && recordedRun?.branch === undefined,
+          onFallback: (reason) => emit({
             type: 'note',
             message: `generated branch "${branch}" could not be created (${reason}) — using the default cez/ branch`,
-          });
-          wt = await createWorktree(this.repoRoot, runId, base);
-        }
+          }),
+        });
+        if (state.cancelled) { this.dropActive(runId, state); return; }
+        if (!wt.ready) { this.parkLifecycle(runId, state, wt.operationId); return; }
         state.cwd = wt.path;
+        state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
         this.store.updateRun(runId, {
           worktreePath: wt.path,
           branch: wt.branch,
           baseBranch: wt.baseBranch,
         });
         emit({ type: 'note', message: `worktree ready — branch ${wt.branch} (base ${wt.baseBranch})` });
+        if (wt.seeded?.length) emit({ type: 'note', message: `seeded personal agent config: ${wt.seeded.join(', ')}` });
         // Seed from this manager's project root: each multi-project context has
         // its own manager/repoRoot and must never copy another project's layer.
-        const seededConfig = await seedAgentConfigLocalLayer(this.repoRoot, state.cwd).catch(() => []);
-        if (seededConfig.length > 0) {
-          emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
-        }
         this.armAutosave(runId, state);
       } catch (err) {
         if (state.cancelled) {
@@ -4592,7 +4912,9 @@ export class RunManager {
       emit({ type: 'note', message: 'not a git repository — running in place, one task at a time' });
     }
 
-    if (state.cwd === this.repoRoot) {
+    if (state.cwd === this.repoRoot && state.readOnly) {
+      emit({ type: 'note', message: 'read-only — answering from the repo working tree, alongside any running task' });
+    } else if (state.cwd === this.repoRoot) {
       if (repositoryRootLockDisabled()) {
         emit({
           type: 'note',
@@ -4616,6 +4938,29 @@ export class RunManager {
       // check also covers the explicit lock-bypass path, where the account may close while the
       // run is preparing its first step.
       if (this.requeueWhileHeld(runId, workflow, input, taskBackend, state)) return;
+    }
+    if (repo && switchInPlaceTo && !state.cancelled) {
+      // Re-read HEAD: the lease wait may have let another in-place run move the checkout.
+      const current = (await getRepoInfo(this.repoRoot))?.branch ?? repo.branch;
+      const base = await chooseForkBase(this.repoRoot, current, config.baseBranch, (message) =>
+        emit({ type: 'note', message }),
+      );
+      const switched = await createOrSwitchBranch(repo.root, switchInPlaceTo, base);
+      if (!switched.ok) {
+        const error = `could not switch the checkout to ${switchInPlaceTo}: ${switched.error}`;
+        this.store.updateRun(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });
+        emit({ type: 'lifecycle', message: `run failed — ${error}` });
+        this.dropActive(runId, state);
+        return;
+      }
+      emit({
+        type: 'note',
+        message: switched.created
+          ? `worktree off — created ${switched.branch} from ${base} in the repo working tree`
+          : `worktree off — switched the repo working tree to ${switched.branch}`,
+      });
+      const startingCommit = await getHeadCommit(repo.root);
+      if (startingCommit) this.store.updateRun(runId, { baseBranch: startingCommit });
     }
 
     // Handoff journal (spec 007) — seeded after the worktree exists so the
@@ -5889,7 +6234,10 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string } },
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
-    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
+    // step template (`Review: {{task}}`) still reads as a sentence.
+    const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
+    const rawPrompt = applyTemplate(step.prompt ?? '{{task}}', taskText);
     // Install the selected skill and its companions where the agent's own skill lookup looks.
     const installed = await this.provisionTaskSkills(state, { stepSkill: step.skill, slash: leadingSlashSkillName(rawPrompt) });
     if (installed.length) {
@@ -6085,9 +6433,12 @@ export class RunManager {
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.
-          emit({ type: 'lifecycle', message: 'goal achieved — session closed' });
-          appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
-          state.session?.end();
+          const close = () => {
+            emit({ type: 'lifecycle', message: 'goal achieved — session closed' });
+            appendHandoffHeartbeat(this.dataDir, runId, 'turn complete — goal achieved, session closed');
+            state.session?.end();
+          };
+          if (!this.landOnDone(runId, state, step.id, close)) close();
           return;
         }
         // `waiting` now also covers a NON-final step parking on an ask or monitor (#917, #1076),
@@ -6225,7 +6576,8 @@ export class RunManager {
     try {
       const normalized = normalizeModelForBackend(
         stepBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? input.model,
+        // The task's model was picked for the task's runner; a step on another runner gets its own default.
+        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
       backendModel = normalized?.backendModel;
@@ -6285,8 +6637,8 @@ export class RunManager {
           userPrompt: prompt,
           images,
           cwd: state.cwd,
-          allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
-          bashAllowlist: step.bashAllowlist,
+          allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
@@ -6326,6 +6678,9 @@ export class RunManager {
     const attach = (started: AgentSession, resume: boolean): AgentSession => {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
+      // A Finish pressed on an earlier step's session is not a repeat of one on this session.
+      state.finishRequested = undefined;
+      state.acceptReviewOnDrop = undefined;
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
@@ -6720,6 +7075,30 @@ export class RunManager {
    * off — settle straight to `done`, leaving the diff in the worktree untouched.
    */
   private async settleSuccess(runId: string): Promise<void> {
+    const landingError = await this.landBeforeSettle(runId);
+    if (landingError === 'review') {
+      this.store.updateRun(runId, {
+        status: 'review',
+        finishedAt: new Date().toISOString(),
+        currentStepId: undefined,
+        autoResumeAttempts: undefined,
+      });
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: 'changes ready for review — check Changes, Continue with corrections, or Commit (or Finish) to land them',
+      });
+      return;
+    }
+    if (landingError) {
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: landingError,
+        finishedAt: new Date().toISOString(),
+        currentStepId: undefined,
+      });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: `run failed — ${landingError}` });
+      return;
+    }
     const review = await this.reviewGateApplies(runId);
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',
@@ -6736,6 +7115,288 @@ export class RunManager {
         ? 'changes ready for review — send feedback, open a draft PR, or finish'
         : 'run finished',
     });
+  }
+
+  /**
+   * The auto-land policy of an in-place run (spec 2026-10-20-trunk-based-projects), or
+   * undefined. Like worktree scripts, a git-tracked config.json cannot grant it: pushing to the
+   * base branch is the owner's permission, never the repository's.
+   */
+  private async landingPolicy(
+    run: RunRecord | undefined,
+    config: CezConfig,
+    note?: (message: string) => void,
+  ): Promise<ActiveRun['autoLand']> {
+    if (!run || run.worktree !== false || run.readOnly || run.inPlaceBranch || config.landing !== 'auto') return undefined;
+    const repo = await getRepoInfo(this.repoRoot);
+    if (!repo) return undefined;
+    if (await isLifecycleConfigTracked(this.repoRoot).catch(() => true)) {
+      note?.('auto-land is off — .ai/cezar/config.json is tracked by git, and only local configuration can grant it');
+      return undefined;
+    }
+    return { checks: config.requiredChecks ?? [], baseBranch: config.baseBranch, baseLabel: config.baseBranch ?? repo.branch, attempts: 0 };
+  }
+
+  /** The most recent thing the user asked this task for — context for a commit message. */
+  private latestRequest(runId: string): string | undefined {
+    const events = this.store.readEvents(runId);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i] as { type?: string; text?: unknown };
+      if (event.type === 'user-message' && typeof event.text === 'string' && event.text.trim()) return event.text;
+    }
+    return this.store.getRun(runId)?.task;
+  }
+
+  /** Land now and record the outcome on the run. A `nothing` never overwrites an earlier result. */
+  private async landNow(runId: string, policy: NonNullable<ActiveRun['autoLand']>): Promise<LandResult> {
+    const run = this.store.getRun(runId);
+    this.store.appendEvent(runId, {
+      type: 'note',
+      message: `auto-land — committing, rebasing${policy.checks.length ? ', running required checks' : ''} and pushing`,
+    });
+    const env = { ...process.env, ...this.agentEnv(runId) };
+    const outcome = await landInPlace(this.repoRoot, {
+      // From the staged change itself: the title names the first request and goes stale.
+      describe: async (staged) => {
+        const written = await generateCommitMessage(this.repoRoot, staged, this.latestRequest(runId));
+        if (written.subject === undefined && staged.files.length > 0) {
+          this.store.appendEvent(runId, {
+            type: 'note',
+            message: `commit message named from the files — ${this.store.redactRunText(runId, written.reason)}`,
+          });
+        }
+        return written.subject;
+      },
+      baseBranch: policy.baseBranch,
+      since: run?.baseBranch,
+      checks: policy.checks,
+      env,
+    });
+    const at = new Date().toISOString();
+    if (outcome.result === 'landed') {
+      this.store.updateRun(runId, {
+        landing: { status: 'landed', at, branch: outcome.branch, sha: outcome.sha, pushed: outcome.pushed, files: outcome.files },
+      });
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `landed ${outcome.sha.slice(0, 8)} on ${outcome.branch}${outcome.pushed ? ' and pushed' : ' (no upstream — committed locally)'}: ${outcome.files.length} file${outcome.files.length === 1 ? '' : 's'}`,
+      });
+    } else if (outcome.result === 'nothing') {
+      if (!run?.landing) this.store.updateRun(runId, { landing: { status: 'nothing', at } });
+      this.store.appendEvent(runId, { type: 'note', message: 'auto-land — nothing to land' });
+    } else {
+      this.store.updateRun(runId, { landing: { status: 'failed', at, stage: outcome.stage, error: this.store.redactRunText(runId, outcome.error) } });
+    }
+    return outcome;
+  }
+
+  /**
+   * `CEZ:DONE` on an auto-land run. An autonomous run lands before its session closes; an
+   * interactive one parks for review instead, and the user's Finish lands it (`finish`). True
+   * when it took the turn over. Both turn-end handlers call it.
+   */
+  private landOnDone(runId: string, state: ActiveRun, stepId: string | undefined, close: () => void): boolean {
+    if (!state.autoLand || state.cancelled) return false;
+    if (state.autonomous) return this.landWithAgent(runId, state, stepId, close) !== undefined;
+    void hasUnlanded(this.repoRoot).then((pending) => {
+      if (state.cancelled || this.active.get(runId) !== state) return;
+      if (!pending) {
+        close();
+        return;
+      }
+      this.parkForReview(runId, state, stepId);
+    });
+    return true;
+  }
+
+  /** The waiting park of an interactive auto-land run with changes: the session and the
+   *  working-tree lease stay, so the user can review, send corrections, or Finish to land. */
+  private parkForReview(runId: string, state: ActiveRun, stepId: string | undefined): void {
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+    if (stepId) this.store.updateStep(runId, stepId, { status: 'waiting' });
+    this.leaveMonitoring(runId);
+    this.clearMonitoringWakeTimer(state, runId);
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId,
+      message: `changes ready for review — check Changes, reply with corrections, or Commit to ${state.autoLand?.baseLabel ?? 'the base branch'} (or Finish) to land them`,
+    });
+    this.waiting.add(runId);
+    this.armIdleTimer(runId, state);
+    this.releaseSlot();
+  }
+
+  /** Land with the session still open, so a failure goes back to the agent to fix. The promise
+   *  of the landing, shared while one is in flight; undefined when the run has no landing policy. */
+  private landWithAgent(
+    runId: string,
+    state: ActiveRun,
+    stepId: string | undefined,
+    close: () => void,
+  ): Promise<LandResult> | undefined {
+    const policy = state.autoLand;
+    if (!policy || state.cancelled) return undefined;
+    if (policy.inFlight) return policy.inFlight;
+    policy.inFlight = this.landNow(runId, policy)
+      .catch((err: unknown): LandResult => ({ result: 'failed', stage: 'commit', error: err instanceof Error ? err.message : String(err) }))
+      .then((outcome) => {
+        policy.inFlight = undefined;
+        if (state.cancelled || this.active.get(runId) !== state) return outcome;
+        if (outcome.result !== 'failed') {
+          close();
+          return outcome;
+        }
+        policy.attempts += 1;
+        if (policy.attempts >= MAX_LAND_ATTEMPTS) {
+          this.store.appendEvent(runId, {
+            type: 'note',
+            stepId,
+            message: `auto-land failed ${policy.attempts} times (${outcome.stage}) — not landed; fix it and Commit again`,
+          });
+          close();
+          return outcome;
+        }
+        if (!this.deliverMessage(runId, [{ type: 'text', text: this.store.redactRunText(runId, landFailurePrompt(outcome)) }], false)) {
+          close();
+          return outcome;
+        }
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `auto-land failed at ${outcome.stage} — sent back to the agent (${policy.attempts}/${MAX_LAND_ATTEMPTS})`,
+        });
+        return outcome;
+      });
+    return policy.inFlight;
+  }
+
+  /**
+   * The header's Commit step on an in-place task (spec 2026-10-20-trunk-based-projects), in any
+   * state: with the session open it lands like Finish; with it closed it lands directly, and a
+   * failure reopens the task with the error so the agent fixes it. Never throws.
+   */
+  async land(runId: string): Promise<LandAnswer> {
+    const run = this.store.getRun(runId);
+    if (!run || run.worktree !== false || run.readOnly) {
+      return { outcome: 'unavailable', message: 'only a task that works in the checkout can commit to the base branch' };
+    }
+    const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
+    if (!policy) return { outcome: 'unavailable', message: 'auto-land is not enabled for this project' };
+    const base = policy.baseBranch ?? (await getRepoInfo(this.repoRoot))?.branch ?? 'the base branch';
+    const state = this.active.get(runId);
+    if (state?.session?.open && run.status === 'waiting') {
+      if (state.repoRootParked) {
+        return { outcome: 'busy', message: 'this task lent the checkout to another task while it waits — commit once it resumes' };
+      }
+      this.clearIdleTimer(state);
+      state.idleClosed = undefined;
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
+      const landing = this.landWithAgent(runId, state, state.currentStepId, () => {
+        state.finishRequested = true;
+        state.session?.end();
+      });
+      if (!landing) return { outcome: 'busy', message: 'the task is stopping — try again in a moment' };
+      return landAnswer(await landing, base, true);
+    }
+    if (state || this.isActive(runId)) {
+      return { outcome: 'busy', message: 'the agent is still working — commit once its turn ends' };
+    }
+    if (this.repoRootBusy > 0) {
+      return { outcome: 'busy', message: 'another task is working in the checkout — commit once it is done' };
+    }
+    // Hold the tree while landing, so a task queued behind cannot edit the checkout mid-rebase.
+    const lease = this.chainRepoRoot();
+    let outcome: LandResult;
+    try {
+      if (!(await hasUnlanded(this.repoRoot))) return { outcome: 'nothing', message: 'nothing to commit' };
+      outcome = await this.landNow(runId, policy);
+    } finally {
+      lease.release();
+    }
+    if (outcome.result === 'failed') {
+      // Help rather than refuse: the session is gone, so reopen the task with the error.
+      const reopened = this.continueRun(runId, { text: landFailurePrompt(outcome) });
+      return reopened.ok
+        ? { outcome: 'failed', message: `${outcome.stage} failed — sent back to the agent to fix` }
+        : { outcome: 'failed', message: `${outcome.stage} failed: ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}` };
+    }
+    if (run.status !== 'done') {
+      this.store.updateRun(runId, { status: 'done', error: undefined });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'changes landed' });
+    }
+    return landAnswer(outcome, base, false);
+  }
+
+  /** Accept an in-place run resting at `review`: land it when the project auto-lands, else the
+   *  ordinary accept. */
+  private async finishReview(runId: string): Promise<void> {
+    await this.landReviewed(runId);
+    const after = this.store.getRun(runId);
+    if (after?.status === 'review' && !(await this.landingPolicy(after, await loadConfig(this.repoRoot)))) {
+      this.store.updateRun(runId, { status: 'done' });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+    }
+  }
+
+  /**
+   * Finish on a run resting at `review` with unlanded in-place changes: land them, then `done`.
+   * Refused while another task works in the checkout — it would commit that task's edits too.
+   */
+  private async landReviewed(runId: string): Promise<void> {
+    const run = this.store.getRun(runId);
+    const policy = run && (await this.landingPolicy(run, await loadConfig(this.repoRoot)));
+    if (!policy) return;
+    if (this.repoRootBusy > 0) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: 'not landed — another task is working in the checkout; Finish again once it is done',
+      });
+      return;
+    }
+    const lease = this.chainRepoRoot();
+    let outcome: LandResult;
+    try {
+      outcome = await this.landNow(runId, policy);
+    } finally {
+      lease.release();
+    }
+    if (outcome.result === 'failed') {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `not landed — ${outcome.stage} failed: ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}. Continue the task to fix it, then Finish again.`,
+      });
+      return;
+    }
+    this.store.updateRun(runId, { status: 'done' });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — changes landed' });
+  }
+
+  /**
+   * The settle-time half of auto-land: a run that ends without a `CEZ:DONE` landing (Finish, an
+   * idle close) still lands what it left, and a landing that never succeeded fails the run rather
+   * than wearing a success badge. Answers the failure message, or undefined.
+   */
+  private async landBeforeSettle(runId: string): Promise<string | 'review' | undefined> {
+    const run = this.store.getRun(runId);
+    if (!run || run.worktree !== false || run.readOnly) return undefined;
+    const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
+    if (!policy || !(await hasUnlanded(this.repoRoot))) return undefined;
+    // Only an autonomous run or the user's Finish may land; anything else rests at review.
+    const state = this.active.get(runId);
+    if (run.autonomous !== true && state?.finishRequested !== true) return 'review';
+    // Land only while holding the tree: this run's own lease, else a fresh one (restart recovery).
+    const holdsTree = Boolean(state?.releaseRepoRoot) && !state?.repoRootParked;
+    if (!holdsTree && this.repoRootBusy > 0) return 'review';
+    const lease = holdsTree ? undefined : this.chainRepoRoot();
+    let outcome: LandResult;
+    try {
+      outcome = await this.landNow(runId, policy);
+    } finally {
+      lease?.release();
+    }
+    return outcome.result === 'failed'
+      ? `auto-land failed (${outcome.stage}): ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}`
+      : undefined;
   }
 
   /** Whether settling this run now would park it at the review gate (#489). */
@@ -6755,7 +7416,10 @@ export class RunManager {
    * the only place the diff and the draft-PR action live.
    */
   private async idleClosedFails(runId: string, state: ActiveRun): Promise<boolean> {
-    return state.idleClosed === true && !(await this.reviewGateApplies(runId));
+    if (state.idleClosed !== true) return false;
+    const reviewGate = await this.reviewGateApplies(runId);
+    // A Finish may land during that git await and clear the inactivity evidence (6a3cecee).
+    return state.idleClosed === true && !reviewGate;
   }
 
   /**
@@ -6790,7 +7454,10 @@ export class RunManager {
               this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), imageLibraryWrites,
             )
           : b.type === 'file'
-            ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
+            ? this.fileInAttachmentLibrary(
+                this.persistAttachment(runId, b.mediaType, b.data, 'pasted', storedAttachmentExtension(b.mediaType, b.name)),
+                b.name,
+              )
             : null,
       )
       .filter((saved): saved is PersistedAttachment => saved !== null);
@@ -6902,12 +7569,13 @@ export class RunManager {
     mediaType: string,
     data: string,
     namePrefix: string = 'screenshot',
+    ext: string = attachmentExtension(mediaType),
   ): PersistedAttachment | null {
     try {
       // One mapping, shared with the wire (`packages/contract`): an image keeps the extension it
-      // always had, a file gets `pdf`/`txt`/`md`, and both share the `pasted-<n>` numbering space
-      // below so a `pasted-3.md` can never collide with a `pasted-3.png`.
-      const ext = attachmentExtension(mediaType);
+      // always had, a file gets `pdf`/`txt`/`md` (a binary one its own, `storedAttachmentExtension`),
+      // and all share the `pasted-<n>` numbering space below so a `pasted-3.md` can never collide
+      // with a `pasted-3.png`.
       const dir = join(this.dataDir, 'runs', `${runId}-images`);
       mkdirSync(dir, { recursive: true });
       // Seed from the highest numeric suffix already on disk, NOT the file count:
@@ -7393,9 +8061,9 @@ export const CHECK_CONTEXT_VARS = [
   'CEZ_PR_BASE_REF',
 ] as const;
 
-/** `https://github.com/<owner>/<repo>/(pull|issues)/<n>` → its repo and number. */
+/** `https://<github host>/<owner>/<repo>/(pull|issues)/<n>` → its repo and number (any host: GitHub Enterprise). */
 export function parseGithubItemUrl(url: string): { repo: string; number: number } | undefined {
-  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\/([1-9][0-9]*)(?:[/?#].*)?$/.exec(url);
+  const match = /^https:\/\/[A-Za-z0-9.-]+(?::\d+)?\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:pull|issues)\/([1-9][0-9]*)(?:[/?#].*)?$/.exec(url);
   return match ? { repo: match[1]!, number: Number(match[2]) } : undefined;
 }
 
@@ -7455,7 +8123,7 @@ function applyTemplate(template: string, task: string): string {
  * when no model is available (#432, spec 2026-07-17-task-auto-naming). When
  * the task references a PR/issue, the number leads: `469: /om-auto-review-pr`.
  */
-export function makeRunTitle(task: string, workflow: WorkflowDef): string {
+export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCount = 0): string {
   const firstLine = task.trim().split('\n')[0] ?? '';
   const skill = workflow.steps.find((step) => stepKind(step) === 'agent' && step.skill)?.skill?.trim();
   const contextual = skill && !firstLine.startsWith(`/${skill}`)
@@ -7472,7 +8140,11 @@ export function makeRunTitle(task: string, workflow: WorkflowDef): string {
     refNumber !== undefined && !body.trimStart().replace(/^#/, '').startsWith(String(refNumber))
       ? `${refNumber}: ${body}`
       : body;
-  const chars = [...(prefixed || '(untitled task)')];
+  // An attachment-only task has no first line; the namer replaces this once the model answers.
+  const fallback = attachmentCount > 0
+    ? `Task from ${attachmentCount} attachment${attachmentCount > 1 ? 's' : ''}`
+    : '(untitled task)';
+  const chars = [...(prefixed || fallback)];
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 

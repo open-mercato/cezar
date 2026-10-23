@@ -117,23 +117,27 @@ describe('tools menu', () => {
       } else {
         expect(row?.version).toBe('not found')
         if (check.hint) expect(row?.hint).toBe(check.hint)
-        expect(row?.setupHref).toBe(scoped('/settings/agents'))
+        // Agents set up on General settings → Agent accounts (their own tab); gh/git have no
+        // settings page that installs them, so no link.
+        if (check.name === 'gh' || check.name === 'git') expect(row?.setupHref).toBeNull()
+        else expect(row?.setupHref).toBe(`/settings/global/accounts?agent=${check.name}`)
       }
     }
 
     browser.screenshot(`${artifactsDir}/tools-menu-open.png`)
   })
 
-  it('routes the cog row to Settings → Agents and closes the menu', () => {
-    // Still open from the previous test — the cog row is its footer.
+  it('routes the cog row to General settings → Agent accounts and closes the menu', () => {
+    // Still open from the previous test — the cog row is its footer. Unprefixed: global settings
+    // live outside every project.
     expect(
       browser.evaluate(`document.querySelector('${MENU} [data-slot="tools-settings"]').getAttribute('href')`)
-    ).toBe(scoped('/settings/agents'))
+    ).toBe('/settings/global/accounts')
 
     browser.click(`${MENU} [data-slot="tools-settings"]`)
-    browser.waitForFunction(`location.pathname === '${scoped('/settings/agents')}'`)
+    browser.waitForFunction(`location.pathname === '/settings/global/accounts'`)
     browser.waitForFunction(`document.querySelector('${MENU}') === null`)
     expect(browser.count(MENU)).toBe(0)
-    expect(browser.url()).toContain('/settings/agents')
+    expect(browser.url()).toContain('/settings/global/accounts')
   })
 })
