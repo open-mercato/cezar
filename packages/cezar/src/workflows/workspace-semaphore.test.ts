@@ -526,4 +526,43 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(a.store.getRun(queued.id)?.status).toBe('done');
     expect(a.store.getRun(holder.id)?.status).toBe('running'); // still holding — proves no restart/wait
   }, 45_000);
+
+  // Spec 2026-10-21-host-resource-limits: the host-headroom gate inside the real pump().
+  it('host reserve holds a second start while the machine is short, never the first, and re-pumps on relief', async () => {
+    let available = 100 * 1024 * 1024; // 100 MiB free, reserve is 4 GiB
+    const listeners = new Set<() => void>();
+    const semaphore = new WorkspaceSemaphore({
+      initial: { maxParallel: 4, hostReserve: { memoryMb: 4096, cpuPct: null } },
+      host: {
+        current: () => ({
+          sampledAt: new Date().toISOString(),
+          cpuCount: 8,
+          memTotalBytes: 16 * 1024 ** 3,
+          memUsedBytes: 0,
+          memAvailableBytes: available,
+        }),
+        subscribe: (l) => (listeners.add(l), () => listeners.delete(l)),
+        agentUsage: () => ({}),
+        subscribeAgents: () => () => undefined,
+        now: () => Date.now(),
+      },
+    });
+    const a = project('cez-wsem-host-', semaphore);
+
+    // Liveness: the workspace is idle, so one run starts despite the pressure.
+    const first = a.manager.startRun(SLOW, { task: 'first start is always admitted' });
+    await waitFor(() => a.store.getRun(first.id)?.status === 'running', 'the first run to start');
+    const second = a.manager.startRun(INSTANT, { task: 'held back by the reserve' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(a.store.getRun(second.id)?.status).toBe('queued');
+
+    available = 8 * 1024 ** 3;
+    for (const l of [...listeners]) l(); // next telemetry tick
+    await waitFor(
+      () => settled.includes(a.store.getRun(second.id)?.status ?? ''),
+      'the held run to start once the pressure cleared',
+    );
+    expect(a.store.getRun(second.id)?.status).toBe('done');
+    semaphore.dispose();
+  }, 45_000);
 });

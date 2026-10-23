@@ -23,7 +23,7 @@ import {
   supportsPrivateMcp,
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { applyCpuPriority, onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -1772,7 +1772,10 @@ export class RunManager {
         const capacity = () =>
           this.semaphore.busy() < maxParallel &&
           this.busySlots() < projectMax &&
-          (repo !== null || this.busySlots() < 1);
+          (repo !== null || this.busySlots() < 1) &&
+          // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
+          // run was otherwise startable and the next telemetry tick re-pumps it.
+          this.semaphore.hostAdmits();
         // The usage-limit hold (spec 2026-08-03-auto-resume-after-usage-limit).
         //
         // A limit closes an ACCOUNT, not a run — so starting the next queued task walks it into
@@ -1809,9 +1812,13 @@ export class RunManager {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
           const next = this.queue.findIndex(startable);
-          if (next === -1) break; // nothing queued can start right now
+          if (next === -1) {
+            this.semaphore.noteHostDeferral();
+            break; // nothing queued can start right now
+          }
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          this.semaphore.noteGatedStart();
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
           // question and would send this run straight back to the queue.
           if (forced) this.forceStarted.add(runId);
@@ -4594,7 +4601,7 @@ export class RunManager {
       state.sessionEverOpened = true;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
@@ -6678,7 +6685,7 @@ export class RunManager {
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     try {
@@ -7986,6 +7993,7 @@ export class RunManager {
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
       const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      if (child.pid !== undefined) applyCpuPriority(child.pid, this.semaphore.agentCpuPriority());
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';

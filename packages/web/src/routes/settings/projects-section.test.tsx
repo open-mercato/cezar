@@ -123,6 +123,9 @@ function serve(answers: Answers = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      agentCpuPriority: 'normal',
+      hostReserve: { memoryMb: null, cpuPct: null },
+      totalAgentMemoryMb: null,
       worktreeRetentionDefault: 10,
     },
   }

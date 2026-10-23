@@ -10,6 +10,7 @@ import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { HostLimitsFields } from './host-limits-fields'
 import { MachineCard } from './machine-card'
 import { SettingsField } from './settings-field'
 
@@ -297,6 +298,8 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
         )}
       </SettingsField>
+
+      <HostLimitsFields config={config} save={save} />
 
       <SettingsField
         title="New task defaults"

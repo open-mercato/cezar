@@ -126,6 +126,20 @@ const resourcesSchema = z
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+    /** OS scheduling priority for agent process trees (spec 2026-10-21-host-resource-limits).
+     *  `normal` = untouched. */
+    agentCpuPriority: z.enum(['normal', 'low', 'idle']).default('normal').catch('normal'),
+    /** Keep this much of the host free: no NEW run starts below `memoryMb` available RAM or
+     *  above `cpuPct` host CPU. null = that guard is off. */
+    hostReserve: z
+      .object({
+        memoryMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+        cpuPct: z.number().int().min(1).max(100).nullable().default(null).catch(null),
+      })
+      .default({ memoryMb: null, cpuPct: null })
+      .catch({ memoryMb: null, cpuPct: null }),
+    /** Ceiling on the summed RSS of every agent process tree; no NEW run starts at or above it. */
+    totalAgentMemoryMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
     /** Default worktree retention for projects that don't override it. */
     worktreeRetentionDefault: z.number().int().min(0).max(1000).default(10).catch(10),
   })

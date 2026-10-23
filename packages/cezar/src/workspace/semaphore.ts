@@ -1,5 +1,9 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { HostUsage } from '@open-mercato/cezar-contract';
+import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
+import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
+import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
@@ -48,6 +52,12 @@ export interface WorkspaceResourceLimits {
   autoResumeOnUsageLimit?: boolean;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
+  /** OS priority for agent process trees (spec 2026-10-21-host-resource-limits). Absent = normal. */
+  agentCpuPriority?: AgentCpuPriority;
+  /** Host headroom to keep free before starting a NEW run. Absent = off. */
+  hostReserve?: HostReserve;
+  /** Ceiling on the summed RSS of all agent trees before a NEW run starts. Absent/null = off. */
+  totalAgentMemoryMb?: number | null;
   /**
    * Per-project concurrency ceilings, keyed by realpath-normalized project
    * root (the registry stores normalized `root`). A root absent from the map
@@ -57,6 +67,8 @@ export interface WorkspaceResourceLimits {
    */
   projectLimits?: ReadonlyMap<string, number>;
 }
+
+export type AgentCpuPriority = 'normal' | 'low' | 'idle';
 
 /** Realpath-normalize a root the same way the registry does
  *  (`workspace/projects.ts` `normalizeRoot`), but synchronously — this answers
@@ -141,6 +153,9 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
+    agentCpuPriority: resources.agentCpuPriority,
+    hostReserve: resources.hostReserve,
+    totalAgentMemoryMb: resources.totalAgentMemoryMb,
     projectLimits,
   };
 }
@@ -153,7 +168,24 @@ export interface WorkspaceSemaphoreOptions {
    *  schema's own defaults (`maxParallel: 2`, no memory limit), so a manager
    *  constructed without boot wiring behaves like a fresh workspace. */
   initial?: Partial<WorkspaceResourceLimits>;
+  /** Telemetry seams for the host-headroom gate; tests inject fakes, production reads the
+   *  process-wide samplers. */
+  host?: {
+    current(): HostUsage | undefined;
+    subscribe(listener: () => void): () => void;
+    agentUsage(): Record<string, Pick<ProcessUsage, 'rssBytes'>>;
+    subscribeAgents(listener: () => void): () => void;
+    now(): number;
+  };
 }
+
+const defaultHost: NonNullable<WorkspaceSemaphoreOptions['host']> = {
+  current: currentHostUsage,
+  subscribe: (listener) => onHostUsage(() => listener()),
+  agentUsage: allUsage,
+  subscribeAgents: (listener) => onUsage(() => listener()),
+  now: () => Date.now(),
+};
 
 export class WorkspaceSemaphore {
   private readonly participants = new Set<SemaphoreParticipant>();
@@ -164,10 +196,118 @@ export class WorkspaceSemaphore {
   /** A slot freed DURING a sweep. The in-flight sweep may already have pumped
    *  the manager that should get it, so re-run rather than drop the wakeup. */
   private pendingRelease = false;
+  private readonly host: NonNullable<WorkspaceSemaphoreOptions['host']>;
+  private offHost: (() => void) | null = null;
+  private offAgents: (() => void) | null = null;
+  /** Telemetry ticks seen, and the tick of the last gated start: one gated start per tick, so a
+   *  burst of queued runs cannot all pass the same stale reading (spec 2026-10-21). */
+  private ticks = 0;
+  private startTick = -1;
+  private lastTickAt = Number.NEGATIVE_INFINITY;
+  private lastStartAt = Number.NEGATIVE_INFINITY;
+  /** The gate turned a start away; the next tick re-pumps. */
+  private hostDeferred = false;
 
   constructor(options: WorkspaceSemaphoreOptions = {}) {
     this.load = options.load ?? loadResourceLimits;
+    this.host = options.host ?? defaultHost;
     this.limits = { ...DEFAULT_LIMITS, ...options.initial };
+    this.syncHostGate();
+  }
+
+  agentCpuPriority(): AgentCpuPriority {
+    return this.limits.agentCpuPriority ?? 'normal';
+  }
+
+  private reserve(): HostReserve | null {
+    const r = this.limits.hostReserve;
+    return r && ((r.memoryMb ?? 0) > 0 || (r.cpuPct ?? 0) > 0) ? r : null;
+  }
+
+  private totalAgentMemoryMb(): number | null {
+    const mb = this.limits.totalAgentMemoryMb;
+    return mb && mb > 0 ? mb : null;
+  }
+
+  /** Sample the host only while a guard is configured (zero cost by default). */
+  private syncHostGate(): void {
+    const onTick = () => {
+      // Host and agent samplers both fire every ~2 s: count ONE tick per sample period so the
+      // one-start-per-tick brake does not run at double rate with both guards on.
+      const at = this.host.now();
+      if (at - this.lastTickAt >= HOST_SAMPLE_INTERVAL_MS / 2) {
+        this.ticks += 1;
+        this.lastTickAt = at;
+      }
+      if (!this.hostDeferred) return;
+      this.hostDeferred = false;
+      void this.release(); // pressure may have cleared
+    };
+    if (this.reserve() && !this.offHost) this.offHost = this.host.subscribe(onTick);
+    else if (!this.reserve() && this.offHost) {
+      this.offHost();
+      this.offHost = null;
+    }
+    if (this.totalAgentMemoryMb() !== null && !this.offAgents) this.offAgents = this.host.subscribeAgents(onTick);
+    else if (this.totalAgentMemoryMb() === null && this.offAgents) {
+      this.offAgents();
+      this.offAgents = null;
+    }
+    if (!this.reserve() && this.totalAgentMemoryMb() === null) {
+      this.hostDeferred = false;
+      this.ticks = 0;
+      this.startTick = -1;
+      this.lastTickAt = Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  /** Stop sampling and forget gate state — teardown and tests. */
+  dispose(): void {
+    this.offHost?.();
+    this.offAgents?.();
+    this.offHost = null;
+    this.offAgents = null;
+    this.hostDeferred = false;
+    this.ticks = 0;
+    this.startTick = -1;
+    this.lastTickAt = Number.NEGATIVE_INFINITY;
+  }
+
+  /** Why a NEW run must wait for the host, or null (spec 2026-10-21-host-resource-limits).
+   *  Fails open on a missing/stale sample; an idle workspace always admits one run, so a queue
+   *  can never dead-end behind a machine that is busy with something else. */
+  hostBlock(): string | null {
+    const reserve = this.reserve();
+    const totalMb = this.totalAgentMemoryMb();
+    if (!reserve && totalMb === null) return null;
+    if (this.busy() === 0) return null;
+    // One start per sample period — including before the first sample exists, so a startup burst
+    // cannot all pass the fail-open. A sampler silent for a stale window lifts the brake (fail open).
+    if (this.ticks === this.startTick && this.host.now() - this.lastStartAt <= HOST_SAMPLE_STALE_MS) {
+      return 'waiting for a fresh reading after the last start';
+    }
+    let usage = this.host.current();
+    if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
+    return (
+      (reserve ? hostReserveBlock(reserve, usage) : null) ?? agentMemoryBlock(totalMb, this.host.agentUsage())
+    );
+  }
+
+  /** Pure capacity predicate for `pump()`. */
+  hostAdmits(): boolean {
+    return this.hostBlock() === null;
+  }
+
+  /** `pump()` stopped with runs still queued: if the host is why, the next tick re-pumps. */
+  noteHostDeferral(): void {
+    if (this.hostBlock() !== null) this.hostDeferred = true;
+  }
+
+  /** `pump()` just dequeued a run through the gate. */
+  noteGatedStart(): void {
+    if (!this.reserve() && this.totalAgentMemoryMb() === null) return;
+    this.startTick = this.ticks;
+    this.lastStartAt = this.host.now();
   }
 
   /** Join the shared counter. Returns the unregister handle — the manager's
@@ -325,6 +465,7 @@ export class WorkspaceSemaphore {
   async refresh(): Promise<void> {
     try {
       this.limits = await this.load();
+      this.syncHostGate();
     } catch {
       // keep the last good snapshot
     }

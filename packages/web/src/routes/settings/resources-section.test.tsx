@@ -45,6 +45,9 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      agentCpuPriority: 'normal',
+      hostReserve: { memoryMb: null, cpuPct: null },
+      totalAgentMemoryMb: null,
       worktreeRetentionDefault: 10,
       ...resources,
     },
@@ -123,6 +126,50 @@ describe('Global settings → Resources', () => {
     expect(memoryInput()!.value).toBe('4096')
     // The per-repo config is not even read by this pane.
     expect(requests.some((r) => r.url === '/api/v1/config')).toBe(false)
+  })
+
+  it('the responsiveness preset writes low priority plus a host reserve in one PUT', async () => {
+    serve({})
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'low', hostReserve: { memoryMb: 2048, cpuPct: 90 } },
+    })
+  })
+
+  it('the preset keeps a custom reserve and priority already set', async () => {
+    serve({ agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: null } })
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: 90 } },
+    })
+  })
+
+  it('saves the host headroom fields and rejects a value below the floor', async () => {
+    serve({})
+    renderResources()
+    const mem = () => document.querySelector<HTMLInputElement>('[data-slot="resources-reserve-memory"]')!
+    const save = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-host-headroom"]')!
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-reserve-memory"]')).not.toBeNull())
+
+    fireEvent.change(mem(), { target: { value: '12' } })
+    expect(save().disabled).toBe(true)
+    expect(document.querySelector('[data-slot="resources-host-invalid"]')).not.toBeNull()
+
+    fireEvent.change(mem(), { target: { value: '3072' } })
+    fireEvent.change(document.querySelector('[data-slot="resources-total-agent-memory"]')!, { target: { value: '8192' } })
+    fireEvent.click(save())
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { hostReserve: { memoryMb: 3072, cpuPct: null }, totalAgentMemoryMb: 8192 },
+    })
   })
 
   it('saves maxParallel to the WORKSPACE config, never the per-repo one', async () => {

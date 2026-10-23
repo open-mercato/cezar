@@ -782,6 +782,18 @@ root — live once in `~/.cezar/config.json`, alongside the
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
 first time cezar boots there, and ignored afterwards.
 
+**Keep this computer responsive** (Settings → Resources; all off by default).
+`resources.agentCpuPriority` (`normal`/`low`/`idle`) lowers the OS priority of
+every agent process tree, so your own apps win a contended CPU.
+`resources.hostReserve` (`{memoryMb, cpuPct}`) holds NEW tasks in the queue while
+the machine has less than `memoryMb` free (the container limit when cezar runs in
+one) or is above `cpuPct` busy; `resources.totalAgentMemoryMb` does the same
+while all agent trees together hold that much RAM. Running tasks are never
+interrupted, one task always runs when nothing else does (the queue cannot
+stall), unreadable telemetry never blocks, and at most one task starts per 2 s
+sample so a burst cannot all pass one stale reading. Queued tasks start when the
+pressure eases. Design: `.ai/specs/2026-10-21-host-resource-limits.md`.
+
 **Settings → Resources** opens on a live **Machine** card, and the sidebar carries
 the same numbers as a one-row **glance** (CPU, its 60 s sparkline, compact RAM)
 that links here. Samples arrive every ~2 s: a local cockpit gets them pushed over
