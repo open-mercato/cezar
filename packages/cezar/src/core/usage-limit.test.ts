@@ -51,12 +51,43 @@ describe('parseUsageLimit', () => {
   });
 
   it('uses tomorrow when a clock-only reset already passed today in its named timezone', () => {
-    const lateWarsawNight = Date.parse('2026-08-03T20:30:00.000Z');
+    const lateWarsawNight = Date.parse('2026-08-03T21:30:00.000Z');
     const hit = parseUsageLimit(
       "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",
       lateWarsawNight,
     );
     expect(hit?.resetAt.toISOString()).toBe('2026-08-04T18:10:00.000Z');
+  });
+
+  it('resumes now, not a day later, when a minute-truncated clock reset just passed (telemetry 4bf9686a)', () => {
+    const justAfter = Date.parse('2026-08-03T18:10:40.000Z');
+    const zoned = parseUsageLimit("You've hit your session limit · resets 8:10pm (Europe/Warsaw)", justAfter);
+    expect(zoned?.resetAt.getTime()).toBe(justAfter);
+    const local = new Date(2026, 7, 3, 2, 10, 40).getTime();
+    expect(parseUsageLimit("You've hit your session limit · resets 2:10am", local)?.resetAt.getTime()).toBe(local);
+  });
+
+  it('reads the session-limit prose with a UTC zone (telemetry 987e8238)', () => {
+    const hit = parseUsageLimit("You've hit your session limit · resets 3:10pm (UTC)", NOW);
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T15:10:00.000Z');
+  });
+
+  it('honors the day a weekly reset names instead of resuming at the next matching clock', () => {
+    const hit = parseUsageLimit("You've hit your weekly limit · resets Aug 6, 9am (Europe/Warsaw)", NOW);
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-06T07:00:00.000Z');
+    expect(hit?.evidence).toBe('clock');
+    expect(parseUsageLimit('Weekly limit reached ∙ resets Aug 4 at 10:30am (UTC)', NOW)?.resetAt.toISOString())
+      .toBe('2026-08-04T10:30:00.000Z');
+  });
+
+  it('rolls a weekly reset named in January over the year end', () => {
+    const lateDecember = Date.parse('2026-12-30T12:00:00.000Z');
+    expect(parseUsageLimit('weekly limit · resets Jan 2, 9am (UTC)', lateDecember)?.resetAt.toISOString())
+      .toBe('2027-01-02T09:00:00.000Z');
+  });
+
+  it('refuses a named day the calendar does not have rather than guessing a clock', () => {
+    expect(parseUsageLimit('weekly limit · resets Feb 31, 9am (UTC)', NOW)).toBeNull();
   });
 
   it('reads a relative delay, and a bare retry-after', () => {

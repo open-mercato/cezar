@@ -11,6 +11,7 @@ import {
 
 import { useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
+import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { AutomationsLoading } from './routes/automations/automations-loading'
@@ -35,75 +36,60 @@ import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
 
 // Dashboard charts, drag controls and exports are paid for only on this route.
-const DashboardRoute = lazy(() =>
+const DashboardRoute = lazyRoute('dashboard', () =>
   import('./routes/dashboard').then((m) => ({ default: m.DashboardRoute })),
-)
-
-/** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
- *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
- *  before any route renders. The Suspense fallback is the same loading state the route itself
- *  shows while fetching, so the split is invisible to the user. */
-const TaskThreadRoute = lazy(() =>
-  import('./routes/task-thread/task-thread').then((m) => ({ default: m.TaskThreadRoute })),
 )
 
 /** Lazy for the same reason: the compare view renders Progress excerpts through Streamdown and
  *  full diffs through the Shiki singleton — thread-chunk weight the home screen must not pay. */
-const CompareVariantsRoute = lazy(() =>
+const CompareVariantsRoute = lazyRoute('compare', () =>
   import('./routes/compare-variants').then((m) => ({ default: m.CompareVariantsRoute })),
 )
 
-/** Lazy because both tabs render the shared run header, which lives in the thread chunk
- *  (markdown stack and all) — a static import here would pull that into the main bundle. */
-const TaskChangesRoute = lazy(() =>
-  import('./routes/task-git/task-changes').then((m) => ({ default: m.TaskChangesRoute })),
-)
-const TaskFilesRoute = lazy(() =>
-  import('./routes/task-git/task-files').then((m) => ({ default: m.TaskFilesRoute })),
-)
-const TaskCommitsRoute = lazy(() =>
+const TaskCommitsRoute = lazyRoute('task-commits', () =>
   import('./routes/task-git/task-commits').then((m) => ({ default: m.TaskCommitsRoute })),
 )
 const TaskNotesRoute = lazy(() =>
   import('./routes/task-thread/task-notes').then((m) => ({ default: m.TaskNotesRoute })),
 )
+/** The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`): `/tasks/:id` and its
+ *  view deep links all render it, with `view` naming the card a link opens. */
+const TaskWorkspaceRoute = lazyRoute('task-workspace', () =>
+  import('./routes/task-workspace/task-workspace').then((m) => ({ default: m.TaskWorkspaceRoute })),
+)
 
 /** Lazy because the repo view renders through the `<Diff>` facade and the Shiki singleton —
  *  the same heavy chunk the task git tabs ride; the home screen must not pay for it. */
-const RepoGitRoute = lazy(() =>
+const RepoGitRoute = lazyRoute('repo-git', () =>
   import('./routes/repo-git/repo-git').then((m) => ({ default: m.RepoGitRoute })),
 )
 
 /** Lazy because the GitHub detail pane renders issue/PR bodies through the same markdown
  *  stack the thread carries — thread-chunk weight the home screen must not pay. */
-const GithubRoute = lazy(() =>
+const GithubRoute = lazyRoute('github', () =>
   import('./routes/github/github').then((m) => ({ default: m.GithubRoute })),
 )
-const TrackerRoute = lazy(() =>
+const TrackerRoute = lazyRoute('tracker', () =>
   import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
 )
 
-/** The live workflow graph of a task (same spec, phase 3) — the editor's chunk, loaded lazily. */
-const TaskGraphRoute = lazy(() =>
-  import('./routes/workflow-graph/task-graph').then((m) => ({ default: m.TaskGraphRoute })),
-)
 
 /** The workflow node editor (spec 2026-09-30-workflow-node-editor) — the Workflows surface. Lazy
  *  so React Flow stays out of the main bundle. */
-const WorkflowGraphRoute = lazy(() =>
+const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
   import('./routes/workflow-graph/workflow-graph').then((m) => ({ default: m.WorkflowGraphRoute })),
 )
 
 /** Lazy because the skill detail renders the skill body through the same markdown stack the
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
-const SkillsRoute = lazy(() => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
+const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
 /** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
  *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
  *  imports, and now that automations are on by default, every visitor would otherwise pay for
  *  it before ever opening `/automations`. */
-const AutomationsRoute = lazy(() =>
+const AutomationsRoute = lazyRoute('automations', () =>
   import('./routes/automations/automations-route').then((m) => ({ default: m.AutomationsRoute })),
 )
 
@@ -353,7 +339,15 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id"
           element={
             <Suspense fallback={<ThreadLoading />}>
-              <TaskThreadRoute />
+              <TaskWorkspaceRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/chat"
+          element={
+            <Suspense fallback={<ThreadLoading />}>
+              <TaskWorkspaceRoute view="session" />
             </Suspense>
           }
         />
@@ -361,7 +355,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/changes"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskChangesRoute />
+              <TaskWorkspaceRoute view="changes" />
             </Suspense>
           }
         />
@@ -369,7 +363,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/files"
           element={
             <Suspense fallback={<GitTabLoading tab="files" />}>
-              <TaskFilesRoute />
+              <TaskWorkspaceRoute view="files" />
             </Suspense>
           }
         />
@@ -377,7 +371,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/graph"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskGraphRoute />
+              <TaskWorkspaceRoute view="graph" />
             </Suspense>
           }
         />
@@ -385,7 +379,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/commits"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskCommitsRoute />
+              <TaskWorkspaceRoute view="commits" />
             </Suspense>
           }
         />
@@ -394,6 +388,22 @@ export const AppRoutes = memo(function AppRoutes() {
           element={
             <Suspense fallback={<GitTabLoading tab="notes" />}>
               <TaskNotesRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/preview"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="browser" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/terminal"
+          element={
+            <Suspense fallback={<GitTabLoading tab="terminal" />}>
+              <TaskWorkspaceRoute view="terminal" />
             </Suspense>
           }
         />
@@ -602,6 +612,11 @@ export const AppRoutes = memo(function AppRoutes() {
             global ones are the top-level `/settings/global/*` block below. */}
         <Route path="settings" element={<SettingsIndexRoute scope="project" capabilities={capabilities} />} />
         <Route path="settings/skills" element={<SettingsSkillsRedirect />} />
+        {/* Prompt templates folded into Settings → Instructions; old links land on the list. */}
+        <Route
+          path="settings/prompt-templates"
+          element={<ScopedNavigate to={{ pathname: '/settings/instructions', hash: '#prompt-templates' }} replace />}
+        />
         {visibleSettingsSections('project', capabilities).map((section) => (
           <Route
             key={section.id}

@@ -63,7 +63,7 @@ export function TaskComposer({
 
   // One delivery path for both modes, because the record that picks between them can be stale:
   // a 409 refetches it and, when the truth names the other endpoint, delivers there instead.
-  const deliverPrompt = useDeliverPrompt(run, continueAction)
+  const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith)
 
   const hasDiffComments = diffComments.comments.length > 0
   // Only to tell a registry skill from a backend's own slash command (`commentsRideWith`) —

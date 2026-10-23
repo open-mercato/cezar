@@ -215,6 +215,26 @@ describe('repo file-browser routes', () => {
   const file = (query: string) => apiRequest(app, `/api/v1/repo/files?${query}`);
   const errorOf = async (res: Response) => ((await res.json()) as { error: string }).error;
 
+  // ---- GET /runs/:id/tree — the ⌘P palette's `#` file search (spec 2026-10-17-task-palette) ----
+
+  it("serves a run's path index from its working directory, ignored files excluded", async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', worktree: false, steps: [] });
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/tree`);
+    expect(res.status).toBe(200);
+    const tree = repoTreeSchema.parse(await res.json());
+    expect(tree.paths).toContain('src/app.ts');
+    expect(tree.paths).not.toContain('secret.env');
+    expect(tree.truncated).toBe(false);
+  });
+
+  it('409s with the no-worktree reason for a run whose worktree is gone, 404s an unknown run', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    const gone = await apiRequest(app, `/api/v1/runs/${run.id}/tree`);
+    expect(gone.status).toBe(409);
+    expect(await errorOf(gone)).toMatch(/no worktree/);
+    expect((await apiRequest(app, '/api/v1/runs/nope/tree')).status).toBe(404);
+  });
+
   // ---- the security-critical guard -------------------------------------------------------
 
   it('refuses an ignored untracked file that is sitting on disk', async () => {

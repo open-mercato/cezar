@@ -94,6 +94,7 @@ export class ProjectContextError extends Error {
  */
 export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
+  private shutdownPromise?: Promise<void>;
   private readonly building = new Map<string, Promise<ProjectContext>>();
   /** Live store-created subscribers; invoked before RunManager recovery. */
   private readonly storeListeners = new Set<(store: RunStore) => void>();
@@ -110,6 +111,7 @@ export class ProjectContexts {
   /** The built context for `projectId`, building it on first access.
    *  Throws `ProjectContextError` for unknown ids and missing roots. */
   async context(projectId: string): Promise<ProjectContext> {
+    if (this.shutdownPromise) throw new Error('Project contexts are shutting down');
     const existing = this.contexts.get(projectId);
     if (existing) return existing;
     const inFlight = this.building.get(projectId);
@@ -201,6 +203,23 @@ export class ProjectContexts {
     for (const id of this.ids()) this.dispose(id);
   }
 
+  /** Drain every opened project, including builds already in flight, before disposal. */
+  shutdownAll(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
+    this.shutdownPromise = (async () => {
+      // Abort existing scripts immediately; slow project discovery must not delay them.
+      const opened = new Set(this.contexts.values());
+      const existing = Promise.allSettled([...opened].map(ctx => ctx.manager.lifecycle.shutdown()));
+      await Promise.allSettled([...this.building.values()]);
+      const newlyBuilt = [...this.contexts.values()].filter(ctx => !opened.has(ctx));
+      const results = [...await existing, ...await Promise.allSettled(newlyBuilt.map(ctx => ctx.manager.lifecycle.shutdown()))];
+      this.disposeAll();
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+    })();
+    return this.shutdownPromise;
+  }
+
   private async build(projectId: string): Promise<ProjectContext> {
     const projects = await this.deps.listProjects();
     const project = projects.find((p) => p.id === projectId);
@@ -222,13 +241,13 @@ export class ProjectContexts {
       // best-effort sweeps serveCommand runs for the boot project, gated on the
       // root actually being a git repo.
       if (await getRepoInfo(project.root)) {
-        await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id))).catch(
+        await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
           () => [] as string[],
         );
         const keep = await resolveWorktreeRetention(project.root).catch(
           () => DEFAULT_WORKTREE_RETENTION,
         );
-        await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
+        await reclaimWorktrees(project.root, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
       }
       await manager.recover();
       // Which repository this project IS (#945), so the referenced tier stops adopting another
@@ -240,6 +259,7 @@ export class ProjectContexts {
       // every listener, and a healed record would then `touch()` a store whose lifecycle had
       // ended — scheduling a `runs.json` write from a context nobody owns any more.
       armRepoHandle(store, project.root);
+      setImmediate(() => manager.lifecycle.start());
       return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.

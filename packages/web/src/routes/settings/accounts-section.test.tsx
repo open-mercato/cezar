@@ -1,6 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import type { ReactNode } from 'react'
+import { MemoryRouter, useNavigate } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
@@ -8,6 +9,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { AgentProfile, AgentProfilesResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Agent accounts (spec `.ai/specs/2026-07-29-agent-profiles.md`).
@@ -153,10 +155,24 @@ function serve(
   )
 }
 
-function renderAccounts() {
+/** Navigates the mounted router to another `?agent=` — what back/forward does. */
+function AgentParamProbe() {
+  const navigate = useNavigate()
+  return (
+    <button type="button" onClick={() => navigate('/settings/global/accounts?agent=claude')}>
+      go claude
+    </button>
+  )
+}
+
+function renderAccounts(
+  entry = '/settings/global/accounts',
+  extra: ReactNode = null,
+  localHandoff: boolean | null = true,
+) {
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } })
-  client.setQueryData(queryKeys.health, {
+  if (localHandoff !== null) client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
     // The install/version rows come from the health probe — the one place a version can honestly
     // come from. Codex is present but UNAVAILABLE, which is "not installed"; an agent missing
@@ -165,6 +181,7 @@ function renderAccounts() {
       { name: 'claude', available: true, version: '2.1.220' },
       { name: 'codex', available: false, hint: 'optional: install the Codex CLI' },
     ],
+    capabilities: { localHandoff },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
@@ -173,10 +190,13 @@ function renderAccounts() {
   })
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/settings/global/accounts']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppRoutes />
+          {extra}
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
@@ -218,6 +238,38 @@ const openDetails = async (id: string) => {
 }
 
 describe('the agent accounts section', () => {
+  it('opens on the agent named by ?agent= — the Tools menu\'s "Set up" deep link', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS })
+    renderAccounts('/settings/global/accounts?agent=codex')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="accounts-tabs"] [data-provider="codex"]')?.getAttribute('data-state')).toBe('active'),
+    )
+    expect(document.querySelector('[data-slot="accounts-tabs"] [data-provider="claude"]')?.getAttribute('data-state')).toBe('inactive')
+  })
+
+  it('an unknown or absent ?agent= opens the first tab, and a changed one switches the mounted pane', async () => {
+    const data: AgentProfilesResponse = { editable: true, profileCapableProviders: ['claude', 'codex'], defaults: {}, selections: {}, profiles: DEFAULTS }
+    const active = (provider: string) =>
+      document.querySelector(`[data-slot="accounts-tabs"] [data-provider="${provider}"]`)?.getAttribute('data-state')
+    serve(data)
+    renderAccounts('/settings/global/accounts?agent=bogus')
+    await waitFor(() => expect(active('claude')).toBe('active'))
+    cleanup()
+
+    serve(data)
+    renderAccounts('/settings/global/accounts')
+    await waitFor(() => expect(active('claude')).toBe('active'))
+    cleanup()
+
+    // Deep-link to codex, then (back/forward) to claude on the SAME mounted pane.
+    serve(data)
+    renderAccounts('/settings/global/accounts?agent=codex', <AgentParamProbe />)
+    await waitFor(() => expect(active('codex')).toBe('active'))
+    fireEvent.click(screen.getByRole('button', { name: 'go claude' }))
+    await waitFor(() => expect(active('claude')).toBe('active'))
+    expect(active('codex')).toBe('inactive')
+  })
+
   it('lists the discovered account with no edit controls at all', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
       defaults: {},
@@ -373,7 +425,7 @@ describe('the agent accounts section', () => {
       expect(row.querySelector('[data-action="account-recheck"]')).not.toBeNull()
     })
 
-    it('re-checks ONE account for real, with refresh=1', async () => {
+    it('re-checks ONE account for real, with refresh=1&recheck=1', async () => {
       serve({
         editable: true,
         profileCapableProviders: ['claude', 'codex'],
@@ -390,7 +442,7 @@ describe('the agent accounts section', () => {
       fireEvent.click(row.querySelector('[data-action="account-recheck"]')!)
 
       await waitFor(() =>
-        expect(requests.some((r) => r.url.includes('/status?refresh=1'))).toBe(true))
+        expect(requests.some((r) => r.url.includes('/status?refresh=1&recheck=1'))).toBe(true))
     })
   })
 
@@ -735,11 +787,26 @@ describe('the agent accounts section', () => {
 
     await waitFor(() =>
       expect(document.querySelector('[data-slot="accounts-hosted"]')?.textContent).toContain(
-        'hosted mode',
+        'CEZ_REMOTE_AGENT_ACCOUNTS=1',
       ),
     )
     expect(rows()).toHaveLength(0)
     expect(document.querySelector('[data-action="accounts-add"]')).toBeNull()
+  })
+
+  it.each([false, null])('hides desktop-open actions with localHandoff=%s', async (localHandoff) => {
+    const work = profile({
+      id: 'work',
+      files: [{ id: 'settings', label: 'settings.json', path: '/home/u/.claude-work/settings.json', exists: true }],
+    })
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
+      defaults: {}, selections: {}, profiles: [DEFAULTS[0]!, work] })
+    renderAccounts(undefined, null, localHandoff)
+
+    await openDetails(work.id)
+    expect(document.querySelector('[data-slot="account-open-file"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-open-folder"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-manage"]')).not.toBeNull()
   })
 
   it('gives every agent a tab, including one that cannot carry a second account', async () => {

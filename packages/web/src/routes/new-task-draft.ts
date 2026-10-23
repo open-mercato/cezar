@@ -32,6 +32,14 @@ export interface NewTaskDraft {
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
   worktree: boolean | null
+  /** The project's `taskWorkspace` when `worktree` was chosen (spec 2026-10-20-trunk-based-projects):
+   *  changing the project setting retires the remembered choice. Absent on older drafts. */
+  worktreeBasis?: string
+  /** With the worktree off: fork the checkout onto a new branch from base first (spec
+   *  2026-10-19-repo-git-sync). Sticky; ignored while the worktree is on. */
+  newBranch?: boolean
+  /** The branch `newBranch` creates; empty → the namer's answer, else `cez/<id8>`. */
+  branchName?: string
   /** Autonomous (#autonomous): true never pauses for the user. null → remembered
    *  `lastAutonomous` / default (off). */
   autonomous: boolean | null
@@ -41,6 +49,9 @@ export interface NewTaskDraft {
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
   dispatch: DispatchIntent | null
+  /** The Ask chip (spec 2026-10-20-trunk-based-projects): a read-only task. Absent = the
+   *  project decides (a trunk-based project asks when the message is a question). Per task, never sticky. */
+  readOnly?: boolean
 }
 
 export interface ComposerRunModeInput {
@@ -64,6 +75,31 @@ export interface ComposerRunModeInput {
  * run in place when the user or workspace policy opts out. `configuredAutonomous`/
  * `configuredWorktree` carry the workspace run defaults; `'source-dependent'` autonomy means
  * skills default on and everything else off. */
+/**
+ * The autonomy default in an auto-land project (spec 2026-10-20-trunk-based-projects): an
+ * autonomous task lands without review, so "skills default autonomous" does not apply there. An
+ * explicit workspace default and the composer's own toggle still do.
+ */
+export function autoLandsUnreviewed(
+  configured: boolean | 'source-dependent',
+  autoLand: boolean,
+): boolean | 'source-dependent' {
+  return autoLand && configured === 'source-dependent' ? false : configured
+}
+
+/**
+ * The draft's remembered Worktree choice, if it still applies: one made under a different project
+ * `taskWorkspace` (or, for an older draft, before the project set one) yields to the project.
+ */
+export function explicitWorktreeFor(
+  draft: Pick<NewTaskDraft, 'worktree' | 'worktreeBasis'>,
+  taskWorkspace: string | null | undefined,
+): boolean | null {
+  if (draft.worktree === null) return null
+  const basis = draft.worktreeBasis ?? 'default'
+  return basis === (taskWorkspace ?? 'default') ? draft.worktree : null
+}
+
 export function resolveComposerRunMode(input: ComposerRunModeInput): {
   autonomous: boolean
   worktree: boolean
@@ -110,13 +146,30 @@ export function composerRunModeNote(input: {
    *  where the work happens than which tree the parent sits in. */
   dispatch?: boolean
   autonomous?: boolean
+  /** In-place on a fresh branch from base (spec 2026-10-19-repo-git-sync). */
+  newBranch?: boolean
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects). */
+  readOnly?: boolean
+  /** The project lands finished in-place work on its base branch itself. */
+  autoLand?: boolean
 }): string {
+  if (input.readOnly === true && input.hasGit) {
+    return 'Asks a read-only question about the current checkout — no branch, nothing to clean up.'
+  }
   if (input.dispatch === true) {
     return input.autonomous === true
       ? 'Runs on its own and fans work out to subtasks — it will not pause for you.'
       : 'Fans work out to subtasks in isolated worktrees.'
   }
   if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
+  if (input.hasGit && input.newBranch) {
+    return 'Runs in the repo working tree on a new branch from base — your checkout switches to it.'
+  }
+  if (input.hasGit && input.autoLand) {
+    return input.autonomous === true
+      ? 'Runs in the repo working tree, one write task at a time — finished work is checked and lands on the base branch.'
+      : 'Runs in the repo working tree, one write task at a time — review the changes, then Commit lands them on the base branch.'
+  }
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
 }
@@ -163,10 +216,14 @@ function normalize(raw: unknown): NewTaskDraft {
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
+    ...(typeof obj.worktreeBasis === 'string' ? { worktreeBasis: obj.worktreeBasis } : {}),
+    ...(obj.newBranch === true ? { newBranch: true } : {}),
+    ...(typeof obj.branchName === 'string' && obj.branchName ? { branchName: obj.branchName } : {}),
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
+    ...(typeof obj.readOnly === 'boolean' ? { readOnly: obj.readOnly } : {}),
   }
 }
 
@@ -252,7 +309,9 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
  *  picked once ended up silently running every task after it. A fresh `/new` starts with no
  *  skill; picking one again is one click. */
 export function clearStartedDraft(projectId: string | null = null): void {
-  writeDraft({ ...readDraft(projectId), text: '', source: null }, projectId)
+  // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
+  const { branchName: _spent, readOnly: _asked, ...kept } = readDraft(projectId)
+  writeDraft({ ...kept, text: '', source: null }, projectId)
 }
 
 /**

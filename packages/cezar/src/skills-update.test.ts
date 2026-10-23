@@ -185,6 +185,25 @@ describe('SkillsUpdateService', () => {
     expect(dryRun).not.toHaveBeenCalled();
   });
 
+  it('reports an in-flight apply as updating, so a client that lost the request can follow it (telemetry edd8c83e)', async () => {
+    const lock = { skills: { alpha: { source: 'open-mercato/skills' } } };
+    const { home, repo } = await fixture(lock);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const run = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args[2] === 'update') await gate;
+      return { stdout: args[2] === 'check' && run.mock.calls.length <= 1 ? 'alpha update available' : '', stderr: '' };
+    });
+    const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run });
+    await service.check(repo);
+    const applying = service.update(repo, true);
+    expect(service.snapshot(repo).status).toBe('updating');
+    release();
+    const done = await applying;
+    expect(done.status).toBe('current');
+    expect(service.snapshot(repo)).toMatchObject({ status: 'current', updatedAt: done.updatedAt });
+  });
+
   it('lets guarded callers distinguish in-process contention', async () => {
     const { home, repo } = await fixture({ skills: { alpha: { source: 'open-mercato/skills' } } });
     let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; });

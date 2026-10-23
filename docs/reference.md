@@ -11,6 +11,7 @@ Everything the [README](../README.md) leaves out: the full configuration, every 
 - [Coding agent backends](#coding-agent-backends)
 - [Remote access (host cezar on a server)](#remote-access-host-cezar-on-a-server)
 - [Configuration](#configuration-optional)
+- [Worktree lifecycle scripts](#worktree-lifecycle-scripts)
 - [Nightly and preview builds](#nightly-and-preview-builds)
 - [Local development](#local-development)
 
@@ -79,19 +80,31 @@ One browser window, with live task updates over Server-Sent Events:
 | View | What's in it |
 |---|---|
 | **Dashboard** | **Overview** shows attention, completed/failed outcomes, median cycle time, project comparisons, live work, enabled automations with next run/check times, and recent results; **Usage & cost** shows reported usage and trends. Counters open matching tasks. Drag widgets to reorder them, customize optional tiles and export the current view to PDF/CSV; saved layout is shared by browsers using this workspace. |
-| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
+| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. The composer can also **start a task later** — at a date and time in the server's time zone, or after the account's observed usage-limit reset — and such tasks wait under **Scheduled** until then (#1340). They are stored with the project's automations in `.ai/cezar/automations.json`; observed reset times are cached, without any model call, in `~/.cezar/usage-windows.json`. The server must be running at the start time. |
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. **Files** browses the whole repository — the tree on the left, the file on the right (syntax-highlighted, images inline, Markdown rendered with a toggle to the source), and a filter box that finds a path as you type. Every file is its own URL (`/git/files/<path>`), so a view can be refreshed or pasted to a colleague. The tree is git's own view of the repository, so `.gitignore`d build output and `node_modules` never appear — and a file git does not list cannot be opened, which is what keeps an ignored `.env` out of reach. Read-only: nothing here edits the checkout. |
-| **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
+| **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. GitHub Enterprise works the same on any domain: a remote counts as GitHub when its host is `github.com`, `*.ghe.com`, or one `gh` is signed in to (`gh auth login --hostname <host>`, or `GH_HOST`). A self-hosted server on any other domain needs that login first. github.com and Enterprise projects work side by side; cezar pins the right host per repo, so `GH_HOST` never has to be exported. |
 | **Skills** | Local skills plus the team skills repo, with a rendered body + prompt preview. Refresh pulls the latest from the remote. |
 | **Workflows** | Build a workflow as a node graph, or let the planner draft one from a description; save it as YAML (a plain stack of skills stays in the portable `skills:` form), import/export, or delete. Built-ins always come back. |
 | **Settings** | Appearance (dark/light theme, accent, density), agent backends, notifications, and the skills catalog. |
+
+**Scheduled-start recovery:** a creation-key replay does not create another schedule, and the scheduler reconciles retained run records before retrying a partial start. This is not a global exactly-once execution guarantee: independent cockpits can recover the same queued run, and **Start missing runs** can recreate a variant whose record was deleted manually or by retention. Check existing work before retrying; **Dismiss** closes an ambiguous entry without starting work.
+
 
 The cockpit is a React app served pre-built from the package — `npx cezar-run`
 still means no build step and no dev server on your machine — with a dark/light
 theme, a ⌘K command palette, and bookmarklets that launch a task straight from
 a GitHub page.
+
+**⌘P / Ctrl+P** acts on one task: on a task page it lists that task's actions
+(pin, archive, rename, stop, the git step, views, layouts, Open in…, copy). The
+prefix picks the mode: `@` to switch tasks (a PR or issue number finds every task about it — in ⌘K too), `>` for commands only, `#` for the task's files.
+Repeated ⌘P walks back through recent tasks; Tab on a task row (here or in ⌘K)
+acts on that task without opening it; ⌥↵ opens a view beside the current one.
+Shortcuts run those commands with the palette closed: ⌘1–⌘9 switch the task's tabs and
+⌘/ opens the terminal in a column; hold ⌘ to see each tab's number. Rebind any command with ⇧↵ on its row, or in
+Settings → Keyboard. Shortcuts are saved in `~/.cezar/ui-state.json`.
 
 ---
 
@@ -151,12 +164,19 @@ cezar projects tag api storefront backend   # set the grouping tags (no tags cle
 These read and write `~/.cezar/config.json` directly, so they work with the
 server stopped, and `CEZ_HOME` selects which workspace they operate on.
 
-Settings split along the same line: **General** (the project's folder, its
-registry facts, its parallel-task ceiling, and Remove), **Agents**,
-**Worktrees**, **Bookmarklets**, **Prompt templates** and **MCP** describe one
-repo and live under `/p/<projectId>/settings`; **Appearance**,
-**Notifications**, **Resources**, **Projects** and **Keyboard** are yours or the
-machine's and live at `/settings/global`.
+Settings is one full-screen surface with one navigation (the app sidebar is
+hidden there; **Back** or Escape returns to the page you came from). The
+**General settings** group — **Appearance**, **Notifications**, **Resources**,
+**Skills**, **Secrets**, **Agent accounts**, **Projects**, **Privacy** — is yours
+or the machine's and lives at `/settings/global`. Below it, a **Project
+settings** tree lists every registered project; each opens into **General**
+(the project's folder, its registry facts, its parallel-task ceiling, and
+Remove), **Tracker**, **Secrets**, **External integrations**, **Agents**,
+**Instructions** (system prompt, branch naming, prompt templates), **Tasks**,
+**Agent config**, **Worktrees** and **Bookmarklets**, which describe that one
+repo and live under `/p/<projectId>/settings`. On any project page, clicking
+another project in the tree opens the same place there: the same section, or
+its General page when General is open; the previous project folds.
 
 ### Grouping connected repositories: tags and the All tasks page
 
@@ -453,19 +473,24 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
+| `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
+| `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
 | `CEZ_APPROVAL_GATE=1` | Select Claude's `acceptEdits` mode. Cezar has no cockpit permission response channel; by default, unapproved tools are denied without interrupting the run. |
+| `CEZ_DESIGN_MODE=0` | Turn off Design Mode in a task's **Preview** tab (spec `.ai/specs/2026-10-09-design-mode.md`). Unset, it is on for a local cockpit: switching it on makes cezar re-serve the previewed local `http://` dev server on a second `127.0.0.1` port with an element picker injected, so you can click an element and send the agent a note about it. The port opens only on that click and closes when idle. Always off on a hosted cockpit, where a loopback port reaches nobody — there is no `=1`. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
 | `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
 | `CEZ_WORKFLOW_WEBHOOKS=1` | Let a workflow graph's **`notify.webhook`** node POST to the URL it names (JSON: `text`, `run`, `node`). Off by default: a workflow file — which can be imported from anywhere — calling out to an arbitrary URL widens exposure, so it is opt-in. Off, the node leaves by `failed` with a note; under `CEZ_DRY_RUN=1` nothing is sent either way. |
+| `CEZ_TERMINAL=1` / `=0` | The task view's interactive **terminal** (spec `.ai/specs/2026-10-07-task-workspace.md` §6). Unset it is on for a local cockpit and off on a hosted one (`CEZ_REMOTE=1` or a non-loopback bind). `1` allows it there too — without a sign-in in front of cezar this hands a shell on the server to anyone your reverse proxy admits. `0` turns it off everywhere. A platform with no prebuilt PTY binary reports the terminal unavailable with a reason instead of failing. |
 | `CEZ_DISPATCH=0` | Turn OFF **task dispatch**, which is on by default: a running task may start other cezar tasks with `cez task create` — each in its OWN worktree forked off the parent's branch, with a budget carved out of the parent's — and they report back into the parent's session when they settle (`cez task report`). Children appear nested under their parent in the task lists. Tasks talk through a tree directory (`.ai/cezar/dispatch/<root>/`: the brief, each task's order/notes/report, an inbox per task) and cezar wakes a parked recipient when a file lands. A `--kind review` child judges another task's branch and answers with a verdict. ON by default (the owner-approved exception to "cost-widening features are opt-in" — see `AGENTS.md`), and only the exact value `0` turns it off; with it off the `/runs/:id/dispatch` and `/runs/:id/report` routes answer `409`, no task is told about the CLI, and the cockpit hides the "Review open PRs" template. A headless `cezar run` never dispatches either way — there is no cockpit for the CLI to reach, so no task is told about it. Read at boot, so restart after changing it. This is the widest cost-widening flag here — one task can start four more agents — so give dispatching tasks a budget. |
+| `CEZ_TASK_PROCESS_REAP=0` | Turn OFF **leftover-process reaping**, which is on by default (#1411): when a task settles, cezar stops every process still carrying that task's `CEZ_TASK_ID` in its environment — a hung test binary, a dev server, a `setsid`ed background job — with SIGTERM five seconds after the settle and SIGKILL three seconds later, and notes what it stopped in the task's timeline. On boot it does the same for tasks that settled while cezar was down. A task you Continue within the grace is left alone. Linux (`/proc`) and macOS (`ps -E`) only. Only the exact value `0` turns it off. |
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. Rarely needed: when it is unset, cezar takes `claude` from PATH, and failing that looks where Claude Code's own installers put it — `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin` — so an install the launching shell never added to PATH is still found. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_JUNIE_BIN=/path/to/junie` | Override which `junie` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
-| `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
+| `CEZ_CURSOR_AGENT_BIN=/path/to/cursor-agent` | Override which Cursor Agent CLI binary is used. Unset: `cursor-agent` on PATH, then `~/.local/bin/cursor-agent`, then `agent` on PATH. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
@@ -487,9 +512,9 @@ Useful environment variables:
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
-| `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |
+| `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Tasks toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
-| `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
+| `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Tasks toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Unset, the count refreshes every 10 seconds while a cockpit tab is visible, paced to GitHub's rate limit (about once a minute unauthenticated; every 10 s with `GITHUB_TOKEN`/`GH_TOKEN` set, which is then sent with the request). Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
@@ -701,7 +726,7 @@ works and how to redeploy new versions.
 
 Zero config is the default — everything below is opt-in via
 `.ai/cezar/config.json` (a missing or invalid file simply uses the defaults, and
-never blocks startup):
+never blocks startup; configured lifecycle transitions pause on malformed configuration rather than treating it as an empty cleanup list):
 
 ```jsonc
 {
@@ -712,13 +737,42 @@ never blocks startup):
   // path as `./name`, not a bare `name`. Pin `ref` to a full commit SHA to freeze
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
+  // Skills repos shared by every project (e.g. your organisation's) are added in Settings →
+  // Global → Skills, not here; they are stored in `~/.cezar/config.json` (`orgSkillsRepos`)
+  // and merged after this list, with the same source rules. Only markdown under a folder named
+  // `skills/` (any depth) is picked up from them: `…/skills/<name>/SKILL.md` is a directory skill
+  // (its other files are its references), any other `…/skills/**/*.md` a flat one.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
-  "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "branchNaming": "your branch naming preferences",
+                             // optional: task branches are named from the first prompt under these
+                             // instructions (Settings → Instructions); absent = cez/<id8>
+  // Trunk-based projects (Settings → Tasks → Development model); every key optional:
+  "taskWorkspace": "in-place", // tasks work in the checkout, write tasks one at a time
+  "landing": "auto",           // finished in-place tasks commit, rebase, run requiredChecks, push
+                               // (ignored while this file is tracked by git)
+  "requiredChecks": ["npm test"],
+  "defaultSkill": "my-skill",   // composer preselect; "askSkill" for read-only Ask tasks
+  "startApp": { "services": ["npm run api", "npm run web"], "url": "http://localhost:5173" }
+                             // optional: what the Preview's Start app runs, each service in its own
+                             // terminal tab; url = the address to show (absent: the first one printed).
+                             // A `startApp` in your project entry of ~/.cezar/config.json wins.
 }
 ```
+
+**Trunk-based projects** (many small changes that should land straight on the
+base branch — a docs or notes repo, a config repo, a solo project): set
+**Settings → Tasks → Development model** to *Trunk-based*. Tasks then run in the
+repo checkout instead of a worktree, write tasks take turns so two tasks never
+conflict. A finished task waits for your review in Changes; reply with
+corrections, then **Finish** commits, rebases on the remote, runs
+`requiredChecks` and pushes to the base branch. Autonomous tasks land on their
+own. A failed rebase or check goes back to the agent. The composer's **Ask** chip starts a
+read-only question: no branch, no lease, runs beside a write task. Spec:
+`.ai/specs/2026-10-20-trunk-based-projects.md`.
 
 Put the same `"modelsLocked": true` key in `~/.cezar/config.json` to apply it
 to every registered project. When the key is absent or `false` in both config
@@ -796,6 +850,139 @@ Each file keeps its native format and vendor-documented precedence. Tracked
 files reach task worktrees after commit; Claude's gitignored personal layer is
 seeded into each run's worktree. Editing is a local-machine capability, so a
 hosted cockpit (`CEZ_REMOTE=1`) is read-only and never serves home-file contents.
+
+---
+
+## Worktree lifecycle scripts
+
+**Project Settings → Worktrees** contains two optional ordered lists: **After
+worktree creation** prepares a new directory before the agent starts; **Before
+worktree removal** cleans up while its files still exist. Both lists default to
+empty. There is no required config file, global inheritance, environment switch,
+or command execution for projects without hooks. These are local settings for
+the selected project, saved under `worktreeLifecycle` in `.ai/cezar/config.json`.
+Saving scripts does not execute them.
+
+Setup also runs when Continue recreates a reclaimed directory. Continuing in an
+already prepared directory does not repeat setup. Cleanup covers explicit
+worktree removal, task deletion, retention/Reclaim now, discarded variants, and
+known managed orphans. Finishing or archiving a task alone runs neither list;
+non-Git and worktree-disabled tasks run neither list. Retention keeps its original
+branch-preserving scope even when cleanup is forced. A failed cleanup may leave
+the project temporarily above its retention limit; the Worktrees page shows the
+operation requiring attention.
+
+Add a display name, multiline Bash command, and optional timeout for each entry;
+move entries up/down to set their order, then **Save**. Lists accept at most 32
+commands each, command text up to 32 KiB and names up to 120 characters. Every
+entry has a stable UUID: editing or reordering keeps it; adding a new entry creates
+a new identity. Hand-authored entries must supply their own unique `id`.
+
+The **Variables** disclosure inserts these tokens at the command editor's caret:
+
+| Variable | Value |
+| --- | --- |
+| `{{ root_path }}` | Canonical absolute root of this project. |
+| `{{ worktree_path }}` | The actual directory being prepared or removed; never a fallback to the project root. |
+| `{{ worktree_id }}` | Stable resource identity `cez-<lowercase UUID>`, retained across reclamation and recreation. |
+| `{{ task_id }}` | Original task ID, retained even if its task record is gone. |
+
+Tokens accept optional inner whitespace. **Leave them unquoted**: Cezar adds
+shell escaping, so spaces and shell punctuation in paths remain inert data.
+Static suffixes are supported:
+
+```sh
+cp {{ root_path }}/.env.local {{ worktree_path }}/.env.local
+docker compose --project-directory {{ worktree_path }} -p {{ worktree_id }} up -d --build
+```
+
+For cleanup, a separate entry might use:
+
+```sh
+docker compose --project-directory {{ worktree_path }} -p {{ worktree_id }} down --volumes
+```
+
+These are examples, never installed defaults. Unknown or unclosed tokens and
+tokens inside quotes, substitutions, backticks, arithmetic, comments, or
+here-documents are rejected before execution. Put complex logic in a script and
+pass variables as ordinary arguments. To pass literal double braces to another
+tool, type `\{{` in the editor, including inside quoted strings:
+
+```sh
+docker inspect --format '\{{ .Name }}' {{ worktree_id }}
+```
+
+Cezar consumes the escape and sends `{{ .Name }}` literally. A JSON-authored
+command needs the usual additional JSON escaping for its backslash. **Preview**
+only renders and redacts the command; it never runs a shell. Choose a real
+worktree, or use the explicitly labelled example context.
+
+Commands run sequentially as noninteractive `bash -c`, without a login profile,
+in the worktree directory with closed stdin. Bash must be available on the host;
+Cezar does not install it or silently substitute another shell. Windows also uses
+native `taskkill /PID … /T /F` to terminate an owned command tree. Native Windows
+execution was not exercised by the implementation's local fixture tests. Each
+command has a **30-minute wall-clock timeout**, with an optional
+`timeoutSeconds` override from **1 through 86,400**. Silence is not an idle-timeout
+trigger. Stop/timeout terminates supervised children; uncertain process exit
+keeps the worktree protected until quiescence can be established.
+
+Commands inherit the Cezar host's environment and privileges. Repository `.env`
+files are not automatically loaded and managed tracker/account credentials are
+not injected. Source a file explicitly if your command needs it. The visiting
+browser does not run these commands, including in remote mode. Output is
+redacted before persistence/live delivery, limited to 1 MiB per execution with
+16 KiB frames and a truncation marker; redaction covers known secrets and token
+patterns, not arbitrary sensitive text a script invents.
+
+Task Session and Worktrees show progress, attempts and expandable output.
+**Retry loads the current saved lists**, in their current order. Durable
+successes are reused only for the same operation, generation, entry ID, exact
+command, resolved context and renderer contract. Editing a successful command
+runs it again; changing only its name or timeout does not. Removed entries remain
+in history but no longer run. Changing a script file alone does not invalidate a
+successful entry: remove and add the entry to deliberately give it a new identity.
+Saving, including clearing both lists, never resumes a failed operation; choose
+**Retry** explicitly. Changes made while a command runs apply to later entries,
+and configuration is checked again before the transition commits.
+
+Setup recovery offers **Retry**, **Edit scripts**, **Start task anyway**, or
+**Cancel task**. Bypass accepts an incomplete environment; cancellation retains
+the directory and any resources already created. Cleanup recovery offers
+**Retry**, **Edit scripts**, **Keep worktree**, or **Force delete**. Keep suppresses
+automatic cleanup for that generation. Force skips remaining commands and carries
+out the original removal intent: reclamation keeps its branch, whereas deleting
+a task also deletes its record and managed branch. Partially stopped containers,
+volumes and other resources may remain after Keep, Cancel or Force. There is no
+automatic rollback of command effects.
+
+**Stop scripts** parks the operation after stopping the current command; it does
+not itself cancel a task or remove its directory. Normal shutdown and restart
+wait for owned scripts to stop and save their recovery state, including scripts
+in other opened projects. A crash leaves uncertain
+execution for an explicit choice, never an automatic replay. There is no
+exactly-once guarantee for external side effects. Completed scripts followed by a
+filesystem failure appear as a commit failure; Retry rechecks current settings
+before attempting the remaining transition.
+
+Headless `cezar run` uses the same preparation gate. If recovery is required, it
+prints the operation ID and cockpit recovery instruction and exits **1**, rather
+than waiting indefinitely or starting the agent. Normal done/review still exits
+0. `CEZ_DRY_RUN=1` does not execute lifecycle commands or delete real worktrees
+through this mechanism.
+
+Lifecycle records and bounded output live independently under the ignored
+`.ai/cezar/lifecycle/` directory. Completed history is retained for **7 days**;
+active/attention operations and retained directories are not age-pruned. Stable
+identity survives as long as the task does, including after its directory was
+reclaimed, so a later recreation uses the same resource identity.
+
+**Before downgrading to a version without lifecycle support**, finish, Keep, or
+explicitly Force pending operations, then disable the configured hooks. Older
+binaries cannot enforce these gates and may remove directories without cleanup.
+Deleting Cezar state cannot undo external resources or reconstruct lost ownership
+information.
+
 
 ---
 

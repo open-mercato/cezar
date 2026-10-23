@@ -95,6 +95,7 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -291,6 +292,7 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -374,6 +376,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: false,
+      orgSkillsRepos: [],
     });
 
     const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;
@@ -521,6 +524,16 @@ describe('the workspace settings API (step 2.7)', () => {
       body: JSON.stringify(body),
     });
   const rawUiState = () => JSON.parse(readFileSync(workspaceUiStatePath(), 'utf8')) as Record<string, unknown>;
+
+  it('keeps layouts saved by name for every task, and refuses an arrangement past the column cap', async () => {
+    const review = { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }] };
+    expect((await putUiState({ savedLayouts: [review] })).status).toBe(200);
+    expect(rawUiState().savedLayouts).toEqual([review]);
+    const four = { name: 'Wide', columns: Array.from({ length: 4 }, () => ({ view: 'files', width: 25 })) };
+    expect((await putUiState({ savedLayouts: [four] })).status).toBe(400);
+    expect((await putUiState({ savedLayouts: [{ name: ' ', columns: review.columns }] })).status).toBe(400);
+    expect(rawUiState().savedLayouts).toEqual([review]);
+  });
 
   it('GET answers {} when no file exists yet', async () => {
     const res = await getUiState();

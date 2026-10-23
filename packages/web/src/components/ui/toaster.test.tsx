@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Toaster, resetToasts, toast } from './toaster'
+import { Toaster, onDangerToast, resetToasts, toast } from './toaster'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -154,5 +154,24 @@ describe('Toaster', () => {
         ['short', 'closed'],
       ])
     })
+  })
+})
+
+describe('onDangerToast', () => {
+  it('sees every danger toast and nothing else, and a throwing observer never stops the toast', () => {
+    const seen: string[] = []
+    const offThrow = onDangerToast(() => {
+      throw new Error('observer broke')
+    })
+    const off = onDangerToast((message) => seen.push(message))
+    render(<Toaster />)
+    act(() => toast('Copied.'))
+    act(() => toast('session closed', { tone: 'danger' }))
+    expect(seen).toEqual(['session closed'])
+    expect(screen.getByText('session closed')).toBeTruthy()
+    off()
+    offThrow()
+    act(() => toast('again', { tone: 'danger' }))
+    expect(seen).toEqual(['session closed'])
   })
 })

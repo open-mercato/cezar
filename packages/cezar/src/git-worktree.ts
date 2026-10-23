@@ -4,6 +4,7 @@ import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
+import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
 
 /**
  * Git worktree per task (spec 006). Each run gets its own branch
@@ -28,6 +29,8 @@ interface GitResult {
 interface RegisteredWorktree {
   path: string;
   branch?: string;
+  /** Its directory is gone; `git worktree prune` would drop the registration. */
+  prunable?: boolean;
 }
 
 /** Run git, never throw — degradation is the caller's policy. */
@@ -49,25 +52,28 @@ function git(
 /** Upper bound on the pre-fork fetch; a slow or unreachable remote must not stall task start. */
 const FETCH_TIMEOUT_MS = 15_000;
 
+/** The base (PR-target) and push remotes of `dir` (`git-remotes.ts`). */
+export function taskRemotes(dir: string): Promise<TaskRemotes> {
+  return resolveTaskRemotes((args) => git(dir, args));
+}
+
 /**
- * Refresh `origin/<base>` so a new task forks from the newest upstream tip,
+ * Refresh `<remote>/<base>` so a new task forks from the newest upstream tip,
  * not whatever the remote-tracking ref happened to hold at the last manual
- * fetch. Best effort: no `origin`, offline, auth required or a timeout all
- * leave the existing refs untouched. The explicit refspec updates the
- * tracking ref even when the remote has a narrowed fetch config. Skipped under
- * `CEZ_DRY_RUN=1`, which must stay network-free.
+ * fetch. Best effort: offline, auth required or a timeout all leave the
+ * existing refs untouched. The explicit refspec updates the tracking ref even
+ * when the remote has a narrowed fetch config. Skipped under `CEZ_DRY_RUN=1`,
+ * which must stay network-free.
  */
-async function fetchBase(repoRoot: string, base: string): Promise<void> {
+async function fetchBase(repoRoot: string, remote: string, base: string): Promise<void> {
   if (process.env.CEZ_DRY_RUN === '1') return;
   // The name is spliced into a refspec — only a well-formed branch name may be.
   const wellFormed = await git(repoRoot, ['check-ref-format', `refs/heads/${base}`]);
   if (!wellFormed.ok) return;
-  const hasOrigin = await git(repoRoot, ['remote', 'get-url', 'origin']);
-  if (!hasOrigin.ok) return;
-  const refspec = `+refs/heads/${base}:refs/remotes/origin/${base}`;
+  const refspec = `+refs/heads/${base}:refs/remotes/${remote}/${base}`;
   // GIT_TERMINAL_PROMPT only silences git's own (HTTPS) prompts; an SSH remote
   // can still ask on the controlling TTY — the timeout is what bounds that.
-  await git(repoRoot, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', 'origin', refspec], {
+  await git(repoRoot, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', remote, refspec], {
     timeout: FETCH_TIMEOUT_MS,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
@@ -78,18 +84,57 @@ export function branchFor(runId: string): string {
 }
 
 /**
+ * A generated branch name (spec 2026-10-11-branch-naming-instructions) that no local or
+ * `origin/` branch already holds or blocks as a path prefix, so the fork can never attach to
+ * someone else's branch: the name as given, else `<name>-<id8>`. A name git refuses, or an option-like one, answers
+ * null and the caller keeps `cez/<id8>`. Never throws.
+ */
+export async function uniqueBranchName(
+  repoRoot: string,
+  wanted: string,
+  runId: string,
+): Promise<string | null> {
+  if (!isSafeGitRef(wanted)) return null;
+  const wellFormed = await git(repoRoot, ['check-ref-format', '--branch', wanted]);
+  if (!wellFormed.ok) return null;
+  const exists = async (name: string): Promise<boolean> => {
+    const local = await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`]);
+    if (local.ok) return true;
+    const remote = await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${name}`]);
+    return remote.ok;
+  };
+  // Git refs are paths: `feature` blocks `feature/x` and `feature/x/y` blocks `feature/x`.
+  const taken = async (name: string): Promise<boolean> => {
+    if (await exists(name)) return true;
+    const parts = name.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      if (await exists(parts.slice(0, i).join('/'))) return true;
+    }
+    const nested = await git(repoRoot, [
+      'for-each-ref', '--count=1', '--format=%(refname)', `refs/heads/${name}/`, `refs/remotes/origin/${name}/`,
+    ]);
+    return nested.ok && nested.stdout.trim() !== '';
+  };
+  if (!(await taken(wanted))) return wanted;
+  const suffixed = `${wanted}-${runId.slice(0, 8)}`;
+  return (await taken(suffixed)) ? null : suffixed;
+}
+
+/**
  * Resolve the configured base branch to something `git worktree add` can
  * fork from: the local branch, its remote-tracking ref, or null — the caller
  * falls back to the current branch with a note. Never throws.
  *
- * When BOTH the local branch and `origin/<base>` exist, prefer whichever is up
- * to date. A stale LOCAL base (behind origin, because nothing fetched it into
+ * "The remote" is the base (PR-target) remote, `taskRemotes` (#1383).
+ *
+ * When BOTH the local branch and `<remote>/<base>` exist, prefer whichever is up
+ * to date. A stale LOCAL base (behind the remote, because nothing fetched it into
  * this worktree's repo) is the classic inflated-diff trap: the merge-base every
  * diff is measured from collapses onto the stale tip, so all of the history
- * merged into origin since then counts as the task's own changes — the phantom
- * 142k-line diff. `origin/<base>` is the source of truth for a review base, so
- * only keep the local ref when it is equal to or ahead of origin (unpushed base
- * commits); otherwise use origin. `origin/<base>` is fetched first (best
+ * merged upstream since then counts as the task's own changes — the phantom
+ * 142k-line diff. `<remote>/<base>` is the source of truth for a review base, so
+ * only keep the local ref when it is equal to or ahead of it (unpushed base
+ * commits); otherwise use the remote. `<remote>/<base>` is fetched first (best
  * effort) so "up to date" means the remote as it is now, not at the last fetch.
  *
  * This answers the question once, when the worktree is forked. The local ref
@@ -98,43 +143,58 @@ export function branchFor(runId: string): string {
  * (`git-diff-base.ts`). Keep the two in agreement.
  *
  * `keepDiverged` is for the user's OWN checked-out branch (the zero-config
- * fork point): there a local branch that diverged from origin — rebased or
+ * fork point): there a local branch that diverged from the remote — rebased or
  * amended but not yet force-pushed — is the user's work, not staleness, so
- * origin wins only when local is strictly behind it (fast-forwardable). A
+ * the remote wins only when local is strictly behind it (fast-forwardable). A
  * deliberate `reset --hard HEAD~N` that is not force-pushed yet also reads as
  * "behind" — git cannot tell it from staleness — so such a task forks with the
- * dropped commits back in; push the reset first. An own branch origin has
- * never tracked is local-only work, so it skips the fetch round trip.
+ * dropped commits back in; push the reset first. An own branch the remote has
+ * never tracked is local-only work, so it skips the fetch round trip. A repo
+ * with no remote at all resolves to the local branch or null.
  */
 export async function resolveBaseRef(
   repoRoot: string,
   base: string,
-  opts: { keepDiverged?: boolean } = {},
+  opts: { keepDiverged?: boolean; remotes?: TaskRemotes } = {},
 ): Promise<string | null> {
   if (!isSafeGitRef(base)) return null;
   const verify = (ref: string) =>
     git(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then((r) => r.ok);
-  if (!opts.keepDiverged || (await verify(`origin/${base}`))) await fetchBase(repoRoot, base);
-  const [hasLocal, hasRemote] = await Promise.all([verify(base), verify(`origin/${base}`)]);
+  const { base: baseRemote } = opts.remotes ?? (await taskRemotes(repoRoot));
+  if (!baseRemote) return (await verify(base)) ? base : null;
+  const remoteRef = `${baseRemote}/${base}`;
+  if (!opts.keepDiverged || (await verify(remoteRef))) await fetchBase(repoRoot, baseRemote, base);
+  const [hasLocal, hasRemote] = await Promise.all([verify(base), verify(remoteRef)]);
   if (hasLocal && hasRemote) {
-    // `--is-ancestor origin/<base> <base>` succeeds iff local is equal-or-ahead.
-    const localCurrent = await git(repoRoot, ['merge-base', '--is-ancestor', `origin/${base}`, base]);
+    // `--is-ancestor <remote>/<base> <base>` succeeds iff local is equal-or-ahead.
+    const localCurrent = await git(repoRoot, ['merge-base', '--is-ancestor', remoteRef, base]);
     if (localCurrent.ok) return base;
-    if (!opts.keepDiverged) return `origin/${base}`;
-    // `--is-ancestor <base> origin/<base>` succeeds iff local is strictly behind here.
-    const localBehind = await git(repoRoot, ['merge-base', '--is-ancestor', base, `origin/${base}`]);
-    return localBehind.ok ? `origin/${base}` : base;
+    if (!opts.keepDiverged) return remoteRef;
+    // `--is-ancestor <base> <remote>/<base>` succeeds iff local is strictly behind here.
+    const localBehind = await git(repoRoot, ['merge-base', '--is-ancestor', base, remoteRef]);
+    return localBehind.ok ? remoteRef : base;
   }
   if (hasLocal) return base;
-  if (hasRemote) return `origin/${base}`;
+  if (hasRemote) return remoteRef;
   return null;
+}
+
+/** `<base remote>/HEAD` names `branch`; `main`/`master` when the remote recorded no HEAD. */
+async function isDefaultBranch(repoRoot: string, branch: string, baseRemote: string | null): Promise<boolean> {
+  if (baseRemote) {
+    const head = await git(repoRoot, ['symbolic-ref', '--quiet', '--short', `refs/remotes/${baseRemote}/HEAD`]);
+    const name = head.ok ? head.stdout.trim() : '';
+    if (name.startsWith(`${baseRemote}/`)) return name.slice(baseRemote.length + 1) === branch;
+  }
+  return branch === 'main' || branch === 'master';
 }
 
 /**
  * The ref a NEW task forks from: the configured base branch when it resolves,
- * else the checked-out branch — itself refreshed against origin, but keeping
- * local work that diverged from it (`keepDiverged`). A detached HEAD stays
- * `HEAD`; `createWorktree` pins it to the commit. Never throws.
+ * else the checked-out branch — itself refreshed against the base remote, but
+ * keeping local work that diverged from it (`keepDiverged`) — except on the
+ * default branch, where local-only commits are strays, not a base (#1383). A
+ * detached HEAD stays `HEAD`; `createWorktree` pins it to the commit. Never throws.
  */
 export async function chooseForkBase(
   repoRoot: string,
@@ -142,13 +202,21 @@ export async function chooseForkBase(
   configured: string | undefined,
   note: (message: string) => void,
 ): Promise<string> {
+  const remotes = await taskRemotes(repoRoot);
   if (configured) {
-    const resolved = await resolveBaseRef(repoRoot, configured);
+    const resolved = await resolveBaseRef(repoRoot, configured, { remotes });
     if (resolved) return resolved;
-    note(`configured base branch "${configured}" not found (locally or on origin) — using "${currentBranch}"`);
+    note(`configured base branch "${configured}" not found (locally or on the base remote) — using "${currentBranch}"`);
   }
   if (currentBranch === 'HEAD') return currentBranch;
-  return (await resolveBaseRef(repoRoot, currentBranch, { keepDiverged: true })) ?? currentBranch;
+  const keepDiverged = !(await isDefaultBranch(repoRoot, currentBranch, remotes.base));
+  const resolved = (await resolveBaseRef(repoRoot, currentBranch, { keepDiverged, remotes })) ?? currentBranch;
+  // Say so when a diverged default branch's local-only commits are left out of the task.
+  if (!keepDiverged && resolved !== currentBranch) {
+    const contained = await git(repoRoot, ['merge-base', '--is-ancestor', currentBranch, resolved]);
+    if (!contained.ok) note(`local "${currentBranch}" diverged from "${resolved}" — forking from "${resolved}"; local-only commits are not in this task`);
+  }
+  return resolved;
 }
 
 export function worktreePathFor(repoRoot: string, runId: string): string {
@@ -174,6 +242,8 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
       current = { path: line.slice('worktree '.length) };
     } else if (current && line.startsWith('branch ')) {
       current.branch = line.slice('branch '.length);
+    } else if (current && (line === 'prunable' || line.startsWith('prunable '))) {
+      current.prunable = true;
     } else if (!line && current) {
       worktrees.push(current);
       current = undefined;
@@ -181,6 +251,22 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
   }
   if (current) worktrees.push(current);
   return worktrees;
+}
+
+/**
+ * Local branches checked out in a worktree OTHER than the one at `dir`, mapped to that
+ * worktree's path. git refuses to check such a branch out a second time (telemetry da5ca728).
+ * A worktree whose directory is gone does not count — `git worktree prune` releases its branch.
+ */
+export async function branchesCheckedOutElsewhere(dir: string): Promise<Map<string, string>> {
+  const top = await git(dir, ['rev-parse', '--show-toplevel']);
+  const self = top.ok ? canonicalPath(top.stdout.trim()) : canonicalPath(dir);
+  const held = new Map<string, string>();
+  for (const wt of await registeredWorktrees(dir)) {
+    if (wt.prunable || !wt.branch?.startsWith('refs/heads/') || canonicalPath(wt.path) === self) continue;
+    held.set(wt.branch.slice('refs/heads/'.length), wt.path);
+  }
+  return held;
 }
 
 function worktreeInfo(path: string, branch: string, baseBranch: string): WorktreeInfo {
@@ -203,12 +289,30 @@ function canonicalPath(path: string): string {
  * branch after its directory/registration was removed. Existing non-empty
  * unregistered paths are never deleted because they may hold recoverable
  * uncommitted work.
+ *
+ * `opts.branch` is the run's recorded (or freshly generated) branch; without it the name is
+ * `cez/<id8>`. Recovery callers MUST pass the record's branch — a named branch cannot be
+ * recomputed from the run id. Precondition for a FRESH run: the name must already be unique
+ * (`uniqueBranchName`), because an existing branch of that name is treated as this run's own
+ * surviving branch and reattached — that is what rematerializing a reclaimed worktree needs.
  */
 export async function createWorktree(
   repoRoot: string,
   runId: string,
   baseBranch: string,
+  opts: { branch?: string } = {},
 ): Promise<WorktreeInfo> {
+  const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch, opts);
+  return info;
+}
+
+/** Internal generation boundary; the public helper retains its original response shape. */
+export async function createWorktreeWithOutcome(
+  repoRoot: string,
+  runId: string,
+  baseBranch: string,
+  opts: { branch?: string } = {},
+): Promise<WorktreeInfo & { materialized: boolean }> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
     // Detached HEAD — pin the base to the current commit so the record and
@@ -220,7 +324,8 @@ export async function createWorktree(
   // Dash-guard (#431): `base` is spliced in as a positional git operand; an
   // option-like value would be argument injection.
   if (!isSafeGitRef(base)) throw new Error(`refusing option-like base ref: ${base}`);
-  const branch = branchFor(runId);
+  const branch = opts.branch ?? branchFor(runId);
+  if (!isSafeGitRef(branch)) throw new Error(`refusing option-like branch name: ${branch}`);
   const absolutePath = join(canonicalPath(repoRoot), WORKTREES_DIR, runId);
   const branchRef = `refs/heads/${branch}`;
 
@@ -236,7 +341,7 @@ export async function createWorktree(
         `managed worktree path is registered to ${atPath.branch ?? 'a detached HEAD'}, expected ${branchRef}`,
       );
     }
-    return worktreeInfo(atPath.path, branch, base);
+    return {...worktreeInfo(atPath.path, branch, base), materialized: false};
   }
 
   // If the directory survived but its administrative entry did not, let Git
@@ -252,7 +357,7 @@ export async function createWorktree(
           `managed worktree path is registered to ${atPath.branch ?? 'a detached HEAD'}, expected ${branchRef}`,
         );
       }
-      return worktreeInfo(atPath.path, branch, base);
+      return {...worktreeInfo(atPath.path, branch, base), materialized: false};
     }
     const entries = await readdir(absolutePath).catch(() => ['unreadable']);
     if (entries.length > 0) {
@@ -270,13 +375,13 @@ export async function createWorktree(
       if (basename(byBranch.path) !== runId) {
         throw new Error(`task branch ${branch} is already checked out at ${byBranch.path}`);
       }
-      return worktreeInfo(byBranch.path, branch, base);
+      return {...worktreeInfo(byBranch.path, branch, base), materialized: false};
     }
     const attach = await git(repoRoot, ['worktree', 'add', absolutePath, branch]);
     if (!attach.ok) {
       throw new Error(`git worktree reattach failed: ${attach.stderr.trim() || attach.stdout.trim()}`);
     }
-    return worktreeInfo(absolutePath, branch, base);
+    return {...worktreeInfo(absolutePath, branch, base), materialized: true};
   }
 
   // Task branches do not need upstream metadata: every diff/base decision passes
@@ -287,7 +392,7 @@ export async function createWorktree(
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }
-  return worktreeInfo(absolutePath, branch, base);
+  return {...worktreeInfo(absolutePath, branch, base), materialized: true};
 }
 
 /**
@@ -683,21 +788,22 @@ export function parseShortstat(s: string): DiffStat {
  * git failure (the caller notes it, never fails the run); an empty diff is a
  * valid all-zero stat.
  */
-/** Push `branch` to origin (the graph `git.push` node). Never throws; `CEZ_DRY_RUN=1` is a no-op. */
+/** Push `branch` to the push remote (the graph `git.push` node). Never throws; `CEZ_DRY_RUN=1` is a no-op. */
 export async function pushBranch(dir: string, branch: string): Promise<{ ok: true } | { ok: false; error: string }> {
   if (process.env.CEZ_DRY_RUN === '1') return { ok: true };
   if (!isSafeGitRef(branch)) return { ok: false, error: `refusing option-like branch: ${branch}` };
-  const remote = await git(dir, ['remote', 'get-url', 'origin']);
-  if (!remote.ok) return { ok: false, error: 'no origin remote' };
-  const push = await git(dir, ['-c', 'credential.interactive=false', 'push', '-u', 'origin', branch]);
+  const { push: remote } = await taskRemotes(dir);
+  if (!remote) return { ok: false, error: 'no git remote' };
+  const push = await git(dir, ['-c', 'credential.interactive=false', 'push', '-u', remote, branch]);
   return push.ok ? { ok: true } : { ok: false, error: (push.stderr || push.stdout).trim().split('\n')[0] || 'git push failed' };
 }
 
 /**
- * Merge the freshest base into the worktree (the graph `git.sync-base` node): `origin/<base>`
- * after a fetch when origin has it, else the local base. A conflicted merge is LEFT IN PROGRESS
- * and reported with its files — the next node (an agent) resolves it; autosave refuses a
- * mid-merge tree, so nothing half-resolved gets committed meanwhile. Never throws.
+ * Merge the freshest base into the worktree (the graph `git.sync-base` node): `<remote>/<base>`
+ * after a fetch when the base remote (or the remote a recorded `upstream/main` names) has it,
+ * else the local base. A conflicted merge is LEFT IN PROGRESS and reported with its files — the
+ * next node (an agent) resolves it; autosave refuses a mid-merge tree, so nothing half-resolved
+ * gets committed meanwhile. Never throws.
  */
 export async function syncWithBase(
   dir: string,
@@ -705,11 +811,13 @@ export async function syncWithBase(
 ): Promise<{ result: 'done' } | { result: 'conflict'; files: string[] } | { result: 'failed'; error: string }> {
   if (!isSafeGitRef(baseBranch)) return { result: 'failed', error: `refusing option-like base: ${baseBranch}` };
   let ref = baseBranch;
-  const remote = await git(dir, ['remote', 'get-url', 'origin']);
-  if (remote.ok && process.env.CEZ_DRY_RUN !== '1') {
-    await git(dir, ['fetch', 'origin', baseBranch]);
-    const remoteRef = await git(dir, ['rev-parse', '--verify', '--quiet', `origin/${baseBranch}`]);
-    if (remoteRef.ok) ref = `origin/${baseBranch}`;
+  const remotes = await taskRemotes(dir);
+  const split = splitRemoteRef(baseBranch, remotes.names);
+  const remote = split.remote ?? remotes.base;
+  if (remote && process.env.CEZ_DRY_RUN !== '1') {
+    await fetchBase(dir, remote, split.branch);
+    const remoteRef = await git(dir, ['rev-parse', '--verify', '--quiet', `${remote}/${split.branch}`]);
+    if (remoteRef.ok) ref = `${remote}/${split.branch}`;
   }
   const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
   const merge = await git(dir, [...identityArgs, 'merge', '--no-edit', ref]);
@@ -764,6 +872,7 @@ export async function worktreeShortstat(
 export async function pruneOrphans(
   repoRoot: string,
   validIds: ReadonlySet<string>,
+  canRemove?: (runId: string) => Promise<boolean>,
 ): Promise<string[]> {
   await git(repoRoot, ['worktree', 'prune']);
   let entries: Dirent[];
@@ -773,9 +882,16 @@ export async function pruneOrphans(
     return []; // no worktrees dir yet
   }
   const removed: string[] = [];
+  const registered = await registeredWorktrees(repoRoot);
   for (const entry of entries) {
     if (!entry.isDirectory() || validIds.has(entry.name)) continue;
-    await removeWorktree(repoRoot, worktreePathFor(repoRoot, entry.name), branchFor(entry.name));
+    if (canRemove && !await canRemove(entry.name).catch(() => false)) continue;
+    const path = worktreePathFor(repoRoot, entry.name);
+    // An orphan has no record, so its branch is whatever the worktree has checked out — a
+    // named branch (spec 2026-10-11-branch-naming-instructions) is not derivable from the id.
+    const checkedOut = registered.find((item) => canonicalPath(item.path) === canonicalPath(path))?.branch;
+    const branch = checkedOut?.startsWith('refs/heads/') ? checkedOut.slice('refs/heads/'.length) : branchFor(entry.name);
+    await removeWorktree(repoRoot, path, branch);
     removed.push(entry.name);
   }
   return removed;

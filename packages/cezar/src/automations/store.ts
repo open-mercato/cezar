@@ -1,16 +1,17 @@
+import { deferredCreationRecordSchema, type DeferredCreationRecord } from '@open-mercato/cezar-contract';
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import lockfile from 'proper-lockfile';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { join } from 'node:path';
 import {
@@ -107,12 +108,18 @@ export class AutomationStore {
         createdAt: now,
         updatedAt: now,
       });
+      if (definition.deferredStart) {
+        const { creationKey, requestDigest } = definition.deferredStart;
+        if (this.readCreation(creationKey)) throw new Error('creation key already used');
+        this.definitionsFile.deferredCreations = { ...this.creationLedger(),
+          [creationKey]: { id, requestDigest, outcome: 'pending', runIds: [] } };
+      }
       this.definitions.set(id, definition);
       // Baseline and definition publish under one lease; readers snapshot under that lease too.
       initializeState?.(definition);
       this.persistDefinitions();
       return definition;
-    } finally { mutation.release(); }
+    } finally { this.loadDefinitions(); mutation.release(); }
   }
 
   update(
@@ -148,7 +155,60 @@ export class AutomationStore {
       initializeState?.(definition);
       this.persistDefinitions();
       return definition;
-    } finally { mutation.release(); }
+    } finally { this.loadDefinitions(); mutation.release(); }
+  }
+
+  creation(key: string): DeferredCreationRecord | undefined {
+    this.loadDefinitions();
+    return this.readCreation(key);
+  }
+
+  /** The settled creation record of a composer start, found by its definition id. */
+  creationFor(id: string): DeferredCreationRecord | undefined {
+    this.loadDefinitions();
+    let ledger: Record<string, unknown>;
+    try { ledger = this.creationLedger(); } catch { return undefined; }
+    for (const row of Object.values(ledger)) {
+      const parsed = deferredCreationRecordSchema.safeParse(row);
+      if (parsed.success && parsed.data.id === id) return parsed.data;
+    }
+    return undefined;
+  }
+
+  /** Unknown ownership blocks every key; a damaged row blocks only its own key. */
+  private creationLedger(): Record<string, unknown> {
+    const ledger = this.definitionsFile.deferredCreations;
+    if (ledger === undefined) return {};
+    if (ledger === null || typeof ledger !== 'object' || Array.isArray(ledger)) {
+      throw new Error('corrupt deferred creation ledger: key ownership is unknown');
+    }
+    return ledger as Record<string, unknown>;
+  }
+
+  private readCreation(key: string): DeferredCreationRecord | undefined {
+    const ledger = this.creationLedger();
+    if (!Object.hasOwn(ledger, key)) return undefined;
+    const parsed = deferredCreationRecordSchema.safeParse(ledger[key]);
+    if (!parsed.success) throw new Error('corrupt deferred creation record: creation key is blocked');
+    return parsed.data;
+  }
+
+  /** Caller holds the poll lease; record + cleanup publish in the same atomic definition write. */
+  finishDeferred(id: string, outcome: 'launched' | 'cancelled', runIds: string[] = []): void {
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict');
+    try {
+      this.loadDefinitions();
+      const current = this.definitions.get(id);
+      if (!current?.deferredStart) throw new Error('scheduled task not found');
+      const { creationKey, requestDigest } = current.deferredStart;
+      // Never overwrite damaged evidence with a seemingly successful cleanup.
+      this.readCreation(creationKey);
+      this.definitionsFile.deferredCreations = { ...this.creationLedger(),
+        [creationKey]: { id, requestDigest, outcome, runIds } };
+      this.definitions.delete(id);
+      this.persistDefinitions();
+    } finally { this.loadDefinitions(); mutation.release(); }
   }
 
   delete(id: string): boolean {
@@ -163,7 +223,7 @@ export class AutomationStore {
       };
       this.persistDefinitions();
       return true;
-    } finally { mutation.release(); }
+    } finally { this.loadDefinitions(); mutation.release(); }
   }
 
   state(id: string): AutomationRuntimeState | undefined {
@@ -351,7 +411,7 @@ export class AutomationStore {
   }
 
   private load(): void {
-    mkdirSync(this.dataDir, { recursive: true });
+    // Read-only: every writer creates the dir itself, so an uncreatable one cannot fail boot (5af5aec6).
     this.loadDefinitions();
     this.stateFile = this.readJson(STATE, automationStateFileSchema, {
       version: 1,
@@ -436,7 +496,7 @@ export class AutomationStore {
     const path = join(this.dataDir, filename);
     const temporary = `${path}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, path);
+    renameSyncWithRetry(temporary, path);
   }
 
   private appendNdjson(filename: string, value: unknown): void {
@@ -456,7 +516,7 @@ export class AutomationStore {
     writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
       mode: 0o600,
     });
-    renameSync(temporary, path);
+    renameSyncWithRetry(temporary, path);
   }
 
   private warnOnce(key: string, message: string): void {

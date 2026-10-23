@@ -1,8 +1,14 @@
+import { useMemo } from 'react'
 import { useParams } from 'react-router'
 
-import { useRun, useRunHandoff } from '@/api/queries'
+import { useHealth, useRun, useRunHandoff } from '@/api/queries'
+import type { ApiRun } from '@open-mercato/cezar-api-client'
+import { useNavigate } from '@/lib/project-router'
 
 import { GitTabLoadError, GitTabLoading } from '../task-git/git-tab-loading'
+import { LayoutCards } from '../task-workspace/layout-cards'
+import { FIXED_VIEW_ORDER, VIEW_PATHS } from '../task-workspace/layout-state'
+import { stripEntries, useStripKeyHints } from '../task-workspace/strip'
 import { Markdown } from './markdown'
 import { RunHeader } from './run-header'
 
@@ -19,13 +25,49 @@ export function TaskNotesRoute() {
   if (run.isError) return <GitTabLoadError tab="notes" error={run.error} />
   return (
     <div data-route="task-notes" className="flex min-h-full flex-col">
-      <RunHeader run={run.data} tab="notes" />
+      <NotesHeader run={run.data} />
       <div className="mx-auto w-full max-w-[var(--measure)] px-3 py-3 md:px-6 md:py-5">
         <NotesBody runId={run.data.id} />
       </div>
     </div>
   )
 }
+
+/** The workspace's own tab row, so the header reads the same on every page of a task. A view tab
+ *  here navigates to that view's deep link; there are no layouts to switch on this page. */
+function NotesHeader({ run }: { run: ApiRun }) {
+  const navigate = useNavigate()
+  const terminal = useHealth().data?.capabilities?.terminal === true
+  const fixedViews = useMemo(
+    () => FIXED_VIEW_ORDER.filter((view) => (view !== 'graph' || Boolean(run.workflowDef)) && (view !== 'terminal' || terminal)),
+    [run.workflowDef, terminal],
+  )
+  // Same numbering as the workspace's row (`strip.ts`). ⌘N works here too — the palette's `tab:N`
+  // navigates to the view's page.
+  const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
+  const { hints, show } = useStripKeyHints(strip)
+  const tabs = useMemo(
+    () => (
+      <LayoutCards
+        keyHints={hints}
+        showKeyHints={show}
+        layouts={[]}
+        active=""
+        fixedViews={fixedViews}
+        onSelectFixed={(view) => navigate(`/tasks/${run.id}/${VIEW_PATHS[view]}`)}
+        onSelect={noop}
+        onClose={noop}
+        notesHref={`/tasks/${run.id}/notes`}
+        notesActive
+        showLayouts={false}
+      />
+    ),
+    [fixedViews, navigate, run.id, hints, show],
+  )
+  return <RunHeader run={run} tab="notes" tabs={tabs} wide />
+}
+
+const noop = () => {}
 
 function NotesBody({ runId }: { runId: string }) {
   const handoff = useRunHandoff(runId)

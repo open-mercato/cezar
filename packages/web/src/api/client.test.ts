@@ -8,7 +8,9 @@ import {
   connectProvider,
   continueRun,
   createRun,
+  createRunPr,
   deleteRun,
+  deleteAutomation,
   finishRun,
   getGithub,
   getGithubChecks,
@@ -341,6 +343,7 @@ describe('request shapes', () => {
     // The one URL this module builds without fetching it (an <img> loads it) — same invariant
     // as every case above: unscoped means exactly the pre-multi-project path.
     expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/v1/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
+    expect(runFileRawUrl('run-1', 'a.png', 'abc123')).toBe('/api/v1/runs/run-1/files?path=a.png&raw=1&rev=abc123')
   })
 
   it('forwards an abort signal to fetch', async () => {
@@ -572,6 +575,49 @@ describe('response parsing', () => {
   })
 })
 
+/** telemetry 9119d21a: the PR POST lost its connection while push + `gh pr create` ran on. */
+describe('createRunPr survives a lost response', () => {
+  const created = () =>
+    new Response(JSON.stringify({ url: 'https://github.com/acme/demo/pull/9', dryRun: false }), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    })
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('asks once more after a dropped request and returns the PR', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(created())
+    const result = createRunPr('run-1', { draft: false })
+    await vi.runAllTimersAsync()
+    await expect(result).resolves.toEqual({ url: 'https://github.com/acme/demo/pull/9', dryRun: false })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastCall().body).toEqual({ draft: false })
+  })
+
+  it('keeps the first error when the server stays unreachable', async () => {
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
+    const result = createRunPr('run-1').catch((e: unknown) => e)
+    await vi.runAllTimersAsync()
+    const error = (await result) as ApiError
+    expect(error.status).toBe(0)
+    expect(error.message).toBe('cannot reach the cezar server (/api/v1/runs/run-1/pr)')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a refusal the server answered', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'git push failed — denied', manual: 'git merge cez/abc' }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const error = (await createRunPr('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(409)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('errors', () => {
   function fail(status: number, body: string, contentType = 'application/json'): void {
     fetchMock.mockResolvedValue(
@@ -589,6 +635,15 @@ describe('errors', () => {
     expect(error).toBeInstanceOf(ApiError)
     expect((error as ApiError).status).toBe(409)
     expect((error as ApiError).message).toBe('run is active — cancel it first')
+  })
+
+  it('preserves completed launch links on a cancellation conflict', async () => {
+    fail(409, JSON.stringify({ error: 'This scheduled task already started.', runIds: ['run-a', 'run-b'] }))
+    const error = await deleteAutomation('scheduled-id', 2).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).runIds).toEqual(['run-a', 'run-b'])
+    fail(409, JSON.stringify({ error: 'Invalid response', runIds: [7] }))
+    expect(((await deleteAutomation('scheduled-id', 2).catch((e: unknown) => e)) as ApiError).runIds).toBeUndefined()
   })
 
   it('carries the 409 extras the server pairs with the reason', async () => {

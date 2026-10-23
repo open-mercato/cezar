@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
-import { TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { RepoBaseContext, TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { markScheduledTasks, resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -20,6 +21,8 @@ const HEALTH: HealthResponse = {
   forge: null,
   capabilities: {
     localHandoff: true,
+    terminal: false,
+    designMode: false,
     followups: true,
     singleProject: false,
     automations: false,
@@ -570,13 +573,31 @@ describe('TaskQuickList', () => {
       // honest axis is the pointer, not the viewport — the drawer keeps the sidebar's fixed
       // 264px, so a `md:` rule would have been wrong in both directions.
       renderList({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
-      const pin = document.querySelector('[data-slot="pin-toggle"]') as HTMLElement
-      expect(pin.className).toContain('no-hover:opacity-100')
+      const actions = document.querySelector('[data-slot="task-row-actions"]') as HTMLElement
+      expect(actions.className).toContain('no-hover:opacity-100')
       // …and big enough for a thumb there, where 20px is not a target.
-      expect(pin.className).toContain('no-hover:size-7')
+      expect(document.querySelector('[data-slot="pin-toggle"]')?.className).toContain('no-hover:size-7')
       // The quiet default survives for pointer devices: still zero-width until hovered.
-      expect(pin.className).toContain('w-0')
-      expect(pin.className).toContain('group-hover/task-row:w-5')
+      expect(actions.className.split(' ')).toContain('w-0')
+      expect(actions.className).toContain('group-hover/task-row:w-auto')
+    })
+
+    it('keeps the age and queue position on a device that cannot hover, where the actions never leave', () => {
+      renderList({
+        runs: [run({ id: 'q', status: 'queued' }), run({ id: 'fin', status: 'done' })],
+        onTogglePin: vi.fn(),
+        onToggleArchive: vi.fn(),
+      })
+      for (const id of ['q', 'fin']) {
+        const age = row(id)?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+        expect(age.closest('[data-slot="task-row-meta-droppable"]')).toBeNull()
+        let el: HTMLElement | null = age
+        while (el && el !== row(id)) {
+          expect(el.className).not.toContain('no-hover:hidden')
+          el = el.parentElement
+        }
+      }
+      expect(row('q')?.querySelector('[data-slot="task-row-age"]')?.textContent).toBe('#1')
     })
 
     it('paints no pin control at all when no container wired one', () => {
@@ -596,6 +617,48 @@ describe('TaskQuickList', () => {
     it('keeps the status dot on a pinned row — Pinned says where it is, not how it is', () => {
       renderList({ runs: [run({ id: 'kept', status: 'waiting', pinned: true })], onTogglePin: vi.fn() })
       expect(dotOf('kept')?.getAttribute('data-tone')).toBe('pending')
+    })
+  })
+
+  describe('the archive action', () => {
+    it('archives a finished row and restores an archived one, reporting the state asked for', () => {
+      const onToggleArchive = vi.fn()
+      renderList({ runs: [run({ id: 'fin', status: 'done' })], onToggleArchive })
+      fireEvent.click(within(row('fin') as HTMLElement).getByRole('button', { name: 'Archive task' }))
+      expect(onToggleArchive.mock.calls[0]?.[0]).toMatchObject({ id: 'fin' })
+      expect(onToggleArchive.mock.calls[0]?.[1]).toBe(true)
+    })
+
+    it('offers restore in the archived view, where the pin is withheld', () => {
+      const onToggleArchive = vi.fn()
+      renderList({
+        view: 'archived',
+        runs: [run({ id: 'gone', status: 'done', archived: true })],
+        onTogglePin: vi.fn(),
+        onToggleArchive,
+      })
+      expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+      fireEvent.click(within(row('gone') as HTMLElement).getByRole('button', { name: 'Unarchive task' }))
+      expect(onToggleArchive.mock.calls[0]?.[1]).toBe(false)
+    })
+
+    it('is not offered on a run the engine still owns', () => {
+      renderList({ runs: [run({ id: 'live', status: 'running' })], onTogglePin: vi.fn(), onToggleArchive: vi.fn() })
+      expect(row('live')?.querySelector('[data-slot="archive-toggle"]')).toBeNull()
+      expect(row('live')?.querySelector('[data-slot="pin-toggle"]')).not.toBeNull()
+    })
+
+    it('sits beside the pin, and the title gives up its floor while they show', () => {
+      renderList({ runs: [run({ id: 'fin', status: 'done' })], onTogglePin: vi.fn(), onToggleArchive: vi.fn() })
+      const actions = row('fin')?.querySelector('[data-slot="task-row-actions"]') as HTMLElement
+      expect([...actions.children].map((el) => el.getAttribute('data-slot'))).toEqual(['pin-toggle', 'archive-toggle'])
+      expect(row('fin')?.querySelector('[data-slot="task-row-title"]')?.className).toContain('group-hover/task-row:min-w-0')
+    })
+
+    it('keeps the metadata unconditionally on a row with no actions', () => {
+      renderList({ runs: [run({ id: 'live', status: 'running' })] })
+      expect(row('live')?.querySelector('[data-slot="task-row-actions"]')).toBeNull()
+      expect(row('live')?.querySelector('[data-slot="task-row-meta"]')?.className).toBe('contents')
     })
   })
 
@@ -742,7 +805,7 @@ describe('TaskQuickListContainer', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pin task' }))
     await waitFor(() =>
-      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true } }]),
+      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true, surface: 'sidebar' } }]),
     )
   })
 
@@ -824,9 +887,9 @@ describe('dispatched subtasks in the quick-list', () => {
   })
 
   // A nested row at the 264px minimum had no room for indent + title floor + kind + age, and the
-  // hover pin pushed the row past the column. The kind yields its slot to the pin while the pin
-  // shows, and a child's age is droppable metadata below 19rem.
-  it('swaps the kind chip for the pin on hover and drops a child age in a narrow column', () => {
+  // hover actions pushed the row past the column. The metadata (kind included) yields its slot to
+  // the actions while they show, and a child's age is droppable metadata below 19rem.
+  it('swaps the metadata for the actions on hover and drops a child age in a narrow column', () => {
     renderList({
       runs: [
         run({ id: 'p', status: 'done' }),
@@ -834,10 +897,14 @@ describe('dispatched subtasks in the quick-list', () => {
       ],
       onTogglePin: vi.fn(),
     })
-    const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
-    expect(kind.className).toContain('group-hover/task-row:hidden')
-    expect(kind.className).toContain('group-focus-within/task-row:hidden')
-    expect(kind.className).toContain('no-hover:hidden')
+    const meta = row('rev')?.querySelector('[data-slot="task-row-meta"]') as HTMLElement
+    expect(meta.querySelector('[data-slot="dispatch-kind"]')).not.toBeNull()
+    expect(meta.className).toContain('group-hover/task-row:hidden')
+    expect(meta.className).toContain('group-focus-within/task-row:hidden')
+    // Without hover the actions never leave, so only the droppable part yields there.
+    const droppable = meta.querySelector('[data-slot="task-row-meta-droppable"]') as HTMLElement
+    expect(droppable.querySelector('[data-slot="dispatch-kind"]')).not.toBeNull()
+    expect(droppable.className).toContain('no-hover:hidden')
 
     const childAge = row('rev')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
     expect(childAge.className).toContain('hidden')
@@ -877,9 +944,9 @@ describe('dispatched subtasks in the quick-list', () => {
     expect(row('c')?.querySelector('[data-slot="dispatch-kind"]')?.textContent).toBe('review')
   })
 
-  // A pinned row's pin is permanent, not hover-revealed, so the kind chip yields for good there —
-  // otherwise both sit on the row at rest and a nested row overflows the 264px column.
-  it('hides the kind chip outright on a pinned child, where the pin never goes away', () => {
+  // A pinned row's pin is hover-revealed like every other row's: a permanent one overlapped the
+  // title on rows whose chips fill the column. The kind chip swaps with it the same way.
+  it('reveals a pinned row’s pin on hover only, like any other row', () => {
     renderList({
       runs: [
         run({ id: 'p', status: 'done' }),
@@ -892,9 +959,13 @@ describe('dispatched subtasks in the quick-list', () => {
       ],
       onTogglePin: vi.fn(),
     })
-    const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
-    expect(kind.className.split(' ')).toContain('hidden')
+    const meta = row('rev')?.querySelector('[data-slot="task-row-meta"]') as HTMLElement
+    expect(meta.className.split(' ')).not.toContain('hidden')
+    expect(meta.className).toContain('group-hover/task-row:hidden')
     expect(row('rev')?.querySelector('[data-slot="pin-toggle"]')?.getAttribute('data-pinned')).toBe('true')
+    const actions = row('rev')?.querySelector('[data-slot="task-row-actions"]') as HTMLElement
+    expect(actions.className.split(' ')).toContain('opacity-0')
+    expect(actions.className).not.toContain('pinned')
   })
 
   it('keeps the kind chip unconditionally when the row has no pin to swap in', () => {
@@ -906,5 +977,94 @@ describe('dispatched subtasks in the quick-list', () => {
     })
     const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
     expect(kind.className).not.toContain('hidden')
+  })
+})
+
+describe('a PR known only by number', () => {
+  it('links to the repo the list provides, and stays a plain chip without one', () => {
+    const marked = run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)
+    const { unmount } = render(
+      <MemoryRouter>
+        <RepoBaseContext.Provider value="https://github.com/o/shop">
+          <TaskQuickList runs={[marked]} view="active" now={NOW} onViewChange={vi.fn()} />
+        </RepoBaseContext.Provider>
+      </MemoryRouter>,
+    )
+    expect(document.querySelector('[data-slot="pr-chip"]')?.closest('a')?.getAttribute('href')).toBe('https://github.com/o/shop/pull/1497')
+    unmount()
+    renderList({ runs: [run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)] })
+    expect(document.querySelector('[data-slot="pr-chip"]')?.closest('a')).toBeNull()
+  })
+})
+
+/** #1340: the Scheduled group must not cost every user a `GET /automations`. */
+describe('TaskQuickListContainer — scheduled tasks gate', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const scheduled = {
+    id: 'later', name: 'Later', kind: 'schedule', enabled: true,
+    deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [] },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  function renderContainer(automations: unknown[]) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      const body = path === '/api/v1/health'
+        ? { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } }
+        : path.endsWith('/automations') ? { automations } : [run({ id: 'live', title: 'A real run', status: 'running' })]
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/']}>
+          <ListViewProvider><TaskQuickListContainer /></ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+  const asked = () => fetchMock.mock.calls.some((call) => String(call[0]).endsWith('/automations'))
+
+  const asks = () => fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length
+
+  it('asks once per session and stops once the list holds no scheduled task', async () => {
+    resetScheduledTasksGate()
+    const first = renderContainer([])
+    await waitFor(() => expect(asks()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    first.unmount()
+    renderContainer([])
+    await screen.findByText('A real run').catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(asks()).toBe(1)
+    expect(screen.queryByRole('region', { name: 'Scheduled tasks' })).toBeNull()
+  })
+
+  it('shows the Scheduled group, including one made in another browser', async () => {
+    resetScheduledTasksGate()
+    renderContainer([scheduled])
+    expect(await screen.findByRole('region', { name: 'Scheduled tasks' })).not.toBeNull()
+    expect(asked()).toBe(true)
+  })
+
+  it('asks again after this cockpit schedules a task', async () => {
+    resetScheduledTasksGate()
+    const first = renderContainer([])
+    await waitFor(() => expect(asks()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    first.unmount()
+    markScheduledTasks('default')
+    renderContainer([scheduled])
+    await waitFor(() => expect(asks()).toBe(2))
   })
 })

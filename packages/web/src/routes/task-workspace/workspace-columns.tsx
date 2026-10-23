@@ -1,0 +1,599 @@
+import {
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ChevronDownIcon,
+  Columns2Icon,
+  GripVerticalIcon,
+  LayoutGridIcon,
+  MoreVerticalIcon,
+  XIcon,
+} from 'lucide-react'
+import { useRef, useState, type ReactNode } from 'react'
+
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { useIsDesktop } from '@/lib/use-desktop'
+import { cn } from '@/lib/utils'
+
+import {
+  MAX_COLUMNS,
+  RESIZE_STEP,
+  RESIZE_STEP_LARGE,
+  dividerFloor,
+  viewLabel,
+  type ViewId,
+  type WorkspaceColumn,
+} from './layout-state'
+import { FullViewExit, WorkspaceMaximizeContext } from './maximize'
+import { VIEW_ICONS, ViewItems, ViewTiles } from './view-picker'
+
+/** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
+ *  `lg`, which is where a three-way split first has room to be readable. */
+const SIDE_BY_SIDE_MIN_WIDTH = 1024
+
+export interface ColumnActions {
+  addColumn: (view: ViewId) => void
+  closeColumn: (index: number) => void
+  setColumnView: (index: number, view: ViewId) => void
+  resizeColumns: (index: number, delta: number) => void
+  moveColumn: (from: number, to: number) => void
+}
+
+/**
+ * The view area: one to three side-by-side columns and the dividers between them (spec
+ * `2026-10-07-task-workspace` §5.2).
+ *
+ * Each column owns its own scroller, and that scroller carries `data-slot="main"` on purpose.
+ * Every virtualized surface in the four embedded views finds its scroll container with
+ * `el.closest('[data-slot="main"]')` — the thread (`thread-scroller.tsx`), the diff
+ * (`components/diff/diff-view.tsx`) and the commit list — so the NEAREST such ancestor winning
+ * is what lets those views scroll inside a column with no change to their scroll machinery. The
+ * app shell's own `main` stays the outer scroller for everything else; the "one scroll owner"
+ * rule those files state holds per column, which is the scope it was always about.
+ */
+export function WorkspaceColumns({
+  columns,
+  actions,
+  renderView,
+  headerExtras,
+}: {
+  columns: readonly WorkspaceColumn[]
+  actions: ColumnActions
+  renderView: (view: ViewId, index: number, column: WorkspaceColumn) => ReactNode
+  /** Controls a view adds to its window's bar, before the split (the terminal's "Move to bottom"). */
+  headerExtras?: (view: ViewId, index: number) => ReactNode
+}) {
+  // Columns go side by side only from `lg` up. The shared default (`md`, 768px) is the threshold
+  // for a different question — whether a diff should wrap — and it left a 768-1024px tablet with
+  // two or three columns at ~340px each, which is the squeezing §5.2 asks not to do: it names
+  // "mobile/tablet" for one-column-at-a-time, and §11 repeats it.
+  const desktop = useIsDesktop(SIDE_BY_SIDE_MIN_WIDTH)
+  const rowRef = useRef<HTMLDivElement>(null)
+  // Which column a narrow viewport is showing (spec §5.2 — "show one column at a time"). Clamped
+  // on read rather than synced in an effect, so closing a column can never leave a dangling index.
+  const [narrowIndex, setNarrowIndex] = useState(0)
+  /**
+   * A window that has been split off but not given a view yet: the slot it will take. It is this
+   * component's own, never saved — a saved column always names a view — so reloading forgets it.
+   * Leaving the layout keeps it while the workspace keeps that layout mounted (`KeptLayout`), and
+   * forgets it once the layout is dropped. Clamped on read, so closing a column cannot strand it.
+   */
+  const [pendingAt, setPendingAt] = useState<number | null>(null)
+  const pending = pendingAt === null ? null : Math.min(pendingAt, columns.length)
+  const canSplit = columns.length + (pending === null ? 0 : 1) < MAX_COLUMNS
+  const fillPending = (view: ViewId) => {
+    if (pending === null) return
+    const target = pending
+    setPendingAt(null)
+    // Columns are added at the right; the new one is then walked to the slot it was split into.
+    actions.addColumn(view)
+    if (target < columns.length) actions.moveColumn(columns.length, target)
+  }
+
+
+  const columnMenu = (index: number, column: WorkspaceColumn) => (
+    <ColumnMenu
+      index={index}
+      column={column}
+      count={columns.length}
+      actions={actions}
+    />
+  )
+
+  // An empty layout — just created, or with its last window closed — is the tile picker.
+  if (columns.length === 0) {
+    return (
+      <div data-slot="workspace-columns" className="flex min-h-0 flex-1 flex-col">
+        <ViewTiles onPick={actions.addColumn} />
+      </div>
+    )
+  }
+  // While a window is waiting for its view, every window shares the row equally.
+  const shown = columns.length + (pending === null ? 0 : 1)
+  const widthOf = (column: WorkspaceColumn) => (pending === null ? column.width : 100 / shown)
+  const pendingHeader = (
+    <header className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 bg-background pl-4 pr-1.5 text-xs font-medium text-muted-foreground">
+      <LayoutGridIcon aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">New window</span>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Close new window"
+        title="Close"
+        onClick={() => setPendingAt(null)}
+        className="text-soft-foreground"
+      >
+        <XIcon aria-hidden="true" className="size-3.5" />
+      </Button>
+    </header>
+  )
+  const pendingWindow =
+    pending === null ? null : (
+      <div
+        key="pending"
+        data-slot="workspace-column"
+        data-pending=""
+        className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
+        style={{ width: `${100 / shown}%` }}
+      >
+        {pendingHeader}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <ViewTiles scope="window" onPick={fillPending} />
+        </div>
+      </div>
+    )
+
+  if (!desktop) {
+    /*
+     * One window at a time (spec §5.2), with the SAME controls a window has on a wide screen: its
+     * name switches the view, the columns icon splits it, the X closes it. What a narrow screen
+     * adds is a switcher above that bar, only once there is more than one window to switch
+     * between — a window still waiting for its view counts, and is where a split lands you.
+     */
+    const slots: Array<number | 'pending'> = columns.map((_, index) => index)
+    if (pending !== null) slots.splice(pending, 0, 'pending')
+    const slotIndex = Math.min(narrowIndex, slots.length - 1)
+    const slot = slots[slotIndex]!
+    const column = slot === 'pending' ? null : columns[slot]!
+    return (
+      <div data-slot="workspace-columns" data-narrow="" className="flex min-h-0 flex-1 flex-col">
+        {slots.length > 1 ? (
+          <Tabs
+            value={String(slotIndex)}
+            onValueChange={(value) => setNarrowIndex(Number(value))}
+            className="shrink-0 gap-0"
+          >
+            <TabsList
+              aria-label="Windows of this layout"
+              className="grid w-full auto-cols-fr grid-flow-col gap-1 rounded-none border-b border-border bg-transparent px-3 py-1.5 group-data-[orientation=horizontal]/tabs:h-auto"
+            >
+              {slots.map((entry, index) => {
+                const Icon = entry === 'pending' ? LayoutGridIcon : VIEW_ICONS[columns[entry]!.view]
+                return (
+                  <TabsTrigger
+                    key={index}
+                    value={String(index)}
+                    className="h-auto min-w-0 rounded-md border-0 px-2 py-1 text-xs data-[state=active]:bg-muted data-[state=active]:font-medium group-data-[variant=default]/tabs-list:data-[state=active]:shadow-none"
+                  >
+                    <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+                    <span className="truncate">{entry === 'pending' ? 'New window' : viewLabel(columns[entry]!.view)}</span>
+                  </TabsTrigger>
+                )
+              })}
+            </TabsList>
+          </Tabs>
+        ) : null}
+        {column === null ? (
+          <>
+            {pendingHeader}
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <ViewTiles scope="window" onPick={fillPending} />
+            </div>
+          </>
+        ) : (
+          <>
+            <ColumnHeader
+              index={slot as number}
+              column={column}
+              count={columns.length}
+              actions={actions}
+              menu={columns.length > 1 ? columnMenu(slot as number, column) : null}
+              onSplit={() => {
+                setPendingAt((slot as number) + 1)
+                setNarrowIndex((slot as number) + 1)
+              }}
+              canSplit={canSplit}
+              grip={false}
+              extras={headerExtras?.(column.view, slot as number)}
+            />
+            <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              {renderView(column.view, slot as number, column)}
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={rowRef}
+      data-slot="workspace-columns"
+      className="flex min-h-0 flex-1 items-stretch"
+    >
+      {columns.flatMap((column, index) => [
+        index === pending ? pendingWindow : null,
+        <div
+          key={index}
+          data-slot="workspace-column"
+          data-view={column.view}
+          className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
+          style={{ width: `${widthOf(column)}%` }}
+        >
+          {/* The divider lives INSIDE the column it precedes, absolutely positioned over that
+              border — the same move `SidebarResizeHandle` makes. A flex sibling would add real
+              width to a row whose columns already sum to 100%, and the browser would pay for it
+              by shrinking the very columns the handle exists to size. There is no divider before
+              the first column, which is also why the handle at `index - 1` resizes the PAIR that
+              meets at this seam. */}
+          {index > 0 && pending === null ? (
+            <ColumnDivider
+              index={index - 1}
+              width={columns[index - 1]!.width}
+              pair={columns[index - 1]!.width + column.width}
+              rowRef={rowRef}
+              onResize={actions.resizeColumns}
+            />
+          ) : null}
+          {/* Every window wears its bar, a lone one included: it names the view and splits it. The
+              full-view exit sits on the last bar, so the views below are told nothing about full
+              view and none of them draws a second one. */}
+          <ColumnHeader
+            index={index}
+            column={column}
+            count={columns.length}
+            actions={actions}
+            menu={columns.length > 1 ? columnMenu(index, column) : null}
+            onSplit={() => setPendingAt(index + 1)}
+            canSplit={canSplit}
+            trailing={index === columns.length - 1 ? <FullViewExit className="ml-1.5" /> : null}
+            extras={headerExtras?.(column.view, index)}
+          />
+          <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <WorkspaceMaximizeContext.Provider value={null}>
+              {renderView(column.view, index, column)}
+            </WorkspaceMaximizeContext.Provider>
+          </div>
+        </div>,
+      ])}
+      {pending === columns.length ? pendingWindow : null}
+    </div>
+  )
+}
+
+/** Name + menu + close (spec §5.1: the header identifies the view and carries its controls).
+ *
+ *  Draggable by the header to reorder (spec §5.2). Native HTML drag-and-drop on purpose: dnd-kit
+ *  is loaded by the workflows route alone and must not become main-bundle weight for a reorder
+ *  this simple. */
+function ColumnHeader({
+  index,
+  column,
+  count,
+  actions,
+  menu,
+  trailing,
+  onSplit,
+  canSplit = true,
+  grip = true,
+  extras,
+}: {
+  /** The view's own controls, before the split. */
+  extras?: ReactNode
+  /** Whether the window can be dragged to reorder — not on a narrow screen, which shows one. */
+  grip?: boolean
+  /** Split this window: a new, empty one opens to its right. */
+  onSplit?: () => void
+  canSplit?: boolean
+  index: number
+  column: WorkspaceColumn
+  count: number
+  actions: ColumnActions
+  menu: ReactNode
+  /** After the close button, at the header's far right — the full-view exit. */
+  trailing?: ReactNode
+}) {
+  const [dropTarget, setDropTarget] = useState(false)
+  const ViewIcon = VIEW_ICONS[column.view]
+  const startDrag = (event: React.DragEvent) => {
+    event.dataTransfer.setData('text/cez-column', String(index))
+    event.dataTransfer.effectAllowed = 'move'
+  }
+
+  return (
+    <header
+      data-slot="workspace-column-header"
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes('text/cez-column')) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+        setDropTarget(true)
+      }}
+      onDragLeave={() => setDropTarget(false)}
+      onDrop={(event) => {
+        setDropTarget(false)
+        // Re-checked here, not just in `onDragOver`: `Number('')` is 0 and passes
+        // `Number.isInteger`, so a foreign drop that reached this handler would have reordered
+        // column 0.
+        if (!event.dataTransfer.types.includes('text/cez-column')) return
+        const raw = event.dataTransfer.getData('text/cez-column')
+        const from = Number(raw)
+        if (raw === '' || !Number.isInteger(from)) return
+        event.preventDefault()
+        actions.moveColumn(from, index)
+      }}
+      className={cn(
+        'group/column flex h-8 shrink-0 items-center gap-0.5 border-b border-border/70 bg-background pl-4 pr-1.5',
+        dropTarget && 'bg-muted',
+      )}
+    >
+      {/*
+        The grip and the empty stretch of the bar drag the window; the buttons never do. With
+        `draggable` on the whole header, a press on a button that moved even slightly began a drag
+        instead of activating it. Dropping stays on the header, so the target is the full width.
+      */}
+      {count > 1 && grip ? (
+        <span
+          draggable
+          onDragStart={startDrag}
+          title="Drag to reorder"
+          className="-ml-2 flex h-full shrink-0 cursor-grab items-center text-soft-foreground/70 active:cursor-grabbing"
+        >
+          <GripVerticalIcon aria-hidden="true" className="size-3.5" />
+        </span>
+      ) : null}
+      {/* The window's name IS its view switcher — except on a lone view, which the tab row above
+          already names and switches: its bar carries only the split. */}
+      {count === 1 ? null : (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-action="change-view"
+            aria-label={`${viewLabel(column.view)} — change view`}
+            className="-ml-1.5 h-6 gap-1.5 px-1.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+          >
+            <ViewIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="truncate">{viewLabel(column.view)}</span>
+            <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-48">
+          <DropdownMenuLabel>Change view</DropdownMenuLabel>
+          <ViewItems onPick={(view) => actions.setColumnView(index, view)} disabled={column.view} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+      )}
+      <span
+        draggable={count > 1 && grip}
+        onDragStart={startDrag}
+        className={cn('h-full min-w-0 flex-1', count > 1 && grip && 'cursor-grab active:cursor-grabbing')}
+      />
+      {extras}
+      {onSplit ? (
+        // Main's shell mounts no app-wide tooltip provider; each tooltip brings its own.
+        <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* A span, so the tooltip still answers on a disabled button. */}
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                data-action="split-view"
+                aria-label="Split view"
+                disabled={!canSplit}
+                onClick={onSplit}
+                className="text-soft-foreground hover:text-foreground"
+              >
+                <Columns2Icon aria-hidden="true" className="size-3.5" />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {canSplit ? 'Split view (\\)' : `At most ${MAX_COLUMNS} windows`}
+          </TooltipContent>
+        </Tooltip>
+        </TooltipProvider>
+      ) : null}
+      {menu}
+      {/* No close on a lone view: there is nothing to close it into. */}
+      {count > 1 ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          aria-label={`Close ${viewLabel(column.view)}`}
+          title="Close view"
+          onClick={() => actions.closeColumn(index)}
+          className="text-soft-foreground"
+        >
+          <XIcon aria-hidden="true" className="size-3.5" />
+        </Button>
+      ) : null}
+      {trailing}
+    </header>
+  )
+}
+
+/**
+ * The column menu: change this column's view, add one on the right, close this one (confirmed
+ * decision, 2026-10-07 — the `+` and the view switcher live in this menu rather than as separate
+ * controls in a header the same decision asked to keep simple).
+ *
+ * FLAT, with labelled groups, rather than submenus: a Radix sub-menu is a second portalled root
+ * with its own focus trap, and nesting one inside a menu that is itself inside a column that can
+ * be dragged bought nothing a label does not. The cost is one list rendered twice, which
+ * `ViewItems` makes one list.
+ */
+function ColumnMenu({
+  index,
+  column,
+  count,
+  actions,
+}: {
+  index: number
+  column: WorkspaceColumn
+  count: number
+  actions: ColumnActions
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-6 shrink-0 text-soft-foreground hover:text-foreground"
+          aria-label={`Column menu ${viewLabel(column.view)}`}
+        >
+          <MoreVerticalIcon aria-hidden="true" className="size-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-52">
+        {count > 1 ? (
+          <>
+            <DropdownMenuItem disabled={index === 0} onSelect={() => actions.moveColumn(index, index - 1)}>
+              <ArrowLeftIcon aria-hidden="true" />
+              Move left
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={index === count - 1}
+              onSelect={() => actions.moveColumn(index, index + 1)}
+            >
+              <ArrowRightIcon aria-hidden="true" />
+              Move right
+            </DropdownMenuItem>
+          </>
+        ) : null}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => actions.closeColumn(index)}>
+          <XIcon aria-hidden="true" />
+          Close view
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * The handle between two columns (spec §5.2).
+ *
+ * The same ARIA window-splitter pattern the sidebar's handle uses (`components/app-shell.tsx`):
+ * a `separator` is the one role that is both focusable and carries a value range, so one
+ * affordance serves a pointer and a keyboard. Pointer capture rather than window listeners,
+ * because the drag leaves the 5px strip immediately on any real drag.
+ *
+ * The drag is computed from the ORIGIN, not from the previous move: a delta chain would
+ * accumulate at the clamp, so dragging past the floor and back would not return the divider
+ * until the surplus had been paid back. `onResize` takes the delta from where the pair sits
+ * NOW, which the clamp in `resizeColumns` then enforces.
+ */
+function ColumnDivider({
+  index,
+  width,
+  pair,
+  rowRef,
+  onResize,
+}: {
+  index: number
+  /** The left column's current width, in percent — the value this separator reports. */
+  width: number
+  /** The two adjacent columns' widths added together: all this separator can redistribute, and
+   *  therefore what bounds the value it reports. */
+  pair: number
+  rowRef: React.RefObject<HTMLDivElement | null>
+  onResize: (index: number, delta: number) => void
+}) {
+  const origin = useRef<{ x: number; width: number } | null>(null)
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    origin.current = { x: event.clientX, width }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    // Without this the drag selects the text of both columns as it passes over them…
+    event.preventDefault()
+    // …and preventing the default also suppresses the focus the press would have given this
+    // `tabIndex=0` element, leaving a mouse user unable to fine-tune with the arrows right after.
+    event.currentTarget.focus()
+  }
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const start = origin.current
+    const row = rowRef.current
+    if (!start || !row) return
+    const rowWidth = row.getBoundingClientRect().width
+    if (rowWidth <= 0) return
+    const target = start.width + ((event.clientX - start.x) / rowWidth) * 100
+    onResize(index, target - width)
+  }
+
+  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!origin.current) return
+    origin.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? RESIZE_STEP_LARGE : RESIZE_STEP
+    const delta =
+      event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : null
+    if (delta === null) return
+    // Only for the keys we handled: Tab, Escape and the rest stay the browser's.
+    event.preventDefault()
+    onResize(index, delta)
+  }
+
+  return (
+    <div
+      data-slot="column-divider"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize column ${index + 1}`}
+      aria-valuenow={Math.round(width)}
+      /* The range this separator really has, which is a property of the PAIR it sits between and
+         not of the row: `resizeColumns` clamps to `[floor, pair - floor]`, so in a 33/33/33
+         layout either divider moves within roughly [12, 55]. Reporting the row-wide [12, 88]
+         told a screen reader about positions no divider in that layout can reach. */
+      aria-valuemin={Math.round(dividerFloor(pair))}
+      aria-valuemax={Math.round(pair - dividerFloor(pair))}
+      tabIndex={0}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onKeyDown={onKeyDown}
+      title="Drag to resize — arrow keys adjust precisely"
+      // A 9px grab strip straddling the seam, invisible until reached for — the hit target §12
+      // asks to be defined, at the low end of what a pointer can comfortably catch. It is
+      // absolutely positioned, so widening it costs the columns no width. `touch-none` is
+      // load-bearing: without it a touch drag is claimed by the browser's panning and scrolls
+      // the column instead of resizing it.
+      className="absolute inset-y-0 -left-[5px] z-20 w-[9px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
+    />
+  )
+}

@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows } from './usage-windows.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -278,6 +279,8 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
 
+          emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
+
           // Claude reports `error_during_execution` while reacting to our
           // teardown signal. Once cezar has signalled the child, that frame
           // describes the intentional stop rather than an agent failure.
@@ -483,6 +486,12 @@ export function buildAllowedTools(allowedTools: string[], bashAllowlist?: string
 
 function truncate(s: string, max = 200): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/** `claude --resume <id>` for a transcript the CLI no longer has — typically pruned by its own
+ *  `cleanupPeriodDays` (default 30) between two Continues of a long-lived task. */
+export function isClaudeMissingSessionError(message: string): boolean {
+  return /No conversation found with session ID/i.test(message);
 }
 
 /** Path to the bundled mock (`scripts/mock-claude.mjs`), for CEZ_DRY_RUN=1. */

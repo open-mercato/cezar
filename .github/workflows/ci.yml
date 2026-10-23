@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - develop
+      - 'release/v*' # backports into a release line (docs/publishing.md § Release lines)
   push:
     branches:
       - main
       - develop
+      - 'release/v*'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +21,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The vitest suites were ~8 of the job's ~9 minutes, so they run as parallel shards
+  # beside `verify` instead of inside it.
+  vitest:
+    name: Server and cockpit unit suites (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run server and cockpit unit suites
+        run: npm test -- --shard=${{ matrix.shard }}/3
+
   verify:
-    name: Unit, build, E2E, and package
+    name: Typecheck, build, E2E, and package
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -47,9 +76,6 @@ jobs:
       - name: Run unit tests
         run: npm run test:unit
 
-      - name: Run server and cockpit unit suites
-        run: npm test
-
       - name: Build application
         run: npm run build
 
@@ -75,7 +101,7 @@ jobs:
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: verify
+    needs: [verify, vitest]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'pull_request' &&

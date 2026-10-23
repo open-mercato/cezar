@@ -4,6 +4,7 @@ import {
   GitMergeIcon,
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
+  LoaderCircleIcon,
   RefreshCwIcon,
   UploadIcon,
   WrenchIcon,
@@ -14,6 +15,8 @@ import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import type { DiffMode } from '@/components/diff'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -85,13 +88,25 @@ export function GitToolbar({
  * page's one primary action is the chat box's send. Rendered verbatim from the policy: which step
  * is "next" is decided there, never here.
  */
-export function GitActions({ action, onAction }: { action: GitAction | null; onAction: (id: GitActionId) => void }) {
+export function GitActions({
+  action,
+  pending = null,
+  onAction,
+}: {
+  action: GitAction | null
+  pending?: GitActionId | null
+  onAction: (id: GitActionId) => void
+}) {
   if (!action) return null
   const alternatives = action.alternatives ?? []
+  // Busy while ANY step is in flight, under its own label: mid-turn the policy can move on to the
+  // next step (Commit and push → Push), and that button must not invite a repeat of the agent's work.
+  const busy = pending !== null
   return (
     <span data-slot="git-button" className="inline-flex items-center">
       <ActionButton
         action={action}
+        busyAs={busy ? pending : null}
         variant="outline"
         onAction={onAction}
         className={alternatives.length > 0 ? 'rounded-r-none' : undefined}
@@ -104,6 +119,7 @@ export function GitActions({ action, onAction }: { action: GitAction | null; onA
             <Button
               variant="outline"
               size="sm"
+              disabled={busy}
               aria-label={`More ways to ${action.label.toLowerCase()}`}
               className="-ml-px rounded-l-none px-1.5"
             >
@@ -132,6 +148,7 @@ export function GitActions({ action, onAction }: { action: GitAction | null; onA
 
 /** One icon per git step — shared with the phone action menu, so both spell a step the same. */
 export const GIT_ACTION_ICONS: Record<GitActionId, ReactNode> = {
+  land: <GitCommitHorizontalIcon aria-hidden="true" />,
   commit: <GitCommitHorizontalIcon aria-hidden="true" />,
   'commit-push': <UploadIcon aria-hidden="true" />,
   push: <UploadIcon aria-hidden="true" />,
@@ -142,33 +159,64 @@ export const GIT_ACTION_ICONS: Record<GitActionId, ReactNode> = {
   'fix-checks': <WrenchIcon aria-hidden="true" />,
 }
 
+/** What a step's button says while it is in flight — the agent running it, or (with no agent to
+ *  ask) the server's push or PR request. */
+export const GIT_ACTION_PENDING_LABELS: Record<GitActionId, string> = {
+  land: 'Committing and pushing…',
+  commit: 'Committing…',
+  'commit-push': 'Committing and pushing…',
+  push: 'Pushing…',
+  'create-pr': 'Creating PR…',
+  'create-draft-pr': 'Creating draft PR…',
+  'update-branch': 'Updating branch…',
+  'resolve-conflicts': 'Resolving conflicts…',
+  'fix-checks': 'Fixing errors…',
+}
+
 /** One policy entry → one button, clicking through to the parent's mutation switch. A disabled
- *  entry shows the policy's reason as its tooltip. */
+ *  entry shows the policy's reason as its tooltip; a busy one spins and refuses a second click. */
 function ActionButton({
   action,
+  busyAs,
   variant,
   onAction,
   className,
 }: {
   action: GitAction
+  /** The step in flight on this button (itself or an alternative), or null. */
+  busyAs: GitActionId | null
   variant: 'primary' | 'outline'
   onAction: (id: GitActionId) => void
   className?: string
 }) {
-  return (
+  // Unavailable (not busy): `aria-disabled` rather than `disabled`, so the button stays focusable and
+  // carries its own tooltip — a disabled button gets no pointer or focus events (run header's pattern).
+  const blocked = !action.enabled && busyAs === null
+  const button = (
     <Button
       variant={variant}
       size="sm"
       data-action={action.id}
-      className={className}
-      disabled={!action.enabled}
-      title={action.enabled ? undefined : action.reason}
-      onClick={() => onAction(action.id)}
+      className={cn(className, blocked && 'cursor-not-allowed opacity-50 hover:bg-card')}
+      disabled={busyAs !== null}
+      aria-disabled={blocked || undefined}
+      aria-busy={busyAs !== null || undefined}
+      onClick={blocked ? undefined : () => onAction(action.id)}
     >
-      {GIT_ACTION_ICONS[action.id]}
-      {action.label}
+      {busyAs ? (
+        <>
+          <LoaderCircleIcon aria-hidden="true" className="motion-safe:animate-spin" />
+          {GIT_ACTION_PENDING_LABELS[busyAs]}
+        </>
+      ) : (
+        <>
+          {GIT_ACTION_ICONS[action.id]}
+          {action.label}
+        </>
+      )}
     </Button>
   )
+  return blocked && action.reason ? <IconTooltip label={action.reason}>{button}</IconTooltip> : button
 }
 
 /**

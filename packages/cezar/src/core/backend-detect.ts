@@ -1,9 +1,16 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
+import { isForeignCursorAgent } from './cursor-bin.ts';
+import { cliVersionFrom } from './provider-auth.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { ghEnv } from './gh-env.ts';
+import { spawnableCommand } from './windows-shim.ts';
 
-const exec = promisify(execFile);
+const execAsync = promisify(execFile);
+/** Every probe goes through `spawnableCommand`, so a Windows `.cmd` override is detected too. */
+const exec = (bin: string, args: readonly string[], opts: { timeout: number; env?: NodeJS.ProcessEnv }) =>
+  execAsync(...spawnableCommand(bin, args), opts);
 
 export interface BackendCheck {
   name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'git';
@@ -118,6 +125,14 @@ async function probeCursor(): Promise<BackendCheck> {
   const bin = resolveCursorAgentBin();
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    // Cursor absent, another `agent` on PATH (telemetry 8d304c50) — don't offer a runner that can't run.
+    if (isForeignCursorAgent(bin, cliVersionFrom(stdout))) {
+      return {
+        name: 'cursor',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like the Cursor CLI (got: ${stdout.trim().slice(0, 80)}); install it (curl https://cursor.com/install -fsS | bash) or set CEZ_CURSOR_AGENT_BIN`,
+      };
+    }
     return {
       name: 'cursor',
       available: true,
@@ -217,7 +232,7 @@ async function probeCopilot(): Promise<BackendCheck> {
 
 async function probeGh(): Promise<BackendCheck> {
   try {
-    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000 });
+    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000, env: ghEnv() });
     return { name: 'gh', available: stdout.trim().length > 0, version: 'authenticated' };
   } catch {
     return {
@@ -240,7 +255,7 @@ async function probeGit(): Promise<BackendCheck> {
 /** The host's GitHub token: logged-in `gh` first, `GITHUB_TOKEN` fallback. */
 export async function readHostGithubToken(): Promise<string | null> {
   try {
-    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000 });
+    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000, env: ghEnv() });
     const token = stdout.trim();
     if (token) return token;
   } catch {

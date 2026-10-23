@@ -1,5 +1,8 @@
+import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { threadId } from 'node:worker_threads';
+import { hostname, uptime } from 'node:os';
 import {
   appendFileSync,
   closeSync,
@@ -8,24 +11,31 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   readSync,
-  renameSync,
+  readlinkSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
+import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
+import { failureKind, taskFailedLabel } from './failure-kind.ts';
+import { track } from '../telemetry.ts';
+import { reportAgentError } from './agent-error-telemetry.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -212,6 +222,9 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
+  /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
+  deferredBinding: deferredBindingSchema.optional(),
+  queueWaitReason: queueWaitReasonSchema.optional(),
   /** Provenance for a task a scheduled automation launched (spec 2026-09-14). Its own key so a
    *  pre-schedule cezar strips it instead of failing the whole index on a missing `githubUrl`. */
   automationTrigger: z
@@ -371,7 +384,27 @@ export const runRecordSchema = z.object({
   worktree: z.literal(false).optional(),
   /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
-  /** The task's own branch (`cez/<id8>`), created off `baseBranch`. */
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
+  /** An in-place run that switched the repo checkout to `branch` before it started. */
+  inPlaceBranch: z.literal(true).optional(),
+  /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
+   *  writes, no landing. */
+  readOnly: z.literal(true).optional(),
+  /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
+  landing: z
+    .object({
+      status: z.enum(['landed', 'nothing', 'failed']),
+      at: z.string(),
+      branch: z.string().optional(),
+      sha: z.string().optional(),
+      pushed: z.boolean().optional(),
+      files: z.array(z.string()).optional(),
+      stage: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
+  /** The task's own branch, created off `baseBranch`: `cez/<id8>` unless branch naming
+   *  instructions named it (spec 2026-10-11-branch-naming-instructions) — read it, never recompute it. */
   branch: z.string().optional(),
   /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
@@ -461,13 +494,18 @@ export interface RunEvent {
   [key: string]: unknown;
 }
 
+/** A layout file this young may belong to a run another process has not saved to the index yet. */
+const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
 const MAX_RUNS_KEPT = 300;
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
 const MAX_ARCHIVED_KEPT = 500;
+/** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
+const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
-const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
-const ISSUE_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
+// Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
+const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
+const ISSUE_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
 // The transcript auto-link is convenience only (the cockpit's own `gh pr create` path sets the
 // URL authoritatively). Adopt a PR URL ONLY when the agent actually CREATED one — a task that
 // reviews or merely references an existing PR must not get mislabeled with its number (#fake-pr).
@@ -514,6 +552,9 @@ function refUrlRepo(url: string): string | undefined {
  * Note what this does not touch: `referenced*Candidates` keep recording every URL as evidence.
  * The fix changes what is *promoted*, never what is *collected* (the #526 rule).
  */
+// Compares `owner/repo` only: `RepoHandle` carries no host, so the same slug on another GitHub
+// host (Enterprise vs github.com) reads as in-repo. Rare enough to accept; add a host to the
+// handle if it ever bites.
 function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null): boolean {
   if (!handle) return true;
   const repo = refUrlRepo(url);
@@ -901,6 +942,189 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   return run;
 }
 
+// Only paths whose owner has finished (or abandoned acquisition) enter this set.
+// Never infer release from age: a paused active writer still owns it (see lockRunIndex).
+const releasedIndexPaths = new Set<string>();
+let indexCleanupTimer: NodeJS.Timeout | undefined;
+
+function scheduleIndexCleanup(): void {
+  if (indexCleanupTimer) return;
+  indexCleanupTimer = setTimeout(() => {
+    indexCleanupTimer = undefined;
+    retryIndexCleanup();
+  }, 100);
+  indexCleanupTimer.unref();
+}
+
+function retryIndexCleanup(): void {
+  for (const path of releasedIndexPaths) {
+    try {
+      rmSync(path, { force: true });
+      releasedIndexPaths.delete(path);
+    } catch { /* Keep ownership knowledge until I/O recovers. */ }
+  }
+  if (releasedIndexPaths.size) {
+    // An idle owner must also unblock independent processes, without another local save.
+    scheduleIndexCleanup();
+  } else if (indexCleanupTimer) {
+    clearTimeout(indexCleanupTimer);
+    indexCleanupTimer = undefined;
+  }
+}
+
+function releaseIndexPath(path: string): void {
+  try { rmSync(path, { force: true }); } catch {
+    releasedIndexPaths.add(path);
+    // Schedule rather than retry immediately: repeated I/O failure must not hold up the
+    // successful commit acknowledgment. There is no timer or extra I/O on healthy release.
+    scheduleIndexCleanup();
+  }
+}
+
+/** Linux `/proc/<pid>/stat` start time (field 22, clock ticks since boot); undefined where
+ *  there is no procfs or the process is gone. Distinguishes a reused PID from its old owner. */
+function processStartTime(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const value = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    return value && /^\d+$/.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** This boot: Linux's `boot_id`, else the boot instant in seconds (`~<epoch>`, jittery). */
+function bootIdentity(): string {
+  try {
+    const id = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    if (id) return id;
+  } catch { /* no procfs */ }
+  return `~${Math.round(Date.now() / 1000 - uptime())}`;
+}
+
+function sameBoot(a: string, b: string): boolean {
+  if (a.startsWith('~') && b.startsWith('~')) return Math.abs(Number(a.slice(1)) - Number(b.slice(1))) <= 120;
+  return a === b;
+}
+
+/** Linux PID namespace (`pid:[<inode>]`); undefined without procfs. Hostnames do not separate
+ *  namespaces: `--network host`, k8s `hostNetwork` and WSL beside Windows share one. */
+function pidNamespace(): string | undefined {
+  try { return readlinkSync('/proc/self/ns/pid'); } catch { return undefined; }
+}
+
+/** A ticket from another process view, or one left unreadable, has no PID evidence; one older
+ *  than this is a crash leftover (a writer holds its ticket for milliseconds), e.g. from before a container restart. */
+const FOREIGN_TICKET_STALE_MS = 5 * 60_000;
+
+const runIndexTicketSchema = z.object({
+  n: z.number().int().nonnegative().safe(),
+  host: z.string(),
+  ns: z.string().optional(),
+  boot: z.string().min(1),
+  start: z.string().optional(),
+}).strict();
+
+/** Synchronous Lamport bakery lock for the local index. Each contender publishes a unique
+ * ticket before choosing its number, then waits for choosing/earlier tickets. Unlike a timed
+ * lease, a paused live writer never loses ownership midway through read/merge/rename. Unique
+ * names also make dead-process cleanup safe: no successor can own the path being removed.
+ * A live PID is not proof of a live writer: a crashed writer's PID is often reused, in a
+ * container by the restarted cezar itself (#1434 review). A ticket is dead, without guessing
+ * from age, when it is from an earlier boot; when it names this PID and thread but is not the
+ * ticket this thread is taking (acquisition is synchronous); when its PID is gone; or, on
+ * Linux, when its recorded process start time no longer matches. PIDs mean nothing in another
+ * process view (hostname, PID namespace or boot-id format differs), so such a ticket is only
+ * reaped once older than FOREIGN_TICKET_STALE_MS; any other live PID waits/fails.
+ * Contention blocks the event loop for at most the 2 s cap, deliberately: writes are a
+ * millisecond read/merge/rename by a handful of local cockpits, and a strict creation must
+ * not acknowledge before the index is durable.
+ * All participants must use this protocol on a coherent local filesystem.
+ */
+function lockRunIndex(dataDir: string): () => void {
+  retryIndexCleanup();
+  const directory = join(dataDir, 'runs', '.index-writers');
+  mkdirSync(directory, { recursive: true });
+  const name = `${process.pid}-${threadId}-${randomUUID()}.ticket`;
+  const path = join(directory, name);
+  const tmp = `${path}.tmp`;
+  const deadline = performance.now() + 2_000;
+  const self = { host: hostname(), ns: pidNamespace(), boot: bootIdentity(), start: processStartTime(process.pid) };
+  const publish = (n: number) => {
+    const ticket = { n, host: self.host, ...(self.ns ? { ns: self.ns } : {}), boot: self.boot, ...(self.start ? { start: self.start } : {}) };
+    writeFileSync(tmp, JSON.stringify(ticket), { encoding: 'utf8', flag: 'wx' });
+    renameSyncWithRetry(tmp, path);
+  };
+  // Measured against our own just-published ticket: one filesystem clock, not this process's.
+  const abandoned = (other: string) => statSync(path).mtimeMs - statSync(other).mtimeMs > FOREIGN_TICKET_STALE_MS;
+  const tickets = (): Array<[string, number]> => {
+    const result: Array<[string, number]> = [];
+    for (const other of readdirSync(directory)) {
+      if (!/^\d+-[\da-f-]+\.ticket$/.test(other)) continue;
+      const otherPath = join(directory, other);
+      try {
+        let parsed: unknown;
+        try { parsed = JSON.parse(readFileSync(otherPath, 'utf8')); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw error;
+        }
+        const ticket = runIndexTicketSchema.safeParse(parsed);
+        if (!ticket.success) {
+          // Fail closed, unless power loss left it empty or torn long ago.
+          if (other !== name && abandoned(otherPath)) { rmSync(otherPath, { force: true }); continue; }
+          throw new Error(`Invalid run-index ticket ${otherPath}`);
+        }
+        const number = ticket.data.n;
+        if (other !== name) {
+          if (ticket.data.host !== self.host || ticket.data.ns !== self.ns
+            || ticket.data.boot.startsWith('~') !== self.boot.startsWith('~')) {
+            if (abandoned(otherPath)) rmSync(otherPath, { force: true });
+            else result.push([other, number]);
+            continue;
+          }
+          const [pidPart, threadPart] = other.split('-');
+          const pid = Number(pidPart);
+          let dead = !sameBoot(ticket.data.boot, self.boot) // an earlier boot
+            || (pid === process.pid && threadPart === String(threadId)); // an earlier incarnation
+          if (!dead) {
+            try { process.kill(pid, 0); } catch (error) {
+              // EPERM means alive but inaccessible. It must still exclude us.
+              dead = (error as NodeJS.ErrnoException).code === 'ESRCH';
+            }
+          }
+          if (!dead && ticket.data.start !== undefined) {
+            const current = processStartTime(pid);
+            dead = current !== undefined && current !== ticket.data.start; // the PID was reused
+          }
+          if (dead) {
+            rmSync(otherPath, { force: true });
+            continue;
+          }
+        }
+        result.push([other, number]);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return result;
+  };
+  try {
+    publish(0); // choosing; visible before reading any other contender's ticket
+    const number = Math.max(0, ...tickets().map(([, n]) => n)) + 1;
+    if (!Number.isSafeInteger(number)) throw new Error('Run-index ticket overflow');
+    publish(number);
+    while (tickets().some(([other, n]) => other !== name &&
+      (n === 0 || n < number || (n === number && other < name)))) {
+      if (performance.now() >= deadline) throw new Error(`Timed out waiting for run-index writer (tickets in ${directory}; remove one only if its cezar is not running)`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    return () => { releaseIndexPath(path); };
+  } catch (error) {
+    releaseIndexPath(path);
+    releaseIndexPath(tmp);
+    throw error;
+  }
+}
+
 /**
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
@@ -909,6 +1133,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  /** The backend of each run's latest session (`session.started`), naming its agent errors. */
+  private sessionBackends = new Map<string, string>();
+  /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
+  private persisted = new Map<string, string>();
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -917,6 +1145,9 @@ export class RunStore extends EventEmitter {
   private indexReadHealth: { state: 'complete' | 'unavailable'; omittedRuns: number; reason?: string } = { state: 'complete', omittedRuns: 0 };
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
+
+  /** `open` could not create `runs/`: events stay live-only instead of failing every run. */
+  private eventsUnwritable = false;
 
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
@@ -930,8 +1161,16 @@ export class RunStore extends EventEmitter {
 
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
-    mkdirSync(join(dataDir, 'runs'), { recursive: true });
     const store = new RunStore(dataDir);
+    // An uncreatable data dir (EPERM: Windows Controlled Folder Access, a read-only checkout) must
+    // not kill boot — the desktop shell relaunches into the same project every time (5af5aec6).
+    try {
+      mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    } catch (err) {
+      store.eventsUnwritable = true;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[cez] cannot create ${join(dataDir, 'runs')} (${message}); task history in this project will not be saved`);
+    }
     const indexPath = join(dataDir, 'runs.json');
     if (existsSync(indexPath)) {
       try {
@@ -939,8 +1178,11 @@ export class RunStore extends EventEmitter {
         const parsed = z.array(runRecordSchema).safeParse(raw);
         if (parsed.success) {
           for (const run of parsed.data) {
+            store.persisted.set(run.id, JSON.stringify(run));
             store.runs.set(run.id, reconcileLoadedRun(run, opts));
           }
+          // Only behind an index that actually loaded — an unreadable one would orphan every layout.
+          pruneOrphanLayouts(dataDir, new Set(store.runs.keys()), ORPHAN_LAYOUT_GRACE_MS);
         } else {
           store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
         }
@@ -1030,6 +1272,7 @@ export class RunStore extends EventEmitter {
   }
 
   createRun(input: {
+    id?: string;
     title: string;
     workflow: string;
     task: string;
@@ -1045,7 +1288,7 @@ export class RunStore extends EventEmitter {
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
   }): RunRecord {
     const run: RunRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       // Scrubbed on the way in, exactly as `updateRun` scrubs it on the way
       // through (#456 review) — a token pasted into the prompt otherwise sat
       // verbatim in `runs.json` from creation. `task` is deliberately NOT
@@ -1119,6 +1362,11 @@ export class RunStore extends EventEmitter {
     // projection often provide the replacement URL/number in the same patch; seeding afterward
     // would make the historical association unrecoverable.
     if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
+    // Counted on the transition only (#1438); an auto-resumed attempt failing again repeats a failure already counted.
+    if (normalized.status === 'failed' && run.status !== 'failed' && run.autoResumeAttempts === undefined) {
+      const kind = failureKind(normalized.error ?? run.error);
+      if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
+    }
     Object.assign(run, this.redactPatch(normalized, id));
     // Keep legacy writers (including workflow resume/naming paths) in sync without requiring
     // every caller to know about the additive list. The list's provenance still decides the
@@ -1364,6 +1612,22 @@ export class RunStore extends EventEmitter {
     return count;
   }
 
+  private persistEvent(runId: string, event: RunEvent): void {
+    const line = `${JSON.stringify(event)}\n`;
+    if (!this.eventsUnwritable) {
+      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      return;
+    }
+    // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    try {
+      mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
+      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      this.eventsUnwritable = false;
+    } catch {
+      // live-only — the SSE stream still carries it
+    }
+  }
+
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run: ${runId}`);
@@ -1375,8 +1639,12 @@ export class RunStore extends EventEmitter {
     const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() }, runId);
     // Sync append keeps event order without a write queue; local NDJSON
     // appends at agent-event rates are effectively free.
-    appendFileSync(this.eventsPath(runId), `${JSON.stringify(full)}\n`, 'utf8');
+    this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
+    if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
+      reportAgentError(this.sessionBackends.get(runId) ?? run.runner, { type: full.type, message: full.message, fatal: full.fatal });
+    }
     if (this.janitorSettled(run)) return full;
 
     // The janitor trick: agents print the PR URL after `gh pr create` — the
@@ -1692,6 +1960,25 @@ export class RunStore extends EventEmitter {
     this.saveNow(options.throwOnError, options.pretty ?? false);
   }
 
+  /** Commit a newly created run before queue admission. On a failed write, discard only
+   *  our unpublished copy: no deletion tombstone or file removal, since another cockpit
+   *  may subsequently retry the same reserved id. Call synchronously after creation. */
+  flushCreatedRun(run: RunRecord): void {
+    try {
+      this.flush({ throwOnError: true });
+      if (this.runs.get(run.id) !== run) {
+        throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
+      }
+    } catch (error) {
+      if (this.runs.get(run.id) === run) {
+        this.runs.delete(run.id);
+        this.seqs.delete(run.id);
+        this.emit('deleted', run.id);
+      }
+      throw error;
+    }
+  }
+
   // ---- internals -----------------------------------------------------------
 
   private seqs = new Map<string, number>();
@@ -1782,15 +2069,27 @@ export class RunStore extends EventEmitter {
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
     this.forgotten.add(id);
+    this.sessionBackends.delete(id);
+    this.persisted.delete(id);
     return this.runs.delete(id);
   }
 
+  /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
+   *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
+   *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
     const all = this.listRuns();
+    const pinned = new Set<string>();
+    for (const run of all) {
+      if (!LIVE_STATUSES.has(run.status)) continue;
+      pinned.add(run.id);
+      if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
+      if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
+    }
     const stalePool = [
       ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
       ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
-    ];
+    ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
       try {
@@ -1798,6 +2097,7 @@ export class RunStore extends EventEmitter {
         rmSync(this.handoffPath(stale.id), { force: true });
         rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
         deleteRunDrafts(this.dataDir, stale.id);
+        deleteRunLayouts(this.dataDir, stale.id); // spec 2026-10-07-task-workspace §5.3
       } catch {
         // best effort
       }
@@ -1816,78 +2116,69 @@ export class RunStore extends EventEmitter {
 
   private saveNow(throwOnError = false, pretty = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
-    const tmpPath = `${indexPath}.tmp`;
+    const tmpPath = join(this.dataDir, 'runs', `.index-${process.pid}-${randomUUID()}.tmp`);
+    let release: (() => void) | undefined;
     try {
-      writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, pretty ? 2 : undefined), 'utf8');
-      renameSync(tmpPath, indexPath);
+      // Every caller (debounce, shutdown, ordinary flush and strict creation) takes the same
+      // lock BEFORE reading. A unique temp protects payload identity but cannot prevent a
+      // later rename from overwriting another writer's acknowledged additions.
+      release = lockRunIndex(this.dataDir);
+      const merged = this.mergeWithIndexOnDisk(indexPath);
+      writeFileSync(tmpPath, JSON.stringify(merged, null, pretty ? 2 : undefined), 'utf8');
+      renameSyncWithRetry(tmpPath, indexPath);
+      // Do not reconcile/adopt foreign state into live manager-owned records. Remember our
+      // local snapshot so future unchanged fields still defer to the latest persisted value.
+      for (const [id, run] of this.runs) this.persisted.set(id, JSON.stringify(run));
     } catch (err) {
       if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
+    } finally {
+      // Cleanup failure after a successful rename must not turn a durable creation into a
+      // false failure/rollback. Failed own-ticket cleanup is retained and retried;
+      // dead-process tickets are also reaped by the next writer.
+      try { rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+      try { release?.(); } catch { /* best effort */ }
     }
   }
 
-  /**
-   * What `saveNow` writes: our own records, plus every record on disk we have never seen.
-   *
-   * `serve` and headless `run` each open their own store over the same data directory — a shared
-   * index is the whole intent — but `open()` reads `runs.json` exactly once and nothing re-reads
-   * it. Serializing a process-local map over the entire file therefore DELETED every run the other
-   * process had started: the cockpit, open before a `cezar run`, wiped that run from the index on
-   * its next save and left an orphaned `.ndjson` behind.
-   *
-   * Ours wins for an id we hold (we know more about it than the file does), an unknown id is
-   * adopted verbatim, and one `forget` recorded is never re-adopted. Best-effort, not a lock: two
-   * writers can still interleave between this read and the `rename`, so a foreign record updated
-   * inside the same debounce window can still lose that update. That residual race costs a field;
-   * the overwrite it replaces cost the whole record.
-   *
-   * Adopted records are written back but deliberately NOT loaded into `this.runs` — showing a
-   * foreign run in an already-live cockpit is a separate change. They are equally deliberately not
-   * passed through `reconcileLoadedRun` (and so not read via `readRunIndexFromDisk`, which looks
-   * like the right helper and is not): demoting a live-looking row to `interrupted` is correct when
-   * opening a store and wrong here, where that row may be a run still executing in the process that
-   * owns it. An index that cannot be read contributes nothing rather than costing us our own runs,
-   * exactly as in `open()`.
+  /** Must run under lockRunIndex. Carry unknown runs through without recovery reconciliation,
+   * and apply only locally changed fields to records we previously read. This keeps a stale
+   * cockpit's unrelated flush from reverting another process's later update. Concurrent edits
+   * to the same field use the last serialized writer; this is not execution ownership.
+   * Local deletion tombstones still veto adoption. Absence alone is NOT a deletion signal:
+   * older writers could have dropped our records. Cross-process deletion ownership requires a
+   * separate durable tombstone protocol; it is not provided here. An unreadable index retains
+   * the historical best-effort behavior of preserving our local records.
    */
   private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
-    const mine = this.listRuns();
-    const foreign = this.foreignRecordsOnDisk(indexPath);
-    if (foreign.length === 0) return mine;
-    // Same ordering rule `listRuns` applies, so the file's shape is unchanged.
-    return [...mine, ...foreign].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  }
-
-  /**
-   * The records in `runs.json` this process knows nothing about — the ones a save has to carry
-   * over rather than overwrite.
-   *
-   * Validated one record at a time, and only for the ids we are actually adopting, which is the
-   * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 1 s debounce
-   * for as long as an agent is streaming, so this runs about once a second on the main thread of
-   * the process also serving the cockpit's SSE, while retention lets the index reach
-   * `MAX_RUNS_KEPT + MAX_ARCHIVED_KEPT` records — and in the ordinary single-process case every one
-   * of them is ours, so a `z.array(...)` parse would spend all of its time validating records the
-   * next line throws away. The id check is cheap and rejects nearly everything; zod sees what is
-   * left, which is normally nothing. Per-record also degrades better than `open()` can afford to:
-   * one unreadable row costs only itself instead of every foreign record in the file.
-   */
-  private foreignRecordsOnDisk(indexPath: string): RunRecord[] {
-    if (!existsSync(indexPath)) return [];
     let raw: unknown;
-    try {
-      raw = JSON.parse(readFileSync(indexPath, 'utf8'));
-    } catch {
-      return []; // not JSON — an index we cannot read contributes nothing, and costs us nothing
-    }
-    if (!Array.isArray(raw)) return [];
-    const foreign: RunRecord[] = [];
+    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { return this.listRuns(); }
+    if (!Array.isArray(raw)) return this.listRuns();
+    const merged = new Map<string, RunRecord>();
     for (const entry of raw) {
       const id: unknown = (entry as { id?: unknown } | null)?.id;
-      if (typeof id !== 'string' || this.runs.has(id) || this.forgotten.has(id)) continue;
+      if (typeof id !== 'string' || this.forgotten.has(id)) continue;
       const parsed = runRecordSchema.safeParse(entry);
-      if (parsed.success) foreign.push(parsed.data);
+      if (parsed.success) merged.set(id, parsed.data);
     }
-    return foreign;
+    for (const mine of this.runs.values()) {
+      const before = this.persisted.get(mine.id);
+      const disk = merged.get(mine.id);
+      if (!before || !disk || disk.createdAt !== mine.createdAt) {
+        merged.set(mine.id, mine);
+        continue;
+      }
+      const baseline = JSON.parse(before) as Record<string, unknown>;
+      const local = mine as unknown as Record<string, unknown>;
+      const combined = { ...disk } as unknown as Record<string, unknown>;
+      for (const key of new Set([...Object.keys(baseline), ...Object.keys(local)])) {
+        if (JSON.stringify(local[key]) === JSON.stringify(baseline[key])) continue;
+        if (key in local) combined[key] = local[key];
+        else delete combined[key];
+      }
+      merged.set(mine.id, combined as RunRecord);
+    }
+    return [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 }

@@ -3,9 +3,11 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
-import { gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
+import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -78,6 +80,9 @@ export interface ChangesPayload {
    *  payload is intentionally limited to uncommitted changes instead of attributing the
    *  checked-out branch's history to this task. */
   repointedHead?: RepointedHead;
+  /** The commit the diff is measured against, resolved to a sha so the old side of an image can
+   *  be fetched by it (`/files?raw=1&rev=`). Absent when the anchor does not resolve. */
+  baseSha?: string;
 }
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
@@ -260,6 +265,8 @@ export async function collectChanges(
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
+    /** Leave cezar's own `.ai/cezar/` out — an in-place task's Changes show what would land. */
+    excludeCezarData?: boolean;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
@@ -296,18 +303,29 @@ export async function collectChanges(
       },
     );
 
-    const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
-    if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };
-    const numstat = await git(dir, ['diff', '--numstat', '-z', '-M', base], env);
-    if (!numstat.ok) return { ok: false, error: gitReason(numstat, 'git diff failed') };
-    const patchOut = await git(dir, ['diff', '--patch', '-M', '--no-color', base], env);
-    if (!patchOut.ok) return { ok: false, error: gitReason(patchOut, 'git diff failed') };
+    // Three independent read-only listings, run concurrently. `GIT_OPTIONAL_LOCKS=0` keeps them
+    // from racing each other for `index.lock` over the opportunistic stat refresh `git diff` writes,
+    // so that refresh is written once here instead — else every poll re-reads each stat-dirty file.
+    await git(dir, ['update-index', '-q', '--refresh'], env);
+    const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
+    const scope = opts.excludeCezarData ? ['--', '.', CEZAR_DATA_EXCLUDE] : [];
+    const [nameStatus, numstat, patchOut, baseRev] = await Promise.all([
+      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
+      git(dir, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], readEnv),
+    ]);
+    for (const listing of [nameStatus, numstat, patchOut]) {
+      if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };
+    }
+    const baseSha = baseRev.ok ? baseRev.stdout.trim() : '';
 
     return {
       ok: true,
       changes: {
         ...assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap),
         ...(repointedHead ? { repointedHead } : {}),
+        ...(isCommitSha(baseSha) ? { baseSha } : {}),
       },
     };
   } finally {
@@ -573,6 +591,42 @@ export function imageMimeType(path: string): string | null {
   return IMAGE_MIME[name.slice(dot + 1).toLowerCase()] ?? null;
 }
 
+/** A full sha-1 or sha-256 object name — never a ref, a range or an option. */
+export function isCommitSha(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
+export type ImageAtRevResult =
+  | { kind: 'ok'; bytes: Buffer; mime: string }
+  | { kind: 'refused'; error: string };
+
+/**
+ * An image's bytes as committed at `rev` — the old side of a deleted or modified image in the
+ * Changes tab. Same allowlist and cap as the worktree raw route (`imageMimeType`,
+ * `FILE_CONTENT_CAP`); the size is asked first so an oversized blob is never read.
+ */
+export async function readImageAtRev(dir: string, rev: string, path: string): Promise<ImageAtRevResult> {
+  if (!isCommitSha(rev)) return { kind: 'refused', error: `invalid rev: ${rev}` };
+  const segments = path.split('/');
+  if (!path || path.startsWith('/') || path.includes('\0') || segments.some((s) => s === '.' || s === '..' || s === '.git' || s === '')) {
+    return { kind: 'refused', error: `invalid path: ${path}` };
+  }
+  const mime = imageMimeType(path);
+  if (mime === null) return { kind: 'refused', error: `raw serving is limited to images: ${path}` };
+  const object = `${rev}:${path}`;
+  const size = await git(dir, ['cat-file', '-s', object]);
+  if (!size.ok) return { kind: 'refused', error: `not found at ${rev.slice(0, 8)}: ${path}` };
+  const bytes = Number(size.stdout.trim());
+  if (!(bytes <= FILE_CONTENT_CAP)) {
+    return { kind: 'refused', error: `file too large to serve raw (${bytes} bytes): ${path}` };
+  }
+  return new Promise((resolvePromise) => {
+    execFile('git', ['cat-file', 'blob', object], { cwd: dir, encoding: 'buffer', maxBuffer: FILE_CONTENT_CAP + 1 }, (err, stdout) => {
+      resolvePromise(err ? { kind: 'refused', error: `not found at ${rev.slice(0, 8)}: ${path}` } : { kind: 'ok', bytes: stdout, mime });
+    });
+  });
+}
+
 /**
  * Extensions the "open in the OS default app" route (#365) will hand to the OS launcher —
  * deliberately NOT `imageMimeType`'s list, even though it is otherwise the same set minus one.
@@ -717,6 +771,16 @@ export async function createOrSwitchBranch(
 
   const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
   if (exists.ok) {
+    // git refuses a branch another worktree holds; say where it is instead of a bare `fatal:`.
+    const holder = (await branchesCheckedOutElsewhere(dir)).get(name);
+    if (holder) {
+      return {
+        ok: false,
+        error: `${name} is checked out in another worktree (${holder}) — open it there, or remove that worktree first`,
+      };
+    }
+    // A deleted worktree's stale registration still blocks the checkout until pruned.
+    await git(dir, ['worktree', 'prune']);
     const sw = await git(dir, ['checkout', name]);
     if (!sw.ok) return { ok: false, error: gitReason(sw, `git checkout ${name} failed`) };
     return { ok: true, branch: name, created: false };
@@ -763,14 +827,15 @@ export async function commitAll(dir: string, message: string): Promise<CommitRes
 }
 
 export type GitStatusResult =
-  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null }
+  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null }
   | { ok: false; error: string };
 
 /** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
- *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus what has
- *  not ARRIVED: commits on the task's base branch that the branch does not have yet (`behind`,
- *  `null` when the base cannot be resolved). Read-only, and offline on purpose: the base is read
- *  from the remote-tracking ref as last fetched, never fetched here — this is polled. */
+ *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus how the
+ *  branch stands against the task's base: commits the base has that it lacks (`behind`) and the
+ *  commits it would propose (`ahead`), both `null` when the base cannot be resolved. Read-only,
+ *  and offline on purpose: the base is read from the remote-tracking ref as last fetched, never
+ *  fetched here — this is polled. */
 export async function worktreeGitStatus(dir: string, baseBranch?: string): Promise<GitStatusResult> {
   const status = await git(dir, ['status', '--porcelain', '-z']);
   if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
@@ -783,29 +848,43 @@ export async function worktreeGitStatus(dir: string, baseBranch?: string): Promi
     uncommitted++;
     if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
   }
-  const behind = await commitsBehindBase(dir, baseBranch);
+  const { behind, ahead } = await baseDivergence(dir, baseBranch);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind };
-  const ahead = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
-  const unpushed = ahead.ok ? Number.parseInt(ahead.stdout.trim(), 10) : Number.NaN;
-  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind };
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead };
+  const count = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
+  const unpushed = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead };
 }
 
-/** Commits on the base branch the worktree's HEAD does not contain — the freshest base ref
- *  first (`origin/<base>`, then the local `<base>`; agents fetch, they never pull — the same
- *  reasoning as `resolveTaskDiffBase`). `null` when there is no named base: none recorded, a raw
- *  sha (a detached-HEAD fork point has no "latest" to be behind), or a ref this repo lacks. */
-async function commitsBehindBase(dir: string, baseBranch: string | undefined): Promise<number | null> {
-  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return null;
-  const name = baseBranch.replace(/^origin\//, '');
-  for (const ref of [`origin/${name}`, name]) {
+/** How the worktree's HEAD stands against the task's base branch: commits the base has that HEAD
+ *  lacks (`behind`) and commits HEAD has that the base lacks (`ahead` — what a PR would propose).
+ *  The freshest base ref first (`<base remote>/<base>`, then the local `<base>`; agents fetch, they
+ *  never pull — the same reasoning as `resolveTaskDiffBase`). The base remote is the PR target
+ *  (`git-remotes.ts`, #1383), or the remote a recorded `upstream/main` names. Both `null` when there
+ *  is no named base: none recorded, a raw sha (a detached-HEAD fork point has no "latest" to be
+ *  behind), or a ref this repo lacks. */
+export async function baseDivergence(
+  dir: string,
+  baseBranch: string | undefined,
+): Promise<{ behind: number | null; ahead: number | null }> {
+  const unknown = { behind: null, ahead: null };
+  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
+  const remotes = await resolveTaskRemotes((args) => git(dir, args));
+  const split = splitRemoteRef(baseBranch, remotes.names);
+  const remote = split.remote ?? remotes.base;
+  for (const ref of remote ? [`${remote}/${split.branch}`, split.branch] : [split.branch]) {
     const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
     if (!exists.ok) continue;
-    const count = await git(dir, ['rev-list', '--count', `HEAD..${ref}`]);
-    const behind = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
-    return Number.isFinite(behind) ? behind : null;
+    // `--left-right` over `HEAD...ref` prints "<only in HEAD>\t<only in ref>".
+    const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
+    if (!count.ok) return unknown;
+    const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+    return {
+      behind: Number.isFinite(behind) ? (behind as number) : null,
+      ahead: Number.isFinite(ahead) ? (ahead as number) : null,
+    };
   }
-  return null;
+  return unknown;
 }
 
 export type PushResult =
@@ -826,7 +905,7 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   if (remotes.length === 0) {
     return { ok: false, error: 'no remote configured — add one with `git remote add origin <url>`' };
   }
-  const remote = remotes.includes('origin') ? 'origin' : (remotes[0] as string);
+  const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   const push = await git(dir, args);

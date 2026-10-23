@@ -19,13 +19,13 @@ import { ChevronDownIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, usePinRun, useProjectRuns } from '@/api/queries'
+import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useProjectRuns } from '@/api/queries'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
-import { QuickListBuckets } from '@/components/task-quick-list'
+import { QuickListBuckets, RepoBaseContext } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
@@ -426,11 +426,14 @@ function ProjectGroup({
   // request, not 40 run lists. A collapsed group still READS whatever is cached, which is what
   // keeps its attention badge alive after the user shuts it.
   const runs = useProjectRuns(project.id, !collapsed && !missing, boot)
+  // The project on screen may have no registered repo URL; its remote answers then.
+  const ownRepoBase = useProjectRepoBase()
+  const repoBase = project.repoUrl ?? (active ? ownRepoBase : undefined)
   const onNavigate = useSidebarNavigate()
   // Pinning (#935) from a group that may not be the scoped project: the request is addressed to
   // THIS project, and the cache invalidated is the one `useProjectRuns` above writes — which is
   // `'default'` for the boot project, whose list mounts unscoped.
-  const pinMutation = usePinRun(project.id, boot ? 'default' : project.id)
+  const pinMutation = usePinRun('sidebar', project.id, boot ? 'default' : project.id)
   const onTogglePin = React.useCallback(
     (run: RunRecord, pinned: boolean) =>
       pinMutation.mutate(
@@ -438,6 +441,15 @@ function ProjectGroup({
         { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
       ),
     [pinMutation.mutate],
+  )
+  const archiveMutation = useArchiveRun('sidebar', project.id, boot ? 'default' : project.id)
+  const onToggleArchive = React.useCallback(
+    (run: RunRecord, archived: boolean) =>
+      archiveMutation.mutate(
+        { id: run.id, archived },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [archiveMutation.mutate],
   )
 
   // The badge counts EVERY run that needs you, automation-started or not — a question nobody sees
@@ -695,6 +707,7 @@ function ProjectGroup({
           {/* This group's own project, explicitly: a collapsed sidebar can show six projects at
               once, and #42 means a different pull request in each of them. */}
           <ReferenceStatusProvider projectId={project.id} requests={referenceRequests}>
+            <RepoBaseContext.Provider value={repoBase}>
             <QuickListBuckets
               buckets={buckets}
               currentRunId={active ? currentRunId : null}
@@ -709,7 +722,9 @@ function ProjectGroup({
                   ? undefined
                   : onTogglePin
               }
+              onToggleArchive={onToggleArchive}
             />
+            </RepoBaseContext.Provider>
           </ReferenceStatusProvider>
 
           {/* Always present, not only past the cap: it is this group's door into the project's

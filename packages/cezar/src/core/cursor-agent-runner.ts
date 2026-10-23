@@ -10,8 +10,10 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { existsSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -24,14 +26,56 @@ import type {
 } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
-import { disclaimedCommand } from './disclaim-spawn.ts';
+import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
+import { resolveCursorAgentBin } from './cursor-bin.ts';
 import {
   createCursorUiState,
   mapCursorMessage,
   mapCursorStreamEvent,
   type CursorUiMapping,
 } from './cursor-ui-mapper.ts';
+
+/** The exact hand-off line of Cursor's bash launcher (`~/.local/share/cursor-agent/versions/<v>/cursor-agent`). */
+const CURSOR_LAUNCHER_EXEC = 'exec -a "$0" "$NODE_BIN" --use-system-ca "$SCRIPT_DIR/index.js" "$@"';
+const LAUNCHER_MAX_BYTES = 64 * 1024;
+
+/**
+ * Cursor's launcher is a bash script that execs the `node` beside it, so in the desktop app a macOS
+ * privacy prompt would name "node". There, start that `node` directly — doing what the launcher
+ * does — so `disclaimedCommand` can run it as "cursor-agent". Any other launcher is left alone.
+ */
+export function cursorLaunch(
+  bin: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  opts: DisclaimOptions = {},
+): { program: string; args: string[]; env: NodeJS.ProcessEnv } {
+  const asIs = { program: bin, args, env };
+  if (!disclaimActive(opts)) return asIs;
+  try {
+    const invoked = resolveProgram(bin, env.PATH ?? process.env.PATH);
+    if (!invoked) return asIs;
+    const dir = dirname(realpathSync(invoked));
+    const node = join(dir, 'node');
+    const entry = join(dir, 'index.js');
+    if (!existsSync(node) || !existsSync(entry)) return asIs;
+    // The launcher is a few hundred bytes; never slurp a binary that merely shares its name.
+    const head = readHead(invoked, LAUNCHER_MAX_BYTES + 1);
+    if (head.length > LAUNCHER_MAX_BYTES || !head.toString('utf8').includes(CURSOR_LAUNCHER_EXEC)) return asIs;
+    return {
+      program: node,
+      args: ['--use-system-ca', entry, ...args],
+      env: {
+        ...env,
+        CURSOR_INVOKED_AS: basename(invoked),
+        NODE_COMPILE_CACHE: env.NODE_COMPILE_CACHE || join(homedir(), 'Library', 'Caches', 'cursor-compile-cache'),
+      },
+    };
+  } catch {
+    return asIs;
+  }
+}
 
 export const DEFAULT_CURSOR_TIMEOUT_MS = 30 * 60_000;
 export const CURSOR_KILL_GRACE_MS = 10_000;
@@ -66,12 +110,7 @@ export function mockCursorAgentPath(): string {
   return resolvePath(here, '..', '..', 'scripts', 'mock-cursor-agent.mjs');
 }
 
-/** The real Cursor binary name — `CEZ_CURSOR_AGENT_BIN` override, else `agent` on PATH. Shared
- *  by every call site that shells out to the real CLI (identity, model discovery, detection),
- *  so an operator's override is honored consistently instead of four separate `?? 'agent'`s. */
-export function resolveCursorAgentBin(optsBin?: string): string {
-  return optsBin || process.env.CEZ_CURSOR_AGENT_BIN || 'agent';
-}
+export { resolveCursorAgentBin };
 
 /** Like {@link resolveCursorAgentBin}, but under `CEZ_DRY_RUN=1` substitutes the bundled mock —
  *  only for actually spawning a run turn. The mock does not implement `status`/`about`/`models`
@@ -81,7 +120,7 @@ export function resolveCursorBin(optsBin?: string): string {
   if (optsBin) return optsBin;
   if (process.env.CEZ_CURSOR_AGENT_BIN) return process.env.CEZ_CURSOR_AGENT_BIN;
   if (process.env.CEZ_DRY_RUN === '1') return mockCursorAgentPath();
-  return 'agent';
+  return resolveCursorAgentBin();
 }
 
 function wrapSpawnError(err: unknown, bin: string): Error {
@@ -138,12 +177,11 @@ export class CursorAgentRunner implements AgentRunner {
     let child: ChildProcessWithoutNullStreams;
     try {
       const isNodeScript = /\.[cm]?js$/.test(this.bin);
-      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
-      const [file, argv] = disclaimedCommand(
-        isNodeScript ? process.execPath : this.bin,
-        isNodeScript ? [this.bin, ...args] : args,
-        env,
-      );
+      const launch = isNodeScript
+        ? { program: process.execPath, args: [this.bin, ...args], env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }) }
+        : cursorLaunch(this.bin, args, buildChildEnv({ backend: this.backend, extraEnv: spec.env }));
+      const env = launch.env;
+      const [file, argv] = disclaimedCommand(launch.program, launch.args, env, { name: 'cursor-agent' });
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
