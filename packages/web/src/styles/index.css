@@ -339,6 +339,8 @@
   --color-success: var(--success);
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
+  /* Warning ink and borders — the readable amber, never the --pending fill. */
+  --color-warning: var(--pending-strong);
   --color-info: var(--info);
   --color-conflict: var(--conflict);
 

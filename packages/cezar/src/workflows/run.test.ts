@@ -740,7 +740,8 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function changedRun(autonomous?: boolean): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', autonomous, steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     writeFileSync(join(wt.path, 'a.txt'), 'one\nTWO\nthree\n');
     writeFileSync(join(wt.path, 'new.txt'), 'x\n');
     return store.getRun(record.id) as RunRecord;
@@ -750,16 +751,18 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function cleanRun(): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     return store.getRun(record.id) as RunRecord;
   }
 
-  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<void> }).settleSuccess(id);
+  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<boolean> }).settleSuccess(id);
 
   it('gate off (default) + changes → done, diff left in the worktree', async () => {
     const record = await changedRun();
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('completed');
   });
 
   it('gate on (env) + non-autonomous + changes → review', async () => {
@@ -779,8 +782,10 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   it('gate on + no changes → done (the diff check stays first)', async () => {
     process.env.CEZ_REVIEW_GATE = '1';
     const record = await cleanRun();
+    store.setLifecycleObserver(() => undefined);
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('no_changes');
   });
 });
 
@@ -1515,6 +1520,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Library');
     expect(questions[0]!.options).toHaveLength(2);
+    expect(parked?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
+    expect(parked?.attentionRequest?.questions[0]?.options).toHaveLength(2);
   }, 30_000);
 
   it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {
@@ -1664,6 +1671,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       expect(store.getRun(record.id)?.status).toBe('review');
       (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
       expect(store.getRun(record.id)?.status).toBe('done');
+      expect(store.getRun(record.id)?.completionReason).toBe('accepted');
     });
 
     it('a repeated End session that lands after the review settle does not accept the review', () => {
@@ -2365,6 +2373,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -2395,6 +2404,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -3251,9 +3261,11 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     await waitFor(() => store.getRun(record.id)?.status === 'waiting');
     const eventsPath = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
     expect(readFileSync(eventsPath, 'utf8')).toContain('"type":"ask.requested"');
+    expect(store.getRun(record.id)?.attentionRequest?.questions.length).toBeGreaterThan(0);
     expect(manager.sendMessage(record.id, [{ type: 'text', text: 'Library: Vitest' }])).toBe(true);
     await waitFor(() => readFileSync(eventsPath, 'utf8').includes('"type":"turn-end"'));
     expect(store.getRun(record.id)?.status).toBe('waiting');
+    expect(store.getRun(record.id)?.attentionRequest).toBeUndefined();
   }, 30_000);
 });
 

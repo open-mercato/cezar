@@ -637,6 +637,31 @@ describe('session git API routes', () => {
     expect(body.repointedHead).toEqual({ headBranch: 'review/pr-42', taskBranch: 'task' });
   });
 
+  it('runs without a worktree never serve ignored files from the real checkout', async () => {
+    const bare = store.createRun({ title: 'i', workflow: 'quick-task', task: 'i', worktree: false, steps: [] });
+    writeFileSync(join(repoRoot, '.gitignore'), '.env\nprivate/\n');
+    writeFileSync(join(repoRoot, '.env'), 'TOKEN=secret\n');
+    mkdirSync(join(repoRoot, 'private'), { recursive: true });
+    writeFileSync(join(repoRoot, 'private', 'endpoints.json'), '{"secret":"whsec_x"}\n');
+    writeFileSync(join(repoRoot, 'visible.txt'), 'ok\n');
+
+    for (const path of ['.env', 'private/endpoints.json', 'private', 'private/', './.env', 'private/absent.json']) {
+      const res = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=${encodeURIComponent(path)}`);
+      expect(res.status).toBe(409);
+      const body = await res.text();
+      expect(body).not.toContain('secret');
+      expect(body).toContain('not in the repository index');
+    }
+    const listing = await apiRequest(app, `/api/v1/runs/${bare.id}/files`);
+    expect(listing.status).toBe(200);
+    const names = ((await listing.json()) as { entries: Array<{ name: string }> }).entries.map((entry) => entry.name);
+    expect(names).toContain('visible.txt');
+    expect(names).not.toContain('.env');
+    expect(names).not.toContain('private');
+    const visible = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=visible.txt`);
+    expect(visible.status).toBe(200);
+  });
+
   it('runs without a worktree read Changes, Files and Commits from the current checkout', async () => {
     const bare = store.createRun({
       title: 'b',

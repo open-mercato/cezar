@@ -91,7 +91,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** A second project's task, known to the palettes through the cross-project index. */

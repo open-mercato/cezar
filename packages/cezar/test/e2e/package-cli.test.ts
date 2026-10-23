@@ -9,17 +9,19 @@ import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+// npm supplies its JS entry point to scripts; invoking it through Node also works on Windows.
+const npmCli = process.env.npm_execpath;
 
 test('the release tarball installs and runs the dry-run CLI workflow', { timeout: 120_000 }, async () => {
+  assert.ok(npmCli, 'run this suite through npm run test:package');
   const root = await mkdtemp(join(tmpdir(), 'cezar-package-e2e-'));
 
   try {
     const packDir = join(root, 'pack');
     await mkdir(packDir);
     const packed = await execFile(
-      npm,
-      ['pack', '--json', '--ignore-scripts', '--pack-destination', packDir],
+      process.execPath,
+      [npmCli, 'pack', '--json', '--ignore-scripts', '--pack-destination', packDir],
       { cwd: repoRoot, maxBuffer: 10 * 1024 * 1024 },
     );
     const records = JSON.parse(packed.stdout) as Array<{
@@ -41,8 +43,8 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     await writeFile(join(consumerDir, 'package.json'), '{"private":true}\n', 'utf8');
     const tarball = join(packDir, record.filename);
     await execFile(
-      npm,
-      ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', tarball],
+      process.execPath,
+      [npmCli, 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', tarball],
       { cwd: consumerDir, maxBuffer: 10 * 1024 * 1024 },
     );
 
