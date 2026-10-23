@@ -51,9 +51,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # scripts/release-line.mjs imports the release decisions from packages/cezar/dist.
-      - name: Build release tooling
-        run: npm run build:server
 
       - name: Mint the release token
         id: app-token
@@ -66,7 +63,7 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: node scripts/release-line.mjs prepare ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: node scripts/release-line.mts prepare ${{ inputs.dry_run && '--dry-run' || '' }}
 
       # The bump commit was made through the API (signed); verify and tag exactly that commit.
       - name: Check out the bump commit
@@ -92,7 +89,7 @@ jobs:
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
           SHA: ${{ steps.prepare.outputs.sha }}
-        run: node scripts/release-line.mjs announce --dry-run --version "$VERSION" --sha "$SHA" --dist-tag latest
+        run: node scripts/release-line.mts announce --dry-run --version "$VERSION" --sha "$SHA" --dist-tag latest
 
       # Installation tokens live one hour; the verify + build above can take a good part of it.
       - name: Mint a fresh release token
@@ -109,7 +106,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token-tag.outputs.token }}
           VERSION: ${{ steps.prepare.outputs.version }}
           SHA: ${{ steps.prepare.outputs.sha }}
-        run: node scripts/release-line.mjs tag --version "$VERSION" --sha "$SHA"
+        run: node scripts/release-line.mts tag --version "$VERSION" --sha "$SHA"
 
       - name: Write workflow summary
         if: always() && steps.prepare.outputs.version != ''

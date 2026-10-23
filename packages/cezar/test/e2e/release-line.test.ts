@@ -13,11 +13,11 @@ import { promisify } from 'node:util';
 // block the event loop it answers on.
 const execFile = promisify(execFileCallback);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const script = join(repoRoot, 'scripts', 'release-line.mjs');
+const script = join(repoRoot, 'scripts', 'release-line.mts');
 
 // Drives the orchestrator against a miniature workspace, a real git repo and a fake GitHub API.
-// Needs `npm run build` first (it imports packages/cezar/dist/release/*.js). npm is never reached:
-// every run pins `--registry` to a fixture file.
+// The .mts script runs on Node's type stripping (Node ≥ 22.18), importing the release decisions
+// straight from packages/cezar/src — no build. npm is never reached: every run pins `--registry`.
 
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 const LINE_016 = 'release/v0.16.x';
@@ -69,7 +69,7 @@ interface Call {
   body: Record<string, unknown> | undefined;
 }
 
-/** Just enough of the GitHub REST API for scripts/lib/github.mjs. */
+/** Just enough of the GitHub REST API for scripts/lib/github.mts. */
 class FakeGitHub {
   calls: Call[] = [];
   refs = new Map<string, string>(); // 'heads/x' | 'tags/x' → sha

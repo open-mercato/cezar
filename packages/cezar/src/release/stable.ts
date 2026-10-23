@@ -1,4 +1,4 @@
-/** Stable-release decisions — the pure half of `scripts/release.mjs`.
+/** Stable-release decisions — the pure half of `scripts/release.mts`.
  *
  *  Sibling of `snapshot.ts`, but for the *owner-driven* `latest` channel. The
  *  `Release` workflow (`.github/workflows/release.yml`) is run manually and

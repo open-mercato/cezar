@@ -44,8 +44,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build release tooling
-        run: npm run build:server
 
       - name: Mint the release token
         id: app-token
@@ -58,7 +56,7 @@ jobs:
         id: verify
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: node scripts/release-line.mjs verify
+        run: node scripts/release-line.mts verify
 
       - name: Build application
         if: steps.verify.outputs.released != 'true'
@@ -78,7 +76,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ steps.verify.outputs.distTag }}
-        run: node scripts/release.mjs existing --dist-tag "$DIST_TAG" --reconcile-tag
+        run: node scripts/release.mts existing --dist-tag "$DIST_TAG" --reconcile-tag
 
       - name: Mint a fresh release token
         if: steps.release.outputs.published == 'true'
@@ -96,7 +94,7 @@ jobs:
           VERSION: ${{ steps.verify.outputs.version }}
           SHA: ${{ steps.verify.outputs.sha }}
           DIST_TAG: ${{ steps.verify.outputs.distTag }}
-        run: node scripts/release-line.mjs announce --version "$VERSION" --sha "$SHA" --dist-tag "$DIST_TAG"
+        run: node scripts/release-line.mts announce --version "$VERSION" --sha "$SHA" --dist-tag "$DIST_TAG"
 
       - name: Write workflow summary
         if: always() && steps.verify.outputs.version != ''

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Stable-release orchestrator (`node scripts/release.mjs <bump>`) — the
+// Stable-release orchestrator (`node scripts/release.mts <bump>`) — the
 // side-effect half of src/release/stable.ts, invoked by the manually-triggered
 // `Release` workflow (.github/workflows/release.yml) after `npm run build`
 // (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
 //
 // Unlike the snapshot pipeline, this is the ONLY thing that ever moves the
 // `latest` dist-tag, and it never runs from a push. The Release workflow calls it
-// with `existing` after scripts/release-line.mjs has committed the version bump to
+// with `existing` after scripts/release-line.mts has committed the version bump to
 // the release branch; the other bumps remain for local use. It stamps every manifest in the release set (intra-release
 // dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
 // releases), then publishes them in DEPENDENCY ORDER — api-client, then the
@@ -37,25 +37,28 @@
 // publish is retried once: npm's provenance step reads a short-lived OIDC token, and that read
 // fails transiently (IDENTITY_TOKEN_READ_ERROR half-published 0.16.2).
 //
-// Usage: node scripts/release.mjs <patch|minor|major|existing> [--dry-run] [--dist-tag <tag>] [--reconcile-tag]
+// Usage: node scripts/release.mts <patch|minor|major|existing> [--dry-run] [--dist-tag <tag>] [--reconcile-tag]
 // Env override for tests: CEZ_RELEASE_ROOT (defaults to the repo root).
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isPublishable } from '../packages/cezar/dist/release/manifests.js';
+import { isPublishable, type ManifestLike, type ReleaseManifests } from '../packages/cezar/src/release/manifests.ts';
 import {
   computeStableVersion,
   isReleaseBump,
   stampStableManifests,
-} from '../packages/cezar/dist/release/stable.js';
+} from '../packages/cezar/src/release/stable.ts';
+
+type SetKey = keyof ReleaseManifests;
+const KEYS: readonly SetKey[] = ['contract', 'apiClient', 'cezar', 'alias', 'runAlias'];
 
 const repoRoot = process.env.CEZ_RELEASE_ROOT
   ? path.resolve(process.env.CEZ_RELEASE_ROOT)
   : path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // The workspace root publishes nothing; every publishable manifest is named here explicitly.
-const dirs = {
+const dirs: Record<SetKey, string> = {
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
@@ -63,11 +66,11 @@ const dirs = {
   runAlias: path.join(repoRoot, 'alias-cezar-run'),
 };
 
-const readManifest = (dir) => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
-const writeManifest = (dir, pkg) =>
+const readManifest = (dir: string): ManifestLike => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
+const writeManifest = (dir: string, pkg: ManifestLike) =>
   writeFileSync(path.join(dir, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
 
-const emitOutput = (result) => {
+const emitOutput = (result: Record<string, string | boolean>) => {
   console.log(`release result: ${JSON.stringify(result)}`);
   if (process.env.GITHUB_OUTPUT) {
     const lines = Object.entries(result).map(([k, v]) => `${k}=${v}`);
@@ -81,7 +84,7 @@ if (!isReleaseBump(bump)) {
   process.exit(1);
 }
 
-const manifests = {
+const manifests: ReleaseManifests = {
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
@@ -115,8 +118,8 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
-for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) writeManifest(dirs[key], stamped[key]);
-const stampedNames = ['contract', 'apiClient', 'cezar', 'alias', 'runAlias'].map((key) => stamped[key].name);
+for (const key of KEYS) writeManifest(dirs[key], stamped[key]);
+const stampedNames = KEYS.map((key) => stamped[key].name);
 console.log(
   `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
 );
@@ -126,7 +129,7 @@ console.log(
 const provenance = !dryRun && process.env.GITHUB_ACTIONS === 'true' ? ['--provenance'] : [];
 // Same cross-platform npm resolution as scripts/release-snapshot.mjs.
 const npmExecpath = process.env.npm_execpath;
-const runNpm = (args, cwd) => {
+const runNpm = (args: string[], cwd: string) => {
   if (npmExecpath) {
     execFileSync(process.execPath, [npmExecpath, ...args], { cwd, stdio: 'inherit' });
   } else {
@@ -134,7 +137,7 @@ const runNpm = (args, cwd) => {
     execFileSync(npmCli, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
   }
 };
-const alreadyPublished = (name) => {
+const alreadyPublished = (name: string) => {
   if (dryRun) return false;
   try {
     const out = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
@@ -147,7 +150,7 @@ const alreadyPublished = (name) => {
     return false;
   }
 };
-const publish = (dir, label) => {
+const publish = (dir: string, label: string) => {
   const args = [
     'publish',
     '--tag', distTag,
@@ -161,7 +164,7 @@ const publish = (dir, label) => {
     runNpm(args, dir);
   } catch (error) {
     if (dryRun) throw error;
-    console.log(`release: publishing ${label} failed (${error.message}) — retrying once in 15s.`);
+    console.log(`release: publishing ${label} failed (${(error as Error).message}) — retrying once in 15s.`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15_000);
     if (alreadyPublished(label)) return;
     runNpm(args, dir);
@@ -171,8 +174,8 @@ const publish = (dir, label) => {
 // Dependency order — see the header. `ReleaseManifests` declares its fields in this order for
 // exactly this reason. A `private` manifest is stamped above but never published: it is part of
 // the release (its version moves, its pins are rewritten) without being on the registry.
-const published = [];
-for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) {
+const published: string[] = [];
+for (const key of KEYS) {
   if (!isPublishable(stamped[key])) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;

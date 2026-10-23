@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// scripts/lib/github.mjs is the release-line workflows' only GitHub writer; its "re-runs are
+// scripts/lib/github.mts is the release-line workflows' only GitHub writer; its "re-runs are
 // safe" promises (docs/publishing.md § Release lines) are pinned here against a stubbed fetch.
 
 interface Client {
@@ -16,7 +16,7 @@ interface Client {
   readFile(path: string, ref: string): Promise<string>;
 }
 
-const modulePath = new URL('../../../../scripts/lib/github.mjs', import.meta.url).href;
+const modulePath = new URL('../../../../scripts/lib/github.mts', import.meta.url).href;
 const { githubClient } = (await import(modulePath)) as {
   githubClient: (opts: { token: string | undefined; repository: string | undefined }) => Client;
 };

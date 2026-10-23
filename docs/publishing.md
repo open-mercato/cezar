@@ -203,8 +203,9 @@ prereleases are inert).
 | `packages/cezar/src/release/snapshot.ts` | pure decisions: channel/version/dist-tag, install lines (unit-tested) |
 | `packages/cezar/src/release/manifests.ts` | the shared stamper: which manifests exist, and how each pins the next (unit-tested) |
 | `packages/cezar/src/release/stable.ts`, `bump.ts` | pure release-line decisions: next version, dist-tag, lockfile/changelog stamping (unit-tested) |
-| `scripts/release-line.mjs` | `cut` / `prepare` / `tag` / `verify` / `announce` for the release-line workflows; GitHub writes through `scripts/lib/github.mjs` (e2e-tested against a fake GitHub API) |
-| `scripts/release.mjs` | publishes the release set in dependency order under `--dist-tag` (`latest` by default) |
+| `scripts/release-line.mts` | `cut` / `prepare` / `tag` / `verify` / `announce` for the release-line workflows; GitHub writes through `scripts/lib/github.mts` (e2e-tested against a fake GitHub API) |
+| `scripts/release.mts` | publishes the release set in dependency order under `--dist-tag` (`latest` by default) |
+| `scripts/tsconfig.release.json` | strict typecheck of the `.mts` release tooling (`npm run typecheck:release`); Node runs it directly with type stripping (Node ≥ 22.18), importing `packages/cezar/src/release/*.ts` — no build step |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
 | `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
 | `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
