@@ -54,6 +54,7 @@ import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { LiveUsage, liveUsageParts } from '@/components/live-usage'
+import { useLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { buildTaskCommands, type TaskCommand } from '@/components/task-palette/commands'
 import { ATTENTION_RANK, budgetStop, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -941,8 +942,9 @@ function RunUsage({
   continuationEngine?: ReactNode
   className?: string
 }) {
+  const showLiveUsage = useLiveUsageEnabled()
   const usage: ReactNode[] = []
-  if (liveUsageParts(run.liveUsage).length > 0) usage.push(<LiveUsage key="live" usage={run.liveUsage} />)
+  if (showLiveUsage && liveUsageParts(run.liveUsage).length > 0) usage.push(<LiveUsage key="live" usage={run.liveUsage} />)
   if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
     usage.push(
       <DirectionalUsage

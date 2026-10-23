@@ -334,6 +334,7 @@ export const runRecordSchema = z.object({
   /** Latest context fill and plan usage windows the agent reported (the header's live gauges). */
   liveUsage: z
     .object({
+      account: z.object({ org: z.string().optional(), email: z.string().optional() }).optional(),
       contextTokens: usageCounterSchema.optional(),
       contextWindow: usageCounterSchema.optional(),
       limits: z

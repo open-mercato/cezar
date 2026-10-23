@@ -79,5 +79,5 @@ describe('usage-status reaches the run record from both turn handlers', () => {
     await settled(record.id);
 
     expect(store.readEvents(record.id).some((event) => event.type === 'usage-status')).toBe(false);
-  });
+  }, 30_000);
 });

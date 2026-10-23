@@ -1,5 +1,27 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { claudeUsageStatus } from './claude-usage-status.ts';
+import { claudeAccount, claudeUsageStatus } from './claude-usage-status.ts';
+
+describe('claudeAccount', () => {
+  it('reads the org and email of CLAUDE_CONFIG_DIR, else of ~/.claude.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-claude-account-'));
+    try {
+      const oauthAccount = { organizationName: 'WP-Stars', emailAddress: 'me@example.com', accountUuid: 'x' };
+      writeFileSync(join(dir, '.claude.json'), JSON.stringify({ oauthAccount }));
+      expect(claudeAccount(dir)).toEqual({ org: 'WP-Stars', email: 'me@example.com' });
+      expect(claudeAccount(undefined, dir)).toEqual({ org: 'WP-Stars', email: 'me@example.com' });
+      writeFileSync(join(dir, '.claude.json'), '{"oauthAccount":{}}');
+      expect(claudeAccount(dir)).toBeUndefined();
+      writeFileSync(join(dir, '.claude.json'), 'not json');
+      expect(claudeAccount(dir)).toBeUndefined();
+      expect(claudeAccount(join(dir, 'missing'))).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 // Shapes captured from a live `claude -p --output-format stream-json --verbose` run (2026-10-23).
 describe('claudeUsageStatus', () => {

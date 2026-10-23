@@ -56,6 +56,15 @@ describe('liveUsageParts', () => {
     expect(liveUsageParts(undefined, NOW)).toEqual([])
   })
 
+  it('leads with the account org, the email on hover', () => {
+    expect(
+      liveUsageParts({ account: { org: 'WP-Stars', email: 'me@example.com' }, at: '2026-10-23T08:00:00.000Z' }, NOW),
+    ).toEqual([{ text: 'WP-Stars', tone: 'neutral', title: 'me@example.com' }])
+    expect(liveUsageParts({ account: { email: 'me@example.com' }, at: '2026-10-23T08:00:00.000Z' }, NOW)[0]?.text).toBe(
+      'me@example.com',
+    )
+  })
+
   it('formats time left', () => {
     expect(timeLeft(42 * 60_000)).toBe('42m')
     expect(timeLeft(65 * 60_000)).toBe('1h05m')

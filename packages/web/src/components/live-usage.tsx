@@ -7,14 +7,17 @@ import { cn } from '@/lib/utils'
 
 const WINDOW_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
 
-export type LiveUsageTone = 'success' | 'warning' | 'danger'
+export type LiveUsageTone = 'neutral' | 'success' | 'warning' | 'danger'
 
 export interface LiveUsagePart {
   text: string
   tone: LiveUsageTone
+  /** Hover text, e.g. the account's email under its org name. */
+  title?: string
 }
 
 const TONE_CLASS: Record<LiveUsageTone, string> = {
+  neutral: 'text-foreground',
   success: 'text-success',
   warning: 'text-warning',
   danger: 'text-danger',
@@ -36,11 +39,16 @@ export function timeLeft(ms: number): string {
   return `${Math.floor(hours / 24)}d${hours % 24}h`
 }
 
-/** The header's status-line parts, e.g. `5h 81% left 2h19m`, `CTX 416k 41%`. A window that has
+/** The header's status-line parts, e.g. `WP-Stars`, `5h 81% left 2h19m`, `CTX 416k 41%`. A window that has
  *  already reset is dropped: its reading is stale and the next event replaces it. */
 export function liveUsageParts(usage: RunLiveUsage | undefined, now = Date.now()): LiveUsagePart[] {
   if (usage === undefined) return []
   const parts: LiveUsagePart[] = []
+  // The org tells accounts apart: one email can sign in to several Claude organizations.
+  const account = usage.account?.org ?? usage.account?.email
+  if (account !== undefined) {
+    parts.push({ text: account, tone: 'neutral', ...(usage.account?.email ? { title: usage.account.email } : {}) })
+  }
   for (const limit of usage.limits ?? []) {
     const resetsIn = Date.parse(limit.resetsAt) - now
     if (!(resetsIn > 0)) continue
@@ -69,7 +77,7 @@ export function LiveUsage({ usage, className }: { usage: RunLiveUsage | undefine
       {parts.map((part, index) => (
         <Fragment key={part.text}>
           {index > 0 ? ' · ' : null}
-          <span data-tone={part.tone} className={TONE_CLASS[part.tone]}>
+          <span data-tone={part.tone} title={part.title} className={TONE_CLASS[part.tone]}>
             {part.text}
           </span>
         </Fragment>

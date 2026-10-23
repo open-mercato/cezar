@@ -22,7 +22,7 @@ import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
-import { claudeUsageStatus } from './claude-usage-status.ts';
+import { claudeAccount, claudeUsageStatus } from './claude-usage-status.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
   claudeTurnStarted,
@@ -125,8 +125,10 @@ export class ClaudeCliRunner implements AgentRunner {
     const args = buildClaudeArgs(spec, process.env, mcpConfig?.path);
 
     let child: ChildProcessWithoutNullStreams;
+    let configDir: string | undefined;
     try {
       const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      configDir = env.CLAUDE_CONFIG_DIR || undefined;
       const [file, argv] = disclaimedCommand(this.bin, args, env);
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
@@ -290,7 +292,13 @@ export class ClaudeCliRunner implements AgentRunner {
           emitUi((state) => mapClaudeMessage(mappedMessage, state));
 
           const raw = mappedMessage as { type?: unknown; subtype?: unknown; model?: unknown };
-          if (raw.type === 'system' && raw.subtype === 'init' && typeof raw.model === 'string') initModel = raw.model;
+          const isInit = raw.type === 'system' && raw.subtype === 'init';
+          if (isInit && typeof raw.model === 'string') initModel = raw.model;
+          // The dry-run mock is signed in to nothing; never show the machine's real account there.
+          if (isInit && process.env.CEZ_DRY_RUN !== '1') {
+            const account = claudeAccount(configDir);
+            if (account !== undefined) onEvent?.({ type: 'usage-status', status: { account } });
+          }
           const status = claudeUsageStatus(mappedMessage, initModel);
           // Every content block repeats its message's usage, so only a changed reading goes out.
           const statusKey = status === undefined ? '' : JSON.stringify(status);

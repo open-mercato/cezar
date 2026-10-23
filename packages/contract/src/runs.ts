@@ -153,6 +153,7 @@ export type ProcessUsage = z.infer<typeof processUsageSchema>;
 /** Live session gauges for the run header (context fill, plan usage windows), the latest
  *  reading the agent reported. Claude only today; absent on every other run. */
 export const runLiveUsageSchema = z.object({
+  account: z.object({ org: z.string().optional(), email: z.string().optional() }).optional(),
   contextTokens: usageCounterSchema.optional(),
   contextWindow: usageCounterSchema.optional(),
   limits: z
