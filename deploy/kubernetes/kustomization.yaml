@@ -1,0 +1,6 @@
+# kubectl apply -k deploy/kubernetes  (create the two Secrets first — see secret.example.yaml)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - hub.yaml
+  - workers.yaml

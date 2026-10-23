@@ -43,6 +43,11 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+import { fleetConfigFromEnv } from './fleet/config.ts';
+import { runFleetCommand } from './fleet/fleet-cli.ts';
+import { startFleet } from './fleet/index.ts';
+import { probeProjectStatus } from './workspace/projects.ts';
+import type { ProjectContexts } from './server/project-context.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
@@ -64,6 +69,7 @@ Usage:
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
+  cezar fleet <submit|status|cancel>  hand work to a fleet of cezar instances (opt-in: CEZ_FLEET_*, docs/fleet.md)
   cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
@@ -118,6 +124,11 @@ async function main(): Promise<void> {
   // Local-only, like tracker-connections: `set` reads its value from stdin, never argv.
   if (process.argv[2] === 'secrets') {
     process.exitCode = await runSecretsCommand(process.argv.slice(3));
+    return;
+  }
+  // `cezar fleet …` talks to a fleet hub over its token-guarded listener; its flags (--repo …) are its own.
+  if (process.argv[2] === 'fleet') {
+    process.exitCode = await runFleetCommand(process.argv.slice(3));
     return;
   }
   // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
@@ -272,10 +283,13 @@ async function serveCommand(
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
+  let fleet: { stop(): void } | undefined;
+  let fleetContexts: ProjectContexts | undefined;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
     stopping = true;
+    fleet?.stop();
     store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
     void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
       .catch((error: unknown) => {
@@ -410,6 +424,7 @@ async function serveCommand(
     providerRuntimeAuth,
     workspaceEvents,
     selfUpdate,
+    onContexts: (contexts) => { fleetContexts = contexts; },
   }, port);
   httpServer.once('listening', () => manager.lifecycle.start());
   const url = `http://localhost:${port}`;
@@ -423,6 +438,25 @@ async function serveCommand(
   }
   if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
   console.log(`\n  cockpit → ${url}\n`);
+  // Fleet coordination is opt-in (CEZ_FLEET_*, spec 2026-10-21-fleet-coordination): nothing below
+  // runs, and no extra port opens, unless a role was asked for. A bad config degrades to a plain cezar.
+  const fleetConfig = fleetConfigFromEnv();
+  if (fleetConfig.role === 'invalid') console.error(`  ⚠ fleet disabled: ${fleetConfig.error}`);
+  else if (fleetConfig.role !== 'off') {
+    httpServer.once('listening', () => {
+      const contexts = fleetContexts;
+      if (!contexts) return;
+      fleet = startFleet({
+        config: fleetConfig,
+        version,
+        semaphore,
+        boot: { root: repoRoot, dataDir: join(repoRoot, '.ai/cezar'), store, manager },
+        context: (id) => contexts.context(id),
+        // A project a fleet job cloned shows up in open cockpits like one added from the UI.
+        onProjectAdded: (entry) => void probeProjectStatus(entry.root).then((probe) => workspaceEvents.emit('project-added', { project: { ...entry, ...probe } })),
+      });
+    });
+  }
   // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
   await printSkillsBanner(repoRoot);
   // The star ask's terminal line — same block, same two off switches.

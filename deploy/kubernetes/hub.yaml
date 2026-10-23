@@ -1,0 +1,75 @@
+# The fleet hub: owns the job queue (jobs.json on its PVC) and runs jobs itself like any node.
+# Exactly one replica — the queue has no HA (spec 2026-10-21-fleet-coordination); Recreate keeps two
+# pods from ever sharing the volume during a rollout.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cezar-hub-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cezar-hub
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: cezar-hub }
+  template:
+    metadata:
+      labels: { app: cezar-hub }
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: cezar
+          image: registry.example.com/cezar-fleet:latest # build deploy/kubernetes/Dockerfile
+          env:
+            - name: CEZ_FLEET_HUB
+              value: "1"
+            - name: CEZ_FLEET_TOKEN
+              valueFrom: { secretKeyRef: { name: cezar-fleet, key: token } }
+            - name: CEZ_FLEET_NODE_ID
+              value: hub # stable across restarts (a pod name changes on every rollout)
+          envFrom:
+            # GH_TOKEN, ANTHROPIC_API_KEY, ... Not optional: create the Secret first (secret.example.yaml), or the pod
+            # stays in CreateContainerConfigError instead of failing later at the first job.
+            - secretRef: { name: cezar-agent-credentials }
+          ports:
+            - name: fleet
+              containerPort: 4330
+          # The cockpit itself binds 127.0.0.1 inside the pod and is NOT exposed; only the fleet port is.
+          readinessProbe:
+            tcpSocket: { port: fleet }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: fleet }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { cpu: "2", memory: 4Gi }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: cezar-hub-data }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cezar-hub
+spec:
+  selector: { app: cezar-hub }
+  ports:
+    - name: fleet
+      port: 4330
+      targetPort: fleet
+# The fleet listener speaks plain HTTP. Keep this Service ClusterIP (workers and `cezar fleet` from
+# inside the cluster), or publish it only through an Ingress that terminates TLS.

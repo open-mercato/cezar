@@ -22,7 +22,7 @@ import { settingsReturnLocation } from '@/lib/settings-return'
 import { cn } from '@/lib/utils'
 import { ProjectGeneral } from './project-general'
 import { ProjectLocationNav } from './project-location'
-import { settingsSectionsByScope, type SettingsScope, type SettingsSection } from './registry'
+import { settingsSectionsByScope, type SettingsCapabilities, type SettingsScope, type SettingsSection } from './registry'
 
 /**
  * The unified, full-screen Settings frame (spec 2026-10-13-unified-settings).
@@ -59,7 +59,7 @@ function projectSettingsPath(projectId: string, sectionId?: SettingsSection['id'
   return sectionId === undefined ? base : `${base}/${sectionId}`
 }
 
-type CapabilityProps = Partial<Pick<Capabilities, 'singleProject'>>
+type CapabilityProps = SettingsCapabilities
 
 /** One row of the project tree. `missing` rows render inert (their panes all 409). */
 type TreeProject = Pick<ProjectListEntry, 'id' | 'name' | 'status'>

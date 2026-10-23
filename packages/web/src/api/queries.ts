@@ -57,7 +57,7 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
-  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus,
+  getTrackerAssociation, getTrackerConnection, getProjectSecrets, getWorkspaceSecrets, getE2eStatus, getFleetPanel,
   getTrackerCandidates,
   getTrackerItem,
   getTrackerItems,
@@ -300,6 +300,17 @@ export const TRACKER_STALE_TIME = 60_000
 export function useProjectSecrets() {
   return useQuery({ queryKey: queryKeys.secrets.list(), queryFn: ({ signal }) => getProjectSecrets({ signal }) })
 }
+/** Fleet nodes + jobs (spec 2026-10-21-fleet-coordination). Without `poll` it is only the gate that
+ *  decides whether Settings lists a Fleet section; the section itself refreshes every few seconds. */
+export function useFleetPanel(poll = false) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.fleet,
+    queryFn: ({ signal }) => getFleetPanel({ signal }),
+    staleTime: poll ? 2_000 : 60_000,
+    refetchInterval: poll ? 5_000 : false,
+    retry: false,
+  })
+}
 /** The user's own secrets (spec 2026-10-10-project-secrets-vault-options). Not scope-led: one machine, one set. */
 export function useWorkspaceSecrets() {
   return useQuery({ queryKey: workspaceQueryKeys.secrets, queryFn: ({ signal }) => getWorkspaceSecrets({ signal }) })
@@ -422,6 +433,8 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** `GET /api/v1/workspace/fleet` — the Settings → Fleet panel and the gate for its nav entry. */
+  fleet: ['workspace', 'fleet'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
   githubOwners: ['workspace', 'github-owners'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:

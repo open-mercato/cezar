@@ -16,6 +16,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  ServerIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -37,6 +38,7 @@ import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
 import { IntegrationsSection } from './integrations-section'
+import { FleetSection } from './fleet-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -73,6 +75,10 @@ export type SettingsSectionId =
   | 'integrations'
   | 'workspace-secrets'
   | 'privacy'
+  | 'fleet'
+
+/** What the section filter reads: server capabilities plus whether a fleet role is configured. */
+export type SettingsCapabilities = Partial<Pick<Capabilities, 'singleProject'>> & { fleet?: boolean }
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -230,6 +236,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'fleet',
+    title: 'Fleet',
+    description: 'Nodes and jobs of the cezar fleet this instance belongs to.',
+    icon: ServerIcon,
+    component: FleetSection,
+    scope: 'global',
+  },
+  {
     id: 'privacy',
     title: 'Privacy',
     description: 'Whether cezar shares usage data with its maintainers. Off unless you turn it on.',
@@ -246,20 +260,22 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: SettingsCapabilities,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      // Fleet is opt-in: no nav entry and no route unless this cezar has a fleet role.
+      !(section.id === 'fleet' && capabilities?.fleet !== true),
   )
 }
 
 /** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
  *  global sections as flat rows, the project sections under every project in the tree. */
 export function settingsSectionsByScope(
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: SettingsCapabilities,
 ): Record<SettingsScope, SettingsSection[]> {
   return {
     global: visibleSettingsSections('global', capabilities),

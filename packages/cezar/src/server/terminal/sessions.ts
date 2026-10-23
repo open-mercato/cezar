@@ -487,6 +487,8 @@ function commandArgs(shell: string, command: string): string[] {
 function terminalEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value;
+  // A shell (and anything pasted into it) never gets cezar's own credentials (fleet/alert tokens).
+  for (const key of Object.keys(env)) if (/^CEZ_.*_(TOKEN|SECRET)$/i.test(key)) delete env[key];
   env.TERM = 'xterm-256color';
   env.COLORTERM = 'truecolor';
   return env;
