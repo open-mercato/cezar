@@ -1,0 +1,37 @@
+ FAIL  |e2e| agents-dock.e2e.ts > the Agents dock against a replayed fan-out > a row opens the drill-down sheet with that agent’s output and nobody else’s
+ FAIL  |e2e| agents-dock.e2e.ts > the Agents dock against a replayed fan-out > collapses to a one-line odometer
+ FAIL  |e2e| agents-dock.e2e.ts > the Agents dock against a replayed fan-out > docks both sub-agents with odometer, type badge, activity and tool count
+ FAIL  |e2e| agents-dock.e2e.ts > the Agents dock against a replayed fan-out > the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill
+ FAIL  |e2e| composer.e2e.ts > the thread composer against a live waiting session > send delivers the reply — the transcript grows with the new user bubble over SSE
+ FAIL  |e2e| empty-states.e2e.ts > the 404 route > walks back to the tasks overview through the action
+ FAIL  |e2e| github.e2e.ts > the GitHub tab against the live dry-run server > opens an issue’s detail: meta, labels, markdown body, hand-to-agent dropdowns
+ FAIL  |e2e| new-task.e2e.ts > the full-screen /new against a live dry-run server > the pill row resolves: no source picked, runner pill iff >1 backend, base: main, ×1
+ FAIL  |e2e| project-groups.e2e.ts > the grouped multi-project sidebar > persists a collapse in THIS browser, so a reload keeps it and the workspace file does not
+ FAIL  |e2e| project-groups.e2e.ts > the grouped multi-project sidebar > reorders correctly with a group expanded — no uniform-height assumption
+ FAIL  |e2e| project-groups.e2e.ts > the grouped multi-project sidebar > scopes every group nav to its own project, and lights only the active one
+ FAIL  |e2e| queued-stack.e2e.ts > a queued run’s prompt is amendable (#472) > keeps the amendment when the run finally starts, and goes read-only
+ FAIL  |e2e| queued-stack.e2e.ts > a queued run’s prompt is amendable (#472) > removes the stacked message
+ FAIL  |e2e| quick-list.e2e.ts > empty quick-list
+ FAIL  |e2e| quick-list.e2e.ts [ quick-list.e2e.ts ]
+ FAIL  |e2e| quick-list.e2e.ts > task quick-list > expands the variant group into per-variant rows, and collapses it again
+ FAIL  |e2e| quick-list.e2e.ts > task quick-list > groups the runs under Needs you / Recent, in that order
+ FAIL  |e2e| quick-list.e2e.ts > tasks table overview > is the home: the table renders every active fixture run with its status
+ FAIL  |e2e| repo-git.e2e.ts > the repo view against the live dry-run server > /git/commits lists this repository’s real commits
+ FAIL  |e2e| review-gate.e2e.ts > the review gate against a live parked run > Send back delivers the notes into the SAME session — the transcript grows
+ FAIL  |e2e| settings-agents.e2e.ts > settings → agents against the live dry-run server > per-runner model preset: select writes the runner key, others untouched
+ FAIL  |e2e| settings-agents.e2e.ts > settings → agents against the live dry-run server > renders every knob, agent-agnostically named
+ FAIL  |e2e| settings-appearance.e2e.ts > settings → appearance against the live dry-run server > the shell renders the registry sections — hidden ones absent, active one marked
+ FAIL  |e2e| settings-monitoring.e2e.ts > global Resources monitoring controls > persists capacity and interval mode through a cold reload
+ FAIL  |e2e| settings-resources.e2e.ts > project settings → worktrees: retention against the live dry-run server > a cold load renders the persisted count — the field is a view of config.json
+ FAIL  |e2e| skill-search-ranking.e2e.ts > #484 skill search ranks the (almost-)exact match first > multi-keyword search still matches across name + description (#411 preserved)
+ FAIL  |e2e| skills-update.e2e.ts > automatic Open Mercato skills updates > shows the inherited global preference and persists an explicit override
+ FAIL  |e2e| task-thread.e2e.ts > task thread > renames the task inline and the PATCH persists server-side
+ FAIL  |e2e| task-thread.e2e.ts > task thread > renders the task and the follow-up as right-aligned user bubbles
+ FAIL  |e2e| task-thread.e2e.ts > task thread > tabs point at the routed Session/Changes/Files surfaces; the done run offers the closed-run actions
+ FAIL  |e2e| task-thread.e2e.ts > task thread > the header meta line reads workflow · branch chip · ± · tokens · cost off the record
+ FAIL  |e2e| task-thread.e2e.ts > task thread > the step rail maps the record steps to checklist rows over the progress bar
+ FAIL  |e2e| thread-drafts.e2e.ts > a half-written reply survives leaving the task > sending it clears the draft — the next visit starts empty
+ FAIL  |e2e| thread-scroll.e2e.ts > thread virtualization on a 1,000-row transcript > auto mode virtualizes past the threshold and keeps the DOM bounded
+ FAIL  |e2e| thread-scroll.e2e.ts > thread virtualization on a 1,000-row transcript > force-flat renders every row (the before measurement)
+ FAIL  |e2e| thread-scroll.e2e.ts > thread virtualization on a 1,000-row transcript > scrolling up shows the jump pill; clicking it returns to the tail
+ FAIL  |e2e| variants-compare.e2e.ts > the variants compare view against two settled dry runs > ✔ Pick A confirms, archives B with its worktree removed, and lands on A at the gate

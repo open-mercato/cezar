@@ -1,0 +1,37 @@
+agents-dock.e2e.ts > the Agents dock against a replayed fan-out > a row opens the drill-down sheet with that agent’s output and nobody else’s
+agents-dock.e2e.ts > the Agents dock against a replayed fan-out > collapses to a one-line odometer
+agents-dock.e2e.ts > the Agents dock against a replayed fan-out > docks both sub-agents with odometer, type badge, activity and tool count
+agents-dock.e2e.ts > the Agents dock against a replayed fan-out > the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill
+composer.e2e.ts > the thread composer against a live waiting session > send delivers the reply — the transcript grows with the new user bubble over SSE
+empty-states.e2e.ts > the 404 route > walks back to the tasks overview through the action
+github.e2e.ts > the GitHub tab against the live dry-run server > /github lists the real issues and PRs with honest counts
+github.e2e.ts > the GitHub tab against the live dry-run server > opens an issue’s detail: meta, labels, markdown body, hand-to-agent dropdowns
+github.e2e.ts > the GitHub tab against the live dry-run server > renders the activity thread: comments, a commit row with a CI glyph, and events
+project-groups.e2e.ts > the grouped multi-project sidebar > persists a collapse in THIS browser, so a reload keeps it and the workspace file does not
+project-groups.e2e.ts > the grouped multi-project sidebar > reorders correctly with a group expanded — no uniform-height assumption
+project-groups.e2e.ts > the grouped multi-project sidebar > scopes every group nav to its own project, and lights only the active one
+queued-stack.e2e.ts > a queued run’s prompt is amendable (#472) > keeps the amendment when the run finally starts, and goes read-only
+queued-stack.e2e.ts > a queued run’s prompt is amendable (#472) > removes the stacked message
+quick-list.e2e.ts > a row under width contention, in a column the user can widen > drags wider, brings the diff pair back, and remembers the width across a reload
+quick-list.e2e.ts > task quick-list > expands the variant group into per-variant rows, and collapses it again
+quick-list.e2e.ts > task quick-list > groups the runs under Needs you / Recent, in that order
+quick-list.e2e.ts > tasks table overview > is the home: the table renders every active fixture run with its status
+settings-agents.e2e.ts > settings → agents against the live dry-run server > per-runner model preset: select writes the runner key, others untouched
+settings-agents.e2e.ts > settings → agents against the live dry-run server > renders every knob, agent-agnostically named
+settings-appearance.e2e.ts > settings → appearance against the live dry-run server > the shell renders the registry sections — hidden ones absent, active one marked
+settings-monitoring.e2e.ts > global Resources monitoring controls > persists capacity and interval mode through a cold reload
+settings-resources.e2e.ts > project settings → worktrees: retention against the live dry-run server > a cold load renders the persisted count — the field is a view of config.json
+skill-search-ranking.e2e.ts > #484 skill search ranks the (almost-)exact match first > multi-keyword search still matches across name + description (#411 preserved)
+skills-update.e2e.ts > automatic Open Mercato skills updates > shows the inherited global preference and persists an explicit override
+smoke.e2e.ts > cockpit app shell > marks exactly one nav item active, following the route
+smoke.e2e.ts > cockpit app shell > renders the sidebar brand and the whole nav
+smoke.e2e.ts > mobile shell > nav drawer > opens over a backdrop, and covers the viewport top to bottom
+task-thread.e2e.ts > task thread > renders the task and the follow-up as right-aligned user bubbles
+task-thread.e2e.ts > task thread > tabs point at the routed Session/Changes/Files surfaces; the done run offers the closed-run actions
+task-thread.e2e.ts > task thread > the header meta line reads workflow · branch chip · ± · tokens · cost off the record
+task-thread.e2e.ts > task thread > the step rail maps the record steps to checklist rows over the progress bar
+thread-drafts.e2e.ts > a half-written reply survives leaving the task > sending it clears the draft — the next visit starts empty
+thread-scroll.e2e.ts > thread virtualization on a 1,000-row transcript > auto mode virtualizes past the threshold and keeps the DOM bounded
+thread-scroll.e2e.ts > thread virtualization on a 1,000-row transcript > force-flat renders every row (the before measurement)
+thread-scroll.e2e.ts > thread virtualization on a 1,000-row transcript > scrolling up shows the jump pill; clicking it returns to the tail
+variants-compare.e2e.ts > the variants compare view against two settled dry runs > ✔ Pick A confirms, archives B with its worktree removed, and lands on A at the gate

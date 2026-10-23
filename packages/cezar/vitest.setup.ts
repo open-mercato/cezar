@@ -29,6 +29,10 @@ if (!process.env.GIT_CONFIG_COUNT) {
 // a host sets `GH_CONFIG_DIR` itself.
 process.env.GH_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'cez-gh-config-'))
 delete process.env.GH_HOST
+// The same for `glab`'s configured hosts (`src/gitlab-hosts.ts`).
+process.env.GLAB_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'cez-glab-config-'))
+delete process.env.GITLAB_HOST
+delete process.env.GL_HOST
 
 // LLM task naming is on by default (`autoNamingActive`), so any case that starts a run on
 // a real backend spawned `claude -p "[cez-namer] Name this task."` on the developer's own

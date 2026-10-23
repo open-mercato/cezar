@@ -9,6 +9,8 @@ import {
   type ReactNode,
 } from 'react'
 
+import type { ForgeKind } from '@open-mercato/cezar-api-client'
+
 import {
   useReferenceStatuses,
   type ReferenceStatusEntry,
@@ -92,16 +94,50 @@ interface ReferenceStatusContextValue {
    *  alone, which spans the whole registry and whose chips each name their own; every other
    *  surface stands in exactly one project, where repeating it per chip would be noise. */
   projectId?: string
+  /** That project's forge, for the chips' tooltip copy (Step 5.10) — it travels with the
+   *  project id and for the same reason: the surface knows it, the chip four components down
+   *  reads it, and nothing in between should have to relay it. Absent on the global Tasks page,
+   *  whose chips name their own, and outside a provider — both read as GitHub (`forgeLabel`). */
+  forge?: ForgeKind | null
 }
 
 const ReferenceStatusContext = createContext<ReferenceStatusContextValue | null>(null)
 
+/**
+ * The forge the SCOPED project lives on, for every chip under the app shell (Step 5.10).
+ *
+ * Mounted once, by `AppShellContainer`, which already reads `useForgeKind()` for the document
+ * title — so the chips' copy costs no second registry subscriber. That mattered: subscribing to
+ * the registry from inside a routed view destabilizes the scope resolution the router does above
+ * it (`routes.tsx` `ProjectScopeRoute`, whose registry-and-health-both-failed path is asserted in
+ * `routes.test.tsx`), which is exactly the wrong place to pay for a tooltip's wording.
+ *
+ * A surface that spans several projects overrides it per provider (the sidebar's project groups)
+ * or per chip (the global Tasks page); outside the shell there is no scope and `forgeLabel` reads
+ * the absence as GitHub — the copy this cockpit always had.
+ */
+const ForgeScopeContext = createContext<ForgeKind | null | undefined>(undefined)
+
+export function ReferenceForgeScope({
+  forge,
+  children,
+}: {
+  forge: ForgeKind | null | undefined
+  children: ReactNode
+}) {
+  return <ForgeScopeContext.Provider value={forge}>{children}</ForgeScopeContext.Provider>
+}
+
 export function ReferenceStatusProvider({
   projectId,
+  forge,
   requests,
   children,
 }: {
   projectId?: string
+  /** The forge this surface's project lives on (`useForgeKind()`, or a per-project `forge` where
+   *  the surface paints several projects one provider each). Absent reads as GitHub. */
+  forge?: ForgeKind | null
   /** Every reference on this surface. Stable content matters, not identity — the hook keys off
    *  what is IN the list, so rebuilding it each render is free. */
   requests: readonly ReferenceStatusRequest[]
@@ -131,7 +167,7 @@ export function ReferenceStatusProvider({
   // hooks cannot be skipped, and an empty list fetches nothing.
   const own = useReferenceStatuses(registry ? EMPTY_REQUESTS : requests)
   const lookup = registry?.lookup ?? own
-  const value = useMemo(() => ({ lookup, projectId }), [lookup, projectId])
+  const value = useMemo(() => ({ lookup, projectId, forge }), [lookup, projectId, forge])
   return <ReferenceStatusContext.Provider value={value}>{children}</ReferenceStatusContext.Provider>
 }
 
@@ -155,6 +191,16 @@ export function useReferenceStatus(
   const owner = projectId ?? context?.projectId
   if (!context || !owner || number === undefined) return IDLE
   return context.lookup({ projectId: owner, kind, number })
+}
+
+/** The forge a chip that is not told its own should name (Step 5.10): its surface's, if that
+ *  surface named one, and otherwise the scoped project's. `undefined` means "not specified" at
+ *  both levels, so a surface can only be overridden BY naming a forge — including `null`, which
+ *  is a positive "this row's project has none" and reads as GitHub, exactly as no scope does. */
+export function useReferenceForge(): ForgeKind | null | undefined {
+  const surface = useContext(ReferenceStatusContext)?.forge
+  const scope = useContext(ForgeScopeContext)
+  return surface === undefined ? scope : surface
 }
 
 /** Read the shared status cache without starting another request. Consumers that paint more

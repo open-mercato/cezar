@@ -9,10 +9,11 @@ import {
   TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
-import type { TrackerKind } from '@open-mercato/cezar-api-client'
+import type { ForgeKind, TrackerKind } from '@open-mercato/cezar-api-client'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { GithubIcon } from '@/components/icons'
+import { forgeIcon, forgeLabel } from '@/lib/forge-display'
 
 export type NavItem = {
   /** Where the item navigates. Also its identity — `activeNavPath` returns this. */
@@ -132,4 +133,25 @@ export function activeNavPath(pathname: string): string | null {
 export function activeNavItem(pathname: string): NavItem | null {
   const to = activeNavPath(pathname)
   return NAV_ITEMS.find((item) => item.to === to) ?? null
+}
+
+/**
+ * The forge-gated item's label/icon for a resolved forge kind (spec 2026-08-10, Step 3.8):
+ * `NAV_ITEMS` stays a static table (its `label`/`icon` are the GitHub defaults every earlier
+ * server ever spoke of), and `visibleNavItems`'s gate is "is there a forge at all", not which
+ * one — so this is a small post-processing pass a caller applies once it knows the kind, rather
+ * than a second copy of the table per forge.
+ *
+ * A non-forge item, or an absent/GitHub kind, comes back as the exact same reference — not a
+ * clone — so a caller that never resolves a kind (or resolves `'github'`) sees byte-identical
+ * output to before this function existed.
+ */
+export function resolveForgeNavItem<T extends NavItem | null>(item: T, forgeKind?: ForgeKind): T {
+  if (!item || !item.forge || forgeKind !== 'gitlab') return item
+  return { ...item, label: forgeLabel(forgeKind), icon: forgeIcon(forgeKind) } as T
+}
+
+/** `resolveForgeNavItem`, applied to a whole list — the shell/palette/project-group's nav rows. */
+export function resolveForgeNavItems(items: NavItem[], forgeKind?: ForgeKind): NavItem[] {
+  return items.map((item) => resolveForgeNavItem(item, forgeKind))
 }

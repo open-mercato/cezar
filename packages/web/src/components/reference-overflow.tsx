@@ -1,5 +1,7 @@
 import * as React from 'react'
 
+import type { ForgeKind } from '@open-mercato/cezar-api-client'
+
 import { ReferenceChip } from '@/components/reference-chip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
@@ -33,6 +35,7 @@ export function ReferenceOverflow({
   taskTitle,
   hidden,
   projectId,
+  forge,
 }: {
   references: readonly OverflowReference[]
   taskTitle: string
@@ -40,6 +43,8 @@ export function ReferenceOverflow({
   /** The references' own project — named by a surface standing outside it (All tasks spans the
    *  registry). Omitted, the chips answer from the surrounding `ReferenceStatusProvider`. */
   projectId?: string
+  /** The references' own forge, for the chips' copy (Step 5.10); omitted, the surface's. */
+  forge?: ForgeKind | null
 }) {
   const [open, setOpen] = React.useState(false)
   // How it was opened decides whether focus moves into the list. A CLICK should hand the keyboard
@@ -111,6 +116,7 @@ export function ReferenceOverflow({
               reference={reference}
               taskTitle={taskTitle}
               projectId={projectId}
+              forge={forge}
             />
           ))}
         </span>

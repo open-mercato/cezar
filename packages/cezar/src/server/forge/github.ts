@@ -1,21 +1,42 @@
-import { execFile } from 'node:child_process';
-import { ghEnv } from '../../core/gh-env.ts';
-import { promisify } from 'node:util';
 import { z } from 'zod';
 import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
-import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
+import { taskRemotes } from '../../git-worktree.ts';
 import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
-import { baseDivergence } from '../git-changes.ts';
 import { getRepoInfo } from '../git.ts';
+import {
+  createSwrCache,
+  deleteKeysWithPrefix,
+  evictForgeProjectCaches,
+  execTool as execCliTool,
+  fetchBoundedPages,
+  isNotFound,
+  notFoundReason,
+  registerProjectCacheEvictor,
+  runCli,
+  type BoundedPages,
+  type ExecResult,
+} from './cli.ts';
+import { PUSH_TIMEOUT_MS, nothingToPropose, preparePublish, tail } from './draft-pr.ts';
+import {
+  FORGE_PR_DIFF_FILE_CAP,
+  FORGE_PR_DIFF_JSON_CAP,
+  FORGE_PR_PATCH_CAP,
+  TIMELINE_BUDGET_MS,
+  TIMELINE_MAX_PAGES,
+  TIMELINE_MIN_PAGE_MS,
+} from './limits.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
   ForgeAvailability,
+  ForgeChecksData,
+  ForgeChecksGlyph,
   ForgeComment,
   ForgeCommentsData,
   ForgeDriver,
   ForgeItem,
+  ForgeListData,
   ForgeMergeInput,
   ForgeMergeMethod,
   ForgeMergeResult,
@@ -26,6 +47,8 @@ import type {
   ForgePrDiffResult,
   ForgeRefKind,
   ForgeRecentCreatedData,
+  ForgeRefStatusData,
+  ForgeReferenceStatus,
   ForgeSearchData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
@@ -39,11 +62,16 @@ import type {
  * protected by BACKWARD_COMPATIBILITY.md — additive changes only.
  */
 
-const exec = promisify(execFile);
+/** The ENOENT hint every `{ available: false }` payload carries — byte-identical to the pre-#847
+ *  literal (BACKWARD_COMPATIBILITY.md §2). */
+const GH_NOT_FOUND_REASON = notFoundReason('gh');
 
-export const GH_PR_DIFF_FILE_CAP = 300;
-export const GH_PR_PATCH_CAP = 512 * 1024;
-export const GH_PR_DIFF_JSON_CAP = 4 * 1024 * 1024;
+// Forge-neutral now (spec 2026-08-10-forge-provider-adapters, Step 3.5, D4) — GitLab's driver
+// imports the neutral names from `./limits.ts` directly; these stay exported with the SAME values
+// so every existing importer of the GitHub-flavoured names keeps compiling unchanged.
+export const GH_PR_DIFF_FILE_CAP = FORGE_PR_DIFF_FILE_CAP;
+export const GH_PR_PATCH_CAP = FORGE_PR_PATCH_CAP;
+export const GH_PR_DIFF_JSON_CAP = FORGE_PR_DIFF_JSON_CAP;
 
 const ghPrFileSchema = z.object({
   filename: z.string().min(1),
@@ -149,9 +177,9 @@ export async function fetchGithubPrDiff(
     }
     return {
       available: false,
-      reason: /ENOENT/.test(message)
-        ? 'gh CLI not found — install it and run `gh auth login`'
-        : firstLine(message),
+      reason: isNotFound(err)
+        ? GH_NOT_FOUND_REASON
+        : whyLine(message),
     };
   }
 }
@@ -177,23 +205,9 @@ function mockGithubPrDiff(number: number): ForgePrDiffResult {
 /** One GitHub issue or pull request, flattened for the cockpit's GitHub tab. */
 export type GithubItem = ForgeItem;
 
-export interface GithubData {
-  available: boolean;
-  /** Human-readable hint when unavailable (`gh` missing, no remote, offline…). */
-  reason?: string;
-  /** owner/name, when known. */
-  repo?: string;
-  syncedAt?: string;
-  issues: GithubItem[];
-  prs: GithubItem[];
-  /** Repo-wide map of label name → 6-hex color (no `#`), so the UI can tint chips like GitHub
-   *  does. Additive (BACKWARD_COMPATIBILITY): absent on old payloads, chips fall back to neutral. */
-  labelColors?: Record<string, string>;
-  issuesTotal?: number;
-  prsTotal?: number;
-  issuesNextCursor?: string | null;
-  prsNextCursor?: string | null;
-}
+/** The `/api/github` payload — re-homed as the forge-neutral `ForgeListData` (spec
+ *  2026-08-10-forge-provider-adapters); the old name stays for existing imports. */
+export type GithubData = ForgeListData;
 
 // `gh … --json` output — validated at the boundary, extras stripped.
 const ghAuthor = z.object({ login: z.string() }).nullish();
@@ -345,13 +359,11 @@ async function enterpriseHost(repoRoot: string): Promise<string | null> {
 
 async function gh(repoRoot: string, args: string[], timeout = 15_000): Promise<string> {
   const host = await enterpriseHost(repoRoot);
-  const { stdout } = await exec('gh', args, {
-    cwd: repoRoot,
-    timeout,
+  return runCli('gh', repoRoot, args, {
+    timeoutMs: timeout,
     maxBuffer: 50 * 1024 * 1024,
-    env: { ...ghEnv(), ...(host ? { GH_HOST: host } : {}) },
+    ...(host ? { env: { GH_HOST: host } } : {}),
   });
-  return stdout;
 }
 
 // ---- comment counts (#499 Phase 1) -----------------------------------------
@@ -540,7 +552,8 @@ export async function fetchGithub(
   }
   try {
     const timeout = capped > 100 ? 30_000 : 15_000;
-    const ownerName = await resolveRepoHandle(repoRoot);
+    // Strict: a `gh` failure (an invalid token, say) must reach `reason` as what gh said.
+    const ownerName = await resolveRepoHandleStrict(repoRoot);
     if (!ownerName) return { available: false, reason: 'repository handle unavailable', issues: [], prs: [] };
     // `-f` sends every value as a String; the page sizes must go typed (`-F`) or GitHub rejects
     // the whole query with "Could not coerce value to Int".
@@ -615,24 +628,22 @@ export async function fetchGithub(
     return data;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const reason = /ENOENT/.test(message)
-      ? 'gh CLI not found — install it and run `gh auth login`'
+    const reason = isNotFound(err)
+      ? GH_NOT_FOUND_REASON
       : whyLine(ghStderr(err) ?? message);
     return { available: false, reason, issues: [], prs: [] };
   }
-}
-
-function firstLine(s: string): string {
-  return s.split('\n').find((l) => l.trim().length > 0)?.trim() ?? 'gh failed';
 }
 
 /**
  * The line of a `gh` failure that says WHY, not just that it failed (#969).
  *
  * Node prefixes a failed subprocess with `Command failed: <the whole argv>` and puts the forge's
- * own message on the lines after it. `firstLine` therefore reports the command back at the reader —
- * which is how "your token cannot read check runs" came out looking like a GitHub outage. This
+ * own message on the lines after it, so the first line only reports the command back at the reader —
+ * which is how "your token cannot read check runs" came out looking like a GitHub outage, and how an
+ * expired token read "Command failed: gh repo view --json nameWithOwner" on every forge route. This
  * skips that preamble whenever there is something behind it, and falls back to it when there isn't.
+ * Every `gh` failure reason in this driver goes through it.
  */
 /** gh's own stderr, when present: a multi-line `query=` argv makes the Node message unreadable. */
 function ghStderr(err: unknown): string | undefined {
@@ -837,9 +848,9 @@ export async function searchGithubItems(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const reason = /ENOENT/.test(message)
-      ? 'gh CLI not found — install it and run `gh auth login`'
-      : firstLine(message);
+    const reason = isNotFound(err)
+      ? GH_NOT_FOUND_REASON
+      : whyLine(message);
     return { available: false, reason, items: [] };
   }
 }
@@ -961,16 +972,10 @@ export const TIMELINE_EVENT_KINDS = new Set<ForgeTimelineEventKind>([
  *  thread with 150 comments and 100 events returns ~120 comments — silently removing contents
  *  from a §2-protected response. */
 export const TIMELINE_EVENT_CAP = 200;
-/** `gh api --paginate` has no page limit, so the timeline fetch hand-rolls a bounded loop. */
-export const TIMELINE_MAX_PAGES = 10;
-/** ONE budget shared by every page. `gh()`'s timeout is per invocation, so ten pages at the 15 s
- *  default would put the ceiling at 150 s — an order of magnitude worse than the single
- *  `--paginate` spawn this replaces. The loop tracks a deadline and passes what's left. */
-export const TIMELINE_BUDGET_MS = 15_000;
-/** Never spawn a page that cannot finish. A bare `remaining <= 0` guard catches only the exact
- *  boundary; the realistic case is 300 ms left, which spawns `gh` with a 300 ms timeout, throws,
- *  and is indistinguishable from a real endpoint failure. */
-export const TIMELINE_MIN_PAGE_MS = 2_000;
+/** The bounded-pagination budget (`TIMELINE_MAX_PAGES` / `TIMELINE_BUDGET_MS` /
+ *  `TIMELINE_MIN_PAGE_MS`) lives in `limits.ts`, shared with the GitLab adapter; re-exported here
+ *  under the names every existing importer already uses. */
+export { TIMELINE_BUDGET_MS, TIMELINE_MAX_PAGES, TIMELINE_MIN_PAGE_MS };
 /** `committed` messages are trimmed to their first line, then this. */
 const COMMIT_MESSAGE_CAP = 120;
 
@@ -1232,15 +1237,12 @@ export async function resolveRepoHandle(
   return handle;
 }
 
-/** What the bounded timeline page loop returns. `stoppedShort` means "the timeline may have more
- *  rows than we fetched" and has exactly three causes — the page cap, the budget floor, and a
- *  failure on page ≥ 2. All three shorten the `commented` stream the same way, so all three feed
- *  `truncated` and arm the comments top-up; the cause does not change the remedy. A short page is
- *  the one exit that does NOT set it: that is the timeline genuinely ending. */
-type TimelinePages = { rows: unknown[]; stoppedShort: boolean };
+/** What the bounded timeline page loop returns — see `BoundedPages` in `./cli.ts`. */
+type TimelinePages = BoundedPages;
 
 /**
- * Walk `/issues/{n}/timeline` under ONE shared time budget.
+ * Walk `/issues/{n}/timeline` under ONE shared time budget — the GitHub defaults over the
+ * forge-neutral `fetchBoundedPages` (`./cli.ts`).
  *
  * `gh api --paginate` is not used here: it pages *"until there are no more pages of results"* and
  * exposes no page-limit flag, so the only way to bound the walk is to hand-roll it. The cap that
@@ -1253,47 +1255,17 @@ type TimelinePages = { rows: unknown[]; stoppedShort: boolean };
  *
  * Exported for unit tests; `run` is injected so the loop is testable without shelling out.
  */
-export async function fetchTimelinePages(
+export function fetchTimelinePages(
   run: (page: number, timeoutMs: number) => Promise<string>,
   opts: { maxPages?: number; budgetMs?: number; minPageMs?: number; now?: () => number } = {},
 ): Promise<TimelinePages> {
-  const maxPages = opts.maxPages ?? TIMELINE_MAX_PAGES;
-  const budgetMs = opts.budgetMs ?? TIMELINE_BUDGET_MS;
-  const minPageMs = opts.minPageMs ?? TIMELINE_MIN_PAGE_MS;
-  const now = opts.now ?? Date.now;
-
-  const deadline = now() + budgetMs;
-  const rows: unknown[] = [];
-  let stoppedShort = false;
-  let page = 1;
-
-  for (; page <= maxPages; page++) {
-    const remaining = deadline - now();
-    // Never spawn a page that cannot finish. A bare `remaining <= 0` guard catches only the exact
-    // boundary; the realistic case is 300 ms left, which spawns gh with a 300 ms timeout, throws,
-    // and looks indistinguishable from a real endpoint failure.
-    if (remaining < minPageMs) {
-      stoppedShort = true;
-      break;
-    }
-    let parsed: unknown[];
-    try {
-      parsed = z.array(z.unknown()).parse(JSON.parse(await run(page, remaining)));
-    } catch (err) {
-      // Page 1 rethrows so the caller's inner catch can decide whether substitution helps —
-      // nothing was fetched, so there is nothing to lose. A failure on any later page keeps the
-      // pages already in hand: discarding nine good pages to re-fetch comments-only is strictly
-      // worse than what the loop already holds.
-      if (page === 1) throw err;
-      stoppedShort = true;
-      break;
-    }
-    rows.push(...parsed);
-    if (parsed.length < TIMELINE_PER_PAGE) break; // short page — the real end of the timeline
-  }
-  if (page > maxPages) stoppedShort = true; // fell out on the page cap
-
-  return { rows, stoppedShort };
+  return fetchBoundedPages(run, {
+    maxPages: opts.maxPages ?? TIMELINE_MAX_PAGES,
+    budgetMs: opts.budgetMs ?? TIMELINE_BUDGET_MS,
+    minPageMs: opts.minPageMs ?? TIMELINE_MIN_PAGE_MS,
+    pageSize: TIMELINE_PER_PAGE,
+    ...(opts.now ? { now: opts.now } : {}),
+  });
 }
 
 /** SHAs per rollup query. Aliases resolve independently, so a chunk that fails costs only its own
@@ -1366,12 +1338,12 @@ export async function fetchCommitChecks(
 // query. Mirrors `fetchCommentCounts` / `fetchCommitChecks`: aliased so N PRs cost one
 // subprocess, and any failure degrades to absent glyphs rather than failing the tab.
 
-/** The single enum a PR row's checks glyph renders (never `undefined` on the wire). */
-export type ChecksGlyph = 'passing' | 'failing' | 'pending' | null;
+/** Re-homed to `forge/types.ts` as `ForgeChecksGlyph` (spec 2026-08-10-forge-provider-adapters);
+ *  the old name stays as an alias so no importer changes. */
+export type ChecksGlyph = ForgeChecksGlyph;
 
-export type GithubChecksData =
-  | { available: true; checks: Record<number, ChecksGlyph> }
-  | { available: false; reason: string };
+/** Re-homed to `forge/types.ts` as `ForgeChecksData`; alias kept for existing importers. */
+export type GithubChecksData = ForgeChecksData;
 
 /** PR numbers per checks query. Aliases resolve independently (a failed chunk costs only its own
  *  glyphs); bounded so an unbounded number list can't blow the query size limit. Also the route's
@@ -1503,9 +1475,9 @@ export async function fetchGithubChecks(repoRoot: string, numbers: number[]): Pr
     const message = err instanceof Error ? err.message : String(err);
     return {
       available: false,
-      reason: /ENOENT/.test(message)
-        ? 'gh CLI not found — install it and run `gh auth login`'
-        : firstLine(message),
+      reason: isNotFound(err)
+        ? GH_NOT_FOUND_REASON
+        : whyLine(message),
     };
   }
 }
@@ -1527,35 +1499,12 @@ function mockGithubChecks(numbers: number[]): GithubChecksData {
 // Deliberately NOT `prMergeState`: that answers "may I press Merge on THIS one" and costs a
 // request (plus a merge-policy lookup) per PR. A table needs a glyph per row, not a merge gate.
 
-/** Where a referenced PR or issue stands. Mirrored by `referenceStatusSchema` in the contract —
- *  see there for why PR `closed` and issue `completed` are separate words. */
-export type ReferenceStatus =
-  | 'draft'
-  | 'review-required'
-  | 'changes-requested'
-  | 'checks-pending'
-  | 'checks-failing'
-  | 'ready'
-  | 'merged'
-  | 'closed'
-  | 'open'
-  | 'completed'
-  | 'not-planned';
+/** Re-homed to `forge/types.ts` as `ForgeReferenceStatus` (spec 2026-08-10-forge-provider-adapters);
+ *  alias kept for existing importers. */
+export type ReferenceStatus = ForgeReferenceStatus;
 
-export type GithubRefStatusData =
-  | {
-      available: true;
-      prs: Record<number, ReferenceStatus>;
-      issues: Record<number, ReferenceStatus>;
-      /** The OPEN pull requests among them that do not merge into their base — the second axis,
-       *  never folded into a status. Optional on the wire, and absent means "nothing is known"
-       *  rather than "no conflicts"; see `conflicts` in the contract. */
-      conflicts?: number[];
-      /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
-       *  contract for why the SERVER answers this. */
-      recheckAfterMs: number | null;
-    }
-  | { available: false; reason: string; recheckAfterMs: number | null };
+/** Re-homed to `forge/types.ts` as `ForgeRefStatusData`; alias kept for existing importers. */
+export type GithubRefStatusData = ForgeRefStatusData;
 
 /** Numbers per kind in one ref-status query — the same bound, and for the same reasons, as
  *  `GH_CHECKS_MAX`: aliases resolve independently, and the query size stays finite. Taken from the
@@ -1981,7 +1930,7 @@ export async function fetchRefStatuses(
       // A failed chunk costs only its own numbers; the rest still resolve. They are recorded as
       // FAILED rather than left absent, so nothing downstream mistakes them for "no such number".
       out.failed.push(...chunk);
-      out.reason ??= firstLine(err instanceof Error ? err.message : String(err));
+      out.reason ??= whyLine(err instanceof Error ? err.message : String(err));
     }
   }
   return out;
@@ -2327,9 +2276,9 @@ export async function fetchGithubRefStatus(
     const message = err instanceof Error ? err.message : String(err);
     return {
       available: false,
-      reason: /ENOENT/.test(message)
-        ? 'gh CLI not found — install it and run `gh auth login`'
-        : firstLine(message),
+      reason: isNotFound(err)
+        ? GH_NOT_FOUND_REASON
+        : whyLine(message),
       recheckAfterMs: REF_STATUS_RETRY_MS,
     };
   }
@@ -2446,8 +2395,7 @@ export async function fetchGithubComments(
       // Scoped INSIDE the existing outer catch on purpose: the outer handler's /404|not found/i
       // branch would otherwise turn a timeline 404 into an empty thread. ENOENT is the one failure
       // the fallback cannot rescue — nothing will work, and a second spawn fails identically.
-      const message = timelineErr instanceof Error ? timelineErr.message : String(timelineErr);
-      if (/ENOENT/.test(message)) throw timelineErr;
+      if (isNotFound(timelineErr)) throw timelineErr;
       // Every other endpoint-level failure substitutes the legacy comments call. It is a
       // substitution, not a retry — a different endpoint, which typically still answers. (A 403
       // attaches to the token rather than the endpoint, so it cannot succeed either; not
@@ -2513,11 +2461,11 @@ export async function fetchGithubComments(
     return data;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const reason = /ENOENT/.test(message)
-      ? 'gh CLI not found — install it and run `gh auth login`'
+    const reason = isNotFound(err)
+      ? GH_NOT_FOUND_REASON
       : /404|not found/i.test(message)
         ? 'not found on GitHub — it may be closed or deleted'
-        : firstLine(message);
+        : whyLine(message);
     return { available: false, reason, comments: [] };
   }
 }
@@ -2646,10 +2594,13 @@ function mockGithubComments(kind: 'issue' | 'pr'): ForgeCommentsData {
 // --draft --repo <base repo>`, all executed in the task worktree. Every failure
 // maps to a one-line human error — the GUI
 // shows it as a toast plus the manual `git merge <branch>` fallback. Never throws.
+// The forge-neutral prelude (autosave, dry run, remote, push, base, body) lives in
+// `./draft-pr.ts`, shared with the GitLab driver (spec 2026-08-10-forge-provider-adapters,
+// Step 4.1); `buildPrBody` stays re-exported here for existing importers.
+
+export { buildPrBody } from './draft-pr.ts';
 
 const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
-const PUSH_TIMEOUT_MS = 60_000;
-const PROGRESS_LINES_MAX = 10;
 const PR_CREATE_ATTEMPTS = 2;
 const PR_CREATE_RETRY_MS = 2_000;
 // GitHub answers these while a just-pushed head is not yet visible to the PR API, or under load.
@@ -2688,64 +2639,19 @@ async function existingPrUrl(worktree: string, repoArgs: string[]): Promise<stri
   return hit && PR_URL_RE.test(hit.url) ? hit.url : null;
 }
 
-const nothingToPropose = (branch: string, base: string | undefined) =>
-  `nothing to propose — ${branch} has no commits that ${base ?? 'the base branch'} does not already have`;
-
 export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome> {
-  const { run } = input;
-  const worktree = run.worktreePath;
-  const branch = run.branch;
-  if (!worktree || !branch) {
-    return { ok: false, error: 'this task has no worktree/branch to publish' };
-  }
-
-  // Final autosave: the branch must hold everything before it leaves the box.
-  // This is the LAST flush — unlike the turn-end and run-finalize ones there is
-  // no later autosave to pick the work up, so a refusal (conflicted tree) or a
-  // failed commit has to stop the publish instead of silently opening a PR from
-  // a branch that is missing the run's final state.
-  const saved = await autosaveCommit(worktree, 'pre-PR');
-  if (saved === 'refused') {
-    return {
-      ok: false,
-      error: 'worktree has unresolved merge conflicts — resolve them, then publish again',
-    };
-  }
-  if (saved === 'failed') {
-    return { ok: false, error: 'could not commit the final changes — check git status in the worktree' };
-  }
-
-  // DRY-RUN (CEZ_DRY_RUN=1): no push, no gh — simulate success with a fake PR
-  // URL so the whole review → PR flow is testable without GitHub.
-  if (process.env.CEZ_DRY_RUN === '1') {
+  const prelude = await preparePublish(input);
+  if (prelude.kind === 'error') return { ok: false, error: prelude.error };
+  if (prelude.kind === 'dryRun') {
     return { ok: true, url: 'https://github.com/open-mercato/demo/pull/777', dryRun: true };
   }
+  const { worktree, branch, base, title, body } = prelude;
 
-  // Push to the push remote, open the PR on the base remote the task forked from (#1383).
-  const remotes = await taskRemotes(worktree);
-  if (!remotes.push || !remotes.base) {
-    return { ok: false, error: 'no git remote — add one (git remote add origin <url>) or merge the branch locally' };
-  }
-
-  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
-  // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): gh would only refuse after the
-  // push, leaving a branch on the remote with nothing in it. Unknown base → let gh decide.
-  const { ahead } = await baseDivergence(worktree, run.baseBranch);
-  if (ahead === 0) return { ok: false, error: nothingToPropose(branch, prBase) };
-
-  const push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
-  if (!push.ok) {
-    return { ok: false, error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
-  }
-
-  const body = buildPrBody(input.handoffText, run.task);
-  // Target the branch the worktree forked from (config `baseBranch`) — without
-  // --base, gh aims at the repo default (main) even when work started on
-  // develop. `<remote>/x` normalizes to `x`; a raw sha (detached-HEAD fork
-  // point) can't be a PR base, so gh falls back to the default branch.
-  const baseArgs = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? ['--base', prBase] : [];
-  const repoArgs = await prRepoArgs(worktree, remotes.base, remotes.push, branch);
-  const createArgs = ['pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', run.title, '--body', body];
+  const baseArgs = base ? ['--base', base] : [];
+  const repoArgs = await prRepoArgs(worktree, prelude.remotes.base, prelude.remotes.push, branch);
+  const createArgs = [
+    'pr', 'create', ...(input.draft === false ? [] : ['--draft']), ...repoArgs, ...baseArgs, '--title', title, '--body', body,
+  ];
   let pr = await execTool(createArgs, worktree, 'gh', PUSH_TIMEOUT_MS);
   for (let attempt = 1; !pr.ok && !pr.notFound; attempt++) {
     // The PR may already exist — opened by the agent, an earlier click whose response was
@@ -2761,7 +2667,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
       return { ok: false, error: 'gh not found — install the GitHub CLI and run `gh auth login`, or merge the branch locally' };
     }
     if (/no commits between/i.test(pr.stderr)) {
-      return { ok: false, error: nothingToPropose(branch, prBase) };
+      return { ok: false, error: nothingToPropose(branch, base) };
     }
     const hint = /auth|log ?in|credential/i.test(pr.stderr) ? ' (try `gh auth login`)' : '';
     return { ok: false, error: `gh pr create failed — ${tail(pr.stderr) || 'unknown error'}${hint}` };
@@ -2880,46 +2786,6 @@ export async function prRepoArgs(worktree: string, baseRemote: string, pushRemot
 }
 
 /**
- * PR body from the handoff journal: the "## Goal" section (task text as
- * fallback) + the first ~10 lines of "## Progress log" (newest first) +
- * the cezar footer.
- */
-export function buildPrBody(handoffText: string, task: string): string {
-  const goal = section(handoffText, '## Goal') || task.trim() || '(given as attachments only)';
-  const progress = section(handoffText, '## Progress log')
-    .split('\n')
-    .filter((l) => l.trim())
-    .slice(0, PROGRESS_LINES_MAX)
-    .join('\n');
-  const parts = ['## Goal', '', goal];
-  if (progress) parts.push('', '## Progress log', '', progress);
-  parts.push('', '---', '', '🤖 made with cezar');
-  return parts.join('\n');
-}
-
-/** Text of one `## Header` section, up to the next `## ` header. */
-function section(text: string, header: string): string {
-  const start = text.indexOf(`${header}\n`);
-  if (start < 0) return '';
-  const rest = text.slice(start + header.length + 1);
-  const next = rest.indexOf('\n## ');
-  return (next >= 0 ? rest.slice(0, next) : rest).trim();
-}
-
-/** Last 3 stderr lines, pipe-joined — enough context, toast-sized. */
-function tail(stderr: string): string {
-  return stderr.trim().split('\n').slice(-3).join(' | ').slice(0, 300);
-}
-
-interface ExecResult {
-  ok: boolean;
-  stdout: string;
-  stderr: string;
-  /** True when the binary itself is missing (ENOENT). */
-  notFound: boolean;
-}
-
-/**
  * Post a comment on a PR through `gh` — the graph `github.pr-comment` node (spec
  * 2026-09-30-workflow-node-editor). Never throws: every failure is a one-line error, and
  * `CEZ_DRY_RUN=1` answers ok without touching the network.
@@ -2974,33 +2840,11 @@ export async function commentOnPr(
   return { ok: false, error: (res.stderr || res.stdout).trim().split('\n')[0] || 'gh pr comment failed' };
 }
 
+/** `cli.ts`'s `execTool`, with `gh` pinned to the repo's own host exactly like `gh()`: PR
+ *  create/comment/update must hit the repo's host, not gh's default (#1426). */
 async function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000): Promise<ExecResult> {
-  // Same pin as `gh()`: PR create/comment/update must hit the repo's own host, not gh's default.
   const ghHost = bin === 'gh' ? await enterpriseHost(cwd) : null;
-  return new Promise((resolve) => {
-    execFile(
-      bin,
-      args,
-      {
-        cwd,
-        timeout: timeoutMs,
-        maxBuffer: 4 * 1024 * 1024,
-        encoding: 'utf8',
-        // Nobody can answer a prompt here: git opens /dev/tty directly, so
-        // piped stdio is not enough to stop it. Without this a `git push` that
-        // cannot authenticate hangs for the whole timeout and surfaces as a
-        // blank one-minute stall instead of git's own "could not read Username".
-        env: { ...ghEnv(), GIT_TERMINAL_PROMPT: '0', ...(ghHost ? { GH_HOST: ghHost } : {}) },
-      },
-      (err, stdout, stderr) =>
-        resolve({
-          ok: !err,
-          stdout: stdout ?? '',
-          stderr: stderr ?? '',
-          notFound: err?.code === 'ENOENT',
-        }),
-    );
-  });
+  return execCliTool(args, cwd, bin, timeoutMs, ghHost ? { GH_HOST: ghHost } : undefined);
 }
 
 // ---- the driver -------------------------------------------------------------
@@ -3011,45 +2855,34 @@ async function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30
  *  in `GET /automations` (and `/api/health`'s `forge` field) whenever a DIFFERENT project's probe
  *  ran more recently — the toggle going dark for reasons that have nothing to do with that
  *  project's own GitHub reachability. */
-const detectCache = new Map<string, { at: number; result: ForgeAvailability }>();
-/** Probes in flight, keyed by repo root: a cold read joins the revalidation the previous line of
- *  the same request already started, rather than shelling out to `gh repo view` a second time. */
-const detectInflight = new Map<string, Promise<ForgeAvailability>>();
 const DETECT_CACHE_MAX = 50;
+const detectCache = createSwrCache<string, ForgeAvailability>({
+  ttlMs: CACHE_MS,
+  max: DETECT_CACHE_MAX,
+  load: probeGithub,
+});
 
 function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
   if (process.env.CEZ_DRY_RUN === '1') return Promise.resolve({ available: true });
-  const hit = detectCache.get(repoRoot);
-  if (hit && Date.now() - hit.at < CACHE_MS) return Promise.resolve(hit.result);
-  const inflight = detectInflight.get(repoRoot);
-  if (inflight) return inflight;
-  const probe = probeGithub(repoRoot).finally(() => detectInflight.delete(repoRoot));
-  detectInflight.set(repoRoot, probe);
-  return probe;
+  // Fresh hit, else join the probe already in flight for this root (a cold read joins the
+  // revalidation the previous line of the same request started), else probe.
+  return detectCache.get(repoRoot);
 }
 
+/** `gh repo view` as the availability probe. Never rejects — a failure is an answer to cache. */
 async function probeGithub(repoRoot: string): Promise<ForgeAvailability> {
-  let result: ForgeAvailability;
   try {
     await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner'], 5_000);
-    result = { available: true };
+    return { available: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    result = {
+    return {
       available: false,
-      reason: /ENOENT/.test(message)
-        ? 'gh CLI not found — install it and run `gh auth login`'
-        : firstLine(message),
+      reason: isNotFound(err)
+        ? GH_NOT_FOUND_REASON
+        : whyLine(message),
     };
   }
-  detectCache.delete(repoRoot); // re-insert so this key becomes the newest
-  detectCache.set(repoRoot, { at: Date.now(), result });
-  while (detectCache.size > DETECT_CACHE_MAX) {
-    const oldest = detectCache.keys().next().value;
-    if (oldest === undefined) break;
-    detectCache.delete(oldest);
-  }
-  return result;
 }
 
 /**
@@ -3066,12 +2899,8 @@ async function probeGithub(repoRoot: string): Promise<ForgeAvailability> {
  */
 export function detectGithubCached(repoRoot: string): ForgeAvailability | null {
   if (process.env.CEZ_DRY_RUN === '1') return { available: true };
-  const hit = detectCache.get(repoRoot);
-  const fresh = hit && Date.now() - hit.at < CACHE_MS;
-  if (!fresh) {
-    void detectGithub(repoRoot).catch(() => {}); // revalidate off the request path
-  }
-  return hit?.result ?? null; // last-known value while revalidating; null only until the first probe warms
+  // Last-known value while revalidating off the request path; null only until the first probe warms.
+  return detectCache.peek(repoRoot);
 }
 
 const mergeStateCache = new Map<string, { at: number; value: ForgePrMergeStateResult }>();
@@ -3338,21 +3167,39 @@ export async function fetchPrMergeState(
     mergeStateCache.set(key, { at: Date.now(), value });
     return value;
   } catch (error) {
-    // `whyLine`, not `firstLine`: a reason of "Command failed: gh pr view 353 --json …" is the
+    // `whyLine`, not the first line: a reason of "Command failed: gh pr view 353 --json …" is the
     // command echoed back, and reads like an outage. The line after it says what actually went
     // wrong (#969).
     return { available: false, reason: whyLine(error instanceof Error ? error.message : String(error)) };
   }
 }
 
-export function evictGithubProjectCaches(repoRoot: string): void {
+/**
+ * What a merge invalidates: the list, the merge states and the comment threads of `repoRoot`.
+ * Deliberately narrower than `evictForgeProjectCaches` — dropping the availability probe after
+ * every merge would cold-start `detectGithubCached` and blink the sidebar's GitHub item (#508).
+ * Each cache is cleared by its own key format: `root` (list), `root:n` (merge state),
+ * `root␀kind#n` (comments — the `root:` prefix used here before #847 never matched one).
+ */
+function evictMergedPrCaches(repoRoot: string): void {
   listCache.delete(repoRoot);
-  mergeStateCache.forEach((_value, key) => {
-    if (key.startsWith(`${repoRoot}:`)) mergeStateCache.delete(key);
-  });
-  commentsCache.forEach((_value, key) => {
-    if (key.startsWith(`${repoRoot}:`)) commentsCache.delete(key);
-  });
+  deleteKeysWithPrefix(mergeStateCache, `${repoRoot}:`);
+  deleteKeysWithPrefix(commentsCache, `${repoRoot}\0`);
+}
+
+// Everything GitHub caches per root, for `evictForgeProjectCaches` (project removed/re-pointed).
+registerProjectCacheEvictor((repoRoot) => {
+  evictMergedPrCaches(repoRoot);
+  deleteKeysWithPrefix(checksCache, `${repoRoot}\0`); // root␀n
+  deleteKeysWithPrefix(prDiffCache, `${repoRoot}\0`); // root␀n␀head
+  deleteKeysWithPrefix(refStatusCache, `${repoRoot}\0`); // root␀#n
+  repoHandleCache.delete(repoRoot);
+  detectCache.delete(repoRoot);
+});
+
+/** Pre-#847 name, kept as a delegate: drops every per-root forge cache for `repoRoot`. */
+export function evictGithubProjectCaches(repoRoot: string): void {
+  evictForgeProjectCaches(repoRoot);
 }
 
 async function mergePullRequest(
@@ -3378,7 +3225,7 @@ async function mergePullRequest(
       return { merged: false, status: 409, error: current.blockers[0]?.message ?? 'The pull request is not eligible to merge.', code: current.eligibility, current };
     }
     if (process.env.CEZ_DRY_RUN === '1') {
-      evictGithubProjectCaches(repoRoot);
+      evictMergedPrCaches(repoRoot);
       return { merged: true, number, url: current.url, method: input.method, mergeCommitSha: 'abcdef0123456789abcdef0123456789abcdef01' };
     }
     if (!repoRef) return { merged: false, status: 404, error: 'GitHub repository not found.' };
@@ -3388,10 +3235,10 @@ async function mergePullRequest(
     ]);
     const result = ghMergeResultSchema.parse(JSON.parse(out));
     if (!result.merged) return { merged: false, status: 409, error: result.message ?? 'GitHub refused the merge.', code: 'github-blocked', current };
-    evictGithubProjectCaches(repoRoot);
+    evictMergedPrCaches(repoRoot);
     return { merged: true, number, url: current.url, method: input.method, ...(result.sha ? { mergeCommitSha: result.sha } : {}) };
   } catch (error) {
-    const message = firstLine(error instanceof Error ? error.message : String(error));
+    const message = whyLine(error instanceof Error ? error.message : String(error));
     const status = /403|permission|forbidden/i.test(message) ? 403 : /404|not found/i.test(message) ? 404 : 502;
     return { merged: false, status, error: status === 403 ? 'GitHub permission denied.' : status === 404 ? 'Pull request or repository not found.' : 'GitHub could not complete the merge.' };
   } finally {
@@ -3403,11 +3250,15 @@ export function mergePreflightAllowed(current: ForgePrMergeState, overrideRules 
   return current.canMerge || (overrideRules && current.canOverride);
 }
 
-/** owner/repo parsed out of the origin remote — feeds `viewUrl`. */
+/** owner/repo/origin parsed out of the remote — feeds `viewUrl`. `origin` is optional so a caller
+ *  that only has owner/repo (e.g. an older test double) still compiles; a missing `origin` falls
+ *  back to `https://github.com` (Step 2.4, spec 2026-08-10-forge-provider-adapters) so nothing
+ *  else changes. */
 export interface GithubRepoRef {
   host?: string;
   owner: string;
   repo: string;
+  origin?: string;
 }
 
 const GH_PR_STATES: Record<string, ForgePrStatus['state']> = {
@@ -3429,9 +3280,25 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
 
     listPRs: async (opts) => (await fetchGithub(repoRoot, opts?.refresh, opts?.limit)).prs,
 
+    // The tab's whole payload, byte-identical to what `/api/github` has always served.
+    listAll: (opts) =>
+      fetchGithub(repoRoot, opts?.refresh, opts?.limit, {
+        ...(opts?.issuesCursor ? { issuesCursor: opts.issuesCursor } : {}),
+        ...(opts?.prsCursor ? { prsCursor: opts.prsCursor } : {}),
+      }),
+
     // The open-only list tier's escape hatch (#730) — this is the only path that can reach a
     // closed or merged item.
     searchItems: (kind, query, opts) => searchGithubItems(repoRoot, kind, query, opts?.limit),
+
+    // The conversation thread for one issue/PR (#499, #525) — byte-identical payload.
+    listComments: (kind, number, opts) => fetchGithubComments(repoRoot, kind, number, !!opts?.refresh),
+
+    // Lazy CI glyphs for on-screen PR rows (#664) — byte-identical payload.
+    listChecks: (numbers) => fetchGithubChecks(repoRoot, numbers),
+
+    // Batched status for a task table's PR/issue chips — byte-identical payload.
+    refStatus: (prs, issues) => fetchGithubRefStatus(repoRoot, { prs, issues }),
 
     prDiff: (number, opts) => fetchGithubPrDiff(repoRoot, number, opts?.refresh),
 
@@ -3462,7 +3329,9 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
 
     viewUrl: (kind: ForgeRefKind, ref: string | number): string | null => {
       if (!repoRef) return null;
-      const base = `https://${repoRef.host ?? GITHUB_COM}/${repoRef.owner}/${repoRef.repo}`;
+      // Built from the remote's own origin (spec 2026-08-10-forge-provider-adapters, Step 2.4) so
+      // a GitHub Enterprise host's links resolve to the enterprise host, not github.com.
+      const base = `${repoRef.origin ?? `https://${repoRef.host ?? GITHUB_COM}`}/${repoRef.owner}/${repoRef.repo}`;
       // Branch names may contain '/' — encode per segment, keep the slashes.
       const path = String(ref).split('/').map(encodeURIComponent).join('/');
       switch (kind) {
@@ -3519,6 +3388,6 @@ async function recentGithubCreated(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { available: false, items: [], reason: /ENOENT/.test(message)
-      ? 'gh CLI not found — install it and run `gh auth login`' : firstLine(message) };
+      ? 'gh CLI not found — install it and run `gh auth login`' : whyLine(message) };
   }
 }

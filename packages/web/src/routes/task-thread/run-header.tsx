@@ -189,7 +189,9 @@ function RunHeaderView({
   const [collapsed, setCollapsed] = useHeaderCollapsed()
 
   return (
-    <ReferenceStatusProvider projectId={refs.projectId} requests={refs.requests}>
+    // `forge` on the provider: this page stands in ONE project, so every chip inside it names that
+    // project's forge in its tooltip rather than GitHub (Step 5.10).
+    <ReferenceStatusProvider projectId={refs.projectId} forge={refs.forgeKind} requests={refs.requests}>
       <header
         data-slot="run-header"
         className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
@@ -771,7 +773,7 @@ function MetaRow({
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
-  const repoBase = useProjectRepoBase()
+  const { base: repoBase, kind: forgeKind } = useProjectRepoBase() ?? {}
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -783,7 +785,7 @@ function MetaRow({
   // the same statuses, the global Tasks table paints (see `prChipNodes`).
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
   parts.push(...prChipNodes(run, references))
-  const issueUrl = taskIssueUrl(run, repoBase)
+  const issueUrl = taskIssueUrl(run, repoBase, forgeKind)
   if (issueUrl && isHttpUrl(issueUrl)) {
     const number = prNumber(issueUrl)
     parts.push(
@@ -855,12 +857,12 @@ function MetaRow({
 export function useRunReferences(run: ApiRun) {
   // #526: a chip may be synthesized from a CEZ:PR / CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
-  const repoBase = useProjectRepoBase()
+  const { base: repoBase, kind: forgeKind } = useProjectRepoBase() ?? {}
   // At most a handful of references here, so this is a small batch rather than a table's — but it
   // goes through the same seam, which is what keeps the header's chip and the table's chip
   // answering identically for the same PR.
   const projectId = useReferenceProjectId()
-  const references = useMemo(() => taskReferences(run, repoBase), [run, repoBase])
+  const references = useMemo(() => taskReferences(run, repoBase, forgeKind), [run, repoBase, forgeKind])
   const requests = useMemo(
     () =>
       projectId === undefined
@@ -872,7 +874,7 @@ export function useRunReferences(run: ApiRun) {
           })),
     [references, projectId],
   )
-  return { projectId, references, requests }
+  return { projectId, forgeKind, references, requests }
 }
 
 /** The task's pull-request chips, one per PR, for the details row. */

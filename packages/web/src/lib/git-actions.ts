@@ -131,7 +131,7 @@ function createPrAction(state: GitActionState): GitAction {
     return disabled(`Create PR unavailable — ${NO_WORKTREE_REASON}`)
   }
   if (state.forge === null) {
-    return disabled('Create PR unavailable — no supported forge remote (GitHub) detected')
+    return disabled('Create PR unavailable — no supported forge remote (GitHub or GitLab) detected')
   }
   if (!state.forge.available) {
     return disabled(`Create PR unavailable — ${state.forge.reason ?? 'the forge is unreachable'}`)
@@ -247,7 +247,7 @@ export function trunkGitActionPolicy(state: TrunkGitActionState): GitAction | nu
   const pending = state.uncommitted > 0 || (state.unpushed ?? 0) > 0
   if (!pending) return update
   const prReason = state.forge === null
-    ? 'no supported forge remote (GitHub) detected'
+    ? 'no supported forge remote (GitHub or GitLab) detected'
     : state.forge.available === false
       ? (state.forge.reason ?? 'the forge is unreachable')
       : state.agentBlocked

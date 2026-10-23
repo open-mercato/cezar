@@ -14,9 +14,10 @@ import {
 } from 'lucide-react'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import type * as React from 'react'
-import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
+import type { ForgeKind, ReferenceStatus } from '@open-mercato/cezar-api-client'
 
-import { useReferenceStatus } from '@/components/reference-status'
+import { useReferenceForge, useReferenceStatus } from '@/components/reference-status'
+import { forgeLabel } from '@/lib/forge-display'
 import type { ReferenceStatusEntry } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -94,6 +95,7 @@ export function ReferenceChip({
   conflicting: explicitConflicting,
   conflictAction,
   projectId,
+  forge,
   className,
   compact = false,
 }: {
@@ -113,6 +115,12 @@ export function ReferenceChip({
   /** Only the global Tasks page needs this: its rows come from different projects, and two of
    *  them may each have a #42. Elsewhere the provider's own project is right. */
   projectId?: string
+  /** Which forge this reference lives on, for the tooltip's copy (Step 5.10): a GitLab task's
+   *  chip must not say "Checking GitHub…". Normally left unset — the chip reads its surface's
+   *  forge from `ReferenceStatusProvider`, the same seam it reads its status through. Named per
+   *  chip by a CROSS-PROJECT list (the global Tasks page), whose rows each live on their own
+   *  project's forge. Absent or unrecognized reads as GitHub, today's text (`forgeLabel`). */
+  forge?: ForgeKind | null
   className?: string
   /**
    * The narrow sidebar row (#788, option C): the number ALONE — `#402` — with no `Issue ` word
@@ -130,6 +138,9 @@ export function ReferenceChip({
   // surface's provider answers. Outside a provider neither exists and this is the chip the cockpit
   // has always painted.
   const entry = useReferenceStatus(kind, number, projectId)
+  // An explicit `forge` wins over the surface's, exactly as `projectId` does above — including
+  // an explicit `null`, which says "this row's project has no forge" rather than "not specified".
+  const surfaceForge = useReferenceForge()
   const status = explicitStatus ?? entry.status
   // A status this bundle has never heard of resolves to `undefined` here and is then treated
   // exactly like no status at all — the neutral chip, no glyph, no claim in the accessible name.
@@ -150,7 +161,12 @@ export function ReferenceChip({
     className,
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.
-  const tooltip = statusTooltip(entry, presentation, conflicting ? statusPresentation : undefined)
+  const tooltip = statusTooltip(
+    entry,
+    presentation,
+    forgeLabel(forge === undefined ? surfaceForge : forge),
+    conflicting ? statusPresentation : undefined,
+  )
   const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
   const kindWord = kind === 'PR' ? 'pull request' : 'issue'
   // The accessible name carries the status too — a screen reader gets what the color says.
@@ -407,7 +423,12 @@ function ReferenceChipCard({
  * A chip with nothing to show used to say nothing at all, which made every one of these look like
  * the same shrug. They are not: "GitHub is unreachable" is a thing to go and fix, "no such number
  * in this repository" usually means the reference points at another repo, and "checking" is over
- * in a moment. `null` — and only `null` — leaves the chip with its plain URL tooltip, which is the
+ * in a moment.
+ *
+ * `forge` is that forge's display name (`forgeLabel`, Step 5.10) — every one of those sentences
+ * names the forge the reference actually lives on, so a GitLab task's chip no longer blames
+ * GitHub for a `glab` that could not be reached. An absent kind yields "GitHub", which is the
+ * text this function always produced. `null` — and only `null` — leaves the chip with its plain URL tooltip, which is the
  * honest answer when nothing has asked about it at all.
  *
  * Takes the PRESENTATION rather than the status, so a value this bundle cannot describe falls
@@ -421,6 +442,7 @@ function ReferenceChipCard({
 function statusTooltip(
   entry: ReferenceStatusEntry,
   presentation: ReferenceStatusPresentation | undefined,
+  forge: string,
   overridden?: ReferenceStatusPresentation,
 ): { headline: string; detail: string; also?: string } | null {
   if (presentation) {
@@ -431,7 +453,7 @@ function statusTooltip(
     if (entry.state === 'unavailable') {
       return {
         headline: label,
-        detail: `last known — GitHub is unreachable${entry.reason ? ` (${entry.reason})` : ''}`,
+        detail: `last known — ${forge} is unreachable${entry.reason ? ` (${entry.reason})` : ''}`,
         ...(also ? { also } : {}),
       }
     }
@@ -439,16 +461,16 @@ function statusTooltip(
   }
   switch (entry.state) {
     case 'loading':
-      return { headline: 'Checking GitHub…', detail: 'the status of this reference is on its way' }
+      return { headline: `Checking ${forge}…`, detail: 'the status of this reference is on its way' }
     case 'unavailable':
       return {
         headline: 'Status unavailable',
-        detail: entry.reason ?? 'GitHub could not be reached — the chip says nothing rather than guessing',
+        detail: entry.reason ?? `${forge} could not be reached — the chip says nothing rather than guessing`,
       }
     case 'unknown':
       return {
         headline: 'Not found on this repository',
-        detail: 'GitHub has no such number here — the reference may point at another repo',
+        detail: `${forge} has no such number here — the reference may point at another repo`,
       }
     default:
       return null
