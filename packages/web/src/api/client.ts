@@ -133,6 +133,8 @@ import type {
   DesignProxyResponse,
   SetTelemetryConsentInput,
   TelemetryConsentPayload,
+  SecurityLanStatus,
+  SetSecurityLanInput,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -497,6 +499,16 @@ export async function getTelemetryConsent(opts?: ReadOptions): Promise<Telemetry
 
 export async function putTelemetryConsent(input: SetTelemetryConsentInput): Promise<TelemetryConsentPayload> {
   return unwrap(await cez.api.v1.telemetry.consent.$put({ json: input }), '/telemetry/consent')
+}
+
+/** LAN access settings (`GET /api/v1/security/lan`), behind Settings → Security. */
+export async function getSecurityLan(opts?: ReadOptions): Promise<SecurityLanStatus> {
+  return unwrap(await cez.api.v1.security.lan.$get({}, init(opts)), '/security/lan')
+}
+
+/** Configure LAN access (`PUT /api/v1/security/lan`). */
+export async function putSecurityLan(input: SetSecurityLanInput): Promise<SecurityLanStatus> {
+  return unwrap(await cez.api.v1.security.lan.$put({ json: input }), '/security/lan')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).

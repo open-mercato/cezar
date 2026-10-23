@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { isLoopbackHost, isLoopbackHostHeader, lanClientScope, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 
 /**
  * `resolveCapabilities` takes its env as a parameter, so these drive it
@@ -320,5 +320,20 @@ describe('resolveCapabilities — usage presentation', () => {
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('LAN client scope (spec 2026-10-20-lan-basic-auth-https)', () => {
+  it('answers a LAN request as hosted and leaves every other caller local', async () => {
+    const inside = await lanClientScope.run(true, async () => {
+      await Promise.resolve(); // the scope must survive an await, as a handler's does
+      return resolveCapabilities({});
+    });
+    expect(inside).toMatchObject({ localHandoff: false, terminal: false, designMode: false });
+    expect(resolveCapabilities({})).toMatchObject({ localHandoff: true, terminal: true, designMode: true });
+  });
+
+  it('keeps the CEZ_TERMINAL=1 opt-in a hosted cockpit already has', () => {
+    expect(lanClientScope.run(true, () => resolveCapabilities({ CEZ_TERMINAL: '1' }).terminal)).toBe(true);
   });
 });
