@@ -79,7 +79,8 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
 
 const providerForExecutable = (executable: string): ProviderId => {
   if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
-  if (executable === 'agent') return 'cursor';
+  // `resolveCursorAgentBin` prefers `cursor-agent` when the host has it on PATH (cursor-bin.ts).
+  if (executable === 'agent' || executable.endsWith('cursor-agent')) return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
