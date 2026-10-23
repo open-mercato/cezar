@@ -47,13 +47,6 @@ async function makeFixture(version: string, tags: string[]): Promise<string> {
       },
     }),
   );
-<<<<<<< HEAD
-  await writeFile(join(root, 'CHANGELOG.md'), `# 0.15.2 (2026-10-14)\n\n- older\n`);
-  const git = (...args: string[]) => execFile('git', args, { cwd: root });
-  await git('init', '-q', '-b', 'main');
-  await git('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
-  for (const tag of tags) await git('tag', tag);
-=======
   await writeFile(join(root, 'CHANGELOG.md'), `# ${version} (2026-10-14)\n\n- older\n`);
   await writeFile(join(root, 'registry.json'), json({}));
   await git(root, 'init', '-q', '-b', 'main');
@@ -61,7 +54,6 @@ async function makeFixture(version: string, tags: string[]): Promise<string> {
   await git(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init');
   // A global `tag.gpgSign=true` turns a lightweight tag into a signed one that needs a message.
   for (const tag of tags) await git(root, '-c', 'tag.gpgSign=false', 'tag', tag);
->>>>>>> ce0f4b6 (ci(release): GitHub App token, tag-triggered publish, resume-safe release lines (#1640))
   return root;
 }
 
