@@ -871,7 +871,7 @@ export async function worktreeShortstat(
  */
 export async function pruneOrphans(
   repoRoot: string,
-  validIds: ReadonlySet<string>,
+  validIds: Pick<ReadonlySet<string>, 'has'>,
   canRemove?: (runId: string) => Promise<boolean>,
 ): Promise<string[]> {
   await git(repoRoot, ['worktree', 'prune']);

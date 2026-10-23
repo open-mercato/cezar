@@ -1619,12 +1619,28 @@ export class RunStore extends EventEmitter {
       return;
     }
     // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    if (this.restoreDataDir()) {
+      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      return;
+    }
+    // Nothing reaches disk in a read-only checkout, so the transcript lives here for the
+    // session and `readEvents` serves it back; without this the replay would be empty.
+    const buffered = this.memoryEvents.get(runId);
+    if (buffered) buffered.push(event);
+    else this.memoryEvents.set(runId, [event]);
+  }
+
+  private restoreDataDir(): boolean {
     try {
       mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
-      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      for (const [id, events] of this.memoryEvents) {
+        appendFileSync(this.eventsPath(id), events.map((e) => `${JSON.stringify(e)}\n`).join(''), 'utf8');
+        this.memoryEvents.delete(id);
+      }
       this.eventsUnwritable = false;
+      return true;
     } catch {
-      // live-only — the SSE stream still carries it
+      return false;
     }
   }
 
@@ -1888,6 +1904,9 @@ export class RunStore extends EventEmitter {
 
   private readonly runSecrets = new Map<string, readonly string[]>();
 
+  /** Transcript buffered for this session only while the data dir is read-only. */
+  private readonly memoryEvents = new Map<string, RunEvent[]>();
+
   /** Memory only: register before spawn; retain through the final event drain. */
   registerRunSecrets(runId: string, values: readonly string[]): void {
     if (values.length === 0) return;
@@ -1911,6 +1930,7 @@ export class RunStore extends EventEmitter {
   }
 
   readEvents(runId: string): RunEvent[] {
+    if (this.eventsUnwritable) return this.memoryEvents.get(runId) ?? [];
     try {
       const raw = readFileSync(this.eventsPath(runId), 'utf8');
       return raw
@@ -1943,6 +1963,7 @@ export class RunStore extends EventEmitter {
         // best effort — the index is authoritative
       }
       this.seqs.delete(id);
+      this.memoryEvents.delete(id);
       this.scheduleSave();
       this.emit('deleted', id);
     }
@@ -2092,6 +2113,8 @@ export class RunStore extends EventEmitter {
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
+      this.seqs.delete(stale.id);
+      this.memoryEvents.delete(stale.id);
       try {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
@@ -2115,6 +2138,10 @@ export class RunStore extends EventEmitter {
   }
 
   private saveNow(throwOnError = false, pretty = false): void {
+    if (this.eventsUnwritable && !this.restoreDataDir()) {
+      if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
+      return;
+    }
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = join(this.dataDir, 'runs', `.index-${process.pid}-${randomUUID()}.tmp`);
     let release: (() => void) | undefined;

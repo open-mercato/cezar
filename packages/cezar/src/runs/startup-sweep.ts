@@ -1,0 +1,71 @@
+import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
+import { pruneOrphans } from '../git-worktree.ts';
+import { reclaimWorktrees } from './retention.ts';
+import type { RunStore } from './store.ts';
+import type { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
+
+/**
+ * Boot-time worktree sweep for one project: orphan pruning (spec 006) and count-based
+ * retention (#483). Best-effort, never throws. It may run while the cockpit already serves, so
+ * a run created mid-sweep must count as live: this process's runs are read from the store per
+ * entry, and the persisted index is consulted for runs another cockpit owns. Memory alone is not
+ * enough — a second cockpit's live run has no record in this process's map, and pruning its
+ * worktree would delete a running task's tree and its `cez/<id8>` branch. With `lifecycle`, a
+ * worktree whose removal must run lifecycle scripts goes through the coordinator instead.
+ */
+export async function sweepStartupWorktrees(
+  repoRoot: string,
+  store: RunStore,
+  lifecycle?: Pick<WorktreeLifecycleCoordinator, 'allowOrphanPrune' | 'requiresGate' | 'reclaim'>,
+): Promise<{ orphans: string[]; reclaimed: string[] }> {
+  let persisted: ReadonlySet<string>;
+  try {
+    persisted = new Set(store.listPersistedRuns().map((run) => run.id));
+  } catch {
+    // Unreadable index: fall back to in-memory membership rather than risk deleting live work.
+    persisted = new Set(store.listRuns().map((run) => run.id));
+  }
+  const orphans = await pruneOrphans(repoRoot, {
+    has: (id) => store.getRun(id) !== undefined || persisted.has(id),
+  }, lifecycle && ((id) => lifecycle.allowOrphanPrune(id))).catch(
+    () => [] as string[],
+  );
+  // Reclaims finished worktrees beyond the keep-limit (directory only — `cez/<id8>` branch kept,
+  // so recoverable).
+  const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
+  const reclaimed = await reclaimWorktrees(repoRoot, store, keep, { lifecycle }).catch(() => [] as string[]);
+  return { orphans, reclaimed };
+}
+
+export interface BootSteps<T> {
+  /** Settles before `serve` starts: no request may reach a run the manager does not own yet. */
+  recover: () => Promise<void>;
+  /** Starts the listener; `listening` resolves once it is bound. */
+  serve: () => Promise<T & { listening: Promise<void> }>;
+  /** The disk-only worktree sweep, started after the listener and never awaited by it. */
+  sweep?: () => Promise<void>;
+  startLifecycle: () => void;
+  stopping: () => boolean;
+}
+
+/**
+ * The cockpit's boot order: recovery, then the listener, then the worktree sweep in the
+ * background, then the lifecycle coordinator once the sweep has settled — fulfilled or not —
+ * so its orphan pass and the sweep's `pruneOrphans` never act on the same worktree at once.
+ * Lifecycle-operation recovery therefore waits for the sweep.
+ */
+export async function bootInOrder<T>(steps: BootSteps<T>): Promise<{ served: T; sweep?: Promise<void> }> {
+  await steps.recover();
+  const served = await steps.serve();
+  if (steps.stopping()) return { served };
+  const { sweep: runSweep } = steps;
+  const sweep = Promise.resolve()
+    .then(() => runSweep?.())
+    .then(() => undefined, () => undefined);
+  void sweep
+    .then(() => served.listening)
+    .then(() => {
+      if (!steps.stopping()) steps.startLifecycle();
+    });
+  return { served, sweep };
+}
