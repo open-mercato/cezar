@@ -39,7 +39,7 @@ import {
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
-import { SidebarDrawer, SidebarFrame, useDesktopShell, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
+import { SidebarDrawer, SidebarFoldButton, SidebarFrame, SidebarRail, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -389,16 +389,34 @@ type NavProps = {
   singleProject: boolean
 }
 
-/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content. */
+/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
+ *  foldable into a rail. Focus follows a fold the user makes, so the keyboard is never dropped. */
 const Sidebar = React.memo(function Sidebar({
   width,
   onWidthChange,
   desktop = null,
   ...props
 }: NavProps & SidebarResize & { desktop?: 'macos' | 'windows' | 'linux' | null }) {
+  const [folded, setFolded] = useSidebarFolded()
+  const [toggled, setToggled] = React.useState(false)
+  const foldButton = React.useRef<HTMLButtonElement>(null)
+  React.useEffect(() => {
+    if (toggled && !folded) foldButton.current?.focus()
+  }, [toggled, folded])
+  const toggle = (next: boolean) => {
+    setToggled(true)
+    setFolded(next)
+  }
+  if (folded) {
+    return <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled} />
+  }
   return (
     <SidebarFrame width={width} onWidthChange={onWidthChange} titlebarInset={desktop === 'macos'}>
-      <SidebarContent {...props} compactHeader={desktop === 'macos'} />
+      <SidebarContent
+        {...props}
+        compactHeader={desktop === 'macos'}
+        headerAction={<SidebarFoldButton ref={foldButton} onFold={() => toggle(true)} />}
+      />
     </SidebarFrame>
   )
 })

@@ -654,6 +654,29 @@ describe('AppShell', () => {
 
   })
 
+  describe('foldable sidebar', () => {
+    it('folds into a rail, remembers it, and unfolds with focus on the fold button', () => {
+      renderShell()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      const unfold = screen.getByRole('button', { name: 'Show sidebar' })
+      expect(document.activeElement).toBe(unfold)
+      expect(localStorage.getItem('cez-sidebar-folded')).toBe('1')
+
+      fireEvent.click(unfold)
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    })
+
+    it('loads folded without stealing focus', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell()
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Show sidebar' }))
+    })
+  })
+
   /** The resizable desktop column (#788, option C). jsdom has no layout engine, so these assert
    *  the state machine and the accessibility contract; the drag itself is exercised for real in
    *  `e2e/sidebar-resize.e2e.ts`. */

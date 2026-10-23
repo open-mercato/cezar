@@ -1,4 +1,4 @@
-import { XIcon } from 'lucide-react'
+import { PanelLeftCloseIcon, PanelLeftOpenIcon, XIcon } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
 
@@ -103,6 +103,110 @@ function setSidebarWidth(next: number): void {
 export function useSidebarWidth(): [number, (width: number) => void] {
   const width = React.useSyncExternalStore(subscribeSidebarWidth, readSidebarWidth, readSidebarWidth)
   return [width, setSidebarWidth]
+}
+
+/** Whether the desktop column is folded into its rail. Browser-local, like the width (#788). */
+export const SIDEBAR_FOLDED_STORAGE_KEY = 'cez-sidebar-folded'
+
+const foldedListeners = new Set<() => void>()
+let unsavedFolded: boolean | null = null
+
+function readStoredFolded(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_FOLDED_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function readSidebarFolded(): boolean {
+  return unsavedFolded ?? readStoredFolded()
+}
+
+function subscribeSidebarFolded(listener: () => void): () => void {
+  foldedListeners.add(listener)
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== SIDEBAR_FOLDED_STORAGE_KEY) return
+    unsavedFolded = null
+    listener()
+  }
+  window.addEventListener('storage', onStorage)
+  return () => {
+    foldedListeners.delete(listener)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+function setSidebarFolded(folded: boolean): void {
+  try {
+    if (folded) localStorage.setItem(SIDEBAR_FOLDED_STORAGE_KEY, '1')
+    else localStorage.removeItem(SIDEBAR_FOLDED_STORAGE_KEY)
+  } catch {
+    // Private mode / storage disabled: the fold still applies for this page.
+  }
+  unsavedFolded = readStoredFolded() === folded ? null : folded
+  for (const listener of foldedListeners) listener()
+}
+
+export function useSidebarFolded(): [boolean, (folded: boolean) => void] {
+  const folded = React.useSyncExternalStore(subscribeSidebarFolded, readSidebarFolded, readSidebarFolded)
+  return [folded, setSidebarFolded]
+}
+
+/** The header button that folds the desktop column away. */
+export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: React.Ref<HTMLButtonElement> }) {
+  return (
+    <Button
+      ref={ref}
+      variant="ghost"
+      size="icon-sm"
+      data-slot="sidebar-fold"
+      aria-label="Hide sidebar"
+      title="Hide sidebar"
+      onClick={onFold}
+      className="-mr-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+    >
+      <PanelLeftCloseIcon className="size-4" aria-hidden="true" />
+    </Button>
+  )
+}
+
+/**
+ * What a folded column leaves behind, from `md` up: a narrow rail holding the button that brings
+ * it back. A rail rather than a floating button, so nothing overlaps the routed views' sticky
+ * headers. `autoFocus` only after a fold the user just made, never on a page that loads folded.
+ */
+export function SidebarRail({
+  onUnfold,
+  titlebarInset = false,
+  autoFocus = false,
+}: {
+  onUnfold: () => void
+  titlebarInset?: boolean
+  autoFocus?: boolean
+}) {
+  return (
+    <aside
+      data-slot="sidebar-rail"
+      className={cn(
+        'hidden w-12 shrink-0 flex-col items-center border-r border-border bg-sidebar pt-[max(env(safe-area-inset-top),0.75rem)] md:flex',
+        titlebarInset && 'pt-[34px]',
+      )}
+    >
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        data-slot="sidebar-unfold"
+        aria-label="Show sidebar"
+        title="Show sidebar"
+        autoFocus={autoFocus}
+        onClick={onUnfold}
+        className="text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <PanelLeftOpenIcon className="size-4" aria-hidden="true" />
+      </Button>
+    </aside>
+  )
 }
 
 /**
