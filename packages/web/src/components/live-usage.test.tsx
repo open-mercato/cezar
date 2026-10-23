@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { liveUsageParts, timeLeft } from './live-usage'
+import { render, screen } from '@testing-library/react'
+
+import { accountPart, LIVE_USAGE_STALE_MS, LiveUsage, liveUsageParts, timeLeft } from './live-usage'
 
 const NOW = Date.parse('2026-10-23T08:00:00.000Z')
 
@@ -56,18 +58,37 @@ describe('liveUsageParts', () => {
     expect(liveUsageParts(undefined, NOW)).toEqual([])
   })
 
-  it('leads with the account org, the email on hover', () => {
-    expect(
-      liveUsageParts({ account: { org: 'WP-Stars', email: 'me@example.com' }, at: '2026-10-23T08:00:00.000Z' }, NOW),
-    ).toEqual([{ text: 'WP-Stars', tone: 'neutral', title: 'me@example.com' }])
-    expect(liveUsageParts({ account: { email: 'me@example.com' }, at: '2026-10-23T08:00:00.000Z' }, NOW)[0]?.text).toBe(
-      'me@example.com',
-    )
+  it('reads the account from the identity route: org first, the email on hover', () => {
+    const details = (fields: { label: string; value: string }[]) => ({ available: true, fields })
+    expect(accountPart(details([{ label: 'Email', value: 'me@example.com' }, { label: 'Organization', value: 'WP-Stars' }]))).toEqual({
+      text: 'WP-Stars',
+      tone: 'neutral',
+      title: 'me@example.com',
+    })
+    expect(accountPart(details([{ label: 'Email', value: 'me@example.com' }]))?.text).toBe('me@example.com')
+    expect(accountPart({ available: false, fields: [] })).toBeUndefined()
+    expect(accountPart(undefined)).toBeUndefined()
   })
 
   it('formats time left', () => {
     expect(timeLeft(42 * 60_000)).toBe('42m')
     expect(timeLeft(65 * 60_000)).toBe('1h05m')
     expect(timeLeft(-1)).toBe('0m')
+  })
+})
+
+describe('LiveUsage', () => {
+  it('dims gauges read more than a few minutes ago, never the account', () => {
+    const at = new Date(Date.now() - LIVE_USAGE_STALE_MS - 60_000).toISOString()
+    render(
+      <LiveUsage
+        usage={{ contextTokens: 900, at }}
+        account={{ text: 'WP-Stars', tone: 'neutral', title: 'me@example.com' }}
+      />,
+    )
+    expect(screen.getByText('CTX 900').hasAttribute('data-stale')).toBe(true)
+    expect(screen.getByText('CTX 900').getAttribute('title')).toMatch(/^as of /)
+    expect(screen.getByText('WP-Stars').hasAttribute('data-stale')).toBe(false)
+    expect(screen.getByText('WP-Stars').getAttribute('title')).toBe('me@example.com')
   })
 })

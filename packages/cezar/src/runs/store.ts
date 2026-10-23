@@ -334,7 +334,6 @@ export const runRecordSchema = z.object({
   /** Latest context fill and plan usage windows the agent reported (the header's live gauges). */
   liveUsage: z
     .object({
-      account: z.object({ org: z.string().optional(), email: z.string().optional() }).optional(),
       contextTokens: usageCounterSchema.optional(),
       contextWindow: usageCounterSchema.optional(),
       limits: z
@@ -1301,6 +1300,13 @@ export class RunStore extends EventEmitter {
     const run = this.runs.get(runId);
     if (!run) return;
     run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    this.touch(run);
+  }
+
+  clearLiveUsage(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run || run.liveUsage === undefined) return;
+    delete run.liveUsage;
     this.touch(run);
   }
 

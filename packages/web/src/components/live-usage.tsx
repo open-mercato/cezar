@@ -1,8 +1,9 @@
 import { Fragment } from 'react'
 
-import type { RunLiveUsage } from '@open-mercato/cezar-api-client'
+import type { AgentAccountDetailsResponse, RunLiveUsage } from '@open-mercato/cezar-api-client'
 
 import { compactTokens } from '@/lib/format'
+import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
 const WINDOW_LABELS: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
@@ -39,16 +40,25 @@ export function timeLeft(ms: number): string {
   return `${Math.floor(hours / 24)}d${hours % 24}h`
 }
 
-/** The header's status-line parts, e.g. `WP-Stars`, `5h 81% left 2h19m`, `CTX 416k 41%`. A window that has
+/** A reading older than this is dimmed: plan windows are per account, and other tasks on it keep
+ *  spending while this one idles. */
+export const LIVE_USAGE_STALE_MS = 5 * 60_000
+
+/** The account part from the on-demand identity route: the org tells accounts apart (one email can
+ *  sign in to several Claude organizations), the email goes on hover. */
+export function accountPart(details: AgentAccountDetailsResponse | undefined): LiveUsagePart | undefined {
+  if (!details?.available) return undefined
+  const field = (label: string) => details.fields.find((f) => f.label === label)?.value
+  const email = field('Email')
+  const text = field('Organization') ?? email
+  return text === undefined ? undefined : { text, tone: 'neutral', ...(email ? { title: email } : {}) }
+}
+
+/** The header's gauge parts, e.g. `5h 81% left 2h19m`, `CTX 416k 41%`. A window that has
  *  already reset is dropped: its reading is stale and the next event replaces it. */
 export function liveUsageParts(usage: RunLiveUsage | undefined, now = Date.now()): LiveUsagePart[] {
   if (usage === undefined) return []
   const parts: LiveUsagePart[] = []
-  // The org tells accounts apart: one email can sign in to several Claude organizations.
-  const account = usage.account?.org ?? usage.account?.email
-  if (account !== undefined) {
-    parts.push({ text: account, tone: 'neutral', ...(usage.account?.email ? { title: usage.account.email } : {}) })
-  }
   for (const limit of usage.limits ?? []) {
     const resetsIn = Date.parse(limit.resetsAt) - now
     if (!(resetsIn > 0)) continue
@@ -68,16 +78,33 @@ export function liveUsageParts(usage: RunLiveUsage | undefined, now = Date.now()
   return parts
 }
 
-/** Plan usage windows and context fill, the numbers Claude Code's own status line shows. */
-export function LiveUsage({ usage, className }: { usage: RunLiveUsage | undefined; className?: string }) {
-  const parts = liveUsageParts(usage)
-  if (parts.length === 0) return null
+/** The account, then plan usage windows and context fill: what Claude Code's own status line shows. */
+export function LiveUsage({
+  usage,
+  account,
+  className,
+}: {
+  usage: RunLiveUsage | undefined
+  account?: LiveUsagePart
+  className?: string
+}) {
+  const now = useNow(30_000)
+  const gauges = liveUsageParts(usage, now)
+  if (gauges.length === 0) return null
+  const at = Date.parse(usage?.at ?? '')
+  const stale = now - at > LIVE_USAGE_STALE_MS
+  const parts = account ? [account, ...gauges] : gauges
   return (
     <span data-slot="live-usage" className={cn('font-mono tabular-nums', className)}>
       {parts.map((part, index) => (
-        <Fragment key={part.text}>
+        <Fragment key={index}>
           {index > 0 ? ' · ' : null}
-          <span data-tone={part.tone} title={part.title} className={TONE_CLASS[part.tone]}>
+          <span
+            data-tone={part.tone}
+            data-stale={stale && part !== account ? '' : undefined}
+            title={part !== account && stale ? `as of ${new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : part.title}
+            className={cn(TONE_CLASS[part.tone], part !== account && stale && 'opacity-50')}
+          >
             {part.text}
           </span>
         </Fragment>

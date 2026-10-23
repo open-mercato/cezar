@@ -15,8 +15,8 @@ const spawned = vi.hoisted(() => ({ count: 0 }));
 
 // Each spawn reports a different context reading, so the record shows which handler folded it.
 vi.mock('../core/runner-factory.ts', () => ({
-  createRunner: () => ({
-    backend: 'claude' as const,
+  createRunner: (backend: string | undefined) => ({
+    backend: backend ?? 'claude',
     run: async () => ({ text: '', toolCalls: [], tokensUsed: 0 }),
     startSession: (_spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void) => {
       const n = ++spawned.count;
@@ -24,7 +24,9 @@ vi.mock('../core/runner-factory.ts', () => ({
         result: new Promise<AgentRunResult>((resolve) => {
           setTimeout(() => {
             onEvent?.({ type: 'session', sessionId: `sess-${n}` });
-            onEvent?.({ type: 'usage-status', status: { contextTokens: n * 1000, contextWindow: 200_000 } });
+            if (backend !== 'codex') {
+              onEvent?.({ type: 'usage-status', status: { contextTokens: n * 1000, contextWindow: 200_000 } });
+            }
             resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 });
           }, 0);
         }),
@@ -79,5 +81,10 @@ describe('usage-status reaches the run record from both turn handlers', () => {
     await settled(record.id);
 
     expect(store.readEvents(record.id).some((event) => event.type === 'usage-status')).toBe(false);
+
+    // A turn on another backend drops the Claude gauges instead of showing them as current.
+    expect(manager!.continueRun(record.id, { text: 'other', runner: 'codex' })).toEqual({ ok: true });
+    await expect.poll(() => store.getRun(record.id)?.liveUsage, { timeout: 15_000 }).toBeUndefined();
+    await settled(record.id);
   }, 30_000);
 });

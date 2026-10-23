@@ -186,8 +186,6 @@ export interface AgentUsageWindow {
 }
 
 export interface AgentUsageStatus {
-  /** The signed-in account the session bills to: one email can belong to several orgs. */
-  account?: { org?: string; email?: string };
   /** Tokens in the main agent's context after its latest message. */
   contextTokens?: number;
   contextWindow?: number;

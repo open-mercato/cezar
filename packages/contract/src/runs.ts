@@ -143,17 +143,9 @@ export const processUsageSchema = z.object({
 });
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
 
-/**
- * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
- *
- * `archived` is required although the store schema defaults it: a default fills on PARSE, so the
- * key is always present in what the server hands out. Everything else optional here is optional
- * there — these are additive fields, and an absent one means "this run predates it".
- */
 /** Live session gauges for the run header (context fill, plan usage windows), the latest
  *  reading the agent reported. Claude only today; absent on every other run. */
 export const runLiveUsageSchema = z.object({
-  account: z.object({ org: z.string().optional(), email: z.string().optional() }).optional(),
   contextTokens: usageCounterSchema.optional(),
   contextWindow: usageCounterSchema.optional(),
   limits: z
@@ -163,6 +155,13 @@ export const runLiveUsageSchema = z.object({
 });
 export type RunLiveUsage = z.infer<typeof runLiveUsageSchema>;
 
+/**
+ * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
+ *
+ * `archived` is required although the store schema defaults it: a default fills on PARSE, so the
+ * key is always present in what the server hands out. Everything else optional here is optional
+ * there — these are additive fields, and an absent one means "this run predates it".
+ */
 export const runRecordSchema = z.object({
   id: z.string(),
   title: z.string(),

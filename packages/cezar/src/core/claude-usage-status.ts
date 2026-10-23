@@ -5,27 +5,7 @@
  * Untrusted wire data: never throws, `undefined` when the frame carries nothing.
  */
 
-import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import type { AgentUsageStatus, AgentUsageWindow } from './agent-runner.ts';
-
-/** The account a Claude config dir is signed in to (what `claude auth status` reports), read
- *  from its `.claude.json`: `$CLAUDE_CONFIG_DIR/.claude.json`, else `~/.claude.json`. */
-export function claudeAccount(configDir: string | undefined, home = homedir()): AgentUsageStatus['account'] {
-  try {
-    const file = configDir ? join(configDir, '.claude.json') : join(home, '.claude.json');
-    const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    const oauth = isRecord(parsed) && isRecord(parsed.oauthAccount) ? parsed.oauthAccount : undefined;
-    if (oauth === undefined) return undefined;
-    const org = typeof oauth.organizationName === 'string' && oauth.organizationName !== '' ? oauth.organizationName : undefined;
-    const email = typeof oauth.emailAddress === 'string' && oauth.emailAddress !== '' ? oauth.emailAddress : undefined;
-    if (org === undefined && email === undefined) return undefined;
-    return { ...(org !== undefined ? { org } : {}), ...(email !== undefined ? { email } : {}) };
-  } catch {
-    return undefined;
-  }
-}
 
 export function claudeUsageStatus(msg: unknown, model: string | undefined): AgentUsageStatus | undefined {
   if (!isRecord(msg)) return undefined;
