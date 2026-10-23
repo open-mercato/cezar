@@ -1,0 +1,65 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>On the phone — ntfy receivers mockup</title><style>:root{--background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--muted:#262626;--muted-foreground:#a3a3a3;--soft-foreground:#7b7b7b;--border:#262626;--primary:#a8f372;--primary-foreground:#0d0d0d;--danger:#ef4444;--success:#10b981;--pending:#fbbf24;--info:#93c5fd;--violet:#8f86e8;--note-bg:#1f1b2e;--note-border:#8f86e8;--warn-bg:#2a2210;--warn-border:#fbbf24;--shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);--sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font:14px/1.55 var(--sans);padding:28px}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+.tag{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft-foreground);margin-bottom:6px}
+h1{font-size:20px;margin:0 0 4px}
+.lead{color:var(--muted-foreground);margin:0 0 18px;max-width:880px}
+.frame{border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:var(--shadow-modal);background:var(--background)}
+.app{display:grid;grid-template-columns:200px 1fr;min-height:560px}
+.side{background:var(--card);border-right:1px solid var(--border);padding:14px 10px;font-size:13px}
+.side .grp{color:var(--soft-foreground);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:14px 8px 6px}
+.side .it{padding:6px 10px;border-radius:8px;color:var(--muted-foreground)}
+.side .it.on{background:var(--muted);color:var(--foreground);font-weight:500}
+.overlay{background:rgba(0,0,0,.55);padding:24px;display:flex;justify-content:center;align-items:flex-start}
+.dialog{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);width:100%;max-width:860px}
+.dh{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.dh b{font-size:16px}.dh .x{margin-left:auto;color:var(--muted-foreground)}
+.db{padding:16px 20px;display:grid;grid-template-columns:1fr 300px;gap:22px}
+.df{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.df .hint{margin-right:auto;color:var(--muted-foreground);font-size:12.5px}
+label.l{display:block;font-weight:600;font-size:13px;margin:12px 0 6px}
+label.l:first-child{margin-top:0}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg span{border:1px solid var(--border);border-radius:10px;padding:5px 11px;font-size:13px;color:var(--muted-foreground)}
+.seg span.on{border-color:var(--primary);color:var(--foreground);background:color-mix(in srgb,var(--primary) 10%,transparent)}
+.input{border:1px solid var(--border);border-radius:10px;padding:7px 10px;background:var(--card-2);font-family:var(--mono);font-size:12.5px;color:var(--foreground)}
+.small{color:var(--muted-foreground);font-size:12.5px;margin-top:5px}
+.radio{display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:13px}
+.radio i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--soft-foreground);flex:none;margin-top:3px}
+.radio i.on{border-color:var(--primary);box-shadow:inset 0 0 0 3px var(--card),inset 0 0 0 8px var(--primary)}
+.check{display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:13px}
+.check i{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--soft-foreground);flex:none;margin-top:3px}
+.check i.on{background:var(--primary);border-color:var(--primary)}
+.new{font-size:10.5px;color:var(--violet);border:1px solid var(--violet);border-radius:999px;padding:0 6px;margin-left:6px}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--card);color:var(--foreground);border-radius:10px;padding:6px 12px;font-size:13px;font-weight:500;white-space:nowrap}
+.btn.primary{background:var(--primary);color:var(--primary-foreground);border-color:transparent}
+.btn.dis{opacity:.45}
+.warn{border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:10px;padding:8px 11px;font-size:12.5px;margin-top:10px}
+.note{border-left:3px solid var(--note-border);background:var(--note-bg);border-radius:8px;padding:8px 11px;font-size:12.5px;margin-top:10px}
+.phone{background:#000;border:1px solid #333;border-radius:28px;padding:14px 12px 18px;min-height:260px}
+.phone .clock{text-align:center;color:#fff;font-size:34px;font-weight:300;margin:6px 0 10px}
+.ntf{background:rgba(60,60,64,.85);border-radius:14px;padding:9px 11px;margin:7px 0;color:#fff;font-size:12.5px}
+.ntf .app{display:flex;gap:6px;align-items:center;color:#c7c7cc;font-size:11px;min-height:0;grid-template-columns:none}
+.ntf .ic{width:16px;height:16px;border-radius:4px;background:#317f6f;display:inline-flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:700}
+.ntf .t{font-weight:600;margin-top:2px}
+.ntf .m{color:#e5e5ea}
+.ntf .when{margin-left:auto}
+.caption{color:var(--muted-foreground);font-size:12.5px;margin:12px 2px 0;max-width:880px}
+</style></head><body><div class="tag">Proposed · what arrives</div>
+<h1>On the phone</h1>
+<p class="lead">ntfy priority follows the event: "needs you" and failures are high (long vibration, pop-over); informational events are default or low. The local instance has no tappable cockpit link, so it says so.</p>
+<div style="display:grid;grid-template-columns:repeat(2,minmax(300px,380px));gap:24px">
+<div><div class="phone"><div class="clock">22:17</div>
+<div class="ntf"><div class="app"><span class="ic">n</span>ntfy · Hosted<span class="when">now</span></div><div class="t">❓ customer-api · Needs your input</div><div class="m">Fix login redirect<br>Which branch should I target? 1) main 2) release/2.4</div></div>
+<div class="ntf"><div class="app"><span class="ic">n</span>ntfy · Hosted<span class="when">8m</span></div><div class="t">❌ billing · Failed</div><div class="m">Migrate invoices to v2 — check step "e2e" failed</div></div>
+<div class="ntf"><div class="app"><span class="ic">n</span>ntfy · Hosted<span class="when">1h</span></div><div class="t">✅ billing · Finished</div><div class="m">Bump Stripe SDK to v15 — pull request opened</div></div>
+</div><p class="caption">Hosted cockpit, Standard profile. Tapping opens the task in the cockpit (installer <code>publicUrl</code>).</p></div>
+<div><div class="phone"><div class="clock">22:17</div>
+<div class="ntf"><div class="app"><span class="ic">n</span>ntfy · Mac<span class="when">now</span></div><div class="t">👀 customer-api · Ready for review</div><div class="m">Task a1b2c3d4<br>Open cezar on this computer</div></div>
+<div class="ntf"><div class="app"><span class="ic">n</span>ntfy · Mac<span class="when">3m</span></div><div class="t">✅ customer-api · Finished</div><div class="m">Task 9f6649a0 — pull request opened</div></div>
+<div class="ntf"><div class="app"><span class="ic">n</span>ntfy · Mac<span class="when">2h</span></div><div class="t">⏳ customer-api · Failed — will retry at 23:00</div><div class="m">Task 77d3c2a1 (only with "All results")</div></div>
+</div><p class="caption">Local cockpit, Minimal profile. No cockpit link; a PR link is used when the task has one.</p></div>
+</div>
+<p class="caption">Illustrative mockup of notifications as rendered by the ntfy app; exact appearance depends on the OS.</p>
+</body></html>
