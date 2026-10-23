@@ -288,6 +288,10 @@ describe('the Changes tab route', () => {
     // `calc` left is the floating dock's clearance at the column's end).
     expect(pane.className).not.toContain('sticky')
     expect(pane.className).not.toContain('max-h-')
+    // The splitter sits beside the scroller, not inside it, so it never scrolls away.
+    const splitter = pane.nextElementSibling as HTMLElement
+    expect(splitter.dataset.slot).toBe('tree-pane-resize')
+    expect(pane.querySelector('[role="separator"]')).toBeNull()
     expect(pane.className).not.toContain('100dvh')
     // The diff scrolls in its own column, which it finds through the marker (desktop: jsdom).
     const diffPane = document.querySelector('[data-slot="diff-pane"]') as HTMLElement

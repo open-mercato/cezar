@@ -6,20 +6,20 @@ Let the user drag the border between the Changes file tree and the diff to widen
 
 ## Scope
 
-- A drag/keyboard splitter on the tree column of the task Changes tab (`routes/task-git/task-changes.tsx`) and the repo Changes view (`routes/repo-git/repo-changes.tsx`), which share `ChangesTree`.
+- A drag/keyboard splitter on the tree column of the task Changes and Files tabs (`routes/task-git/task-changes.tsx`) and the repo Changes view (`routes/repo-git/repo-changes.tsx`), which share `ChangesTree`.
 - Browser-local, persisted width (`localStorage`, like the sidebar width in #788); untouched it keeps today's responsive defaults (`w-60` / `lg:w-72` / `@4xl:w-72`). Double-click resets.
 
 ### Non-goals
 
-- The repo Files browser (`repo-files.tsx`) — a different, sticky layout.
+- The repo Files browser (`repo-files.tsx`) — a different, sticky layout (follow-up if wanted).
 - The mobile layout (the tree is hidden below `md`).
 
 ## Implementation Plan
 
 ### Phase 1: Splitter
 
-- 1.1 Pure width helper `lib/changes-tree-width.ts` (clamp, read/write/clear storage) with tests.
-- 1.2 `ChangesTreeResizeHandle` + `useChangesTreeWidth` store, wired into both Changes views, with component tests.
+- 1.1 Pure width helper `lib/tree-pane-width.ts` (clamp, read/write/clear storage) with tests.
+- 1.2 `TreePaneResizeHandle` + `useTreePaneWidth` store, wired into both Changes views and the task Files tab, with component tests.
 
 ## Risks
 
