@@ -22,12 +22,19 @@ const getRunTerminal = vi.fn()
 const createRunTerminal = vi.fn()
 const stopRunTerminal = vi.fn(async () => undefined)
 const writeRunTerminal = vi.fn(async () => undefined)
+const renameRunTerminal = vi.fn()
 
 vi.mock('@/api/client', () => ({
   getRunTerminal: (...args: unknown[]) => getRunTerminal(...(args as [])),
   createRunTerminal: (...args: unknown[]) => createRunTerminal(...(args as [])),
   stopRunTerminal: (...args: unknown[]) => stopRunTerminal(...(args as [])),
   writeRunTerminal: (...args: unknown[]) => writeRunTerminal(...(args as [])),
+  renameRunTerminal: (...args: unknown[]) => renameRunTerminal(...(args as [])),
+}))
+
+const trackTerminalTabRenamed = vi.fn()
+vi.mock('@/lib/telemetry', () => ({
+  trackTerminalTabRenamed: (...args: unknown[]) => trackTerminalTabRenamed(...(args as [])),
 }))
 
 vi.mock('@/api/queries', () => ({
@@ -86,6 +93,7 @@ beforeEach(() => {
   createRunTerminal.mockReset()
   stopRunTerminal.mockClear()
   writeRunTerminal.mockClear()
+  renameRunTerminal.mockReset()
 })
 
 afterEach(() => {
@@ -248,5 +256,31 @@ describe('TerminalDrawer — closing a tab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Close Terminal s-1' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+})
+
+describe('TerminalDrawer — renaming a tab', () => {
+  it('renames on double-click and Enter, and Escape leaves the name alone', async () => {
+    getRunTerminal.mockResolvedValue({ available: true, sessions: [session('s-1', { label: 'Terminal 1' })] })
+    renameRunTerminal.mockImplementation(async (_run: string, id: string, name: string) => session(id, { label: name }))
+    drawer()
+    await waitFor(() => expect(tabNames()).toEqual(['Terminal 1']))
+
+    fireEvent.doubleClick(screen.getByRole('tab', { name: 'Terminal 1' }))
+    const field = screen.getByRole('textbox', { name: 'Rename Terminal 1' })
+    fireEvent.change(field, { target: { value: 'dev server' } })
+    fireEvent.keyDown(field, { key: 'Enter' })
+
+    expect(renameRunTerminal).toHaveBeenCalledWith('r1', 's-1', 'dev server')
+    // The kind of rename, never the name.
+    expect(trackTerminalTabRenamed).toHaveBeenCalledWith('named')
+    await waitFor(() => expect(tabNames()).toEqual(['dev server']))
+
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'dev server' }))
+    const again = screen.getByRole('textbox', { name: 'Rename dev server' })
+    fireEvent.change(again, { target: { value: 'something else' } })
+    fireEvent.keyDown(again, { key: 'Escape' })
+    expect(renameRunTerminal).toHaveBeenCalledTimes(1)
+    expect(tabNames()).toEqual(['dev server'])
   })
 })

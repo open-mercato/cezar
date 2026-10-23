@@ -29,6 +29,8 @@ import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { Link, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import { isUnread } from '@/lib/read-state'
+import { trackFullViewEntered, trackLayoutChanged, trackTerminalOpened } from '@/lib/telemetry'
+import { useIsDesktop } from '@/lib/use-desktop'
 import { recordTaskVisit } from '@/lib/recent-tasks'
 import { publishTaskWorkspace, takeQueuedFileOpen, withdrawTaskWorkspace, type TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isEditableTarget } from '@/lib/use-command-shortcut'
@@ -69,7 +71,7 @@ import { useSavedLayouts } from './use-saved-layouts'
 import { useWorkspaceLayouts } from './use-workspace-layouts'
 import { AvailableViewsContext } from './view-picker'
 import { ViewDropZones } from './view-drop-zones'
-import { WorkspaceColumns, type ColumnActions } from './workspace-columns'
+import { SIDE_BY_SIDE_MIN_WIDTH, WorkspaceColumns, type ColumnActions } from './workspace-columns'
 
 /** Lazy: xterm is the heaviest thing on this screen, and most visits never open a shell. */
 const TerminalDrawer = lazy(() =>
@@ -244,6 +246,13 @@ function WorkspaceView({
     : layouts.layout
       ? fixedViewOf(layouts.layout)
       : 'session'
+  // Counted on the way in — its tab, a number key or its URL — never on each re-render there.
+  const onTerminalView = useRef(false)
+  useEffect(() => {
+    const now = fixedActive === 'terminal'
+    if (now && !onTerminalView.current) trackTerminalOpened('tab')
+    onTerminalView.current = now
+  }, [fixedActive])
   const cardLayouts = useMemo(
     () => layouts.state.layouts.filter((layout) => fixedViewOf(layout) === null),
     [layouts.state.layouts],
@@ -288,6 +297,7 @@ function WorkspaceView({
   const dropViewHere = useCallback(
     (view: ViewId, at: number, mode: 'insert' | 'replace') => {
       setDraggingView(null)
+      trackLayoutChanged(mode === 'insert' ? 'drop_insert' : 'drop_replace')
       if (mode === 'insert' && besideItself(view) !== null) {
         // Its own card offered a left and a right edge: keep the side, beside the view it returns to.
         dropView(view, at === 0 ? 0 : MAX_COLUMNS, mode)
@@ -299,13 +309,36 @@ function WorkspaceView({
   )
   const openViewBeside = useCallback(
     (view: ViewId) => {
+      trackLayoutChanged('alt_click')
       const count = besideItself(view) ?? layouts.layout?.columns.length ?? 0
       dropView(view, count, 'insert')
     },
     [besideItself, dropView, layouts.layout?.columns.length],
   )
   const columnCount = layouts.layout?.columns.length ?? 0
-  const closeColumnByDrop = fixedActive === null && columnCount > 1 ? layouts.closeColumn : undefined
+  const closeColumn = layouts.closeColumn
+  const closeColumnOnDrop = useCallback(
+    (index: number) => {
+      trackLayoutChanged('column_closed_by_drop')
+      closeColumn(index)
+    },
+    [closeColumn],
+  )
+  const closeColumnByDrop = fixedActive === null && columnCount > 1 ? closeColumnOnDrop : undefined
+  const selectFromSwitcher = useCallback(
+    (name: string) => {
+      trackLayoutChanged('switcher')
+      selectLayout(name)
+    },
+    [selectLayout],
+  )
+  const applySavedFromSwitcher = useCallback(
+    (layout: Parameters<typeof applySaved>[0]) => {
+      trackLayoutChanged('switcher')
+      applySaved(layout)
+    },
+    [applySaved],
+  )
 
   // The drawer: browser-local open + height, per task (spec §6). Read during render on a changed
   // task id, so run A's drawer never carries into run B.
@@ -338,7 +371,14 @@ function WorkspaceView({
     setMaximized(false)
   }
   const exitMaximized = useCallback(() => setMaximized(false), [])
-  const toggleMaximized = useCallback(() => setMaximized((current) => !current), [])
+  const wide = useIsDesktop(SIDE_BY_SIDE_MIN_WIDTH)
+  // Read from a ref, not inside the updater: React may run an updater twice.
+  const maximizedNow = useRef(maximized)
+  maximizedNow.current = maximized
+  const toggleMaximized = useCallback(() => {
+    if (!maximizedNow.current) trackFullViewEntered(wide ? 'desktop' : 'narrow')
+    setMaximized((current) => !current)
+  }, [wide])
   const cover = usePanelCover<HTMLDivElement>(maximized, exitMaximized)
   const maximize = useMemo(() => ({ maximized, toggle: toggleMaximized }), [maximized, toggleMaximized])
 
@@ -346,9 +386,10 @@ function WorkspaceView({
   // the view instead. The bottom drawer is the ` key's, and a column's "Move to bottom".
   const drawerOpen = drawer.open
   const toggleDrawer = useCallback(() => {
-    if (!terminalColumnShown) updateDrawer({ open: !drawerOpen })
+    if (terminalColumnShown) return
+    if (!drawerOpen) trackTerminalOpened('drawer')
+    updateDrawer({ open: !drawerOpen })
   }, [drawerOpen, terminalColumnShown, updateDrawer])
-  const { closeColumn } = layouts
   const terminalColumns = layouts.layout?.columns
   const moveTerminalToDrawer = useCallback(() => {
     updateDrawer({ open: true })
@@ -373,10 +414,10 @@ function WorkspaceView({
         fixedActive={fixedActive}
         onViews={onViews}
         onSelectFixed={openDeepLink}
-        onSelect={selectLayout}
+        onSelect={selectFromSwitcher}
         onClose={closeLayout}
         saved={savedLayouts.saved}
-        onApplySaved={applySaved}
+        onApplySaved={applySavedFromSwitcher}
         onSaveCurrent={canSaveLayout ? saveCurrentLayout : undefined}
         onDeleteSaved={deleteSavedLayout}
         notesHref={`/tasks/${run.id}/notes`}
@@ -395,10 +436,10 @@ function WorkspaceView({
       fixedActive,
       onViews,
       openDeepLink,
-      selectLayout,
+      selectFromSwitcher,
       closeLayout,
       savedLayouts.saved,
-      applySaved,
+      applySavedFromSwitcher,
       canSaveLayout,
       saveCurrentLayout,
       deleteSavedLayout,
@@ -820,6 +861,7 @@ function WorkspaceView({
             onHeightChange={(height) => updateDrawer({ height })}
             onClose={() => updateDrawer({ open: false })}
             onMoveToColumn={() => {
+              trackTerminalOpened('column')
               updateDrawer({ open: false })
               openBeside('terminal')
             }}

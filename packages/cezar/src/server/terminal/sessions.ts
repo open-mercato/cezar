@@ -293,6 +293,17 @@ export class TerminalSessions {
     return true;
   }
 
+  /** Name a tab. The name sticks — the process table no longer renames it; an empty name hands
+   *  the tab back to the automatic `Terminal N`, which the next snapshot may replace again. */
+  rename(id: string, name: string): TerminalSessionInfo | null {
+    const entry = this.entries.get(id);
+    if (!entry) return null;
+    const trimmed = name.trim();
+    entry.fixedLabel = trimmed !== '';
+    entry.info.label = trimmed || `Terminal ${entry.ordinal}`;
+    return entry.info;
+  }
+
   resize(id: string, cols: number, rows: number): boolean {
     const entry = this.entries.get(id);
     if (!entry || entry.info.exitCode !== null) return false;

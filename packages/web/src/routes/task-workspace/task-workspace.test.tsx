@@ -11,6 +11,17 @@ import { reviveState, type ViewId } from './layout-state'
 
 // The terminal needs xterm and a PTY; this suite is about the layout, so the view stands in and
 // says how it was mounted (a column fills, the drawer docks).
+// What the workspace reports (docs/telemetry.md); the senders themselves are covered in lib.
+const tracked = vi.hoisted(() => ({
+  trackTerminalOpened: vi.fn(),
+  trackLayoutChanged: vi.fn(),
+  trackFullViewEntered: vi.fn(),
+}))
+vi.mock('@/lib/telemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/telemetry')>()),
+  ...tracked,
+}))
+
 vi.mock('./terminal-drawer', () => ({
   TerminalDrawer: ({ runId, fill }: { runId: string; fill?: boolean }) => (
     <section data-testid="terminal" data-run={runId} data-fill={fill ? '' : undefined} />
@@ -27,6 +38,7 @@ let hostLayouts: Record<string, unknown> = {}
 let hostUiState: Record<string, unknown> = {}
 
 beforeEach(() => {
+  for (const spy of Object.values(tracked)) spy.mockClear()
   localStorage.clear()
   hostLayouts = {}
   hostUiState = {}
@@ -396,6 +408,7 @@ describe('the task workspace (main)', () => {
     expect(screen.queryByTestId('terminal')).toBeNull()
 
     fireEvent.keyDown(window, { key: '`' })
+    expect(tracked.trackTerminalOpened).toHaveBeenCalledWith('drawer')
     const drawer = await screen.findByTestId('terminal')
     expect(drawer.dataset.fill).toBeUndefined()
     // The tab is lit while the drawer is up; the view that shows stays.
@@ -428,6 +441,33 @@ describe('the task workspace (main)', () => {
     expect((await screen.findByTestId('terminal')).dataset.fill).toBe('')
     await waitFor(() => expect(activeCard()).toBe('Terminal'))
     expect(terminalTab()?.getAttribute('aria-pressed')).toBe('true')
+    expect(tracked.trackTerminalOpened).toHaveBeenCalledWith('tab')
+    expect(tracked.trackTerminalOpened).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers a way out of full view on a narrow screen, which has no Escape key', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    stubFetch()
+    renderWorkspace()
+    await ready()
+
+    fireEvent.click(document.querySelector<HTMLElement>('[data-fixed="changes"]')!, { altKey: true })
+    await waitFor(() => expect(document.querySelector('[data-slot="workspace-columns"][data-narrow]')).not.toBeNull())
+
+    expect(screen.queryByRole('button', { name: /Exit full view/ })).toBeNull()
+    fireEvent.keyDown(window, { key: 'f' })
+    expect(tracked.trackFullViewEntered).toHaveBeenCalledWith('narrow')
+    const exit = await screen.findAllByRole('button', { name: /Exit full view/ })
+    expect(exit).toHaveLength(1)
+    fireEvent.click(exit[0]!)
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Exit full view/ })).toBeNull())
+    // Leaving is not counted.
+    expect(tracked.trackFullViewEntered).toHaveBeenCalledTimes(1)
   })
 
   it('keeps a left layout mounted, hidden, so going back to Changes does not rebuild it', async () => {
@@ -562,6 +602,7 @@ describe('the task workspace (main)', () => {
 
     // The fixed Chat card stays one view; the pair is the task's working arrangement, not a new layout.
     await waitFor(() => expect(activeCard()).toBe('Custom'))
+    expect(tracked.trackLayoutChanged).toHaveBeenCalledWith('drop_insert')
     expect(document.querySelector('[data-slot="view-drop-zones"]')).toBeNull()
     await waitFor(() => {
       const saved = reviveState(hostLayouts.r1 ?? null)

@@ -10,9 +10,11 @@ import {
   taskCommandLabel,
   TELEMETRY_ROUTE_SEGMENTS,
   type AddProjectDialog,
+  type LayoutChange,
   type MessageSurface,
   type SkillsUpdateDropOutcome,
   type TelemetryErrorInput,
+  type TerminalOpenSurface,
 } from '@open-mercato/cezar-api-client'
 
 import { useHealth, useProjects } from '@/api/queries'
@@ -72,6 +74,22 @@ export function trackAttachmentsSent(count: number): void {
 /** A send that hit an expired staged upload, after the automatic re-stage and resend settled. */
 export function trackAttachmentsRestaged(outcome: 'recovered' | 'failed'): void {
   send('/api/v1/telemetry/event', { event: 'attachments_restaged', label: outcome })
+}
+
+export function trackTerminalOpened(surface: TerminalOpenSurface): void {
+  send('/api/v1/telemetry/event', { event: 'terminal_opened', label: surface })
+}
+
+export function trackTerminalTabRenamed(kind: 'named' | 'reset'): void {
+  send('/api/v1/telemetry/event', { event: 'terminal_tab_renamed', label: kind })
+}
+
+export function trackLayoutChanged(change: LayoutChange): void {
+  send('/api/v1/telemetry/event', { event: 'layout_changed', label: change })
+}
+
+export function trackFullViewEntered(screen: 'desktop' | 'narrow'): void {
+  send('/api/v1/telemetry/event', { event: 'full_view_entered', label: screen })
 }
 
 /** One of the "Add project" dialogs was opened (New project, Clone from GitHub, Open local folder). */

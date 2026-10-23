@@ -2803,6 +2803,17 @@ export async function resizeRunTerminal(id: string, sessionId: string, cols: num
   )
 }
 
+/** Name a terminal tab; an empty name gives it back its automatic one. */
+export async function renameRunTerminal(id: string, sessionId: string, name: string): Promise<TerminalSession> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].$patch({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), sessionId },
+      json: { name },
+    }),
+    runPath(id, `/terminal/${sessionId}`),
+  )
+}
+
 export async function stopRunTerminal(id: string, sessionId: string): Promise<void> {
   await unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].terminal[':sessionId'].$delete({

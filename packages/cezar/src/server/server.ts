@@ -14,7 +14,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
-  terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
+  terminalRenameSchema, terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import { workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
@@ -7430,7 +7430,21 @@ export function createApp(deps: ServerDeps) {
       if (!session) return c.json({ error: 'terminal session not found' }, 404);
       terminalSessions.kill(session.id);
       return c.json({ stopped: true });
-    });
+    })
+    .patch(
+      '/runs/:id/terminal/:sessionId',
+      paramZodValidator(terminalSessionParamsSchema),
+      jsonZodValidator(terminalRenameSchema),
+      async (c) => {
+        const session = terminalFor(c.req.valid('param'));
+        if (!session) return c.json({ error: 'terminal session not found' }, 404);
+        const renameRefusal = terminalPolicyRefusal(capabilities());
+        if (renameRefusal) return c.json({ error: renameRefusal }, 409);
+        const renamed = terminalSessions.rename(session.id, c.req.valid('json').name);
+        if (!renamed) return c.json({ error: 'terminal session not found' }, 404);
+        return c.json(terminalSessionSchema.parse(withTopic(renamed)));
+      },
+    );
 
   const v1 = new Hono<ProjectApiEnv>()
     .use('*', resolveProjectScope)

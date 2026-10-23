@@ -38,7 +38,7 @@ import { VIEW_ICONS, ViewItems, ViewTiles } from './view-picker'
 
 /** Narrower than this and the layout shows one column at a time (spec §5.2, §11). Tailwind's
  *  `lg`, which is where a three-way split first has room to be readable. */
-const SIDE_BY_SIDE_MIN_WIDTH = 1024
+export const SIDE_BY_SIDE_MIN_WIDTH = 1024
 
 export interface ColumnActions {
   addColumn: (view: ViewId) => void
@@ -120,7 +120,8 @@ export function WorkspaceColumns({
   // While a window is waiting for its view, every window shares the row equally.
   const shown = columns.length + (pending === null ? 0 : 1)
   const widthOf = (column: WorkspaceColumn) => (pending === null ? column.width : 100 / shown)
-  const pendingHeader = (
+  // `exit`: the window that is all there is on screen carries the way out of full view.
+  const pendingHeader = (exit: boolean) => (
     <header className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/70 bg-background pl-4 pr-1.5 text-xs font-medium text-muted-foreground">
       <LayoutGridIcon aria-hidden="true" className="size-3.5 shrink-0" />
       <span className="min-w-0 flex-1 truncate">New window</span>
@@ -135,6 +136,7 @@ export function WorkspaceColumns({
       >
         <XIcon aria-hidden="true" className="size-3.5" />
       </Button>
+      {exit ? <FullViewExit className="ml-1.5" /> : null}
     </header>
   )
   const pendingWindow =
@@ -146,7 +148,7 @@ export function WorkspaceColumns({
         className="relative flex min-w-0 flex-col border-l border-border/70 first:border-l-0"
         style={{ width: `${100 / shown}%` }}
       >
-        {pendingHeader}
+        {pendingHeader(false)}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           <ViewTiles scope="window" onPick={fillPending} />
         </div>
@@ -195,7 +197,7 @@ export function WorkspaceColumns({
         ) : null}
         {column === null ? (
           <>
-            {pendingHeader}
+            {pendingHeader(true)}
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
               <ViewTiles scope="window" onPick={fillPending} />
             </div>
@@ -214,10 +216,14 @@ export function WorkspaceColumns({
               }}
               canSplit={canSplit}
               grip={false}
+              // A phone has no Escape: the way out of full view must be on screen.
+              trailing={<FullViewExit className="ml-1.5" />}
               extras={headerExtras?.(column.view, slot as number)}
             />
             <div data-slot="main" className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-              {renderView(column.view, slot as number, column)}
+              <WorkspaceMaximizeContext.Provider value={null}>
+                {renderView(column.view, slot as number, column)}
+              </WorkspaceMaximizeContext.Provider>
             </div>
           </>
         )}
