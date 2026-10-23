@@ -10,6 +10,8 @@ describe('modelConflictsWithRunner', () => {
 
   it('rejects another runner\'s preset', () => {
     expect(modelConflictsWithRunner('opus', 'codex')).toBe(true);
+    // Run 903d6df4: a `fable` pin survived a switch to codex, which refused every turn with a 400.
+    expect(modelConflictsWithRunner('fable', 'codex')).toBe(true);
     expect(modelConflictsWithRunner('gpt-5.1-codex', 'claude')).toBe(true);
     expect(modelConflictsWithRunner('claude-opus-4-8', 'codex')).toBe(true);
     // …but an unlisted gateway id stays usable on claude, which supports them by design.
@@ -56,7 +58,7 @@ describe('modelConflictsWithRunner', () => {
   });
 
   it('keeps no dated Claude release to drift, mirroring the picker (#784)', () => {
-    expect(KNOWN_PRESETS_BY_RUNNER.claude).toEqual(['opus', 'sonnet', 'haiku']);
+    expect(KNOWN_PRESETS_BY_RUNNER.claude).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
   });
 
   it('keeps no hard-coded OpenCode catalog to drift', () => {

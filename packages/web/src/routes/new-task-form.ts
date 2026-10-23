@@ -78,6 +78,7 @@ export interface ModelPreset {
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
+    { id: 'fable', label: 'fable', desc: 'Most capable, for the hardest tasks' },
     { id: 'opus', label: 'opus', desc: 'Deep reasoning for hard tasks' },
     { id: 'sonnet', label: 'sonnet', desc: 'Fast and cheap' },
     { id: 'haiku', label: 'haiku', desc: 'Fastest — simple, scoped tasks' },

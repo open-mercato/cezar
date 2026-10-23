@@ -29,7 +29,7 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // Tier aliases only. The dated ids that used to sit here (`claude-opus-4-8` and friends) came
   // off the picker when Claude gained host discovery (#784) — a guard that names a specific
   // vendor release goes stale the same way the picker did, and this list mirrors the picker.
-  claude: ['opus', 'sonnet', 'haiku'],
+  claude: ['fable', 'opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [],
   // Cursor models are discovered from the CLI / Settings — no hard-coded presets

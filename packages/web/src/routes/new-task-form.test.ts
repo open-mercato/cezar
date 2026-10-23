@@ -65,7 +65,7 @@ describe('model option resolution', () => {
   })
 
   it('claude falls back to the tier aliases when there is no host catalog', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
     // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
@@ -100,7 +100,7 @@ describe('model option resolution', () => {
 
   it('an empty catalog is not an empty picker — the presets come back', () => {
     const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
-    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
