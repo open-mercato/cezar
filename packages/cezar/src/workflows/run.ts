@@ -4252,6 +4252,11 @@ export class RunManager {
     );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'usage-status') {
+        // Record-only: the header gauges read the run record, the transcript never shows it.
+        this.store.setLiveUsage(runId, event.status);
+        return;
+      }
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -6309,6 +6314,11 @@ export class RunManager {
     );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'usage-status') {
+        // Record-only: the header gauges read the run record, the transcript never shows it.
+        this.store.setLiveUsage(runId, event.status);
+        return;
+      }
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;

@@ -118,6 +118,18 @@ describe('RunStore — directional usage persistence', () => {
     });
   });
 
+  it('merges live gauge readings onto the record and round-trips them', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'live', steps: [] });
+    const limits = [{ window: 'five_hour', utilization: 0.2, resetsAt: '2026-10-23T10:00:00.000Z' }];
+    store.setLiveUsage(run.id, { limits });
+    store.setLiveUsage(run.id, { contextTokens: 5000 });
+    store.setLiveUsage(run.id, { contextWindow: 200000 });
+    expect(store.getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000, contextWindow: 200000 });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.liveUsage).toMatchObject({ limits, contextTokens: 5000 });
+  });
+
   it('keeps aggregates absent for old records and incomplete invocation or turn checkpoints', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     expect(RunStore.open(dataDir).getRun(LEGACY_RUN.id)?.inputTokens).toBeUndefined();

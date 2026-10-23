@@ -74,6 +74,18 @@ if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resu
 }
 
 emit({ type: 'system', subtype: 'init' });
+// Plan usage windows, so the dry-run header shows its live gauges (real wire shape).
+const nowSec = Math.floor(Date.now() / 1000);
+emit({
+  type: 'rate_limit_event',
+  rate_limit_info: {
+    status: 'allowed',
+    unifiedWindows: {
+      five_hour: { utilization: 0.17, resetsAt: nowSec + 2 * 3600 + 19 * 60 },
+      seven_day: { utilization: 0.2, resetsAt: nowSec + 3 * 86400 },
+    },
+  },
+});
 
 let turn = 0;
 
