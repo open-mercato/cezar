@@ -526,4 +526,109 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(a.store.getRun(queued.id)?.status).toBe('done');
     expect(a.store.getRun(holder.id)?.status).toBe('running'); // still holding — proves no restart/wait
   }, 45_000);
+
+  // Spec 2026-10-21-host-resource-limits: the host-headroom gate inside the real pump().
+  it('host reserve holds a second start while the machine is short, never the first, and re-pumps on relief', async () => {
+    let available = 100 * 1024 * 1024; // 100 MiB free, reserve is 4 GiB
+    const listeners = new Set<() => void>();
+    const semaphore = new WorkspaceSemaphore({
+      initial: { maxParallel: 4, hostReserve: { memoryMb: 4096, cpuPct: null } },
+      host: {
+        current: () => ({
+          sampledAt: new Date().toISOString(),
+          cpuCount: 8,
+          memTotalBytes: 16 * 1024 ** 3,
+          memUsedBytes: 0,
+          memAvailableBytes: available,
+        }),
+        subscribe: (l) => (listeners.add(l), () => listeners.delete(l)),
+        agentUsage: () => ({}),
+        subscribeAgents: () => () => undefined,
+        now: () => Date.now(),
+      },
+    });
+    const a = project('cez-wsem-host-', semaphore);
+
+    // Liveness: the workspace is idle, so one run starts despite the pressure.
+    const first = a.manager.startRun(SLOW, { task: 'first start is always admitted' });
+    await waitFor(() => a.store.getRun(first.id)?.status === 'running', 'the first run to start');
+    const second = a.manager.startRun(INSTANT, { task: 'held back by the reserve' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(a.store.getRun(second.id)?.status).toBe('queued');
+
+    available = 8 * 1024 ** 3;
+    for (const l of [...listeners]) l(); // next telemetry tick
+    await waitFor(
+      () => settled.includes(a.store.getRun(second.id)?.status ?? ''),
+      'the held run to start once the pressure cleared',
+    );
+    expect(a.store.getRun(second.id)?.status).toBe('done');
+    semaphore.dispose();
+  }, 45_000);
+
+  // Spec 2026-10-21-work-limits: a dispatched review draws on its own pool.
+  describe('separate pools for dispatched children', () => {
+    const child = (kind?: 'review') => ({
+      dispatch: { rootRunId: 'root', parentRunId: 'parent', ...(kind ? { kind } : {}) },
+    });
+
+    it('without a pool a review child queues behind the main tasks (control)', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+      const a = project('cez-pool-shared-', semaphore);
+      const holder = a.manager.startRun(SLOW, { task: 'intake holds the only slot' });
+      await waitFor(() => a.store.getRun(holder.id)?.status === 'running', 'the holder to run', 30_000);
+      const review = a.manager.startRun(INSTANT, { task: 'review', ...child('review') });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(a.store.getRun(review.id)?.status).toBe('queued');
+    }, 30_000);
+
+    it('with maxReviewers a review runs beside a full main pool, and does not count against it', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1, maxReviewers: 1 } });
+      const a = project('cez-pool-review-', semaphore);
+      const holder = a.manager.startRun(SLOW, { task: 'intake holds the only slot' });
+      await waitFor(() => a.store.getRun(holder.id)?.status === 'running', 'the holder to run', 30_000);
+      const review = a.manager.startRun(INSTANT, { task: 'review', ...child('review') });
+      await waitFor(() => settled.includes(a.store.getRun(review.id)?.status ?? ''), 'the review to finish', 30_000);
+      expect(a.store.getRun(review.id)?.status).toBe('done');
+      expect(a.store.getRun(holder.id)?.status).toBe('running');
+      expect(semaphore.busyBy().main).toBe(1);
+    }, 30_000);
+
+    it('a grandchild of a running sub-agent borrows a main slot when the sub-agent pool is full (no self-stall)', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 2, maxSubagents: 1 } });
+      const a = project('cez-pool-nested-', semaphore);
+      // A sub-agent that keeps RUNNING (polling) while it waits for its own child: it holds the
+      // only slot of the full sub-agent pool.
+      const sub = a.manager.startRun(SLOW, { task: 'sub-agent', ...child() });
+      await waitFor(() => a.store.getRun(sub.id)?.status === 'running', 'the sub-agent to run', 30_000);
+      expect(semaphore.freeCapacity().subagent).toBe(0);
+      // A sibling at depth 1 has no way around the full pool: it queues.
+      const sibling = a.manager.startRun(INSTANT, { task: 'sibling', ...child() });
+      // Its own child (depth 2) borrows from main, where there is room.
+      const grandchild = a.manager.startRun(INSTANT, {
+        task: 'grandchild',
+        dispatch: { rootRunId: 'root', parentRunId: sub.id },
+      });
+      await waitFor(() => settled.includes(a.store.getRun(grandchild.id)?.status ?? ''), 'the grandchild to finish', 30_000);
+      expect(a.store.getRun(grandchild.id)?.status).toBe('done');
+      expect(a.store.getRun(sub.id)?.status).toBe('running');
+      expect(a.store.getRun(sibling.id)?.status).toBe('queued');
+    }, 60_000);
+
+    it('a full review pool queues the next review, and a slot freed there starts it', async () => {
+      const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 4, maxReviewers: 1 } });
+      const a = project('cez-pool-full-', semaphore);
+      const first = a.manager.startRun(SLOW, { task: 'review one', ...child('review') });
+      await waitFor(() => a.store.getRun(first.id)?.status === 'running', 'review one to run');
+      expect(semaphore.busyBy()).toEqual({ main: 0, subagent: 0, review: 1 });
+      const second = a.manager.startRun(INSTANT, { task: 'review two', ...child('review') });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(a.store.getRun(second.id)?.status).toBe('queued');
+      // main work is unaffected by the full review pool
+      const main = a.manager.startRun(INSTANT, { task: 'main task' });
+      await waitFor(() => settled.includes(a.store.getRun(main.id)?.status ?? ''), 'the main task to finish', 30_000);
+      await waitFor(() => settled.includes(a.store.getRun(second.id)?.status ?? ''), 'review two after one freed', 30_000);
+      expect(a.store.getRun(second.id)?.status).toBe('done');
+    }, 45_000);
+  });
 });

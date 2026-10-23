@@ -23,7 +23,7 @@ import {
   supportsPrivateMcp,
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { applyCpuPriority, onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -135,7 +135,7 @@ import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEO
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
-import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
+import { WorkspaceSemaphore, type AccountHolds, type ClassCounts, type PoolClass } from '../workspace/semaphore.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
 import { prunePrHeadRefs } from '../automations/pr-head.ts';
@@ -1187,6 +1187,8 @@ export class RunManager {
    * `enterMonitoring` / `leaveMonitoring` — nothing else writes either set.
    */
   private readonly unitParents = new Set<string>();
+  /** Nested children that started on a main-pool slot because their own pool was full. */
+  private readonly borrowed = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** The creation-time namer's branch answer per queued run (spec
    *  2026-10-11-branch-naming-instructions) — `execute` awaits it, bounded, before the fork. */
@@ -1293,6 +1295,7 @@ export class RunManager {
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
+      busyByClass: () => this.busyByClass(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
@@ -1301,7 +1304,7 @@ export class RunManager {
     this.lifecycle = new WorktreeLifecycleCoordinator(repoRoot, store, {
       semaphore: this.semaphore,
       deferCleanup: true,
-      busySlots: () => this.busySlots(),
+      busySlots: () => this.busyByClass().main,
       isActive: id => this.isActive(id),
       cancelAndWait: id => this.cancelAndWait(id),
       onWorktreeRemoved: () => this.sweepPrHeadRefs(),
@@ -1684,6 +1687,41 @@ export class RunManager {
     return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
   }
 
+  /** A child of a child: its parent is itself a dispatched task. */
+  private isNestedChild(runId: string): boolean {
+    const parentId = this.store.getRun(runId)?.dispatch?.parentRunId;
+    return parentId !== undefined && this.store.getRun(parentId)?.dispatch?.parentRunId !== undefined;
+  }
+
+  /** The pool a run draws from (spec 2026-10-21-work-limits): its dispatch role, when that
+   *  role has a pool of its own. */
+  private poolOf(runId: string): PoolClass {
+    if (this.borrowed.has(runId)) return 'main';
+    return this.semaphore.classify(this.store.getRun(runId)?.dispatch);
+  }
+
+  /**
+   * `busySlots()` split by pool, with the same exemptions applied per run. With no separate pool
+   * configured every run is `main`, and the answer is `busySlots()` itself, so the default path
+   * cannot drift from the single count it has always been.
+   */
+  private busyByClass(): ClassCounts {
+    const counts: ClassCounts = { main: 0, subagent: 0, review: 0 };
+    if (!this.semaphore.hasSeparatePools()) {
+      counts.main = this.busySlots();
+      return counts;
+    }
+    for (const id of this.active.keys()) counts[this.poolOf(id)] += 1;
+    for (const id of this.starting) counts[this.poolOf(id)] += 1;
+    for (const id of this.waiting) if (!this.monitoring.has(id)) counts[this.poolOf(id)] -= 1;
+    let watchers = this.semaphore.maxMonitoringSessions();
+    for (const id of this.monitoring) {
+      if (this.unitParents.has(id) || watchers-- > 0) counts[this.poolOf(id)] -= 1;
+    }
+    for (const pool of ['main', 'subagent', 'review'] as const) counts[pool] = Math.max(0, counts[pool]);
+    return counts;
+  }
+
   /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
@@ -1761,7 +1799,6 @@ export class RunManager {
       do {
         this.pumpAgain = false;
         const repo = await getRepoInfo(this.repoRoot);
-        const maxParallel = this.semaphore.maxParallel();
         // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
         // project never runs more than its own configured `maxParallel`; absent
         // an override it equals the workspace cap, so behavior is unchanged.
@@ -1769,10 +1806,24 @@ export class RunManager {
         // `waiting` runs don't hold a slot (#347) — see busySlots(). The check
         // below is the only slot gate: resumes never pass through it. A run
         // starts only under BOTH the workspace cap and this project's ceiling.
-        const capacity = () =>
-          this.semaphore.busy() < maxParallel &&
-          this.busySlots() < projectMax &&
-          (repo !== null || this.busySlots() < 1);
+        // Each candidate draws on its OWN pool (spec 2026-10-21-work-limits): a dispatched
+        // review waits on review slots, not behind intake tasks holding `maxParallel`. The
+        // per-project ceiling and the non-git rule bind the main pool only.
+        // The pool a candidate would start in, or null. A nested child (depth >= 2) whose own pool
+        // is full may borrow a main-pool slot when main has room: its parent is a running
+        // sub-agent that holds a slot of the full pool while waiting for it, so refusing would
+        // stall the pool on itself (spec 2026-10-21-work-limits, "Nested children").
+        const admission = (id: string): PoolClass | null => {
+          const fits = (p: PoolClass) =>
+            this.semaphore.poolHasRoom(p) && (p !== 'main' || this.busyByClass().main < projectMax);
+          const own = this.poolOf(id);
+          const pool = fits(own) ? own : own !== 'main' && this.isNestedChild(id) && fits('main') ? 'main' : null;
+          if (pool === null || (repo === null && this.busySlots() >= 1)) return null;
+          // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
+          // run was otherwise startable and the next telemetry tick re-pumps it.
+          return this.semaphore.hostAdmits() ? pool : null;
+        };
+        const capacity = (id: string) => admission(id) !== null;
         // The usage-limit hold (spec 2026-08-03-auto-resume-after-usage-limit).
         //
         // A limit closes an ACCOUNT, not a run — so starting the next queued task walks it into
@@ -1798,7 +1849,7 @@ export class RunManager {
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
-          return capacity();
+          return capacity(id);
         };
         // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
         // actually start — never inside the loop, whose dequeue must stay in one synchronous tick.
@@ -1809,9 +1860,14 @@ export class RunManager {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
           const next = this.queue.findIndex(startable);
-          if (next === -1) break; // nothing queued can start right now
+          if (next === -1) {
+            this.semaphore.noteHostDeferral();
+            break; // nothing queued can start right now
+          }
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          if (admission(runId) === 'main' && this.poolOf(runId) !== 'main') this.borrowed.add(runId);
+          this.semaphore.noteGatedStart();
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
           // question and would send this run straight back to the queue.
           if (forced) this.forceStarted.add(runId);
@@ -2208,6 +2264,7 @@ export class RunManager {
     if (state) state.cancellationTimer = undefined;
     this.waiting.delete(runId);
     this.leaveMonitoring(runId);
+    this.borrowed.delete(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
@@ -2302,7 +2359,11 @@ export class RunManager {
     if (!this.dispatchReachable()) return;
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
-    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+    state.dispatchPrompt = composeDispatchPrompt(
+      dispatch?.kind,
+      dispatch?.parentRunId ? undefined : dispatch?.intent,
+      this.semaphore.maxChildrenPerParent(),
+    );
   }
 
   /**
@@ -2541,10 +2602,11 @@ export class RunManager {
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
-    const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
+    const maxChildren = this.semaphore.maxChildrenPerParent();
+    const inFlightCap = Math.min(maxChildren, intent?.inFlight ?? maxChildren);
     const inFlight = inFlightChildren(runs, parentId).length;
     if (inFlight + 1 > inFlightCap) {
-      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
+      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < maxChildren ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
       note(`dispatch refused — ${refused}`, 'danger');
       return { refused };
     }
@@ -2594,7 +2656,7 @@ export class RunManager {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
-      systemPrompt: composeDispatchPrompt(input.kind),
+      systemPrompt: composeDispatchPrompt(input.kind, undefined, this.semaphore.maxChildrenPerParent()),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
       autonomous: true,
@@ -3385,7 +3447,7 @@ export class RunManager {
     state.releaseWorktree?.();
     state.releaseRepoRoot?.();
     this.active.delete(runId); this.starting.delete(runId); this.waiting.delete(runId);
-    this.monitoring.delete(runId); this.unitParents.delete(runId);
+    this.monitoring.delete(runId); this.unitParents.delete(runId); this.borrowed.delete(runId);
     this.store.updateRun(runId, {status: 'waiting', error: `Worktree scripts need attention${operationId ? ` (${operationId})` : ''}`});
     this.store.appendEvent(runId, {type: 'note', message: `Worktree preparation paused${operationId ? ` — operation ${operationId}` : ''}; use Worktrees settings to Retry, Start task anyway, or Cancel task.`});
     this.releaseSlot();
@@ -4594,7 +4656,7 @@ export class RunManager {
       state.sessionEverOpened = true;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
@@ -6678,7 +6740,7 @@ export class RunManager {
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     try {
@@ -7986,6 +8048,7 @@ export class RunManager {
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
       const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      if (child.pid !== undefined) applyCpuPriority(child.pid, this.semaphore.agentCpuPriority());
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';

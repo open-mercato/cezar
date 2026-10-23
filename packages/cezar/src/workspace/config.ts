@@ -7,7 +7,7 @@ import { renameSyncWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { DISPATCH_MAX_IN_FLIGHT, DISPATCH_MAX_IN_FLIGHT_LIMIT, MAX_CONCURRENCY, PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
@@ -57,7 +57,7 @@ const workspaceProjectSchema = z
      *  workspace `resources.maxParallel`. Bounded like the workspace cap; a bad
      *  value degrades to "inherit" (`.catch(undefined)`) rather than a hard
      *  default, and `.passthrough()` preserves the key across cezar round-trips. */
-    maxParallel: z.number().int().min(1).max(16).optional().catch(undefined),
+    maxParallel: z.number().int().min(1).max(MAX_CONCURRENCY).optional().catch(undefined),
     /** Free-form labels grouping connected repositories (`storefront`, `infra`), used by the
      *  global Tasks page to filter and group across projects. Absent = untagged; the writers
      *  (`PATCH /api/projects/:id`, `cezar projects tag`) delete the key rather than storing `[]`,
@@ -88,9 +88,9 @@ export const DEFAULT_IDLE_TIMEOUT_MINUTES = 15;
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
-    maxParallel: z.number().int().min(1).max(16).default(2).catch(2),
+    maxParallel: z.number().int().min(1).max(MAX_CONCURRENCY).default(2).catch(2),
     /** Extra durable `CEZ:MONITORING` sessions exempt from the active-task cap. */
-    maxMonitoringSessions: z.number().int().min(0).max(16).default(2).catch(2),
+    maxMonitoringSessions: z.number().int().min(0).max(MAX_CONCURRENCY).default(2).catch(2),
     /** Plain `waiting`/`CEZ:ASK` session idle timeout; null or 0 disables this safeguard. */
     idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().default(DEFAULT_IDLE_TIMEOUT_MINUTES).catch(DEFAULT_IDLE_TIMEOUT_MINUTES),
     /**
@@ -126,6 +126,30 @@ const resourcesSchema = z
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+    /** Own pool for dispatched `implement` children, so intake tasks cannot starve them
+     *  (spec 2026-10-21-work-limits). null = they share `maxParallel`. */
+    maxSubagents: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().default(null).catch(null),
+    /** Own pool for dispatched `review` children. null = they share `maxParallel`. */
+    maxReviewers: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().default(null).catch(null),
+    /** Children one task may have in flight at once; 4 is the long-standing fixed cap
+     *  (`DISPATCH_MAX_IN_FLIGHT`). Raise it so large pools can actually fill. */
+    maxChildrenPerParent: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT_LIMIT).default(DISPATCH_MAX_IN_FLIGHT).catch(DISPATCH_MAX_IN_FLIGHT),
+    /** Scale every pool down to what free memory and CPU can carry (reduction only). */
+    autoScale: z.boolean().default(false).catch(false),
+    /** OS scheduling priority for agent process trees (spec 2026-10-21-host-resource-limits).
+     *  `normal` = untouched. */
+    agentCpuPriority: z.enum(['normal', 'low', 'idle']).default('normal').catch('normal'),
+    /** Keep this much of the host free: no NEW run starts below `memoryMb` available RAM or
+     *  above `cpuPct` host CPU. null = that guard is off. */
+    hostReserve: z
+      .object({
+        memoryMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+        cpuPct: z.number().int().min(1).max(100).nullable().default(null).catch(null),
+      })
+      .default({ memoryMb: null, cpuPct: null })
+      .catch({ memoryMb: null, cpuPct: null }),
+    /** Ceiling on the summed RSS of every agent process tree; no NEW run starts at or above it. */
+    totalAgentMemoryMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
     /** Default worktree retention for projects that don't override it. */
     worktreeRetentionDefault: z.number().int().min(0).max(1000).default(10).catch(10),
   })

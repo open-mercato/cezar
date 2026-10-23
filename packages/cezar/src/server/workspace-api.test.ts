@@ -108,6 +108,14 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
+        maxSubagents: null,
+        maxReviewers: null,
+        autoScale: false,
+        maxChildrenPerParent: 4,
+        effective: { maxParallel: 2, maxSubagents: null, maxReviewers: null },
+        agentCpuPriority: 'normal',
+        hostReserve: { memoryMb: null, cpuPct: null },
+        totalAgentMemoryMb: null,
         worktreeRetentionDefault: 10,
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
@@ -282,6 +290,11 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
+        maxSubagents: 40,
+        maxReviewers: 12,
+        agentCpuPriority: 'low',
+        hostReserve: { memoryMb: 3000, cpuPct: 85 },
+        totalAgentMemoryMb: 8000,
       },
     });
     expect(res.status).toBe(200);
@@ -304,6 +317,14 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
+        maxSubagents: 40,
+        maxReviewers: 12,
+        autoScale: false,
+        maxChildrenPerParent: 4,
+        effective: { maxParallel: 5, maxSubagents: 40, maxReviewers: 12 },
+        agentCpuPriority: 'low',
+        hostReserve: { memoryMb: 3000, cpuPct: 85 },
+        totalAgentMemoryMb: 8000,
         worktreeRetentionDefault: 10,
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
@@ -322,6 +343,7 @@ describe('the workspace settings API (step 2.7)', () => {
     // asks, not just the file.
     expect(semaphore.autoResumeOnUsageLimit()).toBe(false);
     expect(semaphore.memoryLimitMb()).toBe(2048);
+    expect(semaphore.agentCpuPriority()).toBe('low');
   });
 
   it('#1232 PUT idle timeout persists, reloads, and reaches the live semaphore', async () => {
@@ -355,6 +377,16 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.monitoringWakeIntervalMinutes()).toBeNull();
   });
 
+  it('accepts concurrency up to 128 and refuses 129 (spec 2026-10-21-work-limits)', async () => {
+    const res = await putConfig({ resources: { maxParallel: 128, maxMonitoringSessions: 128, maxSubagents: 100, maxReviewers: 128 } });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as WorkspaceConfigResponse;
+    expect(body.resources).toMatchObject({ maxParallel: 128, maxSubagents: 100, maxReviewers: 128 });
+    expect(semaphore.maxParallel()).toBe(128);
+    expect(semaphore.freeCapacity()).toEqual({ main: 128, subagent: 100, review: 128 });
+    expect((await putConfig({ resources: { maxMonitoringSessions: 129 } })).status).toBe(400);
+  });
+
   it('partial updates leave the other keys untouched', async () => {
     await putConfig({ resources: { maxParallel: 5 } });
     await putConfig({ resources: { worktreeRetentionDefault: 3 } });
@@ -365,6 +397,14 @@ describe('the workspace settings API (step 2.7)', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      maxSubagents: null,
+      maxReviewers: null,
+      autoScale: false,
+      maxChildrenPerParent: 4,
+      effective: { maxParallel: 5, maxSubagents: null, maxReviewers: null },
+      agentCpuPriority: 'normal',
+      hostReserve: { memoryMb: null, cpuPct: null },
+      totalAgentMemoryMb: null,
       worktreeRetentionDefault: 3,
     });
   });
@@ -412,7 +452,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
-    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }]) {
+    for (const resources of [{ maxParallel: 0 }, { maxParallel: 129 }, { memoryLimitMb: -1 }, { maxSubagents: 0 }, { maxChildrenPerParent: 33 }, { maxChildrenPerParent: 0 }, { hostReserve: { cpuPct: 0 } }, { agentCpuPriority: 'turbo' }]) {
       const res = await putConfig({ resources });
       expect(res.status, JSON.stringify(resources)).toBe(400);
       expect((await res.json()) as { error: string }).toHaveProperty('error');

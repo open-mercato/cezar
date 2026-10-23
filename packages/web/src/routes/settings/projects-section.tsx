@@ -12,6 +12,7 @@ import {
   workspaceQueryKeys,
 } from '@/api/queries'
 import {
+  MAX_CONCURRENCY,
   PROJECT_TAGS_MAX,
   PROJECT_TAG_MAX_LENGTH,
   type ProjectListEntry,
@@ -59,7 +60,7 @@ type Confirming = ProjectListEntry | null
 
 /** Per-project concurrency bounds — mirror the workspace cap (resources-section.tsx). */
 const MAX_PARALLEL_MIN = 1
-const MAX_PARALLEL_MAX = 16
+const MAX_PARALLEL_MAX = MAX_CONCURRENCY
 
 /** Human wording for a registry status probe. `not-git` is fully usable (single-queue
  *  degraded mode), so it reads as a note rather than a fault; only `missing` is a problem.
@@ -738,7 +739,7 @@ export function ProjectTagsEditor({
 /**
  * Per-project "Max parallel tasks" stepper (spec 2026-07-22). An empty field is
  * the unset default — it inherits the workspace limit, which the placeholder
- * names; `1..16` pins a per-project ceiling. Bound to the server value
+ * names; `1..128` pins a per-project ceiling. Bound to the server value
  * (`project.maxParallel`) and saved on commit, mirroring the workspace
  * `Max parallel` control (resources-section.tsx) — a failed save reverts to the
  * server's value, and the hook invalidates the projects query so a success

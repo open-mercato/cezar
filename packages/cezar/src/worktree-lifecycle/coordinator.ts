@@ -311,7 +311,7 @@ export class WorktreeLifecycleCoordinator {
         await this.save(record, operation); // Failure here MUST prevent spawn.
         const result = await executeLifecycleCommand({command: rendered, cwd: context.worktree_path,
           ...(entry.timeoutSeconds ? {timeoutSeconds: entry.timeoutSeconds} : {}), signal: controller.signal,
-          dryRun: process.env.CEZ_DRY_RUN === '1',
+          cpuPriority: this.options.semaphore.agentCpuPriority(), dryRun: process.env.CEZ_DRY_RUN === '1',
           onStart: async identity => {
             const current = operation.executions.at(-1)!;
             current.process = identity; await this.save(record, operation);
@@ -566,7 +566,10 @@ export class WorktreeLifecycleCoordinator {
   private async pump(): Promise<void> {
     if (this.disposed || !this.cleanupStarted) return;
     for (const [id] of this.queue) {
-      if (this.options.semaphore.busy() >= this.options.semaphore.maxParallel() || this.executing.size + this.options.busySlots() >= this.options.semaphore.projectMaxParallel(this.root)) break;
+      if (!this.options.semaphore.poolHasRoom('main') || this.executing.size + this.options.busySlots() >= this.options.semaphore.projectMaxParallel(this.root)) break;
+      // Same host-headroom gate (and liveness rule) as RunManager.pump (spec 2026-10-21-host-resource-limits).
+      if (!this.options.semaphore.hostAdmits()) { this.options.semaphore.noteHostDeferral(); break; }
+      this.options.semaphore.noteGatedStart();
       this.queue.delete(id); this.executing.add(id);
       void this.activate(id).finally(() => { this.executing.delete(id); void this.options.semaphore.release(); });
     }

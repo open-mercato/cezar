@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema } from './health.ts';
+import { DISPATCH_MAX_IN_FLIGHT_LIMIT } from './dispatch.ts';
+import { MAX_CONCURRENCY } from './projects.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
@@ -54,6 +56,28 @@ export const workspaceConfigResponseSchema = z.object({
     /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
     autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
+    /** Own pool for dispatched implement children; null = they share `maxParallel`. */
+    maxSubagents: z.number().nullable(),
+    /** Own pool for dispatched review children; null = they share `maxParallel`. */
+    maxReviewers: z.number().nullable(),
+    /** Children a single task may have in flight (default 4, the old fixed cap). */
+    maxChildrenPerParent: z.number(),
+    /** Scale the pools down to what free memory and CPU can carry. */
+    autoScale: z.boolean(),
+    /** What admission uses right now: the configured limits, lowered when `autoScale` is on and
+     *  the machine is short. Never above the configured value. */
+    effective: z.object({
+      maxParallel: z.number(),
+      maxSubagents: z.number().nullable(),
+      maxReviewers: z.number().nullable(),
+    }),
+    /** OS priority of agent process trees (spec 2026-10-21-host-resource-limits). */
+    agentCpuPriority: z.enum(['normal', 'low', 'idle']),
+    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy.
+     *  The server accepts `memoryMb` 0 as off; the cockpit's floor is 256 MiB. */
+    hostReserve: z.object({ memoryMb: z.number().nullable(), cpuPct: z.number().nullable() }),
+    /** No new run starts while all agent trees together hold this much RAM. */
+    totalAgentMemoryMb: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
   }),
   /**
@@ -119,12 +143,24 @@ export const setWorkspaceConfigInputSchema = z.object({
     .optional(),
   resources: z
     .object({
-      maxParallel: z.number().int().min(1).max(16).optional(),
-      maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
+      maxParallel: z.number().int().min(1).max(MAX_CONCURRENCY).optional(),
+      maxMonitoringSessions: z.number().int().min(0).max(MAX_CONCURRENCY).optional(),
+      maxSubagents: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional(),
+      maxReviewers: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional(),
+      autoScale: z.boolean().optional(),
+      maxChildrenPerParent: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT_LIMIT).optional(),
       idleTimeoutMinutes: z.number().int().min(0).max(1440).nullable().optional(),
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
       autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+      agentCpuPriority: z.enum(['normal', 'low', 'idle']).optional(),
+      hostReserve: z
+        .object({
+          memoryMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+          cpuPct: z.number().int().min(1).max(100).nullable().optional(),
+        })
+        .optional(),
+      totalAgentMemoryMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })
     .optional(),
@@ -489,7 +525,7 @@ export const setConfigInputSchema = z.object({
       pi: z.boolean().nullable().optional(),
     })
     .optional(),
-  maxParallel: z.number().int().min(1).max(16).optional(),
+  maxParallel: z.number().int().min(1).max(MAX_CONCURRENCY).optional(),
   /** null or 0 clears the ceiling back to "no limit". */
   memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
   /** Keep last N finished worktrees (#483); 0 = unlimited, null clears back to the default (10). */

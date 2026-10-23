@@ -12,7 +12,9 @@
 import { DISPATCH_MAX_IN_FLIGHT, type DispatchIntent, type DispatchKind } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
-export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
+/** The dispatch prompt for a workspace whose per-parent fan-out cap is `maxChildren`
+ *  (`resources.maxChildrenPerParent`, read at composition time). */
+export const dispatchPromptFor = (maxChildren: number): string => `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
 To dispatch, run (from your shell) — always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez task …" below means node "$CEZ_BIN" task …:
 
@@ -22,7 +24,7 @@ To dispatch, run (from your shell) — always through the cockpit's own binary, 
 - Give every sibling a DISJOINT scope. Two tasks editing the same file is the one failure this design cannot recover from.
 - --budget is optional: OMIT it unless the user asked for a cost limit or your own task order names a Max cost. Never invent a figure — a --budget you made up becomes a hard cap that parks the child mid-work. Under a capped parent a child that names none gets the whole remainder; under an uncapped one it is uncapped too. A --budget is carved out of your own remaining budget and returned to you, unspent, when the child settles; a dispatch that asks for more than you have left is refused with the reason.
 - The command prints the child's run id and branch. COMMIT before dispatching: children fork your committed tip, not your working tree.
-- At most ${DISPATCH_MAX_IN_FLIGHT} children in flight under you; one more is refused. Wait for reports, then dispatch again.
+- At most ${maxChildren} children in flight under you; one more is refused. Wait for reports, then dispatch again.
 - --runner and --model choose who runs the child; omitted, it inherits yours. If the user's instructions name a runner or model, use that. Otherwise choose deliberately: a narrow, well-specified assignment — a review, a mechanical change, a read-only investigation — is a good fit for a cheaper or faster model; keep your own model for work whose judgement you would not want to re-check.
 
 While children are working and you have nothing else to do, end your turn with a line containing exactly CEZ:MONITORING. cezar parks you, gives your slot to the children, and wakes you when a report arrives.
@@ -39,11 +41,18 @@ The tree directory. Your task order names it (also in the CEZ_TREE_DIR environme
 
 The Guard. Before anything irreversible, financial, or outside the scope you were given — pushing to a shared branch, merging into the base branch, deleting a branch or a remote, spending beyond your budget, touching production or a credential — end the turn with CEZ:ASK and stop. Never work around a blocked action.`;
 
+export const DISPATCH_PROMPT = dispatchPromptFor(DISPATCH_MAX_IN_FLIGHT);
+
 export const REVIEW_PROMPT = `Your KIND is review. You did not write the work you were given — you judge it. Read the diff of every branch or run named in your order's "Review of" line (git diff <fork point>..<branch>; the task's report.md and notes.md in the tree directory tell you what it claimed). Run the repository's tests and checks against that branch yourself and read the output. Judge the work against a checklist you try to FALSIFY: does the diff do what the order asked, does every claim in the report match the diff and the test output, does anything touch files outside the stated scope, is anything untested or destructive. Then report with --verdict: approve when the work does what its order asked and the evidence holds; changes with the exact findings (file and line) when it is close; reject when it is wrong or unsafe. You edit nothing on the reviewed branch and commit nothing of your own beyond your notes — a reviewer that fixes the code is no longer a reviewer. The verdict is required.`;
 
 /** The prompt part one task runs under: the dispatch instructions, plus the review addendum. */
-export function composeDispatchPrompt(kind: DispatchKind | undefined, intent?: DispatchIntent): string {
-  const base = kind === 'review' ? `${DISPATCH_PROMPT}\n\n${REVIEW_PROMPT}` : DISPATCH_PROMPT;
+export function composeDispatchPrompt(
+  kind: DispatchKind | undefined,
+  intent?: DispatchIntent,
+  maxChildren: number = DISPATCH_MAX_IN_FLIGHT,
+): string {
+  const dispatch = dispatchPromptFor(maxChildren);
+  const base = kind === 'review' ? `${dispatch}\n\n${REVIEW_PROMPT}` : dispatch;
   return intent ? `${base}\n\n${dispatchIntentPrompt(intent)}` : base;
 }
 

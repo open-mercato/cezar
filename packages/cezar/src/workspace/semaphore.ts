@@ -1,5 +1,20 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { DISPATCH_MAX_IN_FLIGHT, type HostUsage } from '@open-mercato/cezar-contract';
+import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
+import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
+import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
+import {
+  effectiveCapacity,
+  freeFromHost,
+  headroomRuns,
+  observedPerRun,
+  stepScale,
+  type ClassCounts,
+  type PoolClass,
+  type PoolLimits,
+} from './effective-capacity.ts';
+export type { ClassCounts, PoolClass, PoolLimits } from './effective-capacity.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
@@ -48,6 +63,21 @@ export interface WorkspaceResourceLimits {
   autoResumeOnUsageLimit?: boolean;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
+  /** OS priority for agent process trees (spec 2026-10-21-host-resource-limits). Absent = normal. */
+  agentCpuPriority?: AgentCpuPriority;
+  /** Host headroom to keep free before starting a NEW run. Absent = off. */
+  hostReserve?: HostReserve;
+  /** Ceiling on the summed RSS of all agent trees before a NEW run starts. Absent/null = off. */
+  totalAgentMemoryMb?: number | null;
+  /** Own pool for dispatched `implement` children; absent/null = share `maxParallel`
+   *  (spec 2026-10-21-work-limits). */
+  maxSubagents?: number | null;
+  /** Own pool for dispatched `review` children; absent/null = share `maxParallel`. */
+  maxReviewers?: number | null;
+  /** Scale every pool down to what free memory and CPU can carry. Default off. */
+  autoScale?: boolean;
+  /** Children one task may have in flight; absent = `DISPATCH_MAX_IN_FLIGHT` (4). */
+  maxChildrenPerParent?: number;
   /**
    * Per-project concurrency ceilings, keyed by realpath-normalized project
    * root (the registry stores normalized `root`). A root absent from the map
@@ -57,6 +87,8 @@ export interface WorkspaceResourceLimits {
    */
   projectLimits?: ReadonlyMap<string, number>;
 }
+
+export type AgentCpuPriority = 'normal' | 'low' | 'idle';
 
 /** Realpath-normalize a root the same way the registry does
  *  (`workspace/projects.ts` `normalizeRoot`), but synchronously — this answers
@@ -90,6 +122,8 @@ export interface SemaphoreParticipant {
   /** Slots this manager currently holds. The #347 exemption lives in the
    *  participant's own accounting: `waiting` runs are already subtracted. */
   busySlots(): number;
+  /** The same slots split by pool. Optional so stubs keep working: absent reads as all `main`. */
+  busyByClass?(): ClassCounts;
   /** Kick the manager's queue — capacity may have appeared. Awaited by
    *  `release()` so the manager taking a freed slot has registered it before
    *  the next participant evaluates capacity. */
@@ -141,6 +175,13 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
+    maxSubagents: resources.maxSubagents,
+    maxReviewers: resources.maxReviewers,
+    autoScale: resources.autoScale,
+    maxChildrenPerParent: resources.maxChildrenPerParent,
+    agentCpuPriority: resources.agentCpuPriority,
+    hostReserve: resources.hostReserve,
+    totalAgentMemoryMb: resources.totalAgentMemoryMb,
     projectLimits,
   };
 }
@@ -153,7 +194,24 @@ export interface WorkspaceSemaphoreOptions {
    *  schema's own defaults (`maxParallel: 2`, no memory limit), so a manager
    *  constructed without boot wiring behaves like a fresh workspace. */
   initial?: Partial<WorkspaceResourceLimits>;
+  /** Telemetry seams for the host-headroom gate; tests inject fakes, production reads the
+   *  process-wide samplers. */
+  host?: {
+    current(): HostUsage | undefined;
+    subscribe(listener: () => void): () => void;
+    agentUsage(): Record<string, Pick<ProcessUsage, 'rssBytes'> & { cpuPct?: number }>;
+    subscribeAgents(listener: () => void): () => void;
+    now(): number;
+  };
 }
+
+const defaultHost: NonNullable<WorkspaceSemaphoreOptions['host']> = {
+  current: currentHostUsage,
+  subscribe: (listener) => onHostUsage(() => listener()),
+  agentUsage: allUsage,
+  subscribeAgents: (listener) => onUsage(() => listener()),
+  now: () => Date.now(),
+};
 
 export class WorkspaceSemaphore {
   private readonly participants = new Set<SemaphoreParticipant>();
@@ -164,10 +222,261 @@ export class WorkspaceSemaphore {
   /** A slot freed DURING a sweep. The in-flight sweep may already have pumped
    *  the manager that should get it, so re-run rather than drop the wakeup. */
   private pendingRelease = false;
+  private readonly host: NonNullable<WorkspaceSemaphoreOptions['host']>;
+  private offHost: (() => void) | null = null;
+  private offAgents: (() => void) | null = null;
+  /** Telemetry ticks seen, and the tick of the last gated start: one gated start per tick, so a
+   *  burst of queued runs cannot all pass the same stale reading (spec 2026-10-21). */
+  private ticks = 0;
+  private startTick = -1;
+  private lastTickAt = Number.NEGATIVE_INFINITY;
+  private lastStartAt = Number.NEGATIVE_INFINITY;
+  /** The gate turned a start away; the next tick re-pumps. */
+  private hostDeferred = false;
+  /** autoScale's current effective limits (null = use the configured ones) and the calm-sample
+   *  counters that gate a raise. */
+  private scaled: PoolLimits | null = null;
+  private scaledAt = 0;
+  /** Headroom (runs) behind `scaled`; undefined when unreadable. */
+  private room: number | undefined;
+  private calm = { main: 0, subagent: 0, review: 0 };
 
   constructor(options: WorkspaceSemaphoreOptions = {}) {
     this.load = options.load ?? loadResourceLimits;
+    this.host = options.host ?? defaultHost;
     this.limits = { ...DEFAULT_LIMITS, ...options.initial };
+    this.syncHostGate();
+  }
+
+  agentCpuPriority(): AgentCpuPriority {
+    return this.limits.agentCpuPriority ?? 'normal';
+  }
+
+  private reserve(): HostReserve | null {
+    const r = this.limits.hostReserve;
+    return r && ((r.memoryMb ?? 0) > 0 || (r.cpuPct ?? 0) > 0) ? r : null;
+  }
+
+  private totalAgentMemoryMb(): number | null {
+    const mb = this.limits.totalAgentMemoryMb;
+    return mb && mb > 0 ? mb : null;
+  }
+
+  /** Sample the host only while a guard is configured (zero cost by default). */
+  private syncHostGate(): void {
+    const onTick = () => {
+      // Host and agent samplers both fire every ~2 s: count ONE tick (and one autoScale step) per
+      // sample period so the brake and the calm counters do not run at double rate.
+      const at = this.host.now();
+      let raised = false;
+      if (at - this.lastTickAt >= HOST_SAMPLE_INTERVAL_MS / 2) {
+        this.ticks += 1;
+        this.lastTickAt = at;
+        raised = this.rescale();
+      }
+      if (!this.hostDeferred && !raised) return;
+      this.hostDeferred = false;
+      void this.release(); // pressure may have cleared, or a pool grew
+    };
+    const wantHost = this.reserve() !== null || this.autoScale();
+    if (wantHost && !this.offHost) this.offHost = this.host.subscribe(onTick);
+    else if (!wantHost && this.offHost) {
+      this.offHost();
+      this.offHost = null;
+    }
+    if (!this.autoScale()) this.scaled = null;
+    else this.rescale(true);
+    if (this.totalAgentMemoryMb() !== null && !this.offAgents) this.offAgents = this.host.subscribeAgents(onTick);
+    else if (this.totalAgentMemoryMb() === null && this.offAgents) {
+      this.offAgents();
+      this.offAgents = null;
+    }
+    if (!wantHost && this.totalAgentMemoryMb() === null) {
+      this.hostDeferred = false;
+      this.ticks = 0;
+      this.startTick = -1;
+      this.lastTickAt = Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  /** Stop sampling and forget gate state — teardown and tests. */
+  dispose(): void {
+    this.offHost?.();
+    this.offAgents?.();
+    this.offHost = null;
+    this.offAgents = null;
+    this.hostDeferred = false;
+    this.ticks = 0;
+    this.startTick = -1;
+    this.lastTickAt = Number.NEGATIVE_INFINITY;
+    this.scaled = null;
+  }
+
+  /** Why a NEW run must wait for the host, or null (spec 2026-10-21-host-resource-limits).
+   *  Fails open on a missing/stale sample; an idle workspace always admits one run, so a queue
+   *  can never dead-end behind a machine that is busy with something else. */
+  hostBlock(): string | null {
+    const reserve = this.reserve();
+    const totalMb = this.totalAgentMemoryMb();
+    const braking = this.brakeApplies();
+    if (!reserve && totalMb === null && !braking) return null;
+    if (this.busy() === 0) return null;
+    // One start per sample period — including before the first sample exists, so a startup burst
+    // cannot all pass the fail-open. A sampler silent for a stale window lifts the brake (fail open).
+    if (braking && this.ticks === this.startTick && this.host.now() - this.lastStartAt <= HOST_SAMPLE_STALE_MS) {
+      return 'waiting for a fresh reading after the last start';
+    }
+    let usage = this.host.current();
+    if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
+    return (
+      (reserve ? hostReserveBlock(reserve, usage) : null) ?? agentMemoryBlock(totalMb, this.host.agentUsage())
+    );
+  }
+
+  /** Pure capacity predicate for `pump()`. */
+  hostAdmits(): boolean {
+    return this.hostBlock() === null;
+  }
+
+  /** `pump()` stopped with runs still queued: if the host is why, the next tick re-pumps. */
+  noteHostDeferral(): void {
+    if (this.hostBlock() !== null) this.hostDeferred = true;
+  }
+
+  /** The one-start-per-tick brake: always with a reserve/total guard; with autoScale alone only
+   *  once the computed room is nearly gone, so a roomy machine still fills its pools at once. */
+  private brakeApplies(): boolean {
+    if (this.reserve() || this.totalAgentMemoryMb() !== null) return true;
+    return this.autoScale() && this.scaled !== null && this.room !== undefined && this.room < 2;
+  }
+
+  /** `pump()` just dequeued a run through the gate. */
+  noteGatedStart(): void {
+    if (!this.brakeApplies()) return;
+    this.startTick = this.ticks;
+    this.lastStartAt = this.host.now();
+  }
+
+  // ---- pools (spec 2026-10-21-work-limits) ----
+
+  /** True once a kind has a pool of its own; until then nothing needs classifying. */
+  hasSeparatePools(): boolean {
+    return !!this.limits.maxSubagents || !!this.limits.maxReviewers;
+  }
+
+  /** Per-parent fan-out cap enforced by `dispatch()` and told to the agent. */
+  maxChildrenPerParent(): number {
+    return this.limits.maxChildrenPerParent ?? DISPATCH_MAX_IN_FLIGHT;
+  }
+
+  autoScale(): boolean {
+    return this.limits.autoScale === true;
+  }
+
+  private configuredLimits(): PoolLimits {
+    return {
+      main: this.limits.maxParallel,
+      subagent: this.limits.maxSubagents ?? null,
+      review: this.limits.maxReviewers ?? null,
+    };
+  }
+
+  /** Which pool a run draws from. A kind only gets its own pool when that pool is configured;
+   *  otherwise it counts against `maxParallel` exactly as before. */
+  classify(dispatch: { parentRunId?: string; kind?: string } | undefined): PoolClass {
+    if (!dispatch?.parentRunId) return 'main';
+    if (dispatch.kind === 'review') return this.limits.maxReviewers ? 'review' : 'main';
+    return this.limits.maxSubagents ? 'subagent' : 'main';
+  }
+
+  /** Held slots by pool, across every manager. A stub without a split is all `main`. */
+  busyBy(): ClassCounts {
+    const total: ClassCounts = { main: 0, subagent: 0, review: 0 };
+    for (const p of this.participants) {
+      const by = p.busyByClass?.() ?? { main: p.busySlots(), subagent: 0, review: 0 };
+      total.main += by.main;
+      total.subagent += by.subagent;
+      total.review += by.review;
+    }
+    return total;
+  }
+
+  /**
+   * The limits admission uses now, as `{main, subagent, review}` (null = that kind shares main):
+   * autoScale's while its reading is fresh, else the configured ones. Public, with `freeCapacity()`,
+   * for readouts and the fleet hub. A reading older than a stale window is dropped here, so
+   * silent telemetry can never leave a lowered limit stuck.
+   */
+  effectiveLimits(): PoolLimits {
+    if (this.scaled && this.host.now() - this.scaledAt <= HOST_SAMPLE_STALE_MS) return this.scaled;
+    return this.configuredLimits();
+  }
+
+  /** Limit of one pool; a pool without its own limit is the main pool. */
+  limitOf(pool: PoolClass): number {
+    const eff = this.effectiveLimits();
+    return (pool === 'main' ? eff.main : eff[pool]) ?? eff.main;
+  }
+
+  /** Room in the pool a run would draw from (per-project cap is the manager's own business). */
+  poolHasRoom(pool: PoolClass): boolean {
+    return this.busyBy()[pool] < this.limitOf(pool);
+  }
+
+  /** Free slots per pool (effective limit - busy, >= 0). A kind without its own pool reports the
+   *  main pool's room, because that is what it would take. */
+  freeCapacity(): ClassCounts {
+    const busy = this.busyBy();
+    const room = (pool: PoolClass) => Math.max(0, this.limitOf(pool) - busy[pool]);
+    const main = room('main');
+    return { main, subagent: this.limits.maxSubagents ? room('subagent') : main, review: this.limits.maxReviewers ? room('review') : main };
+  }
+
+  /** Recompute autoScale from the newest host sample. Returns true when any pool grew.
+   *  Fails open: no fresh sample or nothing readable means the configured limits. */
+  private rescale(reset = false): boolean {
+    if (!this.autoScale()) return false;
+    let usage = this.host.current();
+    if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
+    const configured = this.configuredLimits();
+    const input = usage
+      ? {
+          configured,
+          busy: this.busyBy(),
+          ...freeFromHost(usage, this.limits.hostReserve?.memoryMb ?? null),
+          ...observedPerRun(this.host.agentUsage()),
+        }
+      : undefined;
+    if (!input || headroomRuns(input) === undefined) {
+      // Nothing readable: back to the configured limits at once, never a slow ramp.
+      const wasLower = this.scaled !== null;
+      this.scaled = null;
+      this.room = undefined;
+      this.calm = { main: 0, subagent: 0, review: 0 };
+      return wasLower;
+    }
+    const next = effectiveCapacity(input);
+    this.room = headroomRuns(input);
+    this.scaledAt = this.host.now();
+    if (reset) {
+      // A config change starts from the current headroom, not from the old scaled baseline.
+      this.scaled = next;
+      this.calm = { main: 0, subagent: 0, review: 0 };
+      return false;
+    }
+    const prev = this.scaled ?? configured;
+    let grew = false;
+    const step = (pool: PoolClass): number | null => {
+      const target = pool === 'main' ? next.main : next[pool];
+      const before = pool === 'main' ? prev.main : prev[pool];
+      if (target === null || before === null) return target;
+      const r = stepScale(before, target, this.calm[pool]);
+      this.calm[pool] = r.calm;
+      if (r.value > before) grew = true;
+      return r.value;
+    };
+    this.scaled = { main: step('main') as number, subagent: step('subagent'), review: step('review') };
+    return grew;
   }
 
   /** Join the shared counter. Returns the unregister handle — the manager's
@@ -325,6 +634,7 @@ export class WorkspaceSemaphore {
   async refresh(): Promise<void> {
     try {
       this.limits = await this.load();
+      this.syncHostGate();
     } catch {
       // keep the last good snapshot
     }

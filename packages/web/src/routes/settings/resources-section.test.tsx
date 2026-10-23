@@ -45,6 +45,14 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      maxSubagents: null,
+      maxReviewers: null,
+      autoScale: false,
+      maxChildrenPerParent: 4,
+      effective: { maxParallel: 2, maxSubagents: null, maxReviewers: null },
+      agentCpuPriority: 'normal',
+      hostReserve: { memoryMb: null, cpuPct: null },
+      totalAgentMemoryMb: null,
       worktreeRetentionDefault: 10,
       ...resources,
     },
@@ -125,6 +133,107 @@ describe('Global settings → Resources', () => {
     expect(requests.some((r) => r.url === '/api/v1/config')).toBe(false)
   })
 
+  it('the responsiveness preset writes low priority plus a host reserve in one PUT', async () => {
+    serve({})
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'low', hostReserve: { memoryMb: 2048, cpuPct: 90 } },
+    })
+  })
+
+  it('the preset keeps a custom reserve and priority already set', async () => {
+    serve({ agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: null } })
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: 90 } },
+    })
+  })
+
+  it('saves the host headroom fields and rejects a value below the floor', async () => {
+    serve({})
+    renderResources()
+    const mem = () => document.querySelector<HTMLInputElement>('[data-slot="resources-reserve-memory"]')!
+    const save = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-host-headroom"]')!
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-reserve-memory"]')).not.toBeNull())
+
+    fireEvent.change(mem(), { target: { value: '12' } })
+    expect(save().disabled).toBe(true)
+    expect(document.querySelector('[data-slot="resources-host-invalid"]')).not.toBeNull()
+
+    fireEvent.change(mem(), { target: { value: '3072' } })
+    fireEvent.change(document.querySelector('[data-slot="resources-total-agent-memory"]')!, { target: { value: '8192' } })
+    fireEvent.click(save())
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { hostReserve: { memoryMb: 3072, cpuPct: null }, totalAgentMemoryMb: 8192 },
+    })
+  })
+
+  it('saves a separate sub-agent pool and an empty field returns it to sharing', async () => {
+    serve({ maxSubagents: 6 })
+    renderResources()
+    const pool = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-subagents"]')
+    await waitFor(() => expect(pool()).not.toBeNull())
+    expect(pool()!.value).toBe('6')
+
+    fireEvent.change(pool()!, { target: { value: '40' } })
+    fireEvent.keyDown(pool()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxSubagents: 40 } })
+
+    fireEvent.change(pool()!, { target: { value: '' } })
+    fireEvent.keyDown(pool()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { maxSubagents: null } })
+  })
+
+  it('saves the per-task children cap (default 4, up to 32)', async () => {
+    serve({})
+    renderResources()
+    const field = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-children"]')
+    await waitFor(() => expect(field()).not.toBeNull())
+    expect(field()!.value).toBe('4')
+    fireEvent.change(field()!, { target: { value: '12' } })
+    fireEvent.keyDown(field()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxChildrenPerParent: 12 } })
+  })
+
+  it('accepts up to 128 parallel tasks', async () => {
+    serve({ maxParallel: 2 })
+    renderResources()
+    await waitFor(() => expect(parallelSelect()).not.toBeNull())
+    fireEvent.change(parallelSelect()!, { target: { value: '100' } })
+    fireEvent.keyDown(parallelSelect()!, { key: 'Enter' })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 100 } })
+  })
+
+  it('shows "effective X of Y" while autoScale has lowered a limit', async () => {
+    serve({
+      maxParallel: 8,
+      autoScale: true,
+      maxReviewers: 4,
+      effective: { maxParallel: 3, maxSubagents: null, maxReviewers: 4 },
+    })
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-effective"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="resources-effective"]')!.textContent).toBe(
+      'Right now: tasks effective 3 of 8, reviewers 4.',
+    )
+    fireEvent.change(document.querySelector('[data-slot="resources-auto-scale"]')!, { target: { value: 'off' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { autoScale: false } })
+  })
+
   it('saves maxParallel to the WORKSPACE config, never the per-repo one', async () => {
     serve({ maxParallel: 2 })
     renderResources()
@@ -188,9 +297,9 @@ describe('Global settings → Resources', () => {
     serve({ maxParallel: 2 })
     renderResources()
     await waitFor(() => expect(parallelSelect()).not.toBeNull())
-    fireEvent.change(parallelSelect()!, { target: { value: '40' } })
+    fireEvent.change(parallelSelect()!, { target: { value: '129' } })
     fireEvent.blur(parallelSelect()!)
-    expect(screen.getByText('Enter a whole number from 1 to 16.')).not.toBeNull()
+    expect(screen.getByText('Enter a whole number from 1 to 128.')).not.toBeNull()
     expect(puts()).toHaveLength(0)
   })
 

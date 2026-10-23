@@ -122,6 +122,9 @@ export type UpdateProjectResponse = z.infer<typeof updateProjectResponseSchema>;
 export const PROJECT_TAG_MAX_LENGTH = 32;
 export const PROJECT_TAGS_MAX = 20;
 
+/** Upper bound of every concurrency knob (spec 2026-10-21-work-limits); it was 16. */
+export const MAX_CONCURRENCY = 128;
+
 /**
  * `PATCH /api/v1/projects/:projectId` body — the two per-project registry fields the cockpit
  * edits. Each key is optional and a body may carry either or both: a PATCH names the fields it
@@ -132,7 +135,7 @@ export const PROJECT_TAGS_MAX = 20;
  * happened (and cost a full config rewrite to do nothing).
  *
  * - `maxParallel` (spec 2026-07-22-per-project-concurrency): `null` clears the override back to
- *   "inherit the workspace cap"; an integer `1..16` pins it. The bounds mirror
+ *   "inherit the workspace cap"; an integer `1..128` pins it. The bounds mirror
  *   `workspaceProjectSchema` exactly, so a value this schema accepts can never be degraded away
  *   by the next load's `.catch`.
  * - `tags`: the whole list, replaced wholesale — there is no add-one/remove-one spelling,
@@ -144,7 +147,7 @@ export const PROJECT_TAGS_MAX = 20;
  */
 export const updateProjectInputSchema = z
   .object({
-    maxParallel: z.number().int().min(1).max(16).nullable().optional(),
+    maxParallel: z.number().int().min(1).max(MAX_CONCURRENCY).nullable().optional(),
     tags: z
       .array(z.string().trim().min(1).max(PROJECT_TAG_MAX_LENGTH))
       .max(PROJECT_TAGS_MAX)

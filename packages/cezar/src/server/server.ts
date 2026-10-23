@@ -3479,6 +3479,16 @@ export function createApp(deps: ServerDeps) {
   // `~/.cezar/config.json` — global knobs only; the registry stays on
   // /api/projects above, and schemaVersion (a migration cursor, not a
   // setting) is deliberately omitted.
+  // The limits admission uses right now (autoScale may have lowered them); configured when no
+  // semaphore is wired (spec 2026-10-21-work-limits).
+  const effectiveResources = (config: WorkspaceConfig) => {
+    const eff = deps.semaphore?.effectiveLimits();
+    return {
+      maxParallel: eff?.main ?? config.resources.maxParallel,
+      maxSubagents: eff ? eff.subagent : config.resources.maxSubagents,
+      maxReviewers: eff ? eff.review : config.resources.maxReviewers,
+    };
+  };
   const workspaceConfigBody = (config: WorkspaceConfig): WorkspaceConfigResponse => ({
     branding: {
       name: config.branding.name ?? 'cezar',
@@ -3510,6 +3520,14 @@ export function createApp(deps: ServerDeps) {
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
+      maxSubagents: config.resources.maxSubagents,
+      maxReviewers: config.resources.maxReviewers,
+      autoScale: config.resources.autoScale,
+      maxChildrenPerParent: config.resources.maxChildrenPerParent,
+      effective: effectiveResources(config),
+      agentCpuPriority: config.resources.agentCpuPriority,
+      hostReserve: config.resources.hostReserve,
+      totalAgentMemoryMb: config.resources.totalAgentMemoryMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
@@ -3598,6 +3616,14 @@ export function createApp(deps: ServerDeps) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
+          if (resources?.maxSubagents !== undefined) config.resources.maxSubagents = resources.maxSubagents;
+          if (resources?.maxReviewers !== undefined) config.resources.maxReviewers = resources.maxReviewers;
+          if (resources?.autoScale !== undefined) config.resources.autoScale = resources.autoScale;
+          if (resources?.maxChildrenPerParent !== undefined) config.resources.maxChildrenPerParent = resources.maxChildrenPerParent;
+          if (resources?.agentCpuPriority !== undefined) config.resources.agentCpuPriority = resources.agentCpuPriority;
+          if (resources?.hostReserve?.memoryMb !== undefined) config.resources.hostReserve.memoryMb = resources.hostReserve.memoryMb;
+          if (resources?.hostReserve?.cpuPct !== undefined) config.resources.hostReserve.cpuPct = resources.hostReserve.cpuPct;
+          if (resources?.totalAgentMemoryMb !== undefined) config.resources.totalAgentMemoryMb = resources.totalAgentMemoryMb;
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
           }

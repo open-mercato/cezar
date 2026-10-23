@@ -116,6 +116,34 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await peer.operation(before!.id)).state).toBe('completed');
   });
 
+  it('honors the host reserve like pump(): holds a teardown under pressure, runs it on relief (spec 2026-10-21-host-resource-limits)', async () => {
+    let available = 100 * 1024 * 1024;
+    const listeners = new Set<() => void>();
+    const semaphore = new WorkspaceSemaphore({
+      initial: {maxParallel: 4, hostReserve: {memoryMb: 4096, cpuPct: null}},
+      host: {
+        current: () => ({sampledAt: new Date().toISOString(), cpuCount: 8, memTotalBytes: 16 * 1024 ** 3, memUsedBytes: 0, memAvailableBytes: available}),
+        subscribe: l => (listeners.add(l), () => listeners.delete(l)),
+        agentUsage: () => ({}),
+        subscribeAgents: () => () => undefined,
+        now: () => Date.now(),
+      },
+    });
+    semaphore.register({busySlots: () => 1, oldestQueuedAt: () => null, pump: () => undefined}); // a running task
+    const p = await project(semaphore);
+    await p.config([], [entry('touch ../../../../teardown-ran')]);
+    await p.prepare();
+    const marker = join(p.root, 'teardown-ran');
+    const removal = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'reclaim'});
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    expect(existsSync(marker)).toBe(false); // held back: the host is short of memory
+    available = 8 * 1024 ** 3;
+    for (const l of [...listeners]) l();
+    await vi.waitFor(() => expect(existsSync(marker)).toBe(true), {timeout: 15_000});
+    await settled(p.coordinator, removal.id);
+    semaphore.dispose();
+  }, 40_000);
+
   it('does not replace an existing teardown intent when a variant is discarded', async () => {
     const p = await project(); await p.config([], [entry('exit 19')]); await p.prepare();
     const removal = await p.coordinator.startRemoval({requestId: randomUUID(), runId: p.id, intent: 'reclaim'});
