@@ -36,6 +36,19 @@ describe('readAgentModelDefaults', () => {
     });
   });
 
+  it('reads Antigravity\'s /model choice from ~/.gemini/antigravity-cli/settings.json', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.gemini', 'antigravity-cli'), { recursive: true });
+    // agy 1.4.0 persists the display name, which `--model` also accepts.
+    writeFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), '{"model":"Gemini 3.8 Flash (High)"}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home, USERPROFILE: home })).resolves.toEqual({
+      antigravity: 'Gemini 3.8 Flash (High)',
+    });
+  });
+
   it('falls back when a higher-precedence file is missing or malformed', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
     const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));

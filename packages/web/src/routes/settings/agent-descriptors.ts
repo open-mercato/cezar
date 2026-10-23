@@ -14,7 +14,8 @@ import type { AgentConfigFile, Runner } from '@open-mercato/cezar-api-client'
  * groups. It gets a descriptor together with its catalog files. The tab list only
  * ever offers ids from this table, so `descriptorFor` cannot be reached with `pi`.
  * `copilot` (#582) is the opposite case and IS here: the catalog names its settings,
- * MCP and instruction files, so all three groups have something to show.
+ * MCP and instruction files, so all three groups have something to show — and so
+ * does `antigravity` (settings.json, mcp_config.json, GEMINI.md + AGENTS.md).
  *
  * Group membership derives from the flat `/api/agent-config` listing: a file
  * belongs to an agent when `runners` INCLUDES it (not `runners[0]` — the shared
@@ -105,6 +106,21 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
         'A dedicated ~/.copilot/mcp-config.json. Per-run --additional-mcp-config augments it rather than replacing it.',
       ),
       group('copilot', 'memory', 'Memory & instructions'),
+    ],
+  },
+  {
+    id: 'antigravity',
+    label: 'Antigravity',
+    note: EDITOR_PLUS_COMMIT,
+    groups: [
+      group('antigravity', 'settings', 'Settings'),
+      group(
+        'antigravity',
+        'mcp',
+        'MCP',
+        'The shared ~/.gemini/config/mcp_config.json — `agy mcp add|remove` edits the same file.',
+      ),
+      group('antigravity', 'memory', 'Memory & instructions'),
     ],
   },
   {

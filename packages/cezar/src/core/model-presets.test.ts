@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner } from './model-presets.ts';
+import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner, pinSurvivesRunnerSwitch } from './model-presets.ts';
+
+describe('pinSurvivesRunnerSwitch', () => {
+  it('drops any pin crossing into or out of Antigravity', () => {
+    expect(pinSurvivesRunnerSwitch('Gemini 3.8 Flash (High)', 'antigravity', 'claude')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('my-org/custom-tune', 'claude', 'antigravity')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('Gemini 3.8 Flash (High)', 'antigravity', 'antigravity')).toBe(true);
+  });
+
+  it('otherwise keeps free-form ids and drops only known foreign presets', () => {
+    expect(pinSurvivesRunnerSwitch('my-org/custom-tune', 'claude', 'codex')).toBe(true);
+    expect(pinSurvivesRunnerSwitch('sonnet', 'claude', 'codex')).toBe(false);
+  });
+});
 
 describe('modelConflictsWithRunner', () => {
   it('never rejects auto or a runner\'s own preset', () => {

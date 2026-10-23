@@ -51,7 +51,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // from GitHub at run time, and the ids it routes are other vendors' own (`gpt-5.4`,
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
+  // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
+  antigravity: [],
 };
 
 /**
@@ -86,11 +88,26 @@ function namesAnotherKnownProvider(model: string, runner: RunnerId): boolean {
   return (KNOWN_PROVIDERS as readonly string[]).includes(explicit.provider);
 }
 
+/** Runners whose `--model` takes only names from their own catalog, which no other runner accepts
+ *  either (`agy models` answers account-specific slugs like `gemini-3.8-flash-high`, each with a
+ *  display label; `--model` takes the slug). */
+const PRIVATE_MODEL_NAMESPACE: ReadonlySet<RunnerId> = new Set(['antigravity']);
+
+/** Whether a model pinned while the run was on `from` may stay pinned after switching to `to`
+ *  with no explicit model — false for a known foreign preset, and always false across a private
+ *  namespace, whose names are never another runner's to interpret. */
+export function pinSurvivesRunnerSwitch(model: string, from: RunnerId, to: RunnerId): boolean {
+  if (from === to) return true;
+  if (PRIVATE_MODEL_NAMESPACE.has(from) || PRIVATE_MODEL_NAMESPACE.has(to)) return false;
+  return !modelConflictsWithRunner(model, to);
+}
+
 /** True when `model` is recognizably another runner's — a preset of a runner OTHER than `runner`,
  *  its vendor's bare id shape, or a provider prefix this runner is known not to serve — and not
  *  also one of `runner`'s own. `''`/unknown/custom ids never conflict. */
 export function modelConflictsWithRunner(model: string, runner: RunnerId): boolean {
   if (!model) return false;
+  if (runner === 'antigravity') return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
   // Both structural halves of the guard need no vendor model knowledge, so — unlike the preset
