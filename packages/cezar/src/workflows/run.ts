@@ -3426,6 +3426,11 @@ export class RunManager {
     };
   }
 
+  /** Where `persistAttachment` writes a run's pasted files. */
+  private attachmentsDir(runId: string): string {
+    return join(this.dataDir, 'runs', `${runId}-images`);
+  }
+
   /**
    * Re-read persisted attachments at dequeue/restart (#472): an image comes back as a viewable
    * block AND a path, a file (#950) as a path only. The branch is on the NAME's extension, never
@@ -3445,7 +3450,7 @@ export class RunManager {
     for (const url of urls) {
       const name = url.split('/').pop();
       if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
-      const path = join(this.dataDir, 'runs', `${runId}-images`, name);
+      const path = join(this.attachmentsDir(runId), name);
       try {
         if (isImageAttachmentName(name)) {
           const data = readFileSync(path);
@@ -4046,7 +4051,7 @@ export class RunManager {
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
     const portableContext = record && sessionId === undefined
-      ? freshContinuationContext(record, this.store.readEvents(runId))
+      ? freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId))
       : undefined;
     // The record is mutated in place below; a missing-session fallback needs it as it was.
     const recordBeforeTurn = record && sessionId !== undefined
@@ -4536,6 +4541,7 @@ export class RunManager {
         const context = freshContinuationContext(
           { ...recordBeforeTurn, steps: recordBeforeTurn.steps.filter((step) => step.id !== stepId) },
           this.store.readEvents(runId).filter((event) => event.stepId !== stepId),
+          this.attachmentsDir(runId),
         );
         await trackFallbackOutcome(() => {
           session = launch(freshId, false, context);
@@ -6596,7 +6602,7 @@ export class RunManager {
         const freshId = randomUUID();
         this.store.updateStep(runId, step.id, { sessionId: freshId, backend });
         emit({ type: 'note', stepId: step.id, message: MISSING_SESSION_NOTE });
-        const context = freshContinuationContext(record, this.store.readEvents(runId));
+        const context = freshContinuationContext(record, this.store.readEvents(runId), this.attachmentsDir(runId));
         result = await trackFallbackOutcome(() => {
           session = attach(launch(freshId, false, `${context}\n\n---\n\n## New user instruction\n${userPrompt}`), false);
           for (const content of replay) session.sendMessage(content);
