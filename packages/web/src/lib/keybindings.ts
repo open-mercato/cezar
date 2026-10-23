@@ -112,6 +112,7 @@ const RESERVED = new Set([
   'Mod+P', // ⌘P palette
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
+  'Mod+B', // fold the sidebar
   'Mod+Shift+`', // new terminal tab
   'Mod+A',
   'Mod+C',

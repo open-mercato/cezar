@@ -22,6 +22,7 @@ import { trackAddProjectOpened } from '@/lib/telemetry'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { chordFromEvent } from '@/lib/keybindings'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
@@ -407,6 +408,17 @@ const Sidebar = React.memo(function Sidebar({
     setToggled(true)
     setFolded(next)
   }
+  // ⌘B / Ctrl+B, the editor convention for the side bar. Reserved in `lib/keybindings.ts`.
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || chordFromEvent(event) !== 'Mod+B') return
+      event.preventDefault()
+      setToggled(true)
+      setFolded(!folded)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [folded, setFolded])
   if (folded) {
     return <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled} />
   }

@@ -669,6 +669,15 @@ describe('AppShell', () => {
       expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
     })
 
+    it('toggles with Mod+B', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+    })
+
     it('loads folded without stealing focus', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell()

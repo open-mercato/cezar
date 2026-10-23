@@ -14,6 +14,7 @@ import {
   readStoredSidebarWidth,
   writeStoredSidebarWidth,
 } from '@/lib/sidebar-width'
+import { formatChord, isApplePlatform } from '@/lib/keybindings'
 import { cn } from '@/lib/utils'
 
 /**
@@ -153,6 +154,8 @@ export function useSidebarFolded(): [boolean, (folded: boolean) => void] {
   return [folded, setSidebarFolded]
 }
 
+const FOLD_ARIA_KEYS = isApplePlatform() ? 'Meta+B' : 'Control+B'
+
 /** The header button that folds the desktop column away. */
 export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: React.Ref<HTMLButtonElement> }) {
   return (
@@ -162,7 +165,8 @@ export function SidebarFoldButton({ onFold, ref }: { onFold: () => void; ref?: R
       size="icon-sm"
       data-slot="sidebar-fold"
       aria-label="Hide sidebar"
-      title="Hide sidebar"
+      aria-keyshortcuts={FOLD_ARIA_KEYS}
+      title={`Hide sidebar (${formatChord('Mod+B')})`}
       onClick={onFold}
       className="-mr-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
     >
@@ -198,7 +202,8 @@ export function SidebarRail({
         size="icon-sm"
         data-slot="sidebar-unfold"
         aria-label="Show sidebar"
-        title="Show sidebar"
+        aria-keyshortcuts={FOLD_ARIA_KEYS}
+        title={`Show sidebar (${formatChord('Mod+B')})`}
         autoFocus={autoFocus}
         onClick={onUnfold}
         className="text-muted-foreground hover:bg-muted hover:text-foreground"
