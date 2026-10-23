@@ -39,6 +39,7 @@ import {
   putUiState,
   refreshSkills,
   removeTodo,
+  runArtifactRawUrl,
   runFileRawUrl,
   sendMessage,
   setProviderEnabled,
@@ -344,6 +345,12 @@ describe('request shapes', () => {
     expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/v1/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
   })
 
+  it('hands out the raw artifact URL, the name encoded as one segment', () => {
+    expect(runArtifactRawUrl('run-1', 'impact.html')).toBe('/api/v1/runs/run-1/artifacts/impact.html')
+    expect(runArtifactRawUrl('run-1', 'a b.html')).toBe('/api/v1/runs/run-1/artifacts/a%20b.html')
+    expect(runArtifactRawUrl('run-1', 'impact.html', 2)).toBe('/api/v1/runs/run-1/artifacts/impact.html?v=2')
+  })
+
   it('forwards an abort signal to fetch', async () => {
     reply([])
     const controller = new AbortController()
@@ -420,6 +427,7 @@ describe('project scope (multi-project spec, step 3.1)', () => {
     // The non-send() site scopes the same way — the <img> URL it hands out must hit the
     // scoped route or another project's cockpit would render this project's bytes as a 404.
     expect(runFileRawUrl('run-1', 'x.png')).toBe('/api/v1/p/proj-a/runs/run-1/files?path=x.png&raw=1')
+    expect(runArtifactRawUrl('run-1', 'demo.html')).toBe('/api/v1/p/proj-a/runs/run-1/artifacts/demo.html')
   })
 
   it('keeps workspace-level routes unprefixed under a scope — health is single-mount', async () => {

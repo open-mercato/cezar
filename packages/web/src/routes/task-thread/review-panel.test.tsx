@@ -426,6 +426,15 @@ describe('the review gate on the thread', () => {
     expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
   })
 
+  it('an impact run (a subject) offers no Draft PR — its report is what is reviewed', () => {
+    stubFetch()
+    renderWithProviders(
+      <ReviewPanel run={run('review', { subject: { kind: 'pr', number: 12, headSha: 'abc1234' } })} />,
+    )
+    expect(document.querySelector('[data-slot="review-draft-pr"]')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
+  })
+
   it('✓ Accept POSTs the one shared finish action (review-accept semantics)', async () => {
     const sent = stubFetch()
     renderWithProviders(<ReviewPanel run={run('review')} />)

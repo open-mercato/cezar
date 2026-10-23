@@ -37,10 +37,11 @@ if (files.length === 0) {
 
 const gaps = findPackGaps(files);
 if (gaps.length > 0) {
-  console.error('check:pack: the npm tarball would ship a broken cockpit:');
+  console.error('check:pack: the npm tarball would ship a broken package:');
   for (const gap of gaps) console.error(`  - ${gap}`);
   process.exit(1);
 }
 
 const uiFiles = files.filter((f) => f.startsWith('web/dist/')).length;
-console.log(`check:pack ok — ${files.length} files, ${uiFiles} under web/dist (shell + assets present)`);
+const skillFiles = files.filter((f) => f.startsWith('skills/')).length;
+console.log(`check:pack ok — ${files.length} files, ${uiFiles} under web/dist (shell + assets present), ${skillFiles} under skills/, impact template present`);

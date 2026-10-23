@@ -49,6 +49,12 @@ import type {
   CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
+  RunArtifactsResponse,
+  ArtifactsBySubjectResponse,
+  ProjectAssetsResponse,
+  ImpactSubjectInput,
+  StartImpactInput,
+  StartImpactResponse,
   CheckoutProjectInput,
   CreateProjectInput,
   GithubOwnersResponse,
@@ -179,7 +185,9 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  artifactsBySubjectResponseSchema,
   githubOwnersResponseSchema,
+  projectAssetsResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -1263,6 +1271,68 @@ export async function getRunFile(id: string, path: string, opts?: ReadOptions): 
  *  Scoped here rather than in send() — this URL is handed to an `<img>`, never fetched. */
 export function runFileRawUrl(id: string, path: string): string {
   return apiPath(runPath(id, `/files?path=${encodeURIComponent(path)}&raw=1`))
+}
+
+/** The files the run's agent published for the user (spec 2026-10-22-html-artifacts-and-impact). */
+export async function getRunArtifacts(id: string, opts?: ReadOptions): Promise<RunArtifactsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].artifacts.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/artifacts'),
+  )
+}
+
+/** A text artifact's body (markdown, JSON) — the same raw route, read as text. */
+export function getRunArtifactText(id: string, name: string, opts?: ReadOptions): Promise<string> {
+  return requestText(runPath(id, `/artifacts/${encodeURIComponent(name)}`), { method: 'GET', signal: opts?.signal })
+}
+
+/** One artifact's raw bytes, for an iframe/`<img>`/new tab — never fetched here. HTML is served
+ *  with a CSP `sandbox` header, so even opened directly it gets an opaque origin (spec Q3). */
+export function runArtifactRawUrl(id: string, name: string, version?: number): string {
+  const kept = version === undefined ? '' : `?v=${version}`
+  return apiPath(runPath(id, `/artifacts/${encodeURIComponent(name)}${kept}`))
+}
+
+/** `pr:<n>` / `spec:<path>` — the `GET /artifacts?subject=` spelling of a subject. */
+export function impactSubjectKey(subject: ImpactSubjectInput): string {
+  return subject.kind === 'pr' ? `pr:${subject.number}` : `spec:${subject.path}`
+}
+
+/** Start an `assess-impact` run on a PR or a spec; the server resolves and pins the subject.
+ *  409/404 carry one human line (no gh, PR not open, spec not committed…). */
+export async function startImpact(input: StartImpactInput): Promise<StartImpactResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].impact.$post({ param: { projectId: queryScope() }, json: input }),
+    '/impact',
+  )
+}
+
+/** The newest run that assessed this subject, its artifacts, versions and staleness. */
+export async function getImpactForSubject(
+  subject: ImpactSubjectInput,
+  opts?: ReadOptions,
+): Promise<ArtifactsBySubjectResponse> {
+  const key = impactSubjectKey(subject)
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].artifacts.$get(
+      { param: { projectId: queryScope() }, query: { subject: key } },
+      init(opts),
+    ),
+    `/artifacts?subject=${encodeURIComponent(key)}`,
+    artifactsBySubjectResponseSchema,
+  )
+}
+
+/** Every artifact across the project's runs, newest first (the project Assets page, Phase 3). */
+export async function getProjectAssets(opts?: ReadOptions): Promise<ProjectAssetsResponse> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].assets.$get({ param: { projectId: queryScope() } }, init(opts)),
+    '/assets',
+    projectAssetsResponseSchema,
+  )
 }
 
 /** The variant-compare data (spec 010): one entry per variant of the group, with the legacy

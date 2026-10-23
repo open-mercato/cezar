@@ -15,8 +15,9 @@ export const skillSchema = z.object({
   interactive: z.literal(true).optional(),
   body: z.string(),
   path: z.string(),
-  /** `builtin`: the one skill cezar ships itself (`create-cezar-automation`), served only while
-   *  GitHub automations are on and reachable (spec 2026-09-13-automations-from-prompt). */
+  /** `builtin`: a skill cezar ships itself, below every user location — `create-cezar-automation`
+   *  (only while automations are on and reachable, spec 2026-09-13-automations-from-prompt) and
+   *  the package's `skills/` directory (`change-impact`, spec 2026-10-22-html-artifacts-and-impact). */
   source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
-import { CodexAppServerRunner } from './codex-app-server-runner.js';
+import { CodexAppServerRunner, codexThreadOverrides } from './codex-app-server-runner.js';
 import { RunStore } from '../runs/store.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
@@ -474,6 +474,30 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       expect(fake.signals).toEqual(['SIGTERM']);
       vi.advanceTimersByTime(KILL_GRACE_MS);
       expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    });
+  });
+});
+
+describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-artifacts)', () => {
+  const spec = { cwd: '/wt', model: 'gpt-5', env: { CEZ_ARTIFACTS_DIR: '/data/artifacts/r1' } };
+
+  it('adds it as a workspace-write writable root when CEZ_CODEX_NETWORK=0', () => {
+    expect(codexThreadOverrides(spec, { 'mcp_servers.x.command': 'y' }, { CEZ_CODEX_NETWORK: '0' })).toEqual({
+      model: 'gpt-5',
+      cwd: '/wt',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+      config: { 'mcp_servers.x.command': 'y', 'sandbox_workspace_write.writable_roots': ['/data/artifacts/r1'] },
+    });
+  });
+
+  it('leaves the default full-access overrides byte-identical', () => {
+    expect(codexThreadOverrides(spec, undefined, {})).toEqual({
+      model: 'gpt-5',
+      cwd: '/wt',
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+      config: undefined,
     });
   });
 });

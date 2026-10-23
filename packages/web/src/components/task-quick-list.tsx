@@ -35,6 +35,7 @@ import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
+import { ImpactChip } from '@/routes/task-assets/impact-chip'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -606,6 +607,9 @@ const RunRow = React.memo(function RunRow({
         {/* Unread is the title's weight; this only says it to a screen reader. */}
         {unread ? <UnreadMarker /> : null}
       </Link>
+      {/* An impact run's report, one click away (spec 2026-10-22-html-artifacts-and-impact). Active
+          project only — the listing is read through the active scope. A sibling, like the chip. */}
+      {scope === null && run.subject ? <ImpactChip run={run} className={hasActions ? 'mr-0.5' : 'mr-2.5'} /> : null}
       {/* The actions, SIBLINGS of the Link for the same reason the status dot and the reference
           chip are: a button inside an anchor is invalid, and each has its own target. */}
       {hasActions ? (

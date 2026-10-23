@@ -74,6 +74,7 @@ import {
 } from './run-actions'
 import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
+import { ImpactChip } from '../task-assets/impact-chip'
 import { RunConfirmDialog } from './run-confirm-dialog'
 import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
@@ -202,6 +203,7 @@ function RunHeaderView({
             <span data-slot="run-identity" className="flex min-w-0 flex-1 items-center gap-2.5">
               <EditableTitle run={run} />
               <RunProgress planTally={planTally} budget={budget} />
+              <ImpactChip run={run} />
             </span>
             <span className="ml-auto flex shrink-0 items-center gap-2.5">
               {/* The run's state, top right, beside the git button it decides. */}

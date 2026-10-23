@@ -35,6 +35,7 @@ export type SetTelemetryConsentInput = z.infer<typeof setTelemetryConsentInputSc
 export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
+  'assets',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
   'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',
@@ -138,7 +139,7 @@ export const TASK_COMMAND_LABELS = [
   'git:commit', 'git:commit-push', 'git:push', 'git:create-pr', 'git:create-draft-pr',
   'git:update-branch', 'git:resolve-conflicts', 'git:fix-checks', 'open-pr',
   'view:session', 'view:graph', 'view:changes', 'view:commits', 'view:files', 'view:browser',
-  'view:terminal', 'view:notes', 'tab',
+  'view:assets', 'view:terminal', 'view:notes', 'tab',
   'layout', 'layout:new', 'full-view', 'split', 'terminal', 'terminal-column',
   'open', 'open:terminal-resume',
   'copy:link', 'copy:branch', 'copy:path', 'copy:resume', 'copy:pr', 'copy:id',

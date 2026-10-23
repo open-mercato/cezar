@@ -262,6 +262,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
         behind: status.data?.behind,
         forge: health.data?.forge ?? null,
         agentBlocked,
+        assessment: run.subject !== undefined,
       })
     : null
   const action = gitActionPolicy({
@@ -278,6 +279,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     prStatus,
     prConflicting: prEntry.conflicting,
     agentBlocked: agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined,
+    assessment: run.subject !== undefined,
   })
 
   // The step in flight, if any: its button shows a spinner and refuses a second click.

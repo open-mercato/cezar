@@ -49,6 +49,7 @@ import { runAutomationCommand } from './automations/automation-cli.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runImpactCommand } from './impact/impact-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
@@ -61,6 +62,8 @@ Usage:
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar impact <evidence|render>  collect evidence for, and render, an impact report
+                            (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -139,6 +142,16 @@ async function main(): Promise<void> {
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
+  if (process.argv[2] === 'impact') {
+    process.exitCode = await runImpactCommand(process.argv.slice(3), {
+      cwd: process.cwd(),
+      env: process.env,
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    });
     return;
   }
   const { values, positionals } = parseArgs({

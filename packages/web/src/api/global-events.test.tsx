@@ -1234,3 +1234,77 @@ describe('worktree lifecycle SSE invalidations', () => {
     expect(client.getQueryState(key)?.isInvalidated).toBe(false)
   })
 })
+
+describe('useGlobalEvents — artifacts', () => {
+  const artifact = (name: string, updatedAt = '2026-10-22T10:00:00.000Z') => ({
+    name,
+    kind: 'html' as const,
+    title: name,
+    size: 10,
+    updatedAt,
+  })
+  const frame = (runId: string, names: string[], project: string | undefined = BOOT) =>
+    JSON.stringify({ type: 'artifacts', runId, artifacts: names.map((name) => artifact(name)), truncated: false, project })
+
+  it('replaces the cached listing for that run — never merges', () => {
+    client.setQueryData(queryKeys.runs.artifacts('r1'), { artifacts: [artifact('old.html')], truncated: true })
+    const { source } = mount()
+
+    source.emit('artifacts', frame('r1', ['demo.html', 'notes.md']))
+
+    expect(client.getQueryData(queryKeys.runs.artifacts('r1'))).toEqual({
+      artifacts: [artifact('demo.html'), artifact('notes.md')],
+      truncated: false,
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('keeps the kept versions, and patches an impact control showing that run', () => {
+    client.setQueryData(queryKeys.runs.artifacts('r1'), { artifacts: [], truncated: false })
+    const subject = {
+      run: { id: 'r1', status: 'running', title: 't', createdAt: '2026-10-22T10:00:00.000Z' },
+      subject: { kind: 'pr', number: 12, headSha: 'abc' },
+      artifacts: [],
+      truncated: false,
+      stale: false,
+    }
+    const other = { ...subject, run: { ...subject.run, id: 'r2' } }
+    client.setQueryData(queryKeys.runs.impactSubject('pr:12'), subject)
+    client.setQueryData(queryKeys.runs.impactSubject('pr:13'), other)
+    const { source } = mount()
+    const versions = [{ version: 1, updatedAt: '2026-10-22T10:00:00.000Z', files: ['impact.html'] }]
+    source.emit(
+      'artifacts',
+      JSON.stringify({ type: 'artifacts', runId: 'r1', artifacts: [artifact('impact.html')], truncated: false, versions, project: BOOT }),
+    )
+
+    expect(client.getQueryData(queryKeys.runs.artifacts('r1'))).toEqual({ artifacts: [artifact('impact.html')], truncated: false, versions })
+    expect(client.getQueryData(queryKeys.runs.impactSubject('pr:12'))).toEqual({ ...subject, artifacts: [artifact('impact.html')], versions })
+    expect(client.getQueryData(queryKeys.runs.impactSubject('pr:13'))).toEqual(other)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('creates no cache for a run nobody opened, and ignores another project', () => {
+    client.setQueryData(queryKeys.runs.artifacts('r1'), { artifacts: [], truncated: false })
+    const { source } = mount()
+
+    source.emit('artifacts', frame('r2', ['demo.html']))
+    source.emit('artifacts', frame('r1', ['demo.html'], 'some-other-project'))
+    source.emit('artifacts', '{not json')
+
+    expect(client.getQueryData(queryKeys.runs.artifacts('r2'))).toBeUndefined()
+    expect(client.getQueryData(queryKeys.runs.artifacts('r1'))).toEqual({ artifacts: [], truncated: false })
+  })
+
+  it('marks the project Assets page stale for its own project only (Phase 3)', () => {
+    client.setQueryData(queryKeys.runs.projectAssets, { assets: [], truncated: false })
+    const { source } = mount()
+    const state = () => client.getQueryState(queryKeys.runs.projectAssets)
+
+    source.emit('artifacts', frame('r1', ['demo.html'], 'some-other-project'))
+    expect(state()?.isInvalidated).toBe(false)
+
+    source.emit('artifacts', frame('r1', ['demo.html']))
+    expect(state()?.isInvalidated).toBe(true)
+  })
+})

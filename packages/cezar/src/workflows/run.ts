@@ -1,11 +1,11 @@
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { TrackerAssociation } from '@open-mercato/cezar-contract';
+import type { RunSubject, TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
+import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import {
   parseAskMarker,
@@ -88,6 +88,9 @@ import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import { artifactsDir } from '../runs/store.ts';
+import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
+import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
@@ -132,7 +135,7 @@ import {
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
-import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { assessedWithoutChanges, diffHasChanges, reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
@@ -558,6 +561,9 @@ interface ActiveRun {
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
+  /** The artifacts directory watcher while this owner is live (spec 2026-10-22-html-artifacts);
+   *  set at BOTH construction sites by `prepareArtifactsSession`, closed in `dropActive`. */
+  artifactsWatch?: { close: () => void };
   /** The attachment library actually granted to this session at spawn (#987). A library that
    *  appears later must not be advertised to a session whose fixed grant was absent. */
   grantedAttachmentLibrary?: string;
@@ -825,6 +831,9 @@ export interface StartRunInput {
    * forces a worktree — testing a PR in the user's own checkout would test the wrong tree.
    */
   forkRef?: { sha: string; label: string; pr: RunRecord['prHead'] & object; prUrl: string; untrusted: boolean };
+  /** What an impact run assesses, pinned by `POST /impact` (spec 2026-10-22-html-artifacts-and-
+   *  impact Q10). Internal like `forkRef`: `POST /runs` has no such field. */
+  subject?: RunSubject;
 }
 
 /**
@@ -897,6 +906,8 @@ export function agentDirectories(
   // brief, its notes, its inbox. Same rule as TMPDIR: the env names it, so the file tools must
   // reach it.
   if (env.CEZ_TREE_DIR) dirs.push(env.CEZ_TREE_DIR);
+  // The artifacts directory (spec 2026-10-22-html-artifacts): named in every step's prompt.
+  if (env.CEZ_ARTIFACTS_DIR) dirs.push(env.CEZ_ARTIFACTS_DIR);
   return dirs;
 }
 
@@ -1446,6 +1457,7 @@ export class RunManager {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
+      CEZ_ARTIFACTS_DIR: artifactsDir(this.dataDir, runId),
       ...agentTmpEnv(this.dataDir, runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
@@ -1454,7 +1466,8 @@ export class RunManager {
       ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
       // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
       // `cez` that happens to be on its PATH without the command (observed on the first live run).
-      ...(apiUrl && process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
+      // Always set: `cez impact` is local and must work with dispatch off (spec 2026-10-22 Q7).
+      CEZ_BIN: cezBinPath(),
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
@@ -1578,6 +1591,7 @@ export class RunManager {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
     }
     if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
+    if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -2209,6 +2223,13 @@ export class RunManager {
     this.waiting.delete(runId);
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
+    // The terminal rescan: whatever the last turn wrote after its own turn end still shows up.
+    state?.artifactsWatch?.close();
+    if (state) state.artifactsWatch = undefined;
+    // The signature is forgotten after it: one per run ever ended would otherwise never leave memory.
+    void this.rescanArtifacts(runId, { render: true }).finally(() => {
+      if (!this.active.has(runId)) this.artifactSignatures.delete(runId);
+    });
     this.active.delete(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
     this.store.clearRunSecrets(runId);
@@ -2314,6 +2335,41 @@ export class RunManager {
    */
   private prepareAutomationsSession(state: ActiveRun): void {
     state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
+  }
+
+  /**
+   * The artifacts directory for this owner (spec 2026-10-22-html-artifacts-and-impact): created,
+   * and watched while live. Called from BOTH `ActiveRun` construction sites; never throws.
+   */
+  private prepareArtifactsSession(runId: string, state: ActiveRun): void {
+    const dir = artifactsDir(this.dataDir, runId);
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      return; // a read-only data dir: no artifacts, the run itself is unaffected
+    }
+    state.artifactsWatch?.close();
+    state.artifactsWatch = watchArtifacts(dir, () => void this.rescanArtifacts(runId));
+  }
+
+  /** Last published listing per run, so an unchanged rescan stays silent on the SSE bus. */
+  private readonly artifactSignatures = new Map<string, string>();
+
+  /**
+   * Rescan a run's artifacts and publish the listing when it changed. The ONE helper both
+   * turn-end handlers, the watcher and the terminal transition call (spec Q2). `render` (turn
+   * ends and the terminal transition, never the watcher, which fires mid-write) first runs the
+   * impact backstop: a `review.json` newer than its `impact.html` is rendered here.
+   */
+  async rescanArtifacts(runId: string, options: { render?: boolean } = {}): Promise<void> {
+    const dir = artifactsDir(this.dataDir, runId);
+    if (options.render) await backstopRender(dir);
+    const listing = await scanArtifacts(dir);
+    const signature = JSON.stringify(listing);
+    const previous = this.artifactSignatures.get(runId) ?? JSON.stringify({ artifacts: [], truncated: false });
+    if (signature === previous) return;
+    this.artifactSignatures.set(runId, signature);
+    this.store.publishArtifacts(runId, listing);
   }
 
   /**
@@ -4201,6 +4257,7 @@ export class RunManager {
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+    this.prepareArtifactsSession(runId, state);
 
     // Cancellation may have retired this continuation while its async preparation was running.
     // Do not let the late promise make a durably cancelled run look active again.
@@ -4298,6 +4355,7 @@ export class RunManager {
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
+        void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
         // Did the backend end this turn purely to compact its own context (#955)? Absent on
         // every runner that has no such signal, and on every recording written before the
@@ -4562,6 +4620,7 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
             state.automationsPrompt,
             record?.systemPrompt,
+            artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
           userPrompt: attachments.length
@@ -4971,6 +5030,7 @@ export class RunManager {
     // twin is in `runContinuation`.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+    this.prepareArtifactsSession(runId, state);
     let runError: string | null = null;
     let idleFailed = false;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
@@ -6357,6 +6417,7 @@ export class RunManager {
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
+        void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
         // The twin of `runContinuation`'s read — see there for why the field is absent on
         // every runner and every recording that predates it (#955).
@@ -6624,6 +6685,7 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
             extraSystemPrompt,
+            artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
@@ -7398,9 +7460,10 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (!run?.worktreePath || !existsSync(run.worktreePath)) return false;
     const diff = await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD');
-    const hasDiff = diff.trim().length > 0 && !diff.startsWith('(diff failed');
+    // An impact run's diff is empty by construction; its report is what the gate reviews (Q11).
+    const reviewable = diffHasChanges(diff) || assessedWithoutChanges(run, diff);
     const config = await loadConfig(this.repoRoot);
-    return hasDiff && reviewGateEnabled(config) && run.autonomous !== true;
+    return reviewable && reviewGateEnabled(config) && run.autonomous !== true;
   }
 
   /**

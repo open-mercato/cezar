@@ -5,6 +5,7 @@ import {
   LayersIcon,
   LayoutDashboardIcon,
   MenuIcon,
+  PanelLeftOpenIcon,
   PlusIcon,
   SettingsIcon,
   XIcon,
@@ -41,6 +42,7 @@ import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/c
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import { SidebarDrawer, SidebarFrame, useDesktopShell, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
+import { exitSidebarRail, useSidebarRail } from '@/lib/sidebar-rail'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
  *  for CSS and once for the state machine. */
@@ -274,6 +276,8 @@ export const AppShell = React.memo(function AppShell({
   }
 
   const desktop = useDesktopShell()
+  // Focus (spec 2026-10-22-html-artifacts-and-impact, R2): a view on screen folded the sidebar.
+  const railed = useSidebarRail()
 
   return (
     <div
@@ -300,7 +304,9 @@ export const AppShell = React.memo(function AppShell({
           ) : null}
         </div>
       ) : null}
-      {chromeless ? null : (
+      {chromeless ? null : railed ? (
+        <SidebarRail items={items} activeTo={activeTo} desktop={desktop} />
+      ) : (
         <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
       )}
       <div
@@ -402,6 +408,62 @@ const Sidebar = React.memo(function Sidebar({
     </SidebarFrame>
   )
 })
+
+/** The sidebar folded to icons while a view holds Focus (`sidebar-rail.ts`). Desktop only — below
+ *  `md` the drawer is the sidebar and there is no width to win back. */
+function SidebarRail({
+  items,
+  activeTo,
+  desktop,
+}: {
+  items: readonly NavItem[]
+  activeTo: string | null
+  desktop: 'macos' | 'windows' | 'linux' | null
+}) {
+  return (
+    <aside
+      data-slot="sidebar-rail"
+      className={cn(
+        'hidden w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-2 md:flex',
+        desktop === 'macos' && 'pt-[36px]',
+      )}
+    >
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        data-action="expand-sidebar"
+        aria-label="Show sidebar"
+        title="Show sidebar (turns Focus off)"
+        className="text-muted-foreground"
+        onClick={exitSidebarRail}
+      >
+        <PanelLeftOpenIcon aria-hidden="true" />
+      </Button>
+      <nav aria-label="Main" className="flex flex-col items-center gap-1 pt-1">
+        {items.map((item) => {
+          const Icon = item.icon
+          const isActive = item.to === activeTo
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              aria-label={item.label}
+              title={item.label}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                isActive && 'bg-muted text-foreground',
+              )}
+            >
+              <Icon className="size-4" aria-hidden="true" />
+            </Link>
+          )
+        })}
+      </nav>
+    </aside>
+  )
+}
 
 /** The `<md` drawer: the shared `SidebarDrawer` around the SAME content the column renders. */
 const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {

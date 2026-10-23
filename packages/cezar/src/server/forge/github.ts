@@ -3344,7 +3344,46 @@ export async function fetchPrMergeState(
   }
 }
 
+const prHeadCache = new Map<string, { at: number; sha: string | null }>();
+const PR_HEAD_CACHE_MS = 30_000;
+
+/**
+ * A pull request's current head sha, for "is this impact report stale?" (spec
+ * 2026-10-22-html-artifacts-and-impact Q10). The merge box's fresh answer when there is one, else
+ * one `gh pr view` memoized for 30 s. `null` when GitHub cannot say — never throws.
+ */
+export async function fetchPrHeadSha(repoRoot: string, number: number): Promise<string | null> {
+  const merge = mergeStateCache.get(`${repoRoot}:${number}`);
+  if (merge && Date.now() - merge.at < MERGE_CACHE_MS && merge.value.available) return merge.value.mergeState.headSha;
+  const key = `${repoRoot}\0${number}`;
+  const hit = prHeadCache.get(key);
+  if (hit && Date.now() - hit.at < PR_HEAD_CACHE_MS) return hit.sha;
+  let sha: string | null;
+  try {
+    sha = ghPrHeadSchema.parse(JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid']))).headRefOid.toLowerCase();
+  } catch {
+    sha = null;
+  }
+  prHeadCache.set(key, { at: Date.now(), sha });
+  while (prHeadCache.size > 200) prHeadCache.delete(prHeadCache.keys().next().value!);
+  return sha;
+}
+
+/**
+ * The head sha `fetchPrHeadSha` would answer from cache alone — `undefined` when only a `gh` call
+ * could tell. For list routes (the project Assets page), which must never shell out per row.
+ */
+export function peekPrHeadSha(repoRoot: string, number: number): string | null | undefined {
+  const merge = mergeStateCache.get(`${repoRoot}:${number}`);
+  if (merge && Date.now() - merge.at < MERGE_CACHE_MS && merge.value.available) return merge.value.mergeState.headSha;
+  const hit = prHeadCache.get(`${repoRoot}\0${number}`);
+  return hit && Date.now() - hit.at < PR_HEAD_CACHE_MS ? hit.sha : undefined;
+}
+
 export function evictGithubProjectCaches(repoRoot: string): void {
+  prHeadCache.forEach((_value, key) => {
+    if (key.startsWith(`${repoRoot}\0`)) prHeadCache.delete(key);
+  });
   listCache.delete(repoRoot);
   mergeStateCache.forEach((_value, key) => {
     if (key.startsWith(`${repoRoot}:`)) mergeStateCache.delete(key);

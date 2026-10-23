@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useParams } from 'react-router'
 
-import { useHealth, useRun, useRunHandoff } from '@/api/queries'
+import { useHealth, useRun, useRunArtifacts, useRunHandoff } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useNavigate } from '@/lib/project-router'
 
@@ -46,6 +46,7 @@ function NotesHeader({ run }: { run: ApiRun }) {
   // navigates to the view's page.
   const strip = useMemo(() => stripEntries(fixedViews), [fixedViews])
   const { hints, show } = useStripKeyHints(strip)
+  const assetCount = useRunArtifacts(run.id).data?.artifacts?.length ?? 0
   const tabs = useMemo(
     () => (
       <LayoutCards
@@ -60,9 +61,10 @@ function NotesHeader({ run }: { run: ApiRun }) {
         notesHref={`/tasks/${run.id}/notes`}
         notesActive
         showLayouts={false}
+        badges={assetCount > 0 ? { assets: assetCount } : undefined}
       />
     ),
-    [fixedViews, navigate, run.id, hints, show],
+    [fixedViews, navigate, run.id, hints, show, assetCount],
   )
   return <RunHeader run={run} tab="notes" tabs={tabs} wide />
 }

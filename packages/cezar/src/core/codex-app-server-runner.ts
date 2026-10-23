@@ -64,6 +64,34 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
+/**
+ * The `thread/start` / `thread/resume` overrides. Full access is the `auto` preset shared by all
+ * backends; besides avoiding prompts, it keeps container installs working when bubblewrap cannot
+ * create a UID map (#563). `CEZ_CODEX_NETWORK=0` remains the explicit sandbox opt-out, and under
+ * it the run's artifacts directory is added as a writable root, or a sandboxed run could not
+ * publish (spec 2026-10-22-html-artifacts-and-impact).
+ */
+export function codexThreadOverrides(
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  mcpConfig: Record<string, unknown> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const sandboxed = env.CEZ_CODEX_NETWORK === '0';
+  const artifacts = sandboxed ? spec.env?.CEZ_ARTIFACTS_DIR : undefined;
+  // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+  // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+  const config = artifacts
+    ? { ...mcpConfig, 'sandbox_workspace_write.writable_roots': [artifacts] }
+    : mcpConfig;
+  return {
+    model: spec.model,
+    cwd: spec.cwd,
+    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    approvalPolicy: 'never',
+    config,
+  };
+}
+
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
 
@@ -420,18 +448,7 @@ class CodexSession implements AgentSession {
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
 
-    const overrides = {
-      model: this.spec.model,
-      cwd: this.spec.cwd,
-      // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
-      // keeps container installs working when bubblewrap cannot create a UID map (#563).
-      // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
-      approvalPolicy: 'never',
-      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
-      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
-      config: this.privateMcpConfig(),
-    };
+    const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
     if (this.spec.resume && this.spec.sessionId) {
       this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {

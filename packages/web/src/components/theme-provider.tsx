@@ -58,6 +58,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
 }
 
+/** The painting theme, or — outside a provider (isolated renders) — the stored/OS answer. */
+export function useResolvedTheme(): ResolvedTheme {
+  const context = React.useContext(ThemeContext)
+  return context?.resolvedTheme ?? resolveTheme(readStoredTheme(), systemPrefersLight())
+}
+
 export function useTheme(): ThemeContextValue {
   const context = React.useContext(ThemeContext)
   if (!context) throw new Error('cezar: useTheme() must be called inside <ThemeProvider>')

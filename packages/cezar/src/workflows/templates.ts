@@ -201,3 +201,23 @@ export const REVIEW_COUNCIL = builtIn(
 );
 
 export const BUILT_IN_GRAPH_WORKFLOWS: readonly WorkflowDef[] = [IMPLEMENT_AND_VERIFY, IMPLEMENT_REVIEW_PR, REVIEW_COUNCIL, FIX_CI];
+
+/**
+ * Assess Impact (spec 2026-10-22-html-artifacts-and-impact): one agent step on the bundled
+ * `change-impact` skill. It writes into the artifacts directory only, so its diff stays empty.
+ * `cez impact` is local, reached through `$CEZ_BIN` (set for every run), dispatch on or off.
+ */
+export const ASSESS_IMPACT_PROMPT =
+  '{{task}}\n\n' +
+  'Use the change-impact skill. Every `cez impact …` command in it means `node "$CEZ_BIN" impact …` — ' +
+  "cezar's own binary; a `cez` on your PATH may be another install. Write evidence.json, review.json and " +
+  'impact.html into $CEZ_ARTIFACTS_DIR (the commands default there), never into the repository. ' +
+  'This is an assessment, not a change: make no commits and leave the worktree as you found it.\n\n' +
+  'Done means `cez impact render` printed `ok`.';
+
+export const ASSESS_IMPACT_WORKFLOW: WorkflowDef = {
+  name: 'assess-impact',
+  description: 'Explain a pull request or a spec as a visual architecture and product impact report — no code changes.',
+  source: 'built-in',
+  steps: [{ id: 'assess', name: 'Assess impact', skill: 'change-impact', prompt: ASSESS_IMPACT_PROMPT }],
+};

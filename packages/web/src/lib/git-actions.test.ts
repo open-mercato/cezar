@@ -219,3 +219,18 @@ describe('trunkGitActionPolicy (spec 2026-10-20-trunk-based-projects)', () => {
     expect(action?.alternatives?.[0]).toMatchObject({ id: 'create-pr', enabled: false })
   })
 })
+
+describe('an impact run (spec 2026-10-22-html-artifacts-and-impact, Q11)', () => {
+  it('offers no Create PR and no Create draft PR', () => {
+    expect(gitActionPolicy(withState({ assessment: true }))).toBeNull()
+    expect(gitActionPolicy(withState({ assessment: true, uncommitted: 0, ahead: 2 }))).toBeNull()
+    // Without the flag the same state is Create PR, with the draft under its chevron.
+    expect(gitActionPolicy(withState({}))?.alternatives?.map((a) => a.id)).toContain('create-draft-pr')
+  })
+
+  it('drops both PR steps from the trunk chevron', () => {
+    const forge = { kind: 'github', available: true } as GitActionState['forge']
+    const trunk = { status: 'waiting' as RunStatus, base: 'main', uncommitted: 2, unpushed: 0, behind: 0, forge, assessment: true }
+    expect(trunkGitActionPolicy(trunk)?.alternatives?.map((a) => a.id)).toEqual([])
+  })
+})

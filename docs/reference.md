@@ -7,6 +7,7 @@ Everything the [README](../README.md) leaves out: the full configuration, every 
 - [Multiple projects, one cockpit](#multiple-projects-one-cockpit)
 - [Workflow format](#workflow-format)
 - [How it runs agents](#how-it-runs-agents) (environment variables, troubleshooting)
+- [Impact reports: `cez impact`](#impact-reports-cez-impact)
 - [Talking to a running cockpit](#talking-to-a-running-cockpit) (`cez runs`, `cez task`, `cez automation`, the HTTP API)
 - [Coding agent backends](#coding-agent-backends)
 - [Remote access (host cezar on a server)](#remote-access-host-cezar-on-a-server)
@@ -511,6 +512,7 @@ Useful environment variables:
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Tasks toggle overrides this; autonomous runs always skip it. |
 | `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the star-ask dialog (shown at most three times per browser, only after a task ends well once three have, and only while you are at the screen). It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Unset, the count refreshes every 10 seconds while a cockpit tab is visible, paced to GitHub's rate limit (about once a minute unauthenticated; every 10 s with `GITHUB_TOKEN`/`GH_TOKEN` set, which is then sent with the request). Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |
+| `CEZ_ARTIFACTS_CDN=0` | Close the CDN allowlist of **HTML artifacts** (spec `.ai/specs/2026-10-22-html-artifacts-and-impact.md`). Agents publish pages into `.ai/cezar/artifacts/<runId>/` (cezar hands each agent the path as `CEZ_ARTIFACTS_DIR`), and the cockpit serves them sandboxed: an opaque origin, `connect-src 'none'`, images only from `data:`/`blob:`. On by default, an artifact may load scripts from cdnjs, jsDelivr and unpkg, styles from those and Google Fonts — the CDN sees the request. `0` drops every `https:` source from the artifact CSP and tells agents to inline everything instead. |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
 ### Troubleshooting: the agent's shell returns nothing
@@ -541,6 +543,37 @@ the disk holding the repo. `CEZ_AGENT_TMPDIR=0` turns the whole mechanism off �
 per-task directory and pre-spawn check alike — and hands agents the host
 `TMPDIR` again, which is the way out if the check itself is wrong on your
 platform.
+
+---
+
+## Impact reports: `cez impact`
+
+`cez impact` validates and renders a change-impact report: an architect's and product
+owner's view of a pull request or a spec (spec
+[`2026-10-22-html-artifacts-and-impact`](../.ai/specs/2026-10-22-html-artifacts-and-impact.md)).
+It is local. It needs no running cockpit and no `CEZ_API_URL`, never fetches and never
+checks anything out. Paths default to `$CEZ_ARTIFACTS_DIR` when it is set, otherwise the
+current directory.
+
+```bash
+cez impact evidence --base main --head HEAD    # commit-pinned evidence.json for a range
+cez impact evidence --pr 123                   # the PR's exact base/head SHAs, via gh
+cez impact evidence --spec .ai/specs/x.md      # spec text, its blob SHA at HEAD, cited paths
+cez impact render                              # review.json (model v4) → impact.html
+cez impact render --input r.json --out r.html
+cez impact render --demo                       # the made-up example → impact-demo.html
+```
+
+- **`evidence`** writes `evidence.json`: the pinned comparison, the changed files, context
+  documents, and `public_surface_candidates` (changed paths that look like a public API in
+  their ecosystem: package exports, OpenAPI, Shopware/PHP routes, events, `services.xml`,
+  entity definitions, migrations, CLI, env, config). A commit that is not available locally
+  is reported, not fetched. `--repo <dir>` points it at another checkout.
+- **`render`** validates the model and prints `ok: <file> (N views)`. An invalid model prints
+  one `path: problem` line per issue, exits `1` and writes nothing, so an older report is
+  never overwritten by a broken one. Usage errors exit `2`.
+- The report is one self-contained HTML file with a strict CSP that allows no network. It
+  follows the system theme; `impact.html#theme=dark` or `#theme=light` forces one.
 
 ---
 

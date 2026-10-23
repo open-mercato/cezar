@@ -98,12 +98,17 @@ async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promi
     );
   }
   const onDisk = skill.source !== 'team' && skill.source !== 'builtin' && isAbsolute(skill.path);
+  // A skill directory cezar ships in its package (`skills/change-impact`), references/ included.
+  const bundled = skill.source === 'builtin' && basename(skill.path) === 'SKILL.md' && (await exists(skill.path));
   // Already part of this checkout (an in-place run): the agent finds it where it is.
   const inCwd = relative(cwd, skill.path);
   if (onDisk && inCwd && !inCwd.startsWith('..') && !isAbsolute(inCwd)) return false;
   if (await exists(dest)) return false;
   await mkdir(dirname(dest), { recursive: true });
-  if (onDisk && basename(skill.path) === 'SKILL.md') {
+  if (bundled) {
+    // Copied, never linked: a link would let the agent edit cezar's installed package.
+    await cp(dirname(skill.path), dest, { recursive: true, dereference: true });
+  } else if (onDisk && basename(skill.path) === 'SKILL.md') {
     // Link, not copy: the agent reads the current installed copy, references/ included.
     // A junction needs no privilege on Windows; a copy covers a filesystem with no links at all.
     await symlink(dirname(skill.path), dest, process.platform === 'win32' ? 'junction' : 'dir').catch(() =>

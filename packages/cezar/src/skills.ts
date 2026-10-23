@@ -1,6 +1,7 @@
 import { readdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { gatedSkillsRepos } from './config.ts';
 import { getTeamSkillsCached } from './skills-remote.ts';
@@ -22,8 +23,9 @@ export interface Skill {
   interactive?: true;
   body: string;
   path: string;
-  /** `builtin` is the one skill cezar ships itself (`create-cezar-automation`, spec
-   *  2026-09-13-automations-from-prompt) — listed last, and only while automations are reachable. */
+  /** `builtin`: a skill cezar ships itself — the `create-cezar-automation` constant (spec
+   *  2026-09-13-automations-from-prompt, only while automations are reachable) and the directory
+   *  skills under the package's `skills/` (`change-impact`). Always listed last. */
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'builtin';
   /** Team skills only: where the definition lives in its skills repo. */
   team?: {
@@ -61,6 +63,10 @@ export const SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
    agent profile (`src/core/agent-profiles.ts`). A skill is CONTENT — a playbook — not
    identity, and a second Claude login is not a second skill library. `npx skills`, which
    writes the `~/.claude/skills` mirror, is profile-unaware for the same reason. */
+/** The package's own `skills/` (spec 2026-10-22-html-artifacts-and-impact Q6): `../skills` from
+ *  both `src/` (tsx) and `dist/` (the installed tarball). */
+export const BUILTIN_SKILLS_DIR = fileURLToPath(new URL('../skills/', import.meta.url));
+
 const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
   { dir: join(homedir(), '.agents/skills'), source: 'global' },
   { dir: join(homedir(), '.claude/skills'), source: 'global' },
@@ -73,9 +79,9 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  * ("the user's repo is the source of truth"). Missing directories are fine —
  * an empty catalog is fully supported (steps fall back to their plain
  * prompt). Team skills come from the in-process cache; the first call starts
- * a background load so nothing here ever waits on the network. The built-in skill (the one
- * cezar ships, `automations/builtin-skill.ts`) comes LAST, so every user-authored skill of the
- * same name shadows it.
+ * a background load so nothing here ever waits on the network. The built-in skills (the
+ * `automations/builtin-skill.ts` constant, then the package's `skills/` directory) come LAST, so
+ * every user-authored skill of the same name shadows them.
  *
  * Opt-out gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
  * for the zero-config majority, see `gatedSkillsRepos` — appear unless the user has
@@ -87,14 +93,18 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  * single chokepoint, so the decision is identical for every consumer — catalog, composer
  * picker, planner, runner.
  */
-export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
-  const [lists, gatedRepos, uiState] = await Promise.all([
+export async function discoverSkills(
+  repoRoot: string,
+  builtinDir: string = BUILTIN_SKILLS_DIR,
+): Promise<Skill[]> {
+  const [lists, gatedRepos, uiState, bundled] = await Promise.all([
     Promise.all([
       ...SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(resolve(repoRoot, dir), source)),
       ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
     ]),
     gatedSkillsRepos(repoRoot),
     readUiState(repoRoot),
+    readMarkdownSkills(builtinDir, 'builtin'),
   ]);
   const teamSkills = filterImportedTeamSkills(
     getTeamSkillsCached(repoRoot),
@@ -103,7 +113,7 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
   );
   const merged: Skill[] = [];
   const seen = new Set<string>();
-  for (const skills of [...lists, teamSkills, builtinSkills()]) {
+  for (const skills of [...lists, teamSkills, builtinSkills(), bundled]) {
     for (const skill of skills) {
       if (seen.has(skill.name)) continue;
       seen.add(skill.name);

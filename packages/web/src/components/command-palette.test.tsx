@@ -251,19 +251,19 @@ describe('Views group', () => {
     expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear')
   })
 
-  it('leads with New task and its C hint, then the 8 nav destinations and Global settings', async () => {
+  it('leads with New task and its C hint, then the 9 nav destinations and Global settings', async () => {
     renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/assets', '/automations', '/skills', '/workflows', '/settings',
       '/settings/global',
     ])
     expect(views[0]?.textContent).toContain('New task')
@@ -279,11 +279,11 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings', '/settings/global',
+      '/new', '/', '/inbox', '/git', '/github', '/assets', '/skills', '/workflows', '/settings', '/settings/global',
     ])
   })
 
@@ -292,7 +292,7 @@ describe('Views group', () => {
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
     )
 
     const newTaskRows = [...document.querySelectorAll('[data-nav-to="/new"]')]

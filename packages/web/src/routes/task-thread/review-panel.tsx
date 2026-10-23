@@ -230,7 +230,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
               PR ↗
             </a>
           </Button>
-        ) : (
+        ) : run.subject ? null : (
+          // An impact run's report is what is reviewed; it proposes no PR (the server 409s, Q11).
           <Button
             data-slot="review-draft-pr"
             variant="outline"

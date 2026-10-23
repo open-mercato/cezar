@@ -1,0 +1,781 @@
+{
+  "schema_version": 4,
+  "meta": {
+    "title": "Access belongs to the organization.",
+    "subtitle": "Not to one employee's account.",
+    "repository": "NORTHSTAR / platform",
+    "pr": "PR #481 · example",
+    "base": "main · example state",
+    "head": "feat/org-api-keys · example state",
+    "demo": true,
+    "subject_kind": "pr"
+  },
+  "summary": "Integrations get an identity of their own, a limited set of permissions, and keys that can be rotated. A team can take away one person's access without breaking the company's automations.",
+  "scope_note": "A made-up scenario, used to judge the interface. No real repository was analysed and no tests were run.",
+  "decision": {
+    "label": "Conditionally, into the core",
+    "rationale": "The product direction holds up. Before merging, the domain has to be separated from the key store, and a migration for existing integrations has to be agreed.",
+    "evidence": [
+      "D1",
+      "D3",
+      "D5"
+    ],
+    "conditions": [
+      {
+        "id": "cond-key-port",
+        "title": "A port instead of direct SQL",
+        "owner": "Architect",
+        "verification": "Auth depends on KeyResolver; the SQL adapter stays outside the domain. The domain test runs without a database.",
+        "evidence": [
+          "D3"
+        ]
+      },
+      {
+        "id": "cond-migration",
+        "title": "Migration without cutting anyone off",
+        "owner": "Product owner",
+        "verification": "An agreed transition period, a message to customers, and a clear condition for switching personal tokens off.",
+        "evidence": [
+          "D5"
+        ],
+        "api_changes": [
+          "api-personal-tokens",
+          "api-auth-header"
+        ]
+      },
+      {
+        "id": "cond-isolation",
+        "title": "Tenant isolation and revocation",
+        "owner": "Maintainer / QA",
+        "verification": "Tests across organizations, plus a test that a revoked key stops working immediately, with the run's result recorded.",
+        "evidence": [
+          "D6"
+        ]
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "org-access",
+      "status": "added",
+      "title": "Organization keys",
+      "before": "An integration runs on an employee's token.",
+      "after": "An admin gives the integration its own key and its own permissions.",
+      "impact": "The automation no longer depends on one particular person still being there.",
+      "components": [
+        "console",
+        "auth",
+        "keys"
+      ],
+      "evidence": [
+        "D1",
+        "D2"
+      ]
+    },
+    {
+      "id": "permissions",
+      "status": "modified",
+      "title": "Permissions per integration",
+      "before": "A token inherits whatever the user can do.",
+      "after": "The Policy Engine judges the organization and the key's permissions.",
+      "impact": "Narrower access, but a new way for one tenant's data to leak into another's.",
+      "components": [
+        "auth",
+        "policy"
+      ],
+      "evidence": [
+        "D2",
+        "D6"
+      ]
+    },
+    {
+      "id": "legacy-access",
+      "status": "removed",
+      "title": "Personal token as a fallback",
+      "before": "An older client still works with a user's token.",
+      "after": "The integration path requires an organization identity.",
+      "impact": "Existing integrations have to be migrated before the fallback is switched off.",
+      "components": [
+        "auth",
+        "legacy"
+      ],
+      "evidence": [
+        "D5"
+      ]
+    },
+    {
+      "id": "key-rotation",
+      "status": "added",
+      "title": "Keys expire without anyone remembering",
+      "before": "A token stayed valid until a person deleted it, and the plaintext stayed in the database next to the user.",
+      "after": "An organization key is hashed at rest, rotated on a schedule, and its expiry is announced on the audit stream.",
+      "impact": "Removes the long-lived plaintext credential, and adds a scheduled writer that has to agree with manual revocation.",
+      "components": [
+        "rotation",
+        "keys",
+        "secrets"
+      ],
+      "evidence": [
+        "D7",
+        "D8"
+      ]
+    }
+  ],
+  "architecture": {
+    "headline": "A new identity. The same permissions engine.",
+    "description": "Two readings of the same change. The authorization path shows what now decides a request; the lifecycle view shows who owns the credential and what is stored.",
+    "nodes": [
+      {
+        "id": "console",
+        "label": "Admin Console",
+        "kind": "Screen / API client",
+        "status": "modified",
+        "before": "Manages personal tokens.",
+        "after": "Creates, rotates and revokes organization keys.",
+        "impact": "A new admin surface. Users need to be told what the permissions mean and what revoking one does.",
+        "evidence": [
+          "D1",
+          "D2"
+        ]
+      },
+      {
+        "id": "auth",
+        "label": "Auth Service",
+        "kind": "Domain module",
+        "status": "modified",
+        "before": "Identifies the user from a token and passes them to the policy engine.",
+        "after": "Identifies the organization and its permissions, reading the key straight from the SQL adapter.",
+        "impact": "A new tie from the core to infrastructure. If the key store is down, integrations lose access.",
+        "evidence": [
+          "D2",
+          "D3"
+        ]
+      },
+      {
+        "id": "policy",
+        "label": "Policy Engine",
+        "kind": "Domain module",
+        "status": "modified",
+        "before": "Judges what the signed-in user may do.",
+        "after": "Also judges an integration's identity inside its organization.",
+        "impact": "One shared policy stays in one place. Isolation between organizations and the absence of permission creep both still need proving.",
+        "evidence": [
+          "D2",
+          "D6"
+        ]
+      },
+      {
+        "id": "legacy",
+        "label": "Personal-token fallback",
+        "kind": "Compatibility path",
+        "status": "removed",
+        "before": "Maps a personal token to a user for older integrations.",
+        "after": "Gone from the integration path.",
+        "impact": "A breaking change for customers still on the fallback. No transition period has been agreed.",
+        "evidence": [
+          "D5"
+        ]
+      },
+      {
+        "id": "keys",
+        "label": "Org Key Registry",
+        "kind": "New SQL adapter",
+        "status": "added",
+        "before": "Does not exist.",
+        "after": "Stores the hashed key, the organization, the permissions and whether it has been revoked.",
+        "impact": "A new infrastructure responsibility, needing a data migration and a stated plan for when it is unavailable. Suggested port: KeyResolver.",
+        "evidence": [
+          "D2",
+          "D3"
+        ]
+      },
+      {
+        "id": "audit",
+        "label": "Audit Log",
+        "kind": "Existing module",
+        "status": "unchanged",
+        "before": "Receives admin events through the shared audit mechanism.",
+        "after": "Also receives key.created, key.rotated and key.revoked, with no change to the module itself.",
+        "impact": "The code is untouched, but new events arrive. Check what is redacted and who reads the audit trail.",
+        "evidence": [
+          "D4"
+        ]
+      },
+      {
+        "id": "rotation",
+        "label": "Rotation Worker",
+        "kind": "Background job",
+        "status": "added",
+        "before": "Nothing expired a credential. A personal token lived until somebody deleted the account.",
+        "after": "Expires and re-issues organization keys on a schedule, writing the new hash and an audit entry.",
+        "impact": "A second writer now touches the key registry, so a scheduled rotation and a manual revocation can race.",
+        "evidence": [
+          "D7"
+        ]
+      },
+      {
+        "id": "secrets",
+        "label": "Secret Store",
+        "kind": "Infrastructure",
+        "status": "added",
+        "before": "Personal tokens sat in plaintext columns next to the user row.",
+        "after": "Keeps only the hash of a key; the plaintext is shown once at creation and never stored.",
+        "impact": "The database stops holding usable credentials, at the cost of a key nobody can recover if the admin loses it.",
+        "evidence": [
+          "D8"
+        ]
+      },
+      {
+        "id": "notify",
+        "label": "Notification Service",
+        "kind": "Existing module",
+        "status": "unchanged",
+        "before": "Sends account-level mail to one named person.",
+        "after": "Untouched by the PR, but now receives expiry events addressed to an organization rather than a person.",
+        "impact": "An unchanged consumer inherits a new audience; who actually receives an organization-level alert is not settled.",
+        "evidence": [
+          "D7"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "id": "e-console-auth",
+        "from": "console",
+        "to": "auth",
+        "label": "HTTPS / org key",
+        "before_label": "HTTPS / personal token",
+        "status": "modified",
+        "evidence": [
+          "D2"
+        ]
+      },
+      {
+        "id": "e-auth-policy",
+        "from": "auth",
+        "to": "policy",
+        "label": "organization plus permissions",
+        "before_label": "one person's permissions",
+        "status": "modified",
+        "evidence": [
+          "D2"
+        ]
+      },
+      {
+        "id": "e-auth-legacy",
+        "from": "auth",
+        "to": "legacy",
+        "label": "resolve user token",
+        "status": "removed",
+        "evidence": [
+          "D5"
+        ]
+      },
+      {
+        "id": "e-auth-keys",
+        "from": "auth",
+        "to": "keys",
+        "label": "reads SQL directly",
+        "status": "added",
+        "evidence": [
+          "D3"
+        ]
+      },
+      {
+        "id": "e-keys-audit",
+        "from": "keys",
+        "to": "audit",
+        "label": "sends key.* events",
+        "status": "added",
+        "evidence": [
+          "D4"
+        ]
+      },
+      {
+        "id": "e-rotation-keys",
+        "from": "rotation",
+        "to": "keys",
+        "label": "rotates and expires",
+        "status": "added",
+        "evidence": [
+          "D7"
+        ]
+      },
+      {
+        "id": "e-keys-secrets",
+        "from": "keys",
+        "to": "secrets",
+        "label": "writes only the hash",
+        "status": "added",
+        "evidence": [
+          "D8"
+        ]
+      },
+      {
+        "id": "e-audit-notify",
+        "from": "audit",
+        "to": "notify",
+        "label": "emits key.expiring",
+        "status": "added",
+        "evidence": [
+          "D7"
+        ]
+      }
+    ],
+    "views": [
+      {
+        "id": "authorization",
+        "title": "Authorization path",
+        "description": "A map of parts, not of separately deployed services. The new key store lands on the critical path for authorization, while deciding what is allowed still belongs to the Policy Engine.",
+        "before_caption": "User identity · depends on one employee's account",
+        "after_caption": "Integration identity · organization plus permissions",
+        "focus": "auth",
+        "places": [
+          {
+            "node": "console",
+            "col": 0,
+            "row": 0
+          },
+          {
+            "node": "auth",
+            "col": 1,
+            "row": 0
+          },
+          {
+            "node": "policy",
+            "col": 2,
+            "row": 0
+          },
+          {
+            "node": "legacy",
+            "col": 0,
+            "row": 1
+          },
+          {
+            "node": "keys",
+            "col": 1,
+            "row": 1
+          },
+          {
+            "node": "audit",
+            "col": 2,
+            "row": 1
+          }
+        ]
+      },
+      {
+        "id": "lifecycle",
+        "title": "Key lifecycle and ownership",
+        "description": "The same change seen from the data side: who issues a key, what is actually stored, and which untouched consumer starts hearing about organizations instead of people.",
+        "before_caption": "Personal tokens · plaintext at rest, no expiry",
+        "after_caption": "Organization keys · hashed at rest, rotated on a schedule",
+        "focus": "secrets",
+        "places": [
+          {
+            "node": "rotation",
+            "col": 0,
+            "row": 0
+          },
+          {
+            "node": "keys",
+            "col": 1,
+            "row": 0
+          },
+          {
+            "node": "secrets",
+            "col": 2,
+            "row": 0
+          },
+          {
+            "node": "audit",
+            "col": 1,
+            "row": 1
+          },
+          {
+            "node": "notify",
+            "col": 2,
+            "row": 1
+          }
+        ]
+      }
+    ]
+  },
+  "flows": [
+    {
+      "id": "authorize",
+      "title": "An integration calls the API",
+      "outcome": "Who the caller is changes; deciding what they may do stays in one place.",
+      "failure": "A new thing that can break: the key store. A timeout should refuse the request rather than let it through, and that behaviour needs a test.",
+      "evidence": [
+        "D2",
+        "D3",
+        "D6"
+      ],
+      "before": {
+        "steps": [
+          {
+            "id": "b1",
+            "label": "Employee's token",
+            "component": "console",
+            "status": "unchanged"
+          },
+          {
+            "id": "b2",
+            "label": "Identify the user",
+            "component": "legacy",
+            "status": "removed"
+          },
+          {
+            "id": "b3",
+            "label": "Judge that person's permissions",
+            "component": "policy",
+            "status": "modified"
+          }
+        ],
+        "links": [
+          {
+            "from": "b1",
+            "to": "b2",
+            "label": "API request"
+          },
+          {
+            "from": "b2",
+            "to": "b3",
+            "label": "user identity"
+          }
+        ]
+      },
+      "after": {
+        "steps": [
+          {
+            "id": "a1",
+            "label": "Organization key",
+            "component": "console",
+            "status": "modified"
+          },
+          {
+            "id": "a2",
+            "label": "Check the key and the tenant",
+            "component": "keys",
+            "status": "added"
+          },
+          {
+            "id": "a3",
+            "label": "Judge the organization's permissions",
+            "component": "policy",
+            "status": "modified"
+          }
+        ],
+        "links": [
+          {
+            "from": "a1",
+            "to": "a2",
+            "label": "API request"
+          },
+          {
+            "from": "a2",
+            "to": "a3",
+            "label": "organization plus permissions"
+          }
+        ]
+      }
+    },
+    {
+      "id": "revoke",
+      "title": "Taking an integration's access away",
+      "outcome": "Revoking one key should not switch off any of the others.",
+      "failure": "Not known: can a revoked key still be accepted from a cache? Proving revocation works is a condition of this review.",
+      "evidence": [
+        "D1",
+        "D2",
+        "D6"
+      ],
+      "before": {
+        "steps": [
+          {
+            "id": "r1",
+            "label": "Disable the person's token",
+            "component": "console",
+            "status": "modified"
+          },
+          {
+            "id": "r2",
+            "label": "Every integration on it stops too",
+            "component": "legacy",
+            "status": "removed"
+          }
+        ],
+        "links": [
+          {
+            "from": "r1",
+            "to": "r2",
+            "label": "one shared identity"
+          }
+        ]
+      },
+      "after": {
+        "steps": [
+          {
+            "id": "r3",
+            "label": "Pick the integration's key",
+            "component": "console",
+            "status": "modified"
+          },
+          {
+            "id": "r4",
+            "label": "Mark it revoked",
+            "component": "keys",
+            "status": "added"
+          },
+          {
+            "id": "r5",
+            "label": "Record the audit event",
+            "component": "audit",
+            "status": "unchanged"
+          }
+        ],
+        "links": [
+          {
+            "from": "r3",
+            "to": "r4",
+            "label": "revoke"
+          },
+          {
+            "from": "r4",
+            "to": "r5",
+            "label": "key.revoked"
+          }
+        ]
+      }
+    }
+  ],
+  "tradeoffs": [
+    {
+      "id": "trade-own-identity",
+      "title": "Integrations that stand on their own",
+      "pro": "Someone leaving the team no longer breaks the company's automations.",
+      "con": "Older integrations have to be moved off personal tokens.",
+      "alternative": "A period where both work, with usage figures for the fallback and a date for switching it off.",
+      "evidence": [
+        "D1",
+        "D5"
+      ]
+    },
+    {
+      "id": "trade-simple-read",
+      "title": "Reading the key the simple way",
+      "pro": "One place holds the truth about permissions and revocation.",
+      "con": "Auth becomes tied to SQL; if the store is down, integrations stop.",
+      "alternative": "A KeyResolver port in the domain and the SQL adapter in infrastructure, so the behaviour on failure stays explicit.",
+      "evidence": [
+        "D3"
+      ]
+    },
+    {
+      "id": "trade-least-access",
+      "title": "Giving out the least access needed",
+      "pro": "Each integration gets only the permissions it needs.",
+      "con": "More authorization states, and more room to confuse one tenant with another.",
+      "alternative": "One shared Policy Engine with contract tests covering both kinds of identity.",
+      "evidence": [
+        "D2",
+        "D6"
+      ]
+    }
+  ],
+  "fit": [
+    {
+      "id": "fit-product",
+      "title": "Product direction",
+      "status": "aligned",
+      "rule": "Assumed for this example: business integrations are managed at the organization level.",
+      "assessment": "Organization keys serve that goal, and this is a platform feature rather than an integration with one particular vendor.",
+      "evidence": [
+        "D1"
+      ]
+    },
+    {
+      "id": "fit-boundaries",
+      "title": "Domain boundaries",
+      "status": "tension",
+      "rule": "Assumed for this example: a domain module depends on a port, not on a SQL adapter.",
+      "assessment": "Reading SQL straight from Auth breaks that boundary. Move the dependency onto a KeyResolver interface.",
+      "evidence": [
+        "D3"
+      ]
+    },
+    {
+      "id": "fit-policy",
+      "title": "One shared access policy",
+      "status": "aligned",
+      "rule": "Assumed for this example: every access decision belongs to the Policy Engine.",
+      "assessment": "The PR extends the existing engine instead of building a second permissions mechanism beside it.",
+      "evidence": [
+        "D2"
+      ]
+    },
+    {
+      "id": "fit-migration",
+      "title": "Are customers ready to migrate",
+      "status": "unknown",
+      "rule": "There is no data on how many current integrations use personal tokens.",
+      "assessment": "No date for removing the fallback can be approved without that data and a plan for telling customers.",
+      "evidence": [
+        "D5"
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-fallback",
+      "owner": "Product owner",
+      "question": "Can the fallback be removed in this same release?",
+      "why": "We do not know how many customers would have to migrate.",
+      "evidence": [
+        "D5"
+      ]
+    },
+    {
+      "id": "q-timeout",
+      "owner": "Architect / SRE",
+      "question": "What does authorization do when the key store times out?",
+      "why": "A new infrastructure dependency has landed on the critical path.",
+      "evidence": [
+        "D3",
+        "D6"
+      ]
+    }
+  ],
+  "api_changes": [
+    {
+      "id": "api-personal-tokens",
+      "surface": "http",
+      "name": "Authorization: Bearer <personal token> on /api/*",
+      "status": "removed",
+      "breaking": true,
+      "impact": "Integrations that still send an employee's personal token are refused once the compatibility path is gone.",
+      "before": "Any /api/* route accepts a personal token and acts as that employee.",
+      "after": "Only organization keys are accepted; a personal token answers 401.",
+      "consumers": [
+        "Customer integrations",
+        "console"
+      ],
+      "migration": "Create an organization key in the console, replace the personal token in every integration, then confirm the audit log shows no personal-token calls.",
+      "evidence": [
+        "D5",
+        "D2"
+      ]
+    },
+    {
+      "id": "api-auth-header",
+      "surface": "http",
+      "name": "X-Org-Key request header",
+      "status": "added",
+      "breaking": false,
+      "after": "X-Org-Key: <key id>.<secret> identifies the organization and its scopes.",
+      "consumers": [
+        "Customer integrations"
+      ],
+      "evidence": [
+        "D2"
+      ]
+    },
+    {
+      "id": "api-key-events",
+      "surface": "event",
+      "name": "org_key.rotated / org_key.revoked",
+      "status": "added",
+      "breaking": false,
+      "after": "Emitted on every rotation and revocation, carrying the key id and the actor.",
+      "consumers": [
+        "audit",
+        "notify"
+      ],
+      "evidence": [
+        "D4",
+        "D7"
+      ]
+    },
+    {
+      "id": "api-key-store",
+      "surface": "extension-point",
+      "name": "KeyResolver port",
+      "status": "added",
+      "breaking": "unknown",
+      "impact": "The made-up PR does not say whether third-party auth plugins must implement the new port.",
+      "after": "interface KeyResolver { resolve(keyId): OrgKey | null }",
+      "evidence": [
+        "D3"
+      ]
+    },
+    {
+      "id": "api-keys-table",
+      "surface": "schema",
+      "name": "org_keys table",
+      "status": "added",
+      "breaking": false,
+      "after": "org_keys(id, org_id, scopes, hash, rotated_at) — only a hash of the secret is stored.",
+      "evidence": [
+        "D8"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "D1",
+      "kind": "demo",
+      "title": "The product goal",
+      "source": "Made-up product brief",
+      "detail": "For this demonstration we assume a business platform where integrations belong to an organization. This is not a verified strategy for any real product."
+    },
+    {
+      "id": "D2",
+      "kind": "demo",
+      "title": "The change to identity and permissions",
+      "source": "Made-up model of the change",
+      "detail": "The scenario assumes a new Org Key Registry and an extension of the existing Auth and Policy Engine. The diagram shows that model; it was not derived from code."
+    },
+    {
+      "id": "D3",
+      "kind": "demo",
+      "title": "A new dependency from Auth to SQL",
+      "source": "Made-up diff and architecture rule",
+      "detail": "To show the trade-off, we assume the domain reads SQL directly, and a ports-and-adapters rule. Both are inventions of this example, not findings from an audit."
+    },
+    {
+      "id": "D4",
+      "kind": "demo",
+      "title": "More audit events",
+      "source": "Made-up event contract",
+      "detail": "The example adds key.created, key.rotated and key.revoked, reusing the existing Audit Log as the receiver. A real review would check who sends them, what the contract is, and who reads them."
+    },
+    {
+      "id": "D5",
+      "kind": "demo",
+      "title": "Removing the compatibility path",
+      "source": "Made-up migration scenario",
+      "detail": "We assume the personal-token fallback is removed. The example deliberately leaves out a migration plan and customer data, so that the decision stays open for the product owner."
+    },
+    {
+      "id": "D6",
+      "kind": "demo",
+      "title": "Error paths nobody has checked",
+      "source": "No tests were run",
+      "detail": "There are no results for tenant isolation, key revocation or a key-store outage. The list describes the checks that are needed; it does not mean those tests exist or passed."
+    },
+    {
+      "id": "D7",
+      "kind": "demo",
+      "title": "Rotation schedule in the made-up PR",
+      "source": "demo · workers/key_rotation.py:1-84",
+      "detail": "Fictional example content. In a real review this record would quote the scheduled job, its interval, and what it writes, read from the diff at the exact head commit."
+    },
+    {
+      "id": "D8",
+      "kind": "demo",
+      "title": "Hash-at-rest in the made-up PR",
+      "source": "demo · migrations/0042_org_keys.sql:1-31",
+      "detail": "Fictional example content. In a real review this record would name the column, the hashing routine and the migration that drops the plaintext token, all read in the source."
+    }
+  ]
+}

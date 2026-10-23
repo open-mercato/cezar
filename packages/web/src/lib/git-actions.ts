@@ -43,6 +43,9 @@ export interface GitActionState {
    *  step is the agent's to run; without one, Commit/Push/Create PR fall back to the server doing
    *  them (under the server's own rules), and Resolve conflicts / Fix errors render disabled. */
   agentBlocked?: string
+  /** An impact run (`RunRecord.subject`): its report is the deliverable, so it never offers a PR —
+   *  `POST /runs/:id/pr` refuses it (spec 2026-10-22-html-artifacts-and-impact, Q11). */
+  assessment?: boolean
 }
 
 export type GitActionId =
@@ -191,6 +194,8 @@ export function gitActionPolicy(state: GitActionState): GitAction | null {
     state.behind !== undefined && state.behind !== null && state.behind > 0 && !state.agentBlocked
       ? agentStep(state, 'update-branch', 'Update branch')
       : null
+  // An assessment proposes nothing: no Create PR, no Create draft PR.
+  if (state.assessment && !state.prUrl) return null
   if (!state.prUrl && state.forge !== null) {
     // Nothing to open a PR from (a clean tree, nothing the base lacks — telemetry 16aef26d): no
     // button at all. Only on a live `git status` answer — never the run's `diffStat`, which goes stale.
@@ -233,6 +238,8 @@ export interface TrunkGitActionState {
   behind?: number | null
   forge: ForgeInfo | null
   agentBlocked?: string
+  /** See `GitActionState.assessment`. */
+  assessment?: boolean
 }
 
 /**
@@ -253,7 +260,8 @@ export function trunkGitActionPolicy(state: TrunkGitActionState): GitAction | nu
       : state.agentBlocked
   const prStep = (id: GitActionId, label: string): GitAction =>
     prReason ? { id, label, enabled: false, reason: `${label} unavailable — ${prReason}` } : { id, label, enabled: true }
-  const alternatives = [prStep('create-pr', 'Create PR'), prStep('create-draft-pr', 'Create draft PR'), ...(update ? [update] : [])]
+  const prSteps = state.assessment ? [] : [prStep('create-pr', 'Create PR'), prStep('create-draft-pr', 'Create draft PR')]
+  const alternatives = [...prSteps, ...(update ? [update] : [])]
   const label = `Commit to ${state.base}`
   if (state.status === 'running' || state.status === 'queued') {
     return { id: 'land', label, enabled: false, reason: `${label} unavailable — the agent is still working`, alternatives }

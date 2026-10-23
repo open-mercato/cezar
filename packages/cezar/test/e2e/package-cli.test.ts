@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 const execFile = promisify(execFileCallback);
@@ -30,7 +30,7 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     assert.ok(record, 'npm pack should describe the generated tarball');
 
     const packagedPaths = new Set(record.files.map((file) => file.path));
-    for (const requiredPath of ['dist/index.js', 'web/dist/index.html', 'scripts/mock-claude.mjs', 'README.md']) {
+    for (const requiredPath of ['dist/index.js', 'web/dist/index.html', 'scripts/mock-claude.mjs', 'README.md', 'dist/impact/template.html', 'skills/change-impact/SKILL.md']) {
       assert.ok(packagedPaths.has(requiredPath), `release tarball should contain ${requiredPath}`);
     }
     assert.equal(packagedPaths.has('src/index.ts'), false, 'release tarball should not contain TypeScript sources');
@@ -62,6 +62,26 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     });
     assert.match(help.stdout, /cezar — local cockpit/);
     assert.match(help.stdout, /cezar run "<task>"/);
+
+    // The installed CLI renders an impact report from its packed template (spec 2026-10-22).
+    const impact = await execFile(process.execPath, [cliPath, 'impact', 'render', '--demo', '--out', join(root, 'impact-demo.html')], {
+      cwd: consumerDir,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    assert.match(impact.stdout, /^ok: .*impact-demo\.html \(2 views\)/);
+    assert.match(await readFile(join(root, 'impact-demo.html'), 'utf8'), /Created by the Open Mercato Team/);
+
+    // The bundled change-impact skill is discovered from the INSTALLED layout, as source builtin.
+    const { discoverSkills } = (await import(pathToFileURL(join(packageRoot, 'dist', 'skills.js')).href)) as {
+      discoverSkills: (repo: string) => Promise<Array<{ name: string; source: string; path: string }>>;
+    };
+    // `skillsRepos: []` — no team repo is cloned in the background.
+    await mkdir(join(consumerDir, '.ai', 'cezar'), { recursive: true });
+    await writeFile(join(consumerDir, '.ai', 'cezar', 'config.json'), '{"skillsRepos": []}\n', 'utf8');
+    const shipped = (await discoverSkills(consumerDir)).find((skill) => skill.name === 'change-impact');
+    assert.equal(shipped?.source, 'builtin');
+    // realpath: the import resolves through a symlinked tmpdir (macOS /tmp → /private/tmp).
+    assert.equal(shipped?.path, join(await realpath(packageRoot), 'skills', 'change-impact', 'SKILL.md'));
 
     const fixtureRepo = join(root, 'fixture-repo');
     await mkdir(fixtureRepo);

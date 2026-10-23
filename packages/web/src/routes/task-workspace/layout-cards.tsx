@@ -77,6 +77,7 @@ export function LayoutCards({
   onColumnDropClose,
   keyHints = NO_HINTS,
   showKeyHints = false,
+  badges,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
@@ -111,6 +112,8 @@ export function LayoutCards({
    *  for ⌘1. Printed on the tabs while `showKeyHints` (⌘ held), and always in the `…` menu. */
   keyHints?: ReadonlyMap<string, string>
   showKeyHints?: boolean
+  /** A count shown on a view's tab (the Assets tab's published files). */
+  badges?: Partial<Record<ViewId, number>>
 }) {
   /*
    * The row never scrolls: the tabs that do not fit fold into a `…` menu. How many fit is MEASURED,
@@ -126,7 +129,7 @@ export function LayoutCards({
   const [width, setWidth] = useState(0)
   const [fit, setFit] = useState<number | null>(null)
   // The layout menu names the active layout, so its width — and the room left — follows it.
-  const signature = `${items.join('|')}#${showLayouts && fixedActive === null ? active : ''}`
+  const signature = `${items.join('|')}#${showLayouts && fixedActive === null ? active : ''}#${JSON.stringify(badges ?? {})}`
 
   useEffect(() => {
     const root = rootRef.current
@@ -302,6 +305,15 @@ export function LayoutCards({
               <Icon aria-hidden="true" className="size-3.5 shrink-0" />
             </TabIcon>
             {label}
+            {badges?.[view] ? (
+              <span
+                data-slot="tab-badge"
+                aria-label={`${badges[view]} ${label.toLowerCase()}`}
+                className="rounded-full bg-muted px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-muted-foreground"
+              >
+                {badges[view]}
+              </span>
+            ) : null}
             {on && !selected ? (
               <span aria-hidden="true" className="absolute top-2 right-1 size-1.5 rounded-full bg-primary" />
             ) : null}
