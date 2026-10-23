@@ -22,14 +22,16 @@ function num(raw: string | undefined): number | undefined {
   return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
 }
 
+/** GitHub's `<host>/<owner>/<repo>/` prefix: any dotted host, since GitHub Enterprise lives on
+ *  arbitrary domains (#1426) — except gitlab.com, whose URLs are only ever GitLab-shaped. The
+ *  lookbehind keeps a scheme-less match from starting mid-host (`itlab.com/…`). */
+const GITHUB_REPO = String.raw`(?:https?:\/\/|(?<![\w.\/-]))(?!gitlab\.com[\/:])[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/`;
 /** GitLab's project-URL prefix up to `/-/`: any host, a project path of two or more segments. */
 const GITLAB_PROJECT = String.raw`https?:\/\/[\w.-]+(?::\d+)?(?:\/(?!-\/)[\w.-]+){2,}\/-\/`;
-const PR_URL_RE = new RegExp(
-  String.raw`github\.com\/[\w.-]+\/[\w.-]+\/pull\/(\d+)|${GITLAB_PROJECT}merge_requests\/(\d+)`,
-  'i',
-);
+const PR_URL_RE = new RegExp(String.raw`${GITHUB_REPO}pull\/(\d+)|${GITLAB_PROJECT}merge_requests\/(\d+)`, 'i');
+// `work_items`: gitlab.com serves issues there now and `glab` reports their web_url that way.
 const ISSUE_URL_RE = new RegExp(
-  String.raw`github\.com\/[\w.-]+\/[\w.-]+\/issues\/(\d+)|${GITLAB_PROJECT}issues\/(\d+)`,
+  String.raw`${GITHUB_REPO}issues\/(\d+)|${GITLAB_PROJECT}(?:issues|work_items)\/(\d+)`,
   'i',
 );
 
@@ -38,10 +40,11 @@ export function extractTaskRefs(task: string): TaskRefs {
   const refs: TaskRefs = {};
   const text = task ?? '';
 
-  // 1. Explicit URLs — the strongest signal. GitHub's `github.com/<owner>/<repo>/pull/N`, or
-  //    GitLab's `https://<any host>/<path…>/-/merge_requests/N` (subgroup paths included; spec
-  //    2026-08-10-forge-provider-adapters). The GitLab shape needs its scheme so the unanchored
-  //    scan cannot backtrack across long slash-free runs; the leftmost URL still wins.
+  // 1. Explicit URLs — the strongest signal. GitHub's `<host>/<owner>/<repo>/pull/N` (github.com
+  //    or an Enterprise host), or GitLab's `https://<any host>/<path…>/-/merge_requests/N`
+  //    (subgroup paths included; spec 2026-08-10-forge-provider-adapters). The GitLab shape needs
+  //    its scheme so the unanchored scan cannot backtrack across long slash-free runs; the
+  //    leftmost URL still wins.
   const prUrl = PR_URL_RE.exec(text);
   if (prUrl) refs.prNumber = num(prUrl[1] ?? prUrl[2]);
   const issueUrl = ISSUE_URL_RE.exec(text);

@@ -3,20 +3,43 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import { resetToasts, Toaster } from '@/components/ui/toaster'
+import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
+import { reportDictationFailed } from '@/lib/telemetry'
 
 import { Composer } from './composer'
 import {
+  DICTATION_INSECURE,
+  DICTATION_NO_SERVICE,
+  DICTATION_OLD_SHELL,
+  dictationNotice,
   foldResults,
   formatElapsed,
+  resetDictationAvailability,
   type SpeechRecognitionLike,
   type SpeechResultEventLike,
 } from './dictation'
+
+vi.mock('@/lib/telemetry', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/telemetry')>()),
+  reportDictationFailed: vi.fn(),
+}))
 
 afterEach(() => {
   cleanup()
   resetToasts()
   vi.unstubAllGlobals()
+  vi.mocked(reportDictationFailed).mockClear()
+  resetDictationAvailability()
+})
+
+describe('dictationNotice', () => {
+  it('maps Web Speech codes to what the user can do, and which ones are failures', () => {
+    expect(dictationNotice('aborted')).toBeNull()
+    expect(dictationNotice('no-speech')?.failure).toBeNull()
+    expect(dictationNotice('not-allowed')?.failure).toBe('not-allowed')
+    expect(dictationNotice('service-not-allowed')?.failure).toBe('service-not-allowed')
+    expect(dictationNotice(undefined)).toEqual({ message: 'Dictation failed', failure: 'unknown' })
+  })
 })
 
 /** A scriptable Web Speech stand-in: tests drive `onresult`/`onerror` by hand — exactly the
@@ -177,10 +200,88 @@ describe('the dictation overlay (paseo pattern)', () => {
     stubSpeech()
     renderComposer()
     const recognition = startDictation()
-    act(() => recognition.onerror!({ error: 'no-speech' }))
-    expect(await screen.findByText('Dictation failed — no-speech')).toBeTruthy()
+    act(() => recognition.onerror!({ error: 'bad-grammar' }))
+    expect(await screen.findByText('Dictation failed — bad-grammar')).toBeTruthy()
     expect(document.querySelector('[data-slot="dictation-overlay"]')).toBeNull()
     expect(recognition.aborted).toBe(true)
+    expect(reportDictationFailed).toHaveBeenCalledWith('bad-grammar')
+  })
+
+  // telemetry 38ccdbdc / 252d00a6: every code is one report under one fingerprint, never the
+  // generic danger-toast report whose group is the message text.
+  it('a refused microphone says what to do and is reported once, not as a toast group', async () => {
+    stubSpeech()
+    const toastReports: string[] = []
+    const off = onDangerToast((message) => toastReports.push(message))
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'not-allowed' }))
+    expect(await screen.findByText(/allow it for this site/)).toBeTruthy()
+    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
+    expect(toastReports).toEqual([])
+    off()
+  })
+
+  it('no-speech is a plain notice, not a reported failure; aborted is silent', async () => {
+    stubSpeech()
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'aborted' }))
+    expect(document.querySelector('[data-tone="danger"]')).toBeNull()
+    act(() => startDictation().onerror!({ error: 'no-speech' }))
+    const toast = (await screen.findByText('Dictation heard nothing — try again')).closest('[data-tone]')
+    expect(toast?.getAttribute('data-tone')).toBe('default')
+    expect(reportDictationFailed).not.toHaveBeenCalled()
+  })
+
+  it('a speech service that refuses disables the mic for the session, saying why', async () => {
+    stubSpeech()
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'service-not-allowed' }))
+    expect(await screen.findByText(DICTATION_NO_SERVICE)).toBeTruthy()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(1) // no second attempt
+    // A fresh composer (another task, the new-task form) must not offer it again.
+    cleanup()
+    renderComposer()
+    expect(screen.getByLabelText('Start dictation').getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('in an insecure context the mic is disabled with the reason, never started', async () => {
+    stubSpeech()
+    vi.stubGlobal('isSecureContext', false)
+    // The reason is a Radix tooltip, positioned by floating-ui; jsdom has no ResizeObserver.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderComposer()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(0)
+    act(() => mic.focus())
+    expect((await screen.findAllByText(DICTATION_INSECURE)).length).toBeGreaterThan(0)
+  })
+
+  // telemetry c55c7b0b: a macOS shell without the microphone entitlement refuses every start.
+  it('in a macOS app that predates the microphone entitlement the mic is disabled, never started', async () => {
+    stubSpeech()
+    vi.stubGlobal('__CEZ_DESKTOP__', { platform: 'macos' })
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderComposer()
+    const mic = screen.getByLabelText('Start dictation')
+    expect(mic.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(mic)
+    expect(FakeRecognition.instances).toHaveLength(0)
+    act(() => mic.focus())
+    expect((await screen.findAllByText(DICTATION_OLD_SHELL)).length).toBeGreaterThan(0)
+  })
+
+  it('in a macOS app with the entitlement a refusal points at System Settings, not the browser', async () => {
+    stubSpeech()
+    vi.stubGlobal('__CEZ_DESKTOP__', { platform: 'macos', microphone: true })
+    renderComposer()
+    act(() => startDictation().onerror!({ error: 'not-allowed' }))
+    expect(await screen.findByText(/System Settings → Privacy & Security/)).toBeTruthy()
+    expect(reportDictationFailed).toHaveBeenCalledWith('not-allowed')
   })
 
   it('a mic that will not start (permissions) toasts honestly instead of hanging the overlay', async () => {

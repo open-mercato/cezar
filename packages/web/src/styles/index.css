@@ -414,6 +414,16 @@
     font-family: var(--mono);
   }
 
+  /* v3's preflight gave buttons `cursor: pointer`; v4 dropped that rule, so they fall back to the
+   * user agent's arrow. In this cockpit anything clickable reads as clickable, so enabled buttons
+   * and button-like roles opt back into the pointer. Disabled controls keep the arrow (and their
+   * own `cursor-not-allowed` where set), and an explicit `cursor-*` utility still wins — the
+   * `utilities` layer outranks `base`. */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
   ::placeholder {
     color: var(--soft-foreground);
   }
@@ -528,6 +538,12 @@
 .thread-markdown {
   line-height: 1.6;
 }
+/* #1356: Scroll list containers too: Streamdown makes li > p inline, so paragraph overflow is inert.
+ * Keep markers within the list's padding; clipping individual li would hide outside markers. */
+.thread-markdown :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
   font-size: 1.05em;
@@ -565,4 +581,64 @@
 .thread-markdown [data-streamdown='code-block'] pre {
   font-size: 12px;
   line-height: 1.55;
+}
+/* Streamdown emits one span per line with no newline between them and makes them `block` only
+ * when line numbers are on; we turn those off, so without this every fence collapses to one line. */
+.thread-markdown [data-streamdown='code-block-body'] code > span {
+  display: block;
+}
+
+/* ---------- document markdown (diff preview) ----------
+ * Reading scale for a whole Markdown FILE (the Changes tab's preview toggle), layered on the
+ * chat rules above: a centred ~72ch measure, body text a step up, headings with real
+ * hierarchy and forge-style rules under h1/h2, roomier block spacing. Same unlayered
+ * reasoning; the doubled class outranks the `.thread-markdown` rules it overrides. */
+
+.thread-markdown.markdown-document {
+  max-width: 72ch;
+  margin-inline: auto;
+  font-size: 15px;
+  line-height: 1.7;
+}
+.thread-markdown.markdown-document :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.6em 0 0.6em;
+  line-height: 1.3;
+}
+/* Streamdown's own first-child reset lives in the utilities layer, which the unlayered heading
+ * margin above outranks — restate it, or a file opening with `# Title` starts ~40px down. */
+.thread-markdown.markdown-document > :first-child {
+  margin-top: 0;
+}
+.thread-markdown.markdown-document h1 {
+  font-size: 1.75em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.thread-markdown.markdown-document h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+.thread-markdown.markdown-document h3 {
+  font-size: 1.2em;
+}
+.thread-markdown.markdown-document :is(h4, h5, h6) {
+  font-size: 1em;
+}
+.thread-markdown.markdown-document :is(p, ul, ol, table, blockquote) {
+  margin: 0.9em 0;
+}
+.thread-markdown.markdown-document li + li {
+  margin-top: 0.3em;
+}
+.thread-markdown.markdown-document hr {
+  margin: 2em 0;
+  border-color: var(--border);
+}
+.thread-markdown.markdown-document img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.thread-markdown.markdown-document [data-streamdown='code-block'] pre {
+  font-size: 13px;
 }

@@ -1,10 +1,49 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { fstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const fsTestState = vi.hoisted(() => ({
+  events: [] as string[],
+  openedFds: [] as number[],
+  failWrite: false,
+  failFsync: false,
+}));
+
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return {
+    ...actual,
+    openSync: (...args: Parameters<typeof actual.openSync>) => {
+      const fd = actual.openSync(...args);
+      fsTestState.openedFds.push(fd);
+      return fd;
+    },
+    writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
+      if (fsTestState.failWrite) throw new Error('write failed');
+      fsTestState.events.push('write');
+      return actual.writeFileSync(...args);
+    },
+    fsyncSync: (fd: number) => {
+      fsTestState.events.push('fsync');
+      if (fsTestState.failFsync) throw new Error('fsync failed');
+      return actual.fsyncSync(fd);
+    },
+    closeSync: (fd: number) => {
+      fsTestState.events.push('close');
+      return actual.closeSync(fd);
+    },
+    renameSync: (...args: Parameters<typeof actual.renameSync>) => {
+      fsTestState.events.push('rename');
+      return actual.renameSync(...args);
+    },
+  };
+});
+
 import { workspaceConfigPath } from '../paths.ts';
 import {
   atomicTmpPath,
+  atomicWriteJsonSync,
   defaultWorkspaceConfig,
   effectiveSkillsAutoUpdate,
   effectiveComposerDefault,
@@ -47,6 +86,10 @@ describe('workspace config', () => {
     else process.env.CEZ_SKILLS_AUTO_UPDATE = originalSkillsAutoUpdate;
     rmSync(home, { recursive: true, force: true });
     vi.restoreAllMocks();
+    fsTestState.events.length = 0;
+    fsTestState.openedFds.length = 0;
+    fsTestState.failWrite = false;
+    fsTestState.failFsync = false;
   });
 
   const write = (value: unknown) =>
@@ -68,7 +111,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -203,6 +246,36 @@ describe('workspace config', () => {
     expect((await loadWorkspaceConfig()).projects.map((p) => p.id)).toEqual(['cezar']);
   });
 
+  it('flushes before rename and removes the staging file when rename fails', () => {
+    const target = join(home, 'ui-state.json');
+    expect(() => atomicWriteJsonSync(target, { ok: true })).not.toThrow();
+    expect(fsTestState.events.indexOf('fsync')).toBeLessThan(fsTestState.events.indexOf('rename'));
+    expect(fsTestState.events.indexOf('close')).toBeLessThan(fsTestState.events.indexOf('rename'));
+    expect(readFileSync(target, 'utf8')).toContain('"ok": true');
+
+    mkdirSync(join(home, 'rename-target'));
+    expect(() => atomicWriteJsonSync(join(home, 'rename-target'), { ok: true })).toThrow();
+    expect(readdirSync(home).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('closes and cleans up after a write or fsync failure', () => {
+    const target = join(home, 'failure.json');
+    fsTestState.failWrite = true;
+    expect(() => atomicWriteJsonSync(target, { ok: true })).toThrow('write failed');
+    expect(() => fstatSync(fsTestState.openedFds.at(-1)!)).toThrow(/EBADF|closed/i);
+    expect(readdirSync(home).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    fsTestState.failWrite = false;
+    fsTestState.failFsync = true;
+    expect(() => atomicWriteJsonSync(target, { ok: true })).toThrow('fsync failed');
+    expect(() => fstatSync(fsTestState.openedFds.at(-1)!)).toThrow(/EBADF|closed/i);
+    expect(readdirSync(home).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    fsTestState.failFsync = false;
+    expect(() => atomicWriteJsonSync(target, { recovered: true })).not.toThrow();
+    expect(readFileSync(target, 'utf8')).toContain('"recovered": true');
+  });
+
   it('concurrent merge-writes from stale in-memory copies keep both writers projects', async () => {
     // Writer A reads the (empty) config into memory…
     const stale = await loadWorkspaceConfig();
@@ -243,14 +316,14 @@ describe('workspace config', () => {
       schemaVersion: 'two',
       browseRoot: 42,
       projectsDir: 42,
-      resources: { maxParallel: 99, maxMonitoringSessions: 99, monitoringWakeIntervalMinutes: 0, memoryLimitMb: 'lots', worktreeRetentionDefault: -1 },
+      resources: { maxParallel: 99, maxMonitoringSessions: 99, idleTimeoutMinutes: 9999, monitoringWakeIntervalMinutes: 0, memoryLimitMb: 'lots', worktreeRetentionDefault: -1 },
       projects: [project('good')],
     });
     const config = await loadWorkspaceConfig();
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
     expect(config.projects).toEqual([project('good')]);
   });
 
@@ -299,6 +372,30 @@ describe('workspace config', () => {
     const config = await loadWorkspaceConfig();
     expect(config.projects.map((p) => p.id)).toEqual(['good', 'also-good']);
     expect(config.projects[1]?.source).toBe('local');
+  });
+
+  it('keeps native Windows roots on win32 through a reload and an unrelated write', async () => {
+    // `registerProject` writes the platform's own realpath, so on Windows the registry holds
+    // `C:\\…` roots. A leading-`/` rule salvaged them away on read and the next merge-write
+    // persisted the loss; the platform is stubbed so the win32 rule runs on any CI host.
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    try {
+      const roots = ['C:\\projects\\ProjectName', 'C:/Repos', '\\\\server\\share\\repo'];
+      write({
+        projects: [
+          ...roots.map((root, i) => ({ ...project(`win-${i}`), root })),
+          { ...project('drive-relative'), root: 'C:repo' }, // still refused
+        ],
+      });
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.root)).toEqual(roots);
+      await mergeWriteWorkspaceConfig((config) => {
+        config.resources.maxParallel = 3;
+      });
+      expect((await loadWorkspaceConfig()).projects.map((p) => p.root)).toEqual(roots);
+    } finally {
+      Object.defineProperty(process, 'platform', platform);
+    }
   });
 
   it('per-project maxParallel: keeps a valid value, degrades a bad one to inherit, absent stays absent', async () => {

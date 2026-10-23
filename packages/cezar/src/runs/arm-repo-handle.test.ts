@@ -121,7 +121,7 @@ describe('armRepoHandle (#945)', () => {
     });
 
     it('arms a self-managed instance the same way, port and http scheme included', async () => {
-      // Only the discovery cache can classify an on-prem host — the same map `resolveForge` reads.
+      // Only glab's configured hosts classify an on-prem host — the same lookup `resolveForge` reads.
       __setForgeHostsForTests({ 'gitlab.acme.internal': 'gitlab' });
       getRepoInfoMock.mockResolvedValue({
         root: '/repo',

@@ -1,12 +1,19 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
+import { isForeignCursorAgent } from './cursor-bin.ts';
+import { cliVersionFrom } from './provider-auth.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { ghEnv } from './gh-env.ts';
+import { spawnableCommand } from './windows-shim.ts';
 
-const exec = promisify(execFile);
+const execAsync = promisify(execFile);
+/** Every probe goes through `spawnableCommand`, so a Windows `.cmd` override is detected too. */
+const exec = (bin: string, args: readonly string[], opts: { timeout: number; env?: NodeJS.ProcessEnv }) =>
+  execAsync(...spawnableCommand(bin, args), opts);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'gh' | 'glab' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'glab' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -14,13 +21,14 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `cursor` / `pi` alternatives), `gh` (GitHub
- * auth for PR creation), `glab` (GitLab auth for merge-request creation — spec
- * 2026-08-10-forge-provider-adapters) and `git`. Nothing is required except at
- * least one agent CLI — the GUI degrades gracefully, only offers the runners
- * that are present, and shows the hints for the rest. `glab` in particular is
- * optional in every sense: a GitHub-only project never needs it, so its
- * absence is never an error and never fails boot (AGENTS.md "Zero config").
+ * the optional `codex` / `opencode` / `cursor` / `pi` / `junie` / `copilot`
+ * alternatives), `gh` (GitHub auth for PR creation), `glab` (GitLab auth for
+ * merge-request creation — spec 2026-08-10-forge-provider-adapters) and `git`.
+ * Nothing is required except at least one agent CLI — the GUI degrades
+ * gracefully, only offers the runners that are present, and shows the hints for
+ * the rest. `glab` in particular is optional in every sense: a GitHub-only
+ * project never needs it, so its absence is never an error and never fails boot
+ * (AGENTS.md "Zero config").
  */
 export async function detectEnvironment(): Promise<BackendCheck[]> {
   return Promise.all([
@@ -29,6 +37,8 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeOpencode(),
     probeCursor(),
     probePi(),
+    probeJunie(),
+    probeCopilot(),
     probeGh(),
     probeGlab(),
     probeGit(),
@@ -120,6 +130,14 @@ async function probeCursor(): Promise<BackendCheck> {
   const bin = resolveCursorAgentBin();
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    // Cursor absent, another `agent` on PATH (telemetry 8d304c50) — don't offer a runner that can't run.
+    if (isForeignCursorAgent(bin, cliVersionFrom(stdout))) {
+      return {
+        name: 'cursor',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like the Cursor CLI (got: ${stdout.trim().slice(0, 80)}); install it (curl https://cursor.com/install -fsS | bash) or set CEZ_CURSOR_AGENT_BIN`,
+      };
+    }
     return {
       name: 'cursor',
       available: true,
@@ -160,9 +178,66 @@ async function probePi(): Promise<BackendCheck> {
   }
 }
 
+async function probeJunie(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'junie', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_JUNIE_BIN ?? 'junie';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    const version = stdout.trim();
+    if (!/junie version[:\s]/i.test(version)) {
+      return {
+        name: 'junie',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like Junie (got: ${version.slice(0, 80)})`,
+      };
+    }
+    return {
+      name: 'junie',
+      available: true,
+      version,
+      hint: 'if not authenticated, run `junie` once and log in',
+    };
+  } catch {
+    return {
+      name: 'junie',
+      available: false,
+      hint: 'optional: install Junie (https://junie.jetbrains.com/cli) and log in to use the Junie runner',
+    };
+  }
+}
+
+async function probeCopilot(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'copilot', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_COPILOT_BIN ?? 'copilot';
+  try {
+    // `--version` needs no login and no network — the auth state is the provider descriptor's
+    // job (`provider-auth.ts`), never detection's (AGENT_PROTOCOL.md §9 step 3).
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'copilot',
+      available: true,
+      version: stdout.trim().split(/\r?\n/)[0] ?? '',
+      hint: 'if not authenticated, run `copilot login` (COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN also work)',
+    };
+  } catch {
+    // A missing Copilot CLI is never a boot failure — the runner just isn't offered.
+    return {
+      name: 'copilot',
+      available: false,
+      hint: 'optional: install GitHub Copilot CLI (`npm i -g @github/copilot`) and run `copilot login` to use the copilot runner',
+    };
+  }
+}
+
 async function probeGh(): Promise<BackendCheck> {
   try {
-    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000 });
+    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000, env: ghEnv() });
     return { name: 'gh', available: stdout.trim().length > 0, version: 'authenticated' };
   } catch {
     return {
@@ -182,15 +257,15 @@ const GLAB_PROBE_TIMEOUT_MS = 2_500;
 
 /** `glab`'s own version notifier is its one network touch on an otherwise local command; off, so
  *  an offline host cannot spend the probe's budget on it. */
-const GLAB_PROBE_ENV = { ...process.env, GLAB_CHECK_UPDATE: 'false' };
+const GLAB_PROBE_ENV = { ...ghEnv(), GLAB_CHECK_UPDATE: 'false' };
 
 /**
  * The GitLab equivalent of `probeGh`'s `gh auth token`, and deliberately the same SHAPE: a LOCAL
  * config read, never `glab auth status`. `auth status` validates the token against every
  * configured host over the NETWORK, and this probe runs on the health request path — offline, it
  * would hold `/api/v1/health` open until its timeout, which reads as "cez is down" (AGENTS.md: a
- * missing dependency degrades, never blocks). Live GitLab authentication is the off-path discovery
- * warm-up's job (`server/forge/discovery.ts` rung 3), which does run `glab auth status`.
+ * missing dependency degrades, never blocks). Which hosts are GitLab is `gitlab-hosts.ts`'s job —
+ * a read of `glab`'s own config file, no subprocess at all.
  *
  * Two local reads, because `glab config get token` without `--host` only sees the environment:
  * the default host (which also proves `glab` is installed and runnable), then that host's token.
@@ -245,7 +320,7 @@ async function probeGit(): Promise<BackendCheck> {
 /** The host's GitHub token: logged-in `gh` first, `GITHUB_TOKEN` fallback. */
 export async function readHostGithubToken(): Promise<string | null> {
   try {
-    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000 });
+    const { stdout } = await exec('gh', ['auth', 'token'], { timeout: 10_000, env: ghEnv() });
     const token = stdout.trim();
     if (token) return token;
   } catch {

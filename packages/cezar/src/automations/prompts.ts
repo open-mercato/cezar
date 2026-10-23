@@ -1,3 +1,5 @@
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
 /**
  * What a task is told about GitHub automations, and the playbook the built-in
  * `create-cezar-automation` skill runs under (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
@@ -29,7 +31,7 @@ A GitHub poll:
   "name": "Review every new pull request",          // required, 1-200 chars
   "description": "What this automation is for",      // optional, up to 2000 chars
   "kind": "github",                                  // optional here — omitted means a GitHub poll
-  "events": ["pull_request.opened"],                 // 1-7 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled, pull_request.reviewed, pull_request.review_requested, pull_request.rereview_requested
+  "events": ["pull_request.opened"],                 // 1-9 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled, pull_request.reviewed, pull_request.review_requested, pull_request.rereview_requested, pull_request.closed (closed without merging), pull_request.merged
   "intervalSeconds": 300,                            // required: how often GitHub is polled, in seconds, 60-86400 (300 is the usual choice)
   "filters": {                                       // required, may be {}; every key optional; a candidate must pass ALL given filters
     "authors": ["octocat"],                          //   GitHub logins that opened it
@@ -46,7 +48,7 @@ A GitHub poll:
     "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",
     "workflow": "quick-task",                        // a workflow name — OR inline "steps", never both
     "steps": [{ "id": "task", "skill": "om-auto-review-pr", "prompt": "{{task}}" }],  // to run a skill: one agent step naming it
-    "runner": "claude",                              // optional: claude | codex | opencode | pi
+    "runner": "claude",                              // optional: ${RUNNER_IDS.join(' | ')}
     "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
@@ -54,7 +56,9 @@ A GitHub poll:
     "autonomous": true,                              // never park to ask — an automation has no one watching (recommended)
     "generateFollowups": false,
     "systemPrompt": "Extra guidance for every launched run",  // optional
-    "dispatch": { "maxSubtasks": 4, "reviewChild": true }     // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task
+    "dispatch": { "maxSubtasks": 4, "reviewChild": true },    // optional: let each run dispatch up to N subtasks, and ask it to dispatch a final review task
+    "checkout": "pr-head",                           // optional, pull_request.* events only: fork the run's worktree from the PR's head instead of the base branch (its check steps then verify the PR itself; the run cannot publish a PR)
+    "allowForkHeads": false                          // optional, with checkout "pr-head": admit heads from forks — untrusted code, run without check credentials
   }
 }
 
@@ -104,6 +108,8 @@ A schedule — same "name", "description" and "task", but "kind": "schedule" and
   "task": { "prompt": "Run npm outdated, bump patch and minor versions, run the tests, open a draft PR if anything changed. Today is {{date}}." }
 }
 
+Only "filters" decide which items launch a task; the prompt never does. A condition the user states — "when user octocat opens a PR", "only bugs", "unless labelled wip" — goes into authors, labels or the other filters, never only into the prompt text: a condition left in prose launches a task for every item.
+
 For a GitHub poll, name, events, intervalSeconds, filters and task are required; for a tracker poll, name, kind, trackerTrigger, intervalSeconds, filters and task; for a schedule, name, kind, schedule and task. No other top-level key is accepted. Schedules run in the cockpit's own time zone.
 
 Prompt placeholders, substituted per launch — GitHub poll: {{github.kind}} (issue | pull request), {{github.number}}, {{github.title}}, {{github.url}}, {{github.author}}, {{github.assignees}}, {{github.labels}} and {{github.event}}; schedule: {{date}}, {{time}}, {{project}} and {{automation}}. Any other {{…}} is rejected. The matched item's title, author, labels and URL (or the scheduled instant) are also appended to every launched task as untrusted context, so the prompt need not repeat them.
@@ -140,7 +146,7 @@ You turn the user's request into an automation on this cockpit: a bounded GitHub
 
 Every automation answers two questions. Find both in the user's message before writing anything:
 
-- **Trigger** — either a GitHub event: a new pull request (\`pull_request.opened\`), a new issue (\`issue.opened\`), a label added to an issue (\`issue.labeled\`) or removed from one (\`issue.unlabeled\`), a review submitted on a pull request (\`pull_request.reviewed\`), a review requested on one (\`pull_request.review_requested\`) or requested again from someone who already reviewed it (\`pull_request.rereview_requested\`), with the filters that narrow it — authors, assignees, labels it must or must not carry (a label event needs the label whose change fires it, \`filters.changedLabels\`), reviewers a review event must name (\`filters.reviewers\`); or a schedule: every day at a time, weekdays, one weekday a week, or every N hours (\`"kind": "schedule"\`, in the cockpit's own time zone).
+- **Trigger** — either a GitHub event: a new pull request (\`pull_request.opened\`), a new issue (\`issue.opened\`), a label added to an issue (\`issue.labeled\`) or removed from one (\`issue.unlabeled\`), a review submitted on a pull request (\`pull_request.reviewed\`), a review requested on one (\`pull_request.review_requested\`) or requested again from someone who already reviewed it (\`pull_request.rereview_requested\`), a pull request merged (\`pull_request.merged\`) or closed without merging (\`pull_request.closed\`), with the filters that narrow it — authors, assignees, labels it must or must not carry (a label event needs the label whose change fires it, \`filters.changedLabels\`), reviewers a review event must name (\`filters.reviewers\`); or a schedule: every day at a time, weekdays, one weekday a week, or every N hours (\`"kind": "schedule"\`, in the cockpit's own time zone).
 - **Tracker trigger** — for connected Jira/Linear, obtain supported events, the exact association and status/label IDs from GET /api/v1/p/:projectId/tracker/automation-options. Use \`trackerTrigger.events\` and \`targetStatusIds\` for a supported status transition. Current status alone is never a trigger. Use \`{{tracker.key}}\`, \`{{tracker.title}}\` and other tracker placeholders. Never invent unsupported history events.
 - **Task** — what the launched task must do for each match, as a prompt template. Write it the way you would brief a colleague who sees only that text plus the item's number, title, URL, author and labels: the goal, the checks to run, how to finish (a review comment, a draft PR, a report). Use \`{{github.number}}\`, \`{{github.title}}\`, \`{{github.url}}\` (GitHub) or \`{{date}}\`, \`{{project}}\` (schedule) and the other placeholders \`cez automation schema\` lists.
 

@@ -422,14 +422,12 @@ describe('GitHub-event automation availability by remote host', () => {
     expect(await availability(app())).toEqual({ available: false, reason: 'GitHub automations need a GitHub remote' });
   });
 
-  // A GHE host IS a GitHub remote — `resolveForge` gives it the GitHub driver and its `/github*`
-  // routes work — but `automations/github-poller.ts` passes no `cwd` and no `--hostname` to `gh`
-  // and matches candidates against the literal `https://api.github.com/repos/<owner>/<repo>`, so
-  // arming it would poll github.com/acme/demo instead. Its own reason names the gap.
-  it('refuses a GitHub Enterprise host, which the github.com-only poller cannot serve', async () => {
+  // A GHE host is a GitHub remote, and since #1426 the poller passes `--hostname` and matches the
+  // Enterprise `repository_url`, so it is served exactly like github.com.
+  it('reports a GitHub Enterprise host as available — the poller is host-aware (#1426)', async () => {
     __setForgeHostsForTests({ 'ghe.example.com': 'github' });
     remote('git@ghe.example.com:acme/demo.git');
-    expect(await availability(app())).toEqual({ available: false, reason: 'GitHub automations need a github.com remote' });
+    expect(await availability(app())).toEqual({ available: true, reason: undefined });
   });
 
   // The forge only ever gates the GITHUB kind: a schedule needs no forge, so it must create,
@@ -485,12 +483,9 @@ describe('githubAutomationsBlocker', () => {
     expect(githubAutomationsBlocker('ssh://git@github.com/acme/demo.git')).toBeNull();
   });
 
-  it('refuses a GitHub Enterprise host with its own reason, so boot arms no poller for it', () => {
+  it('lets a GitHub Enterprise host through, so boot arms its host-aware poller (#1426)', () => {
     __setForgeHostsForTests({ 'ghe.example.com': 'github' });
-    expect(githubAutomationsBlocker('git@ghe.example.com:acme/demo.git')).toEqual({
-      available: false,
-      reason: 'GitHub automations need a github.com remote',
-    });
+    expect(githubAutomationsBlocker('git@ghe.example.com:acme/demo.git')).toBeNull();
   });
 
   it('refuses a GitLab host with the Step 4.6 reason', () => {

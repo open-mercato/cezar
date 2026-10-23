@@ -42,6 +42,7 @@ export const repoResponseSchema = z.union([
     status: z.array(z.never()),
     log: z.array(z.never()),
     branches: z.array(z.never()),
+    checkedOutElsewhere: z.record(z.string(), z.never()),
     baseBranch: z.null(),
   }),
   z.object({
@@ -49,6 +50,8 @@ export const repoResponseSchema = z.union([
     status: z.array(statusEntrySchema),
     log: z.array(logEntrySchema),
     branches: z.array(z.string()),
+    /** Branch → path of the OTHER worktree that has it checked out; git refuses to switch to these. */
+    checkedOutElsewhere: z.record(z.string(), z.string()),
     baseBranch: z.string().nullable(),
   }),
 ]);
@@ -61,6 +64,48 @@ export const repoBranchResponseSchema = z.object({
   created: z.boolean(),
 });
 export type RepoBranchResponse = z.infer<typeof repoBranchResponseSchema>;
+
+/** One local branch against its upstream; counts are `null` without one, `gone` when the
+ *  upstream was deleted on the remote. */
+export const branchTrackingSchema = z.object({
+  name: z.string(),
+  upstream: z.string().nullable(),
+  ahead: z.number().nullable(),
+  behind: z.number().nullable(),
+  gone: z.boolean(),
+});
+export type BranchTracking = z.infer<typeof branchTrackingSchema>;
+
+/**
+ * `GET /api/v1/repo/sync` — the main checkout against its remote, Source-Control style: the
+ * current branch's upstream and ↑ahead ↓behind, the outgoing commits (on HEAD, not on the
+ * upstream) and the incoming ones (on the upstream, not on HEAD), and every local branch's
+ * tracking. Offline: read from remote-tracking refs as last fetched (`lastFetchedAt`).
+ */
+export const repoSyncSchema = z.object({
+  /** `null` on a detached HEAD. */
+  branch: z.string().nullable(),
+  upstream: z.string().nullable(),
+  ahead: z.number().nullable(),
+  behind: z.number().nullable(),
+  /** Short hashes of the commits `git push` would send. */
+  outgoing: z.array(z.string()),
+  incoming: z.array(logEntrySchema),
+  /** The remote a branch without an upstream would be pushed to; `null` with no remote. */
+  pushRemote: z.string().nullable(),
+  /** ISO time of the last fetch (`FETCH_HEAD`), `null` when this clone never fetched. */
+  lastFetchedAt: z.string().nullable(),
+  branches: z.array(branchTrackingSchema),
+});
+export type RepoSync = z.infer<typeof repoSyncSchema>;
+
+/** `POST /api/v1/repo/{fetch,pull,push,sync}` — what happened, plus the fresh status. Every
+ *  predictable git failure (no upstream, non-fast-forward, auth) is a 409 `{ error }`. */
+export const repoSyncActionResponseSchema = z.object({
+  message: z.string(),
+  sync: repoSyncSchema,
+});
+export type RepoSyncActionResponse = z.infer<typeof repoSyncActionResponseSchema>;
 
 /** The aggregate line counts every structured-diff payload carries. Module-local: the runs family
  *  carries its own `DiffStat` of the same shape, and two `export`s of one name would collide when
@@ -146,6 +191,43 @@ export const worktreeEntrySchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type WorktreeEntry = z.infer<typeof worktreeEntrySchema>;
+
+/**
+ * `GET /api/v1/p/:projectId/repo/tree` — the project repository's whole path index in one bounded
+ * response (spec `.ai/specs/2026-10-05-repo-file-browser.md`, #1279), from
+ * `git ls-files -z --cached --others --exclude-standard`.
+ *
+ * A FLAT array rather than nested JSON, deliberately: it is smaller on the wire, the cockpit
+ * already owns a flat-paths-to-tree builder, and the Files tab's filter is a client-side pass over
+ * exactly this array — which is why search needs no endpoint of its own.
+ *
+ * `truncated` is REQUIRED, not optional: a client that silently ignored it would present a
+ * partial repository as the whole one. 409 (+ reason) outside a repository or when `ls-files` fails.
+ */
+export const repoTreeSchema = z.object({
+  /** Repo-relative POSIX paths, sorted; tracked plus untracked-but-not-ignored. */
+  paths: z.array(z.string()),
+  /** True when the repository has more paths than the server's cap; `paths` is the first cap. */
+  truncated: z.boolean(),
+});
+export type RepoTree = z.infer<typeof repoTreeSchema>;
+
+/**
+ * `GET /api/v1/p/:projectId/repo/files` — the request shape, and the single source for it: the
+ * route validates through this as query MIDDLEWARE, so a missing or empty `path` and a `raw` other
+ * than `0`/`1` are 400s before the handler runs.
+ *
+ * Deliberately NOT shared with `GET /runs/:id/files`: that route's query has always accepted any
+ * `raw` value and a `path` of `''` (the worktree root listing), and narrowing it here would be a
+ * wire change nobody asked for. Every indexed path is a file, so this route has no root listing to
+ * serve and can afford the stricter shape — including rejecting a REPEATED key (hono hands those to
+ * the validator as an array), which the older route had to keep collapsing to the first value.
+ */
+export const repoFileQuerySchema = z.object({
+  path: z.string().min(1),
+  raw: z.enum(['0', '1']).optional(),
+});
+export type RepoFileQuery = z.infer<typeof repoFileQuerySchema>;
 
 /**
  * The lifecycle states a task can be in. Declared here (module-local, not exported) only because

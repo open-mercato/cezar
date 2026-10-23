@@ -48,7 +48,7 @@ export const hostUsageSchema = z.object({
   cpuCount: z.number().int().positive(),
   memTotalBytes: z.number().nonnegative(),
   memUsedBytes: z.number().nonnegative(),
-  /** Headroom left for new work (libuv's `freemem`, i.e. `MemAvailable` on Linux). */
+  /** Headroom left for new work: `MemAvailable` on Linux, total minus Activity Monitor's "Memory Used" on macOS. */
   memAvailableBytes: z.number().nonnegative(),
   swapTotalBytes: z.number().nonnegative().optional(),
   swapUsedBytes: z.number().nonnegative().optional(),

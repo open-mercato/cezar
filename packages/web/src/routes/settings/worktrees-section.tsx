@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { SettingsField } from './settings-field'
 import { WorktreesPanel } from './worktrees-panel'
+import { WorktreeLifecycleEditor } from './worktree-lifecycle-editor'
 
 /**
  * Project settings → Worktrees: the retention count (#483) and the disk panel — what used to be
@@ -130,9 +131,11 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
         )}
       </SettingsField>
 
+      <WorktreeLifecycleEditor config={config} />
+
       <SettingsField
         title="Worktrees"
-        hint="Task worktrees currently on disk. Delete one to reclaim its space now, or reclaim everything past the keep-limit at once. Branches are always kept, so the work stays recoverable."
+        hint="Task worktrees currently on disk. Delete one to reclaim its space now, or reclaim everything past the keep-limit at once. Reclamation keeps branches; deleting a worktree also deletes its managed branch."
       >
         <WorktreesPanel />
       </SettingsField>

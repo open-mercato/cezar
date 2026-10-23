@@ -1,14 +1,16 @@
-import { memo, useMemo, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, type ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useForgeKind, useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos } from '@/api/queries'
+import { useForgeKind, useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
+import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ReferenceForgeScope } from '@/components/reference-status'
+import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
@@ -60,7 +62,12 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const { pathname } = useLocation()
   const projectId = useActiveProjectId()
   const health = useHealth()
-  const starCount = useStarCount()
+  const workspaceConfig = useWorkspaceConfig()
+  const branding = workspaceConfig.data?.branding
+  const customBranding = branding !== undefined && (
+    branding.name !== 'cezar' || branding.logoUrl !== null
+  )
+  const starCount = useStarCount(!customBranding && workspaceConfig.data !== undefined)
   // The global inbox is opt-in (#471). With the capability off there is no Inbox nav item to
   // badge and the endpoint can only answer [], so the query parks rather than polls.
   const inboxAvailable = health.data?.capabilities.followups === true
@@ -116,7 +123,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const forgeKind = useForgeKind()
   const pageLabel = titleLabel ?? (titleContext.pageLabel === 'GitHub' ? forgeLabel(forgeKind) : titleContext.pageLabel)
 
-  useDocumentTitle({ projectName, pageLabel })
+  useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })
 
   // Multi-project sidebar only from the SECOND project on (multi-project spec, "Sidebar").
   // With one registered project — or with the registry still loading, or unreachable — the
@@ -129,6 +136,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     [health.data?.repo?.root, health.data?.repo?.branch],
   )
   const banner = useMemo(() => <ProviderBannerContainer />, [])
+  // The opt-in ask (docs/telemetry.md): renders nothing once this machine has answered.
+  const footerBanner = useMemo(() => <TelemetryConsentBanner />, [])
   const taskQuickList = useMemo(() => <TaskQuickListContainer />, [])
   // The sidebar glance. Created here, not inside `AppShell`, because the shell stays presentational
   // and QueryClient-free: the widget's own wrapper evaluates the viewport and transport gates and
@@ -166,19 +175,20 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     // sidebar and the routed views under it — a routed view subscribing to the registry on its
     // own destabilizes the scope resolution the router does above it (`ForgeScopeContext`).
     <ReferenceForgeScope forge={forgeKind}>
-      {/* The Active/Archived filter is shared by the quick-list below and the Tasks table
-          (Step 3.4), which renders in `children`. The provider goes here because this is the
-          lowest node that has both of them under it — the spec requires the two sets of tabs to
-          be one filter. */}
+      {/* The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
+          which renders in `children`. The provider goes here because this is the lowest node that
+          has both of them under it — the spec requires the two sets of tabs to be one filter. */}
       <ListViewProvider>
         <AppShell
           repo={repo}
+          brandName={workspaceConfig.data?.branding.name ?? 'cezar'}
+          brandLogoUrl={workspaceConfig.data?.branding.logoUrl ?? null}
           version={health.data?.version ?? null}
           latestVersion={health.data?.latestVersion ?? null}
           // The ⭐ ask's count. Same honesty rule as the chips above: `available: false` — offline,
           // a rate-limited IP, or promos silenced with `CEZ_NO_BANNER=1` — is `null` here, and
           // AppShell renders no chip for it rather than a button that cannot count.
-          starCount={starCount.data?.available ? (starCount.data.count ?? null) : null}
+          starCount={!customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null}
           // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
           // is known to be empty — AppShell renders neither for a falsy count.
           inboxCount={todos.data?.length ?? null}
@@ -186,10 +196,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           // unread is 0, which AppShell also renders as no badge.
           unreadCount={runs.data ?? null}
           skillsUpdateAvailable={skillsUpdateAvailable}
-          // Hidden until health confirms the forge driver (R6 Step 1.1) — same honesty rule as
-          // the chips: the nav must not claim a GitHub tab it cannot back. The Tools menu's
-          // forge note says why it is absent.
-          forgeAvailable={health.data?.forge?.available === true}
+          // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
+          // a cold or failed probe is the GitHub page's to explain and retry (#1412).
+          forgeAvailable={health.data?.forge != null}
           // Same source as the title above — the viewed project's kind, read from the URL (`useForgeKind`).
           forgeKind={forgeKind}
           // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
@@ -199,6 +208,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           automationsAvailable={automationsAvailable}
           tracker={tracker}
           banner={banner}
+          footerBanner={footerBanner}
           singleProject={health.data?.capabilities.singleProject === true}
           taskQuickList={taskQuickList}
           hostWidget={hostWidget}
@@ -212,6 +222,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         {/* Global chrome, not a route: ⌘K must work on every URL. Mounted here (not in AppShell)
             because it needs the query client and router this container already assumes. */}
         <CommandPalette />
+        {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
+        <TaskPalette />
       </ListViewProvider>
     </ReferenceForgeScope>
   )

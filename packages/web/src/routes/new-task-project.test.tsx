@@ -15,7 +15,7 @@ import type {
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 
-import { resetDraft } from './new-task-draft'
+import { resetDraft, writeAttachments } from './new-task-draft'
 
 /**
  * The composer's project pill (multi-project spec, step 3.4).
@@ -70,7 +70,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
   projects: [
     { id: BOOT, name: 'cezar' },
     { id: OTHER, name: 'shop-frontend' },
@@ -136,6 +136,7 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 const OTHER_REPO: RepoResponse = {
@@ -143,6 +144,7 @@ const OTHER_REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
@@ -192,6 +194,7 @@ function serve({
           baseBranch: null,
           defaultRunner: 'claude',
           systemPrompt: null,
+          branchNaming: null,
           // The Model pill's label is config-driven, so it proves the CONFIG re-resolved too.
           defaultModels: pick({ claude: 'sonnet' }, { claude: 'opus' }),
         })
@@ -347,6 +350,7 @@ describe('switching project', () => {
     await switchProject(OTHER)
     await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
+    expect(document.querySelector('[data-slot="toast"]')).toBeNull()
 
     // The boot project keeps the bare legacy key (unscoped invariant); the second project gets
     // the spec's suffixed one — and the text is under exactly one of them.
@@ -373,12 +377,43 @@ describe('switching project', () => {
     await composerReady()
     // Their work in progress wins …
     expect(textarea().value).toBe('ship the storefront')
+    expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
+    )
 
     // … and nothing was lost: switching back finds the cezar draft exactly where it was typed.
     await switchProject(BOOT)
     await waitFor(() => expect(pathname()).toBe(`/p/${BOOT}/new`))
     await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
+  })
+
+  it('warns with the destination display name when its attachment-only draft wins', async () => {
+    serve()
+    renderAt(`/p/${BOOT}/new`)
+    await composerReady()
+    fireEvent.change(textarea(), { target: { value: 'fix the cezar flake' } })
+    paste(textarea(), [pngFile('cezar.png')])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    // Attachments are deliberately memory-only, so seed the destination through the store.
+    writeAttachments([{
+      mediaType: 'image/png',
+      data: 'shop',
+      preview: 'shop',
+      name: 'shop.png',
+      isImage: true,
+    }], OTHER)
+
+    await switchProject(OTHER)
+    await composerReady()
+    // The switch is declined, so the destination keeps its own attachment-only draft rather
+    // than receiving the departing composition.
+    expect(textarea().value).toBe('')
+    expect(attachmentChips().map((node) => node.getAttribute('aria-label'))).toEqual(['Remove shop.png'])
+    expect(document.querySelector('[data-slot="toast"]')?.textContent).toContain(
+      'Kept your draft in cezar; shop-frontend already has an unsent draft.',
+    )
   })
 
   /**

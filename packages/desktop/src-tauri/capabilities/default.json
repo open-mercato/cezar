@@ -16,7 +16,8 @@
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
     "allow-update-cezar-command",
-    "allow-retry-start",
-    "allow-show-versions-menu"
+    "allow-restart-app",
+    "allow-show-versions-menu",
+    "allow-send-error-report"
   ]
 }

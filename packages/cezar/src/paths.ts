@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join, posix, sep, win32 } from 'node:path';
 import type { AgentHomePaths } from './agent-config/catalog.ts';
 
 /**
@@ -137,6 +137,21 @@ export function expandTilde(path: string): string {
 }
 
 /**
+ * Is `path` absolute on `platform`? The ONE absolute-path rule for every
+ * filesystem path cezar accepts or persists — project roots, browse/checkout
+ * roots, account dirs. Never a leading-`/` test: that refuses every native
+ * Windows path (`C:\projects\app`, `\\server\share\repo`), and because the
+ * project registry salvages per entry, a refused root does not error — the
+ * project silently vanishes on the next read while `registerProject`, which
+ * writes the platform's own `realpath()`, keeps putting it back.
+ *
+ * `platform` is a parameter so both answers stay testable from either OS.
+ */
+export function isAbsolutePath(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  return (platform === 'win32' ? win32 : posix).isAbsolute(path);
+}
+
+/**
  * Single-writer lock the installer/uninstaller hold for a whole run. Per
  * instance, so installing/uninstalling one cockpit never blocks work on another
  * on the same host. The host-level installer is not concurrency-safe with
@@ -167,6 +182,8 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     codex: env.CODEX_HOME?.trim() || join(home, '.codex'),
     opencodeConfig: join(xdgConfig, 'opencode'),
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
+    copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
+    junie: join(home, '.junie'),
   };
 }
 

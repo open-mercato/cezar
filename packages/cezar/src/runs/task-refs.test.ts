@@ -64,9 +64,15 @@ describe('extractTaskRefs — GitLab (spec 2026-08-10-forge-provider-adapters)',
   });
 
   it('never reads a GitHub-shaped path as GitLab, nor a one-segment project', () => {
-    // No `/-/` → not GitLab; not github.com → not GitHub. Only the tier-4 fallback is left.
+    // No `/-/` → not GitLab; gitlab.com is never GitHub, even though GitHub Enterprise may live on
+    // any other host (#1426). Only the tier-4 fallback is left.
     expect(extractTaskRefs('https://gitlab.com/o/r/pull/5')).toEqual({});
+    expect(extractTaskRefs('see gitlab.com/o/r/pull/5')).toEqual({}); // nor mid-host, as `itlab.com/…`
     expect(extractTaskRefs('https://gitlab.com/proj/-/merge_requests/1')).toEqual({});
+  });
+
+  it('reads the `/-/work_items/N` issue URL gitlab.com and glab now use', () => {
+    expect(extractTaskRefs('triage https://gitlab.com/group/sub/proj/-/work_items/77')).toEqual({ issueNumber: 77 });
   });
 
   it('the leftmost URL wins across both forges', () => {
@@ -103,5 +109,13 @@ describe('refineTaskRefs', () => {
     });
     expect(refineTaskRefs({ ambiguousNumber: 9 }, undefined)).toEqual({ ambiguousNumber: 9 });
     expect(refineTaskRefs({ ambiguousNumber: 9 }, 'om-spec-writing')).toEqual({ ambiguousNumber: 9 });
+  });
+});
+
+describe('extractTaskRefs on GitHub Enterprise', () => {
+  it('reads PR and issue numbers from any host', () => {
+    expect(extractTaskRefs('see https://company.ghe.com/acme/demo/pull/12')).toMatchObject({ prNumber: 12 });
+    expect(extractTaskRefs('see https://github.corp.example:8443/acme/demo/issues/34')).toMatchObject({ issueNumber: 34 });
+    expect(extractTaskRefs('github.com/acme/demo/pull/5')).toMatchObject({ prNumber: 5 });
   });
 });

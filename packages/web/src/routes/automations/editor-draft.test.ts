@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { QUICK_TASK } from '@/lib/task-source'
 
 import type { AutomationDefinition } from '@open-mercato/cezar-api-client'
 
 import {
+  DEFAULT_FILTERS,
   applyTemplate,
   cliDefinitionOf,
   fromDefinition,
@@ -14,7 +16,34 @@ import {
   splitList,
   templatePick,
   toBody,
+  unenforcedPromptLogins,
 } from './editor-draft'
+
+describe('unenforcedPromptLogins', () => {
+  const github = (prompt: string, authors = '') =>
+    ({ kind: 'github' as const, prompt, filters: { ...newDraft().filters, authors } })
+
+  it('names a login the prompt conditions on while no people filter enforces it', () => {
+    expect(unenforcedPromptLogins(github('When user `patzick` opens PR run auto review'))).toEqual(['patzick'])
+    expect(unenforcedPromptLogins(github('Only PRs by @Octo-Cat, ping @octo-cat'))).toEqual(['Octo-Cat'])
+  })
+  it('is quiet once a filter names the login, and for schedules', () => {
+    expect(unenforcedPromptLogins(github('When user `patzick` opens PR', 'Patzick'))).toEqual([])
+    expect(unenforcedPromptLogins(github('When @patzick opens', '@patzick'))).toEqual([])
+    expect(unenforcedPromptLogins({ ...github('When user `patzick` opens'), kind: 'schedule' })).toEqual([])
+  })
+  it('ignores emails, npm scopes, placeholders and unquoted prose', () => {
+    expect(unenforcedPromptLogins(github(
+      'Mail a@b.com, bump @open-mercato/cezar, greet @{{github.author}}, branch from `main`',
+    ))).toEqual([])
+    expect(unenforcedPromptLogins(github('Review it by default as the user asked'))).toEqual([])
+  })
+  it('ignores a bare @word that is no launch condition, and trailing-hyphen non-logins', () => {
+    expect(unenforcedPromptLogins(github('cc @patzick, mention @claude, keep @ts-ignore and @deprecated'))).toEqual([])
+    expect(unenforcedPromptLogins(github('opened by @patzick or author `octo-cat`'))).toEqual(['patzick', 'octo-cat'])
+    expect(unenforcedPromptLogins(github('by @foo- only'))).toEqual([])
+  })
+})
 
 const SCHEDULE_DEF: AutomationDefinition = {
   id: 'a1',
@@ -101,6 +130,17 @@ describe('fromDefinition / toBody', () => {
     })
   })
 
+  it('keeps a PR-head verifier verifying the PR head when it is saved from the editor', () => {
+    const verifier = {
+      ...GITHUB_DEF,
+      events: ['pull_request.opened' as const],
+      task: { ...GITHUB_DEF.task, checkout: 'pr-head' as const, allowForkHeads: true },
+    }
+    expect(toBody(fromDefinition(verifier)).task).toMatchObject({ checkout: 'pr-head', allowForkHeads: true })
+    // And a definition without them gains neither.
+    expect(toBody(fromDefinition(GITHUB_DEF)).task).not.toHaveProperty('checkout')
+  })
+
   it('sends only the active kind — a schedule body carries no events or filters', () => {
     const draft = { ...fromDefinition(GITHUB_DEF), kind: 'schedule' as const }
     const body = toBody(draft)
@@ -140,6 +180,10 @@ describe('fromDefinition / toBody', () => {
     const template = { name: 'Sweep', kind: 'schedule' as const, prompt: 'sweep' }
     expect(applyTemplate(picked, { ...template, runner: 'codex' }).account).toBeNull()
     expect(applyTemplate(picked, template).account).toBe('work')
+    // junie is a runner too: a template naming it must take the runner and drop the account,
+    // not fall back to the draft's — the un-widened guard this used to have did exactly that.
+    expect(applyTemplate(picked, { ...template, runner: 'junie' }).runner).toBe('junie')
+    expect(applyTemplate(picked, { ...template, runner: 'junie' }).account).toBeNull()
   })
 
   it('clamps lookback and max records into the server bounds', () => {
@@ -213,6 +257,47 @@ describe('applyTemplate', () => {
       autonomous: true,
     })
     expect(applyTemplate(newDraft(), pick).runner).toBe('codex')
+  })
+
+  it('copies another project\'s GitHub filters and skill, so the copy launches for the same items', () => {
+    const steps = [{ id: 'task', name: 'om-auto-review-pr', skill: 'om-auto-review-pr', prompt: '{{task}}' }]
+    const pick = templatePick({
+      project: { id: 'cezar', name: 'cezar' },
+      id: 'eee6c276',
+      name: 'Self-review tasks',
+      kind: 'github',
+      events: ['pull_request.opened'],
+      intervalSeconds: 900,
+      filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Review it', steps, model: 'opus', autonomous: true, checkout: 'pr-head' },
+    })
+    const next = applyTemplate(newDraft(), pick)
+    expect(next.filters.authors).toBe('patzick')
+    expect(next.skill).toBe('om-auto-review-pr')
+    expect(toBody(next)).toMatchObject({
+      filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Review it', steps, model: 'opus', checkout: 'pr-head' },
+    })
+    expect(unenforcedPromptLogins(next)).toEqual([])
+  })
+
+  it('a later pick never inherits an earlier pick\'s filters, skill or fork-head admission', () => {
+    const copied = applyTemplate(newDraft(), templatePick({
+      project: { id: 'cezar', name: 'cezar' },
+      id: 'eee6c276',
+      name: 'Self-review tasks',
+      kind: 'github',
+      events: ['pull_request.opened'],
+      filters: { authors: ['patzick'], lookbackDays: 7, maxRecords: 25 },
+      task: { prompt: 'Review it', steps: [{ id: 'task', skill: 'om-auto-review-pr', prompt: '{{task}}' }], checkout: 'pr-head', allowForkHeads: true },
+    }))
+    const next = applyTemplate(copied, { name: 'Triage new issues', kind: 'github', events: ['issue.opened'], prompt: 'Read it' })
+    expect(next).toMatchObject({ filters: DEFAULT_FILTERS, skill: null, customSteps: null, workflow: QUICK_TASK })
+    const body = toBody(next)
+    expect(body.filters).toEqual({ lookbackDays: 7, maxRecords: 25 })
+    expect(body.task).not.toHaveProperty('steps')
+    expect(body.task).not.toHaveProperty('checkout')
+    expect(body.task).not.toHaveProperty('allowForkHeads')
   })
 })
 

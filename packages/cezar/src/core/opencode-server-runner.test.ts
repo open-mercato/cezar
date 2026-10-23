@@ -1,5 +1,8 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -8,17 +11,25 @@ import type { AgentEvent } from './agent-runner.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
+  SERVER_PORT_ATTEMPTS,
+  SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
+  opencodePermissionReply,
+  unsupportedServerMessage,
 } from './opencode-server-runner.ts';
 
-const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+const spawnHook = vi.hoisted(() => ({
+  override: null as null | ((...args: unknown[]) => unknown),
+  actual: null as null | ((...args: unknown[]) => unknown),
+}));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
+  spawnHook.actual = actual.spawn as (...args: unknown[]) => unknown;
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) =>
-      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+      spawnHook.override ? spawnHook.override(...args) : actual.spawn(...args),
   };
 });
 
@@ -148,6 +159,205 @@ describe('SIGTERM→SIGKILL escalation for an opencode server that survives SIGT
       expect(fake.signals).toEqual([]);
     });
   });
+});
+
+describe('opencode serve startup', () => {
+  function silentChild(): ChildProcessWithoutNullStreams {
+    return Object.assign(new EventEmitter(), {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      pid: 5151,
+      kill: () => true,
+    }) as unknown as ChildProcessWithoutNullStreams;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    spawnHook.override = null;
+  });
+
+  it.each([0, 0.5, 0.99999])('passes a random port in 40000–59999 and exposes the PID synchronously (random=%s)', (random) => {
+    let argv: unknown;
+    spawnHook.override = (_bin, args) => {
+      argv = args;
+      return silentChild();
+    };
+    vi.useFakeTimers();
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(random);
+    try {
+      const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession({ userPrompt: 'do it', cwd: process.cwd() });
+      void session.result.catch(() => undefined);
+      const port = 40000 + Math.floor(random * 20000);
+      expect(argv).toEqual(['serve', '--hostname', '127.0.0.1', '--port', String(port)]);
+      expect(Number.isInteger(port)).toBe(true);
+      expect(port).toBeGreaterThanOrEqual(40000);
+      expect(port).toBeLessThan(60000);
+      expect(session.pid).toBe(5151);
+    } finally {
+      randomSpy.mockRestore();
+    }
+  });
+
+  it('fails the session when the server never reports a listening URL', async () => {
+    spawnHook.override = () => silentChild();
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
+  });
+
+  // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
+  it('keeps waiting while the server is still printing, up to the hard cap', async () => {
+    const child = silentChild();
+    const stderr = child.stderr as PassThrough;
+    spawnHook.override = () => child;
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    const errorsSoFar = () => events.filter((e) => e.type === 'error');
+    for (let t = 0; t < SERVER_START_MAX_MS - 20_000; t += 20_000) {
+      stderr.write(`migrating ${t}\n`);
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    expect(errorsSoFar()).toEqual([]);
+    stderr.write('still migrating\n');
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(errorsSoFar()).toEqual([{ type: 'error', message: `opencode: opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s` }]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('opencode serve stderr: migrating') }));
+  });
+
+  function exitingChild(stderr: string): ChildProcessWithoutNullStreams {
+    const child = silentChild();
+    setTimeout(() => {
+      (child.stderr as PassThrough).end(stderr);
+      Object.assign(child, { exitCode: 1 });
+      child.emit('exit', 1, null);
+      child.emit('close', 1, null);
+    }, 5);
+    return child;
+  }
+
+  it('does not respawn a server that exited for a reason other than its port', async () => {
+    let spawns = 0;
+    spawnHook.override = () => (spawns += 1, exitingChild('Error: bad config\n'));
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    await session.result;
+    expect(spawns).toBe(1);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+    ]);
+    expect(events).toContainEqual({ type: 'note', message: 'opencode serve stderr: Error: bad config' });
+  });
+
+  it(`gives up after ${SERVER_PORT_ATTEMPTS} spawns that all lost their port`, async () => {
+    let spawns = 0;
+    spawnHook.override = () => (spawns += 1, exitingChild('Error: Unexpected error\n\nServeError\n'));
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    await session.result;
+    expect(spawns).toBe(SERVER_PORT_ATTEMPTS);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+    ]);
+    expect(events.filter((e) => e.type === 'note')).toHaveLength(1);
+  });
+
+  // The message is a telemetry group key, so it never carries the elapsed time.
+  it('fails with one fixed message when the server prints and then goes silent', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
+    vi.useFakeTimers();
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(17_000);
+    (child.stderr as PassThrough).write('migrating\n');
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve went silent for 30s without reporting a listening URL' },
+    ]);
+  });
+});
+
+describe('2d01c3c9 opencode serve that starts without the expected URL line', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const errors = (events: AgentEvent[]): AgentEvent[] => events.filter((e) => e.type === 'error');
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it.each(['silent', 'stderr'])('runs the turn when the URL line is %s', async (mode) => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_START: mode } },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    expect(errors(events)).toEqual([]);
+    expect(events.map((e) => e.type)).toContain('turn-end');
+    expect(result.sessionId).toBe('ses_mock_1');
+  }, 30_000);
+
+  it('never adopts a server on that port that serves another directory', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_START: 'silent', MOCK_PATH_DIR: tmpdir() } },
+      (e) => events.push(e),
+    );
+    // Real time for the real probes (setInterval is not faked) to reach it.
+    await new Promise<void>((r) => setImmediate(r));
+    const until = performance.now() + 2_000;
+    while (performance.now() < until) await new Promise<void>((r) => setImmediate(r));
+    expect(events.find((e) => e.type === 'session')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(30_000);
+    vi.useRealTimers();
+    await session.result.catch(() => undefined);
+    expect(errors(events)).toEqual([{ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' }]);
+  }, 30_000);
+});
+
+describe('dc1a91a6 an OpenCode 2.x server', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('fails with an actionable message instead of a bare 405', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'check the tree', cwd: process.cwd(), env: { MOCK_API: 'v2' } },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: `opencode: ${unsupportedServerMessage(405)}` },
+    ]);
+    expect(unsupportedServerMessage(405)).toMatch(/OpenCode 2\.x .* not supported yet — install OpenCode 1\.x/);
+  }, 30_000);
 });
 
 /**
@@ -280,6 +490,42 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   }, 30_000);
 
+  // The random port is in the OS ephemeral range, so it can already be taken (release 0.16.1 CI).
+  it('respawns on a fresh port when the random one is already taken', async () => {
+    const blocker = createServer();
+    let taken = 0;
+    for (let p = 40000 + Math.floor(Math.random() * 19000); !taken; p += 1) {
+      taken = await new Promise<number>((resolve) => {
+        blocker.once('error', () => resolve(0));
+        blocker.listen(p, '127.0.0.1', () => resolve(p));
+      });
+    }
+    try {
+      vi.spyOn(Math, 'random').mockReturnValueOnce((taken - 40000 + 0.5) / 20000);
+      const ports: string[] = [];
+      spawnHook.override = (file, args, options) => {
+        ports.push(String((args as string[]).at(-1)));
+        return spawnHook.actual!(file, args, options);
+      };
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const { events, onEvent } = record();
+      const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, {
+        autoEndAfterFirstTurn: true,
+      });
+      await session.result;
+
+      expect(ports).toHaveLength(2);
+      expect(ports[0]).toBe(String(taken));
+      expect(ports[1]).not.toBe(String(taken));
+      expect(notes(events)).toEqual([]);
+      expect(errors(events)).toEqual([]);
+      expect(types(events)).toContain('turn-end');
+    } finally {
+      spawnHook.override = null;
+      await new Promise((resolve) => blocker.close(resolve));
+    }
+  }, 30_000);
+
   /**
    * The transitions OUT of the state this fix introduces. `session.idle` is now
    * the boundary, so a server that never sends one — or has no event bus at all
@@ -350,4 +596,83 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+});
+
+describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const runs = '/repo/.ai/cezar/runs';
+  const env = { CEZ_HANDOFF_FILE: `${runs}/r1.handoff.md`, CEZ_TASK_ID: 'r1' };
+  const ask = (filepath: string, permission = 'external_directory') => ({
+    id: 'per_1',
+    permission,
+    patterns: [`${dirname(filepath)}/*`],
+    metadata: { filepath },
+  });
+
+  it('grants exactly this run\'s handoff file and its own pasted attachments', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), env)).toBe('once');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/pasted-1.png`), env)).toBe('once');
+  });
+
+  it('refuses everything else outside the worktree', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r2.handoff.md`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1.ndjson`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r2-images/pasted-1.png`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/../r2.handoff.md`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1-images/nested/x.png`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask('/etc/passwd'), env)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`, 'bash'), env)).toBe('reject');
+  });
+
+  it('grants anything under the run\'s own TMPDIR, and only when cezar set it there', () => {
+    const tmp = '/repo/.ai/cezar/tmp/r1';
+    const withTmp = { ...env, TMPDIR: tmp };
+    expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), withTmp)).toBe('once');
+    expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), env)).toBe('reject');
+    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r2/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r1-other/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask('/tmp/x'), { ...env, TMPDIR: '/tmp' })).toBe('reject');
+  });
+
+  it('compares paths after following symlinks', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-oc-perm-'));
+    try {
+      mkdirSync(join(root, 'data', 'runs', 'r1-images'), { recursive: true });
+      symlinkSync(join(root, 'data'), join(root, 'link'));
+      symlinkSync('/etc', join(root, 'data', 'runs', 'r1-images', 'escape'));
+      const viaLink = { CEZ_HANDOFF_FILE: join(root, 'link', 'runs', 'r1.handoff.md'), CEZ_TASK_ID: 'r1' };
+      // OpenCode reports the real path; cezar handed out the symlinked one.
+      expect(opencodePermissionReply(ask(join(root, 'data', 'runs', 'r1.handoff.md')), viaLink)).toBe('once');
+      expect(opencodePermissionReply(ask(join(root, 'data', 'runs', 'r1-images', 'a.png')), viaLink)).toBe('once');
+      expect(opencodePermissionReply(ask(join(root, 'link', 'runs', 'r1-images', 'escape', 'hosts')), viaLink)).toBe('reject');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when the run has no handoff file to compare against', () => {
+    expect(opencodePermissionReply(ask(`${runs}/r1.handoff.md`), undefined)).toBe('reject');
+    expect(opencodePermissionReply({ id: 'per_1', permission: 'external_directory' }, env)).toBe('reject');
+  });
+
+  for (const [label, path, reply, legacy] of [
+    ['the handoff file is approved', `${runs}/r1.handoff.md`, 'once', false],
+    ['another path is refused', `${runs}/r2.handoff.md`, 'reject', false],
+    ['a pre-rework server is answered on its session route', `${runs}/r1.handoff.md`, 'once', true],
+  ] as const) {
+    it(`a turn blocked on a prompt finishes: ${label}`, async () => {
+      const runEnv = legacy ? { ...env, MOCK_LEGACY_PERMISSION: '1' } : env;
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const events: AgentEvent[] = [];
+      const session = runner.startSession(
+        { userPrompt: `read it #permission ${path}`, cwd: process.cwd(), env: runEnv },
+        (e) => events.push(e),
+        { autoEndAfterFirstTurn: true },
+      );
+      const result = await session.result;
+      expect(result.text).toContain(`permission ${reply}`);
+      const notes = events.filter((e) => e.type === 'note').map((e) => (e as { message: string }).message);
+      expect(notes).toEqual(reply === 'reject' ? [`opencode: refused external_directory permission for ${path}`] : []);
+    }, 30_000);
+  }
 });

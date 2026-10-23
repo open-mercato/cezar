@@ -6,11 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { backendCheckSchema, forgeInfoSchema } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import {
-  __setForgeHostCacheFileForTests,
-  __setForgeHostsForTests,
-  forgeKindOfRemote,
-} from './forge/index.ts';
+import { resetGitlabHostsCache } from '../gitlab-hosts.ts';
 import { createApp, type ServerDeps } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
@@ -30,6 +26,7 @@ interface HealthBody {
   forge: { kind: string; available: boolean; reason?: string } | null;
   capabilities: {
     localHandoff: boolean;
+    terminal: boolean;
     followups: boolean;
     singleProject: boolean;
     automations: boolean;
@@ -116,6 +113,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.forge).toBeNull(); // tmp dir — not a git repo, no remote
     expect(body.capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -148,6 +147,28 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.forge).toEqual({ kind: 'github', available: true });
   });
 
+  // Classification is a read of `glab`'s own config (spec 2026-08-10-forge-provider-adapters §
+  // Forge discovery), so a self-managed host answers on the FIRST request — no warm-up, no
+  // probe, no window in which the forge is unknown.
+  it('reports the GitLab forge for a self-managed host glab is configured for, on the first request', async () => {
+    const glabDir = process.env.GLAB_CONFIG_DIR as string;
+    writeFileSync(join(glabDir, 'config.yml'), 'host: gitlab.com\nhosts:\n    gitlab.acme.internal:\n        user: me\n');
+    resetGitlabHostsCache();
+    try {
+      initRepo('git@gitlab.acme.internal:platform/api.git');
+      const body = await health();
+      expect(body.forge?.kind).toBe('gitlab');
+    } finally {
+      rmSync(join(glabDir, 'config.yml'), { force: true });
+      resetGitlabHostsCache();
+    }
+  });
+
+  it('reports no forge for an unknown self-hosted host', async () => {
+    initRepo('git@git.other.internal:platform/api.git');
+    expect((await health()).forge).toBeNull();
+  });
+
   it('reports the GitHub forge for an SSH (scp-like) origin remote', async () => {
     initRepo('git@github.com:acme/demo.git');
     const body = await health();
@@ -177,6 +198,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health();
     expect(body.capabilities).toEqual({
       localHandoff: false,
+      terminal: false,
+      designMode: false,
       followups: false,
       singleProject: false,
       automations: true,
@@ -206,6 +229,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health({ bindHost: '0.0.0.0' });
     expect(body.capabilities).toEqual({
       localHandoff: false,
+      terminal: false,
+      designMode: false,
       followups: false,
       singleProject: false,
       automations: true,
@@ -220,6 +245,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health({ bindHost: '127.0.0.1' });
     expect(body.capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -239,6 +266,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_FOLLOWUPS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: true,
       singleProject: false,
       automations: true,
@@ -264,6 +293,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_AUTOMATIONS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -278,6 +309,8 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_TOKEN_METRICS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
@@ -371,73 +404,5 @@ describe('health contract — forge-neutral kinds (spec 2026-08-10-forge-provide
 
   it('still rejects an unknown forge kind', () => {
     expect(forgeInfoSchema.safeParse({ kind: 'bitbucket' }).success).toBe(false);
-  });
-});
-
-/**
- * Step 2.2's review fix: the discovery cache is read ONCE, EAGERLY, at `createApp`, beside the
- * (fire-and-forget) probe warm-up and behind the same `socketHub` gate — so no test spawns
- * anything and no request pays a synchronous `readFileSync`. Before this, the lazy load's first
- * caller was in practice inside a request (`/api/v1/projects` → per-project probe →
- * `forgeKindOfRemote`), and until it landed a GitHub Enterprise project's `/github*` routes
- * answered the in-payload unavailable.
- */
-describe('createApp — eager forge discovery cache load (spec 2026-08-10-forge-provider-adapters)', () => {
-  let repoRoot: string;
-  let cacheDir: string;
-  let store: RunStore;
-
-  // `startServer` injects the hub; a bare app in tests does not — the same gate `refreshHealth`
-  // and the discovery warm-up already use.
-  const socketHub = { registerTopic: () => undefined, attach: () => undefined, close: () => undefined } as unknown as ServerDeps['socketHub'];
-
-  beforeEach(() => {
-    repoRoot = mkdtempSync(join(tmpdir(), 'cez-forge-eager-'));
-    cacheDir = mkdtempSync(join(tmpdir(), 'cez-forge-eager-cache-'));
-    store = RunStore.open(join(repoRoot, '.ai/cezar'));
-  });
-  afterEach(() => {
-    __setForgeHostCacheFileForTests(null);
-    __setForgeHostsForTests(null);
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
-    rmSync(cacheDir, { recursive: true, force: true });
-  });
-
-  /** A discovery cache naming one GitHub Enterprise host, as a warm-up would have written it. */
-  const seedCache = (): string => {
-    const file = join(cacheDir, 'forge-hosts.json');
-    writeFileSync(file, JSON.stringify({ version: 1, hosts: { 'ghe.acme.corp': 'github' }, updatedAt: '2026-09-22T00:00:00.000Z' }));
-    __setForgeHostCacheFileForTests(file);
-    return file;
-  };
-  const app = (over: Partial<ServerDeps> = {}) =>
-    createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over });
-
-  it('classifies a discovered host with no request having happened yet', () => {
-    const file = seedCache();
-    app({ socketHub });
-    // Deleting the file first is what makes this a statement about WHEN the read happened: only a
-    // map already in memory can still answer.
-    rmSync(file, { force: true });
-    expect(forgeKindOfRemote('git@ghe.acme.corp:acme/widgets.git')).toBe('github');
-  });
-
-  it('keeps the lazy load as the fallback for an app built without the hub', () => {
-    const file = seedCache();
-    app(); // no socketHub: nothing eager, exactly as before
-    expect(forgeKindOfRemote('git@ghe.acme.corp:acme/widgets.git')).toBe('github'); // lazy read
-    rmSync(file, { force: true });
-    expect(forgeKindOfRemote('git@ghe.acme.corp:acme/widgets.git')).toBe('github'); // and cached
-  });
-
-  it('reads the cache once, not once per app', () => {
-    seedCache();
-    app({ socketHub });
-    // A second app finds the map already loaded; the well-known hosts never needed it at all.
-    __setForgeHostsForTests({ 'ghe.acme.corp': 'gitlab' }); // whatever is in memory wins
-    app({ socketHub });
-    expect(forgeKindOfRemote('git@ghe.acme.corp:acme/widgets.git')).toBe('gitlab');
-    expect(forgeKindOfRemote('https://github.com/acme/demo.git')).toBe('github');
   });
 });

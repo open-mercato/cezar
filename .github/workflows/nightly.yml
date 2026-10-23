@@ -101,6 +101,14 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         run: npm run build
 
+      # Public releases report telemetry under the real service; every other build uses the
+      # development id hard-coded in packages/cezar/src/telemetry.ts.
+      - name: Stamp telemetry service
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
+        run: node packages/cezar/scripts/stamp-telemetry-service.mjs
+
       - name: Run packaged CLI E2E tests
         if: steps.decide.outputs.publish == 'true'
         run: npm run test:package

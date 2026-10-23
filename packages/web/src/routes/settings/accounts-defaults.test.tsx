@@ -11,6 +11,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Agent accounts, "Defaults for new projects" (spec 2026-07-29-agent-profiles):
@@ -64,6 +65,7 @@ const PROVIDERS = {
     { provider: 'opencode', status: 'connected', enabled: true },
     { provider: 'cursor', status: 'connected', enabled: true },
     { provider: 'pi', status: 'connected', enabled: true },
+    { provider: 'junie', status: 'connected', enabled: true },
   ],
 }
 
@@ -76,6 +78,7 @@ function serve({
 } = {}) {
   requests = []
   const state: WorkspaceConfigResponse = {
+    branding: { name: 'cezar', logoUrl: null },
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
@@ -89,6 +92,7 @@ function serve({
     resources: {
       maxParallel: 2,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
@@ -148,10 +152,12 @@ function renderAccounts() {
   })
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/settings/global/accounts']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/accounts']}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
@@ -162,6 +168,17 @@ const rowFor = (runner: string, account = '') =>
   document.querySelector<HTMLButtonElement>(
     `[data-slot="agents-runner"] [data-value="${runner}"][data-account="${account}"]`,
   )
+/** A row is rendered as soon as the profiles answer, but ENABLED only once the provider-status
+ *  query has resolved — clicking before that hits a disabled button and writes nothing. The two
+ *  answers race, and request order (the settings sidebar fetches its own branding first) decides
+ *  which lands first, so wait for the row itself rather than for the list. */
+const enabledRow = (runner: string, account = '') =>
+  waitFor(() => {
+    const el = rowFor(runner, account)
+    expect(el).not.toBeNull()
+    expect(el!.disabled).toBe(false)
+    return el!
+  })
 const configPuts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const selections = () =>
   requests.filter((r) => r.url === '/api/v1/workspace/agent-profiles/selection')
@@ -221,7 +238,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     )
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
+    await waitFor(() => expect(rows()).toHaveLength(8))
     // The built-in fallback, rendered rather than thrown.
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
@@ -230,9 +247,9 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
+    await waitFor(() => expect(rows()).toHaveLength(8))
     expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
-      'claude', 'claude', 'codex', 'opencode', 'cursor', 'pi',
+      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot',
     ])
     expect(rows()[1]?.textContent).toContain('~/.claude-klaudiusz')
   })
@@ -241,7 +258,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
+    await waitFor(() => expect(rows()).toHaveLength(8))
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
 
@@ -249,8 +266,11 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
-    fireEvent.click(rowFor('codex')!)
+    await waitFor(() => expect(rows()).toHaveLength(8))
+    // Rows render before provider status answers and stay disabled until it does — wait for
+    // the row to be clickable, not merely present.
+    await waitFor(() => expect(rowFor('codex')!.disabled).toBe(false))
+    fireEvent.click(await enabledRow('codex'))
 
     await waitFor(() => expect(configPuts()).toHaveLength(1))
     expect(configPuts()[0]?.body).toEqual({ agentDefaults: { runner: 'codex' } })
@@ -263,8 +283,9 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
-    fireEvent.click(rowFor('claude', 'klaudiusz')!)
+    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rowFor('claude', 'klaudiusz')!.disabled).toBe(false))
+    fireEvent.click(await enabledRow('claude', 'klaudiusz'))
 
     await waitFor(() => expect(selections()).toHaveLength(1))
     // `null` is what makes this the machine-wide default rather than one repo's selection.
@@ -290,8 +311,9 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
-    fireEvent.click(rowFor('claude', '')!)
+    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rowFor('claude', '')!.disabled).toBe(false))
+    fireEvent.click(await enabledRow('claude', ''))
 
     await waitFor(() => expect(selections()).toHaveLength(1))
     expect(selections()[0]?.body).toEqual({
@@ -322,7 +344,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(6))
+    await waitFor(() => expect(rows()).toHaveLength(8))
     const pane = defaults()
     expect(pane?.textContent).toContain('has not chosen for itself')
     expect(pane?.textContent).toContain('keeps its own')

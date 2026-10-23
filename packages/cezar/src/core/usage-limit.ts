@@ -56,6 +56,12 @@ const RESET_AT_RE =
 const RESET_CLOCK_RE =
   /(?:resets?|reset[s]?\s+at|try\s+again|retry|available\s+again|unlocks?)\b[^\n]{0,24}?\b(?:at\s*)?(\d{1,2})(?:(?::(\d{2}))\s*([ap]\.?m\.?)?|\s*([ap]\.?m\.?))(?:\s*\(([^)]+)\))?/i;
 
+/** `…resets Oct 24, 9am (Europe/Warsaw)` — Claude Code's weekly window names its day. Read before
+ *  the clock-only form, which would otherwise skip the date and resume at the NEXT 9am. */
+const RESET_DATE_CLOCK_RE =
+  /(?:resets?|reset[s]?\s+at|try\s+again|retry|available\s+again|unlocks?)\b[^\n]{0,12}?\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:at\s+)?(\d{1,2})(?:(?::(\d{2}))\s*([ap]\.?m\.?)?|\s*([ap]\.?m\.?))(?:\s*\(([^)]+)\))?/i;
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
 /** `…try again in 42 minutes`, `…retry after 3600 seconds`, `retry-after: 3600`. */
 const RESET_IN_RE =
   /(?:try\s+again|retry|resets?|available\s+again)\b[^\n]{0,16}?\b(?:in|after)\s+(\d{1,7})\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\b/i;
@@ -66,6 +72,11 @@ const UNIT_MS: Record<string, number> = {
   m: 60_000, min: 60_000, mins: 60_000, minute: 60_000, minutes: 60_000,
   h: 3_600_000, hr: 3_600_000, hrs: 3_600_000, hour: 3_600_000, hours: 3_600_000,
 };
+
+/** True for any usage-limit error, reset instant or not — `task_failed`'s `usage_limit` kind (#1438). */
+export function isUsageLimitMessage(message: string): boolean {
+  return CLAUDE_MARKER_RE.test(message) || LIMIT_PHRASE_RE.test(message);
+}
 
 /**
  * Read a usage limit out of a terminal error message, or `null` when it is not one (or carries no
@@ -97,6 +108,13 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
     if (Number.isFinite(parsed)) return settle(parsed, now, 'timestamp');
   }
 
+  const dated = RESET_DATE_CLOCK_RE.exec(message);
+  if (dated) {
+    // A named day the parser cannot place is not a reason to guess the next clock instead.
+    const parsed = parseDatedReset(dated, now);
+    return parsed === null ? null : settle(parsed, now, 'clock');
+  }
+
   const clock = RESET_CLOCK_RE.exec(message);
   if (clock) {
     const parsed = parseClockReset(clock, now);
@@ -114,10 +132,15 @@ export function parseUsageLimit(message: string | undefined, now = Date.now()): 
   return null;
 }
 
-function parseClockReset(match: RegExpExecArray, now: number): number | null {
-  const hourRaw = Number(match[1]);
-  const minute = match[2] === undefined ? 0 : Number(match[2]);
-  const meridiem = (match[3] ?? match[4])?.toLowerCase().replaceAll('.', '');
+/** A 12- or 24-hour clock as `{ hour, minute }`, or `null` when it is not a real time of day. */
+function readClock(
+  hourText: string | undefined,
+  minuteText: string | undefined,
+  meridiemText: string | undefined,
+): { hour: number; minute: number } | null {
+  const hourRaw = Number(hourText);
+  const minute = minuteText === undefined ? 0 : Number(minuteText);
+  const meridiem = meridiemText?.toLowerCase().replaceAll('.', '');
   if (!Number.isInteger(hourRaw) || !Number.isInteger(minute) || minute < 0 || minute > 59) {
     return null;
   }
@@ -130,10 +153,39 @@ function parseClockReset(match: RegExpExecArray, now: number): number | null {
   } else if (hour < 0 || hour > 23) {
     return null;
   }
+  return { hour, minute };
+}
 
+function parseClockReset(match: RegExpExecArray, now: number): number | null {
+  const clock = readClock(match[1], match[2], match[3] ?? match[4]);
+  if (!clock) return null;
   const timeZone = match[5]?.trim();
-  if (isValidTimeZone(timeZone)) return nextClockInTimeZone(hour, minute, timeZone, now);
-  return nextLocalClock(hour, minute, now);
+  if (isValidTimeZone(timeZone)) return nextClockInTimeZone(clock.hour, clock.minute, timeZone, now);
+  return nextLocalClock(clock.hour, clock.minute, now);
+}
+
+/** `Oct 24, 9am (TZ)`: this year's date in that zone (the host's without one), next year's when it
+ *  already passed — a week-long window opened in late December resets in January. */
+function parseDatedReset(match: RegExpExecArray, now: number): number | null {
+  const month = MONTHS.indexOf(match[1]!.slice(0, 3).toLowerCase()) + 1;
+  const day = Number(match[2]);
+  const clock = readClock(match[3], match[4], match[5] ?? match[6]);
+  if (month < 1 || !clock || day < 1 || day > 31) return null;
+  const timeZone = match[7]?.trim();
+  const zoned = isValidTimeZone(timeZone);
+  const at = (year: number): number | null => {
+    // `Date` rolls Feb 31 into March; a day the month does not have is not a reset instant.
+    if (new Date(Date.UTC(year, month - 1, day)).getUTCDate() !== day) return null;
+    if (zoned) return zonedWallTimeToUtc(year, month, day, clock.hour, clock.minute, timeZone);
+    return new Date(year, month - 1, day, clock.hour, clock.minute, 0, 0).getTime();
+  };
+  const year = zoned ? zonedParts(now, timeZone)?.year : new Date(now).getFullYear();
+  if (year === undefined) return null;
+  const candidate = at(year);
+  if (candidate === null) return null;
+  // A day ago or more is last year's date read as this year's; minutes ago is a limit that lifted.
+  // A stale date rolled a year ahead fails `settle`'s one-week cap and reads as unparsed.
+  return now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
 }
 
 function nextLocalClock(hour: number, minute: number, now: number): number {

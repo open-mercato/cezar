@@ -1,0 +1,324 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+import { readRunTerminal, resizeRunTerminal, writeRunTerminal } from '@/api/client'
+import { useHostTransport } from '@/api/host-usage'
+import { subscribeTopic } from '@/api/ws'
+import type { TerminalOutput, TerminalSession } from '@open-mercato/cezar-api-client'
+import { cn } from '@/lib/utils'
+
+import '@xterm/xterm/css/xterm.css'
+
+/**
+ * One terminal tab's screen: an emulator bound to one PTY session (spec
+ * `.ai/specs/2026-10-07-task-workspace.md` §6).
+ *
+ * TRANSPORT. Output is never pushed over the socket. Where the cockpit has one — locally, and on
+ * a signed-in hosted cockpit whose proxy passes upgrades (`api/socket-transport.ts`) — the
+ * session's topic wakes us with a cursor and the bytes come back over authenticated HTTP.
+ * Everywhere else the same read is polled. The socket is only ever the bell; losing it costs
+ * latency and nothing else, which is what makes the fallback below safe.
+ *
+ * A pane stays mounted while its tab is in the background, but it stops READING. The cursor is
+ * what makes that free: on reactivation one read returns everything that accumulated, because
+ * the server holds the scrollback either way.
+ */
+
+/** How often a hosted cockpit (or one whose topic was refused) asks for new output. */
+const POLL_MS = 400
+
+/** Written into the screen when retained scrollback was dropped. Plain text rather than a dimmed
+ *  ANSI sequence: this is the cockpit talking, and it must not be mistakable for — or corrupt the
+ *  state of — the program that is writing. */
+const TRUNCATION_NOTICE = '\r\n[... earlier output fell out of the scrollback ...]\r\n'
+
+/**
+ * The emulator's colours, read from the cockpit's tokens at the moment they are needed. The
+ * surface is `--card-2` — the same fill the drawer paints behind the screen — so the terminal has
+ * no edge of its own; the caret wears the accent.
+ */
+function terminalTheme() {
+  const css = getComputedStyle(document.documentElement)
+  const token = (name: string) => css.getPropertyValue(name).trim()
+  const ansi = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'] as const
+  const palette: Record<string, string> = {}
+  for (const name of ansi) {
+    palette[name] = token(`--term-${name}`)
+    palette[`bright${name[0]!.toUpperCase()}${name.slice(1)}`] = token(`--term-bright-${name}`)
+  }
+  return {
+    background: token('--card-2'),
+    foreground: token('--foreground'),
+    cursor: token('--primary-strong'),
+    cursorAccent: token('--card-2'),
+    selectionBackground: token('--term-selection'),
+    ...palette,
+  }
+}
+
+/**
+ * Where a pane's bytes go. A task's terminal is the default; a project service and the Code
+ * page's terminal are the same screen over other routes (services spec §5).
+ */
+export interface TerminalIo {
+  read(cursor: number): Promise<TerminalOutput>
+  write(data: string): Promise<void>
+  resize(cols: number, rows: number): Promise<void>
+}
+
+/** What a pane needs to know about its session. `topic: null` is a session that will produce
+ *  nothing more (a stopped service's kept output): it is read once and never polled. */
+export type TerminalPaneSession = Pick<TerminalSession, 'id' | 'exitCode'> & { topic: string | null }
+
+export function TerminalPane({
+  runId,
+  session,
+  active,
+  io,
+}: {
+  runId: string
+  session: TerminalPaneSession
+  active: boolean
+  /** Omit for a task's terminal. Must be stable for a given `session.id`. */
+  io?: TerminalIo
+}) {
+  const transport = useHostTransport()
+  const ioRef = useRef<TerminalIo>(null as unknown as TerminalIo)
+  ioRef.current = io ?? {
+    read: (cursor) => readRunTerminal(runId, session.id, cursor),
+    write: (data) => writeRunTerminal(runId, session.id, data),
+    resize: (cols, rows) => resizeRunTerminal(runId, session.id, cols, rows),
+  }
+  const hostRef = useRef<HTMLDivElement>(null)
+  const termRef = useRef<{ write(data: string): void } | null>(null)
+  const themeWatchRef = useRef<MutationObserver | null>(null)
+  const fitRef = useRef<(() => void) | null>(null)
+  const focusRef = useRef<(() => void) | null>(null)
+  const cursorRef = useRef(0)
+
+  /**
+   * The emulator is mounted and can be written to.
+   *
+   * Load-bearing, not cosmetic: the emulator arrives through a dynamic import, so for the first
+   * frames there is nothing to write to. Reading output in that window ADVANCES THE CURSOR and
+   * drops what it read, and every later read returns nothing new — the screen then stays blank
+   * forever over a perfectly healthy shell.
+   */
+  const [screenReady, setScreenReady] = useState(false)
+  /**
+   * The session's topic is not readable on this connection, so fall back to polling.
+   *
+   * Not a dev-only path. Browsers do not send `Sec-Fetch-*` headers on a WebSocket handshake, so
+   * a connection that is not provably same-authority — a Vite dev proxy, and Safari and Firefox
+   * generally — is admitted UNTRUSTED by the hub and may read only topics marked
+   * loopback-readable. A terminal's topic is deliberately not one of those.
+   */
+  const [socketRefused, setSocketRefused] = useState(false)
+
+  // Mount the emulator ---------------------------------------------------------------------
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    let disposed = false
+    let detach: (() => void) | undefined
+
+    void (async () => {
+      // Imported here, not at module scope: the emulator is ~85 KB gzipped, and a user who never
+      // opens the drawer must not pay for it inside the workspace chunk.
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import('@xterm/xterm'),
+        import('@xterm/addon-fit'),
+      ])
+      if (disposed) return
+
+      const term = new Terminal({
+        cursorBlink: true,
+        cursorStyle: 'bar',
+        cursorWidth: 2,
+        fontSize: 12.5,
+        lineHeight: 1.35,
+        letterSpacing: 0,
+        // The cockpit's own mono face first, so the terminal reads as part of the page.
+        fontFamily: "'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+        // A real palette read from the tokens rather than a transparent background: xterm paints
+        // its viewport black whenever it is not handed a colour it can use.
+        theme: terminalTheme(),
+        scrollback: 5_000,
+      })
+      // Follow the theme toggle: the tokens change under us when `.light` lands on <html>.
+      const themeWatch = new MutationObserver(() => {
+        term.options.theme = terminalTheme()
+      })
+      themeWatch.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-accent'] })
+      themeWatchRef.current = themeWatch
+      const fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(host)
+      termRef.current = term
+      fitRef.current = () => {
+        // Fitting a hidden element measures zero and would resize the PTY to nothing.
+        if (host.clientHeight > 0 && host.clientWidth > 0) fit.fit()
+      }
+      focusRef.current = () => term.focus()
+
+      /**
+       * Copy and paste (spec §6).
+       *
+       * xterm draws its own selection, which the browser's native copy cannot see, so the
+       * shortcuts have to be bound explicitly. The bindings follow terminal convention rather
+       * than document convention, and the reason is Ctrl-C: in a terminal that is the INTERRUPT,
+       * so plain Ctrl-C must keep falling through to the shell. Copy is therefore Cmd-C on macOS
+       * and Ctrl-Shift-C elsewhere — and even then only when there is a selection, so a stray
+       * Cmd-C on an empty screen still interrupts.
+       */
+      term.attachCustomKeyEventHandler((event) => {
+        if (event.type !== 'keydown') return true
+        if (!event.metaKey && !event.ctrlKey) return true
+        const key = event.key.toLowerCase()
+        // `metaKey` is macOS's modifier; `shiftKey` is the Ctrl-Shift- form everywhere else.
+        const clipboardChord = event.metaKey || event.shiftKey
+        if (!clipboardChord) return true
+        if (key === 'c' && term.hasSelection()) {
+          void navigator.clipboard?.writeText(term.getSelection()).catch(() => {})
+          return false
+        }
+        if (key === 'v') {
+          // Paste is the BROWSER's: `false` keeps xterm from typing the chord and prevents
+          // nothing, so the native paste lands in xterm's textarea and its own `paste` listener
+          // sends it through `onData` (bracketed when the shell asks). Reading the clipboard
+          // here as well delivered every paste twice wherever that read was permitted.
+          return false
+        }
+        return true
+      })
+
+      // The PTY has to learn the real size, or every program that draws in columns wraps wrongly.
+      //
+      // REGISTERED BEFORE THE FIRST FIT, and followed by an unconditional send. The opening fit is
+      // the one that matters — it takes a terminal built at xterm's default 80x24 to whatever the
+      // drawer actually is — and an `onResize` attached after it never hears that event, leaving
+      // the shell convinced it has 80 columns while the user looks at ~120. Nothing fires again
+      // afterwards either: the observer only re-fits when the HOST changes size, and a fit that
+      // computes the same dimensions emits no event. The explicit send covers the mirror case,
+      // where the first fit really is a no-op because the drawer happens to measure 80x24.
+      const pushSize = ({ cols, rows }: { cols: number; rows: number }) => {
+        void ioRef.current.resize(cols, rows).catch(() => {})
+      }
+      term.onResize(pushSize)
+      term.onData((data) => {
+        void ioRef.current.write(data).catch(() => {})
+      })
+
+      fitRef.current()
+      pushSize({ cols: term.cols, rows: term.rows })
+      setScreenReady(true)
+
+      const observer =
+        typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => fitRef.current?.())
+      observer?.observe(host)
+      detach = () => {
+        observer?.disconnect()
+        term.dispose()
+      }
+    })()
+
+    return () => {
+      disposed = true
+      themeWatchRef.current?.disconnect()
+      themeWatchRef.current = null
+      termRef.current = null
+      fitRef.current = null
+      focusRef.current = null
+      setScreenReady(false)
+      detach?.()
+    }
+  }, [runId, session.id])
+
+  // A pane that was hidden measured zero, so its size is stale the moment it is shown again.
+  useEffect(() => {
+    if (!active || !screenReady) return
+    fitRef.current?.()
+    focusRef.current?.()
+  }, [active, screenReady])
+
+  // Pull output ------------------------------------------------------------------------------
+  /**
+   * SINGLE FLIGHT, with a trailing re-run.
+   *
+   * The cursor advances only once the server has answered, so two reads that overlap both ask
+   * from the same offset, both receive the same bytes, and both write them — the screen then
+   * shows output the shell produced once, several times over. The per-session topic rings once
+   * per output chunk and the mount fires its own immediate pull, so a burst (an interrupt, a
+   * fast-printing build) overlaps readily. Observed live on 2026-10-08: the server's buffer held
+   * one `^C`, one copy of the typed command and three prompt lines; the screen showed five,
+   * three and eleven. The doubled opening prompt (`… % %`) was the same race at mount.
+   *
+   * A ring that arrives mid-read is COALESCED rather than dropped: `again` makes the loop go
+   * round once more, so the chunk that prompted it is still fetched — with the cursor the first
+   * read left behind.
+   */
+  const reading = useRef(false)
+  const again = useRef(false)
+  const pull = useCallback(async () => {
+    if (reading.current) {
+      again.current = true
+      return
+    }
+    reading.current = true
+    try {
+      do {
+        again.current = false
+        const read = await ioRef.current.read(cursorRef.current)
+        cursorRef.current = read.cursor
+        // Say so rather than splicing a gap into the screen silently.
+        if (read.truncated) termRef.current?.write(TRUNCATION_NOTICE)
+        if (read.data) termRef.current?.write(read.data)
+      } while (again.current)
+    } finally {
+      reading.current = false
+    }
+  }, [runId, session.id])
+
+  useEffect(() => {
+    if (!screenReady || !active || transport === undefined) return
+    let running = true
+    const safePull = () => {
+      if (running) void pull().catch(() => {})
+    }
+    safePull()
+
+    const topic = session.topic
+    if (topic === null) return () => { running = false }
+    if (transport === 'local' && !socketRefused) {
+      // The topic carries a cursor and nothing else; this is the "there is more" bell.
+      const release = subscribeTopic(topic, safePull, () => setSocketRefused(true))
+      return () => {
+        running = false
+        release()
+      }
+    }
+    const timer = setInterval(safePull, POLL_MS)
+    return () => {
+      running = false
+      clearInterval(timer)
+    }
+  }, [active, pull, screenReady, session.topic, socketRefused, transport])
+
+  return (
+    <div
+      data-slot="terminal-screen"
+      data-session={session.id}
+      // Hidden rather than unmounted: a background tab keeps its screen and its scrollback.
+      // `invisible` + zero size rather than `display:none`, so xterm's own measurements do not
+      // throw while it is away.
+      className={cn(
+        'absolute inset-0 overflow-hidden p-3',
+        active ? 'visible' : 'invisible pointer-events-none',
+        session.exitCode !== null && 'opacity-60',
+      )}
+    >
+      {/* The emulator's host is the box INSIDE the padding: the fit addon measures its parent's
+          full box, so padding on the host itself would be rows the shell thinks it has. */}
+      <div ref={hostRef} className="size-full" />
+    </div>
+  )
+}

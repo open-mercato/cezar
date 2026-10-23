@@ -165,8 +165,8 @@ export function CloneProjectDialog({
         <DialogHeader>
           <DialogTitle>Clone from a git forge</DialogTitle>
           <DialogDescription>
-            cezar clones with <code>gh</code> (GitHub) or <code>glab</code> (GitLab) into your checkout root and
-            adds the result as a project.
+            The service clones with <code>gh</code> (GitHub) or <code>glab</code> (GitLab) into your
+            checkout root and adds the result as a project.
           </DialogDescription>
         </DialogHeader>
 

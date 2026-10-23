@@ -21,7 +21,7 @@ Work enters through two paths: a free-form task brief handed to an agent, or a f
 | Triage | Confirm the issue is real, still unfixed on `main`, and not already claimed or covered by an open PR. Read-only; stops the chain cleanly when there is nothing to do. | `om-verify-in-repo` or a human | Confirmed actionable, or closed as no-action |
 | Claim | The author claims the ticket so concurrent agents back off. See the claim protocol below. | `om-fix` / `om-auto-create-pr`, or a human | Claim visible on the ticket |
 | Implement | Locate the minimal change surface (`om-root-cause`, read-only), then implement the change with regression tests and run the validation gate. Task briefs without a ticket go through `om-auto-create-pr`, which plans, implements phase by phase in an isolated worktree, and runs the same gate. | `om-root-cause` + `om-fix`, `om-auto-create-pr`, or a human author | Change complete, validation gate green |
-| PR | Commit, push, and open a PR against `main` with normalized labels. On a hand-worked branch, `om-check-and-commit` runs the gate, fixes obvious drift, and pushes when green. | `om-open-pr`, `om-auto-create-pr`, or `om-check-and-commit` | Open, labeled PR |
+| PR | Commit, push, and open a PR against `main` with normalized labels, carrying over any `backport …` label from the issue (see [Release lines](#release-lines-and-backports)). On a hand-worked branch, `om-check-and-commit` runs the gate, fixes obvious drift, and pushes when green. | `om-open-pr`, `om-auto-create-pr`, or `om-check-and-commit` | Open, labeled PR |
 | Review loop | The reviewer reads the diff against the `om-code-review` checklist and approves or requests changes. Requested changes are addressed (`om-auto-continue-pr` resumes agent PRs from the tracking plan) and the PR is re-reviewed until approved. | `om-auto-review-pr` (single PR), `om-review-prs` (sweep), or a human | Approving review submitted |
 | QA | A PR carrying `needs-qa` waits for manual QA. A QA reviewer tests it and records the outcome. See the QA gate below. | QA reviewer (manual) | `qa-approved` applied, or `qa-failed` routes it back |
 | Merge | `om-merge-buddy` reports, read-only, which PRs can merge now and which are close but blocked. `om-approve-merge-pr` re-checks every gate, approves, and squash-merges. | `om-merge-buddy` + `om-approve-merge-pr`, or a human | PR squash-merged into `main` |
@@ -40,10 +40,11 @@ Pipeline labels are mutually exclusive: a PR carries at most one, and it names w
 | Group | Labels | Exclusivity | Meaning |
 |---|---|---|---|
 | Pipeline | `review`, `changes-requested`, `qa`, `qa-failed`, `merge-queue`, `blocked`, `do-not-merge` | one at a time | Workflow state |
-| Category | `bug`, `feature`, `refactor`, `security`, `dependencies`, `documentation` | additive | Kind of change |
+| Category | `bug`, `feature`, `refactor`, `security`, `dependencies`, `documentation` | additive | Kind of change — also the section a PR is listed under in generated release notes, so every PR carries one (`skip-changelog` leaves it out) |
 | Meta | `needs-qa`, `skip-qa`, `qa-approved`, `qa-self-verified`, `in-progress` | additive | Process signals |
 | Priority | `priority-low`, `priority-medium`, `priority-high`, `priority-extreme` | one at a time; unset = medium | Urgency of the work |
 | Risk | `risk-low`, `risk-medium`, `risk-high` | one at a time; unset = medium | Blast radius of the change |
+| Backport | `backport release/vX.Y.x`, `backport main` | additive | Cherry-pick into that line once merged — see [Release lines and backports](#release-lines-and-backports) |
 
 Priority is how urgent the work is; risk is how dangerous the change is to ship. A one-line fix for a broken cockpit can be `priority-extreme` and `risk-low`; a large runner-seam refactor that can wait can be `priority-low` and `risk-high`. A PR inherits both from its source issue unless the scope clearly changed. When an automated skill adds or changes a pipeline or meta label, it leaves a short comment explaining why.
 
@@ -91,6 +92,16 @@ Every PR passes the full validation gate before review sign-off, in this order:
 - `npm run test:package`
 
 Any non-zero exit fails the gate and blocks the PR. `npm test` is the fast server + cockpit unit/component suite (vitest) and `npm run test:unit` the node:test core-module suite; the build includes the `check:pack` tarball gate, and `npm run test:package` builds a release tarball, installs it into an isolated consumer, and exercises the offline CLI workflow. User-facing changes also need the separate real-browser QA (`npm run test:e2e`) described by the QA gate. The implementing skills run the configured gate before opening a PR, and `om-check-and-commit` runs it before pushing a hand-worked branch. The command list lives in `.ai/agentic.config.json`; when it changes, update it there and in this section together.
+
+## Release lines and backports
+
+`main` is the next minor; each released minor lives on `release/vX.Y.x`, which takes fixes only ([docs/publishing.md § Release lines](docs/publishing.md#release-lines) has the workflows).
+
+- **Every PR targets `main`** — features, fixes, docs alike. Never push to `release/v*`, and open a PR against one by hand only for the hotfix case below.
+- **A fix that users of the released line need gets `backport release/vX.Y.x`** (the newest line: `git branch -r --list 'origin/release/v*'`). Default to it for `priority-high`/`priority-extreme` bugs, regressions and telemetry fixes whose bug exists on that line; skip it for features, refactors, and bugs introduced after the cut. Put the label on the issue when triaging and on the PR when opening it — only the PR's label triggers the backport. The `backport …` labels are outside label normalization: never remove one.
+- **The Backport workflow does the cherry-pick** once the PR is merged and opens a PR into the line. Review it as a real PR: CI is green *and* the fix makes sense in that line's code. On a conflict it opens a draft — resolve it on that branch, or close it and port the fix by hand in a PR against the line where the code actually lives.
+- **A hotfix that cannot wait for `main`** may target `release/vX.Y.x` directly; label it `backport main` so it is forward-ported.
+- **Versions and releases are workflows, run by a maintainer**: *Release cut* (from `main`) and *Release* (from a line). Never edit a version or the lockfile's workspace versions by hand, and an agent never dispatches either workflow. Release notes are generated from merged PRs unless a `# Unreleased` section at the top of `CHANGELOG.md` already says it better — add one on `main` before a cut, or backport it to the line before a patch.
 
 ## Amending this process
 

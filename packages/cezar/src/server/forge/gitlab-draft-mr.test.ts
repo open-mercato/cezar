@@ -109,6 +109,27 @@ describe('GitLab driver — createPR (draft merge request)', () => {
     expect(pushed).toBe(git(['rev-parse', 'HEAD']).trim());
   });
 
+  it('opens a ready merge request (no --draft) when the caller asks for one', async () => {
+    writeFileSync(join(repo, 'a.txt'), 'finished work\n');
+    glabReply(null, 'https://gitlab.com/acme/demo/-/merge_requests/44\n');
+    const driver = createGitlabDriver(freshRoot(), remoteOf('git@gitlab.com:acme/demo.git'));
+    expect((await driver.createPR({ ...input(), draft: false })).ok).toBe(true);
+    expect(glabArgs().slice(0, 4)).toEqual(['mr', 'create', '--source-branch', 'cez/abc123']);
+  });
+
+  // The shared prelude refuses an empty branch BEFORE pushing it (telemetry 16aef26d), for GitLab
+  // exactly as for GitHub: glab would only refuse after the push, leaving an empty remote branch.
+  it('refuses a branch with nothing to propose without pushing or running glab', async () => {
+    const driver = createGitlabDriver(freshRoot(), remoteOf('git@gitlab.com:acme/demo.git'));
+    const outcome = await driver.createPR(input({ baseBranch: 'main' }));
+    expect(outcome).toEqual({
+      ok: false,
+      error: 'nothing to propose — cez/abc123 has no commits that main does not already have',
+    });
+    expect(glabMock).not.toHaveBeenCalled();
+    expect(() => execFileSync('git', ['rev-parse', '--verify', '-q', 'cez/abc123'], { cwd: bare })).toThrow();
+  });
+
   it('matches the URL against a self-managed instance host (port, subgroups), not gitlab.com', async () => {
     glabReply(
       null,

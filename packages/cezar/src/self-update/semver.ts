@@ -61,6 +61,13 @@ export function isNewer(candidate: string, current: string): boolean {
   return compareVersions(candidate, current) > 0;
 }
 
+/** How a version built from a source checkout is shown: `0.15.2` → `0.15.2-dev`. Display only —
+ *  update checks compare the raw version, or a checkout would sort below its own release. */
+export function devVersion(raw: string): string {
+  const parsed = parseVersion(raw);
+  return `${parsed ? parsed.core.join('.') : raw.trim()}-dev`;
+}
+
 /** Which dist-tag family a published version belongs to, from its prerelease identifiers. */
 export function classifyVersion(version: string): VersionChannel {
   const parsed = parseVersion(version);

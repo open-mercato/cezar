@@ -197,26 +197,30 @@ describe('evictForgeProjectCaches', () => {
     });
   });
   afterEach(() => vi.unstubAllEnvs());
+  // `gh` spawns only: each `gh` call first resolves the repo's host from git (#1426's GH_HOST pin).
+  const ghCalls = () => execFileMock.mock.calls.filter((call) => call[0] === 'gh').length;
 
   // Regression: the pre-#847 eviction cleared comments by a `${root}:` prefix while comment keys
   // are `${root}\0${kind}#${n}`, so a merged PR's thread was served from cache for another minute.
   it('drops the cached comment threads of that root, and only that root', async () => {
     await fetchGithubComments('/repo/evict-a', 'issue', 1);
+    const perThread = ghCalls(); // what one uncached thread costs
     await fetchGithubComments('/repo/evict-b', 'issue', 1);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghCalls()).toBe(2 * perThread);
 
     evictForgeProjectCaches('/repo/evict-a');
 
     await fetchGithubComments('/repo/evict-a', 'issue', 1);
-    expect(execFileMock).toHaveBeenCalledTimes(3); // refetched
+    expect(ghCalls()).toBe(3 * perThread); // refetched
     await fetchGithubComments('/repo/evict-b', 'issue', 1);
-    expect(execFileMock).toHaveBeenCalledTimes(3); // the other root is still cached
+    expect(ghCalls()).toBe(3 * perThread); // the other root is still cached
   });
 
   it('keeps evictGithubProjectCaches as a delegate', async () => {
     await fetchGithubComments('/repo/evict-c', 'issue', 1);
+    const perThread = ghCalls();
     evictGithubProjectCaches('/repo/evict-c');
     await fetchGithubComments('/repo/evict-c', 'issue', 1);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghCalls()).toBe(2 * perThread);
   });
 });

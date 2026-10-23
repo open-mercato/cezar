@@ -24,7 +24,7 @@ export function isProjectSkill(skill: Pick<Skill, 'source'>): boolean {
 
 /** The sort is stable, so within each half the server's own order (alphabetical —
  *  `src/skills.ts` sorts the merged catalog by name) is preserved. */
-export function orderSkills(skills: readonly Skill[]): Skill[] {
+export function orderSkills<T extends Pick<Skill, 'source'>>(skills: readonly T[]): T[] {
   return [...skills].sort((a, b) => Number(!isProjectSkill(a)) - Number(!isProjectSkill(b)))
 }
 
@@ -32,13 +32,15 @@ export function orderSkills(skills: readonly Skill[]): Skill[] {
 const MOST_USED_LIMIT = 5
 
 /** The three display tiers every skill picker renders, in this order (#519). */
-export interface SkillTiers {
+type SkillSummary = Pick<Skill, 'name' | 'description' | 'source'>
+
+export interface SkillTiers<T extends SkillSummary = Skill> {
   /** Skills actually picked before (`skillUsage` count > 0), frequency descending, capped. */
-  mostUsed: Skill[]
+  mostUsed: T[]
   /** Remaining project skills (#377 locality), in the incoming (server-alphabetical) order. */
-  project: Skill[]
+  project: T[]
   /** Remaining user-global skills, in the incoming order. */
-  global: Skill[]
+  global: T[]
 }
 
 /**
@@ -51,11 +53,11 @@ export interface SkillTiers {
  * source of tier truth: grouped pickers render the three tiers, flat surfaces flatten them
  * through `orderSkillsByUsage`.
  */
-export function partitionSkillsForDisplay(
-  skills: readonly Skill[],
+export function partitionSkillsForDisplay<T extends SkillSummary>(
+  skills: readonly T[],
   usage: Readonly<Record<string, number>> | undefined,
   { mostUsedLimit = MOST_USED_LIMIT }: { mostUsedLimit?: number } = {},
-): SkillTiers {
+): SkillTiers<T> {
   const mostUsed = skills
     .map((skill, index) => ({ skill, index, count: usageCount(usage, skill.name) }))
     .filter((entry) => entry.count > 0)
@@ -82,10 +84,10 @@ export function partitionSkillsForDisplay(
  * flat surfaces (the workflows palette, the ⌘K palette, the `/` autocomplete's base order)
  * agree with the grouped pickers. With no usage data this is exactly `orderSkills`.
  */
-export function orderSkillsByUsage(
-  skills: readonly Skill[],
+export function orderSkillsByUsage<T extends SkillSummary>(
+  skills: readonly T[],
   usage: Readonly<Record<string, number>> | undefined,
-): Skill[] {
+): T[] {
   const tiers = partitionSkillsForDisplay(skills, usage)
   return [...tiers.mostUsed, ...tiers.project, ...tiers.global]
 }
@@ -298,10 +300,10 @@ export function searchWorkflows(workflows: readonly WorkflowDef[], query: string
  *  description does). Ties keep the usage-then-locality order, so an empty query and
  *  equally-good matches still render most-used skills first, then project before global/team.
  *  Without `usage` this is exactly the pre-#519 project-first behavior. */
-export function filterSkills(
-  skills: readonly Skill[],
+export function filterSkills<T extends SkillSummary>(
+  skills: readonly T[],
   query: string,
   usage?: Readonly<Record<string, number>>,
-): Skill[] {
+): T[] {
   return rankByQuery(orderSkillsByUsage(skills, usage), query, usage)
 }

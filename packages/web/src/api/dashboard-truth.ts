@@ -5,10 +5,20 @@ import type { DashboardTaskRow } from '@open-mercato/cezar-api-client'
 const rows = new Map<
   string,
   {
-    value: { status: DashboardTaskRow['status']; archived: boolean } | null
+    value: TruthValue | null
     revision: number
   }
 >()
+/** `awaitingAnswerSince` rides with `status`: a `failed` row that still awaits an answer is a
+ *  question, and overlaying the status alone would turn it into an outcome. */
+type TruthValue = Pick<DashboardTaskRow, 'status' | 'archived' | 'awaitingAnswerSince'>
+const truthValue = (run: Pick<DashboardTaskRow, 'status' | 'archived' | 'awaitingAnswerSince'>): TruthValue => ({
+  status: run.status,
+  archived: run.archived,
+  // Always present (possibly undefined) so spreading the overlay over a staged row also CLEARS a
+  // stale value — an answered question must stop reading as one.
+  awaitingAnswerSince: run.awaitingAnswerSince,
+})
 const removedProjects = new Map<string, number>()
 const listeners = new Set<() => void>()
 let version = 0
@@ -21,13 +31,15 @@ export function dashboardProjectTransition(project: string, removed: boolean) {
 }
 export function dashboardTransition(
   project: string,
-  run: { id: string; status: DashboardTaskRow['status']; archived: boolean } | string,
+  run:
+    | { id: string; status: DashboardTaskRow['status']; archived: boolean; awaitingAnswerSince?: string }
+    | string,
 ) {
   const key = `${project}:${typeof run === 'string' ? run : run.id}`
   rows.delete(key)
   rows.set(key, {
     value:
-      typeof run === 'string' ? null : { status: run.status, archived: run.archived },
+      typeof run === 'string' ? null : truthValue(run),
     revision: version + 1,
   })
   if (rows.size > 2000) rows.delete(rows.keys().next().value!)
@@ -56,7 +68,7 @@ export const dashboardTruth = (projectId: string, runId: string) =>
 export function reconcileDashboardTruth(
   revision: number,
   present: readonly (Pick<DashboardTaskRow, 'projectId' | 'id'> &
-    Partial<Pick<DashboardTaskRow, 'status' | 'archived'>>)[] = [],
+    Partial<Pick<DashboardTaskRow, 'status' | 'archived' | 'awaitingAnswerSince'>>)[] = [],
 ) {
   const current = new Map(present.map((row) => [`${row.projectId}:${row.id}`, row]))
   let changed = false
@@ -74,7 +86,7 @@ export function reconcileDashboardTruth(
       // The observation itself is newer, even if its value is unchanged. Saved
       // pages captured before this confirmation must not roll it back later.
       rows.set(key, {
-        value: { status: row.status, archived: row.archived },
+        value: truthValue({ status: row.status, archived: row.archived, awaitingAnswerSince: row.awaitingAnswerSince }),
         revision: version + 1,
       })
       changed = true

@@ -1172,7 +1172,10 @@ async function createGitlabDraftMr(repoRoot: string, parsed: ParsedRemote, input
 
   const targetArgs = base ? ['--target-branch', base] : [];
   const mr = await execTool(
-    ['mr', 'create', '--draft', '--source-branch', branch, ...targetArgs, '--title', title, '--description', body, '--yes'],
+    [
+      'mr', 'create', ...(input.draft === false ? [] : ['--draft']), '--source-branch', branch, ...targetArgs,
+      '--title', title, '--description', body, '--yes',
+    ],
     worktree,
     'glab',
     PUSH_TIMEOUT_MS,

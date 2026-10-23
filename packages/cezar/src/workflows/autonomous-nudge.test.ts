@@ -143,6 +143,11 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(store.getRun(record.id)?.autonomous).toBe(true);
 
     const statuses = trackStatuses();
+    // Captured live: an unpaced mock can settle the run (clearing currentStepId) before we look.
+    let continuationStepId: string | undefined;
+    store.on('run', (r: RunRecord) => {
+      if (r.id === record.id && r.currentStepId) continuationStepId ??= r.currentStepId;
+    });
     expect(manager.continueRun(record.id, { text: 'mock:autonomous keep going' })).toEqual({ ok: true });
 
     // `runContinuation` builds its OWN ActiveRun; it must read `autonomous` off the record.
@@ -153,9 +158,7 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     // Same helper, same event SHAPE: every other event this handler writes is attributed to the
     // continuation's own step, and the cockpit keys transcript items by `stepId`. A nudge note
     // from a continuation must not be the one anonymous event in the file.
-    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toBe(
-      store.getRun(record.id)?.currentStepId,
-    );
+    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toBe(continuationStepId);
     expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toMatch(/^continue-/);
     await waitFor(record.id, (r) => r?.status === 'done');
     expect(statuses).not.toContain('waiting');

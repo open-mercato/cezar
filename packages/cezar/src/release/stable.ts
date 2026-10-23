@@ -50,6 +50,85 @@ export function computeStableVersion(bump: ReleaseBump, base: string): string | 
   }
 }
 
+/** `[major, minor, patch]` of a plain `x.y.z`, or `null` for anything else. */
+export function parseStableVersion(version: string): [number, number, number] | null {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+/** Semver order of two plain versions; an unparseable one sorts lowest. */
+export function compareStableVersions(a: string, b: string): number {
+  const pa = parseStableVersion(a);
+  const pb = parseStableVersion(b);
+  if (!pa || !pb) return pa ? 1 : pb ? -1 : 0;
+  for (let i = 0; i < 3; i += 1) if (pa[i] !== pb[i]) return pa[i]! - pb[i]!;
+  return 0;
+}
+
+/** The maintenance branch a version's minor line lives on: `0.15.2` → `release/v0.15.x`. */
+export function releaseBranchFor(version: string): string | null {
+  const v = parseStableVersion(version);
+  return v ? `release/v${v[0]}.${v[1]}.x` : null;
+}
+
+/** The `major.minor` a `release/vX.Y.x` branch maintains, or `null` for any other ref. */
+export function parseReleaseBranch(ref: string): { major: number; minor: number } | null {
+  const m = /^(?:refs\/heads\/)?release\/v(\d+)\.(\d+)\.x$/.exec(ref.trim());
+  return m ? { major: Number(m[1]), minor: Number(m[2]) } : null;
+}
+
+/** The version `main` moves to when its line is cut: the next minor. */
+export function nextMinorVersion(version: string): string | null {
+  return computeStableVersion('minor', version);
+}
+
+export type ReleasePlan =
+  | { ok: true; version: string; bumped: boolean; previousTag: string | null }
+  | { ok: false; error: string };
+
+/**
+ * What a release from a `release/vX.Y.x` branch publishes.
+ *
+ * The committed version ships as-is while no tag names it (the line's first `x.y.0`); once it
+ * is tagged, the release bumps the patch first — past any tag already taken, so a re-run after a
+ * half-finished release never collides. The branch and the manifests must agree on the line.
+ */
+export function planRelease(input: {
+  branch: string;
+  manifestVersion: string;
+  tags: readonly string[];
+}): ReleasePlan {
+  const line = parseReleaseBranch(input.branch);
+  if (!line) return { ok: false, error: `"${input.branch}" is not a release/vX.Y.x branch` };
+  const base = parseStableVersion(input.manifestVersion);
+  if (!base) return { ok: false, error: `manifest version "${input.manifestVersion}" is not a plain x.y.z` };
+  if (base[0] !== line.major || base[1] !== line.minor) {
+    return {
+      ok: false,
+      error: `manifest version ${input.manifestVersion} does not belong to ${input.branch}`,
+    };
+  }
+  const taken = new Set(input.tags.map((t) => t.trim()));
+  let version = input.manifestVersion.trim();
+  while (taken.has(`v${version}`)) version = computeStableVersion('patch', version)!;
+  const previous = input.tags
+    .filter((t) => parseStableVersion(t) && compareStableVersions(t, version) < 0)
+    .sort(compareStableVersions)
+    .at(-1);
+  return { ok: true, version, bumped: version !== input.manifestVersion.trim(), previousTag: previous ?? null };
+}
+
+/**
+ * The dist-tag a stable release publishes under. Only the newest line moves `latest` — the
+ * updater's stable channel follows it — so a backport publishes under `latest-X.Y` instead.
+ */
+export function resolveStableDistTag(version: string, currentLatest: string | null | undefined): string {
+  const v = parseStableVersion(version);
+  if (!v) throw new Error(`not a stable version: ${version}`);
+  if (!currentLatest || !parseStableVersion(currentLatest)) return 'latest';
+  return compareStableVersions(version, currentLatest) >= 0 ? 'latest' : `latest-${v[0]}.${v[1]}`;
+}
+
 export type { ManifestLike, ReleaseManifests } from './manifests.ts';
 
 /** Stamp the release set to a stable version.

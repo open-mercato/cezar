@@ -155,10 +155,14 @@ describe('readAccountIdentity', () => {
     });
   });
 
-  it('says OpenCode cannot be read, because its login is not in the config folder', async () => {
-    const identity = await readAccountIdentity('opencode', home);
-    expect(identity.available).toBe(false);
-    expect(identity.reason).toContain('outside its config folder');
+  it.each([
+    ['opencode', 'OpenCode keeps its login outside its config folder, so cezar cannot read it.'],
+    ['pi', 'cezar does not yet read Pi account details from its config folder.'],
+    ['junie', 'cezar does not yet read Junie account details from its config folder.'],
+    ['copilot', 'cezar does not yet read Copilot account details from its config folder.'],
+  ] as const)('%s gets its own unsupported-provider reason without a CLI read', async (provider, reason) => {
+    const identity = await readAccountIdentity(provider, home);
+    expect(identity).toEqual({ available: false, reason, fields: [] });
   });
 
   describe('cursor', () => {

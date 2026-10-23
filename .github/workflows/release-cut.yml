@@ -1,0 +1,68 @@
+name: Release cut
+
+# Splits main into a release line (docs/publishing.md § Release lines): with main at X.Y.Z it
+# creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` label, and opens
+# the PR that moves main to X.(Y+1).0. Then ship the line with the Release workflow, run from
+# the new branch. Re-running is safe: an existing branch is left alone and the PR is reused.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Show the branch and version it would create, without touching GitHub'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write # the release branch and the version-bump commit
+  pull-requests: write # the PR moving main to the next minor
+  issues: write # the backport label
+
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    name: Cut a release line from main
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build release tooling
+        run: npm run build:server
+
+      - name: Cut the release line
+        id: cut
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+        run: node scripts/release-line.mjs cut ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Write workflow summary
+        if: always() && steps.cut.outputs.releaseBranch != ''
+        env:
+          RELEASE_BRANCH: ${{ steps.cut.outputs.releaseBranch }}
+          CURRENT: ${{ steps.cut.outputs.current }}
+          NEXT: ${{ steps.cut.outputs.nextVersion }}
+          PR_URL: ${{ steps.cut.outputs.prUrl }}
+        run: |
+          {
+            echo "## ✂️ ${RELEASE_BRANCH} (${CURRENT})"
+            echo ""
+            echo "main moves to \`${NEXT}\`${PR_URL:+ in ${PR_URL}}."
+            echo ""
+            echo "Next: run **Release** from \`${RELEASE_BRANCH}\`. Fixes reach it through the \`backport ${RELEASE_BRANCH}\` label."
+          } >> "$GITHUB_STEP_SUMMARY"

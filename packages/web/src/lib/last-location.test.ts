@@ -96,6 +96,10 @@ describe('locationToSave', () => {
     ['a missing project', { pathname: '/p/gone/', search: '', hash: '' }],
     ['an overlong path', { pathname: `/p/boot/${'x'.repeat(2041)}`, search: '', hash: '' }],
     ['a malformed encoded project', { pathname: '/p/%/', search: '', hash: '' }],
+    // Settings is full-screen with no app chrome: a launch restored into it had nowhere for
+    // Back to go but `/`, which restored it again (spec 2026-10-13-unified-settings).
+    ['a project settings index', { pathname: '/p/boot/settings', search: '', hash: '' }],
+    ['a project settings section', { pathname: '/p/other/settings/agents', search: '', hash: '' }],
   ])('rejects %s', (_case, location) => {
     expect(locationToSave(location, REGISTRY)).toBeNull()
   })
@@ -142,6 +146,8 @@ describe('locationToRestore', () => {
     ['a missing project', { projectId: 'gone', pathname: '/p/gone/' }],
     ['a search without ?', { projectId: 'boot', pathname: '/p/boot/', search: 'tab=runs' }],
     ['a hash without #', { projectId: 'boot', pathname: '/p/boot/', hash: 'L2' }],
+    // Stored by a build that still saved settings pages — never restored into.
+    ['a stored settings page', { projectId: 'other', pathname: '/p/other/settings/agents' }],
   ])('rejects %s', (_case, value) => {
     expect(locationToRestore(value, REGISTRY, 'boot')).toBeNull()
   })

@@ -13,7 +13,7 @@ This spec was written by an unattended run. The Open Questions below were resolv
 | # | Question | Applied default | Why |
 |---|----------|-----------------|-----|
 | Q1 | Enabler for GitLab: the `glab` CLI, or a direct REST/GraphQL client with a personal access token? | **`glab`** | It preserves the property the whole design leans on — cezar never holds a credential (`readHostGithubToken`, the `agent-env` passthrough, `secret-redaction`, the automations poller all assume the CLI owns auth). `glab` also speaks self-managed instances natively (`GITLAB_HOST`, `glab auth login --hostname …`, per-host config). A REST fallback stays addable later without changing the seam; making cezar a credential store is not reversible in the same way. |
-| Q2 | How is an on-premise instance at an arbitrary host recognized as GitLab? | **Discovered, not configured**: a well-known host table first, then a cached probe of what the installed forge CLIs are authenticated against; unknown → `forge: null` | AGENTS.md § Zero config is explicit — "when a feature seems to need configuration, the design is wrong; discover it, or default it." `glab auth status` already knows the operator's self-managed hosts, which is the same source of truth `gh` provides for GitHub Enterprise. No new required config key. |
+| Q2 | How is an on-premise instance at an arbitrary host recognized as GitLab? | **Discovered, not configured**: the well-known hosts first, then the hosts the forge CLI already lists in its own config file; unknown → `forge: null` | AGENTS.md § Zero config is explicit — "when a feature seems to need configuration, the design is wrong; discover it, or default it." `glab`'s `config.yml` already knows the operator's self-managed hosts, exactly as `gh`'s `hosts.yml` knows GitHub Enterprise ones (#1426). No new required config key. *Revised 2026-10-23 on rebase onto #1426: the original answer was a cached `auth status` probe; see § Forge discovery.* |
 | Q3 | Does cezar make its own HTTP request to an unknown host to sniff the forge (`GET /api/v4/version`)? | **No — CLI-only discovery** | It would add cezar's first outbound HTTP request to a host derived from repository content, plus a TLS-trust story for self-signed on-premise certificates. The CLI already solves both and is already trusted with the credential. Addable later as an extra rung if CLI-only discovery proves insufficient. |
 | Q4 | Generalize GitHub Automations (`packages/cezar/src/automations/`) to GitLab in this spec? | **No — gate it on `forge.kind === 'github'`** | It is a second, independent `gh` client with its own event vocabulary, poll cursors and `github.*` template tokens; generalizing it is a spec of its own. Gating is three lines, honest (the nav item is absent rather than broken), reversible, and already how `CEZ_AUTOMATIONS` degrades. |
 | Q5 | Introduce a neutral `/api/v1/forge*` route family now? | **No — the `/api/v1/github*` paths stay as they are** | BACKWARD_COMPATIBILITY.md §2 freezes them; a parallel family is new public surface serving identical payloads, which is exactly the "spec bloat" this change does not need. The routes become forge-agnostic behind the same URLs. Renaming is a later, separately reviewable decision. |
@@ -71,22 +71,25 @@ packages/cezar/src/server/forge/
                # New OPTIONAL methods: listComments?(), listChecks?()
   cli.ts       # NEW — shared adapter plumbing: cwd-scoped execFile, ENOENT→install hint,
                #       keyed caches, the bounded-pagination budget loop
-  discovery.ts # NEW — the host→kind ladder + its cache (see below)
-  index.ts     # registry: forgeKindOfRemote() (sync), resolveForge() (sync), plus
-               #       warmForgeDiscovery() (async, fire-and-forget)
+  index.ts     # registry: forgeKindOfHost() / forgeKindOfRemote() / resolveForge() (all sync)
   github.ts    # unchanged behaviour, re-homed onto cli.ts
   gitlab.ts    # NEW — glab-backed adapter
+packages/cezar/src/
+  github-hosts.ts  # (#1426, main) which hosts are GitHub: github.com, *.ghe.com, gh's hosts.yml, GH_HOST
+  gitlab-hosts.ts  # NEW — its twin: gitlab.com, glab's config.yml hosts, GITLAB_HOST / GL_HOST
+  git-remotes.ts   # (#1383, main) parseRemote() now lives here, with this spec's `path`/`origin`
 ```
 
 ### Forge discovery (replaces the const host table)
 
-Three rungs, cheapest first. The contract of the sync entry points is unchanged: they always answer immediately, from a table or a warm cache.
+Two rungs, both synchronous and both I/O-light, so the sync entry points (`forgeKindOfRemote()` for the per-project registry probe, #698) always answer immediately:
 
-1. **Well-known hosts** — a constant map, `github.com → github`, `gitlab.com → gitlab`. Pure string work, no I/O. This is what keeps `forgeKindOfRemote()` synchronous for the per-project registry probe (#698) and keeps the zero-config SaaS path exactly as fast as today.
-2. **Warm discovery cache** — a `host → kind | 'none'` map persisted under `~/.cache/cez/forge-hosts.json`. Read synchronously at boot; written by rung 3. Deleting it costs one re-probe, nothing else (AGENTS.md § Zero config: state may be *written*, never *required*).
-3. **CLI-authenticated hosts (async, off the request path)** — `warmForgeDiscovery()` asks each installed forge CLI which hosts it is authenticated against (`gh auth status`, `glab auth status`), parses the host list, and records `host → kind` in the cache. It runs at boot and on a bounded interval, never inside a request, following the exact stale-while-revalidate discipline `detectGithubCached()` already uses for availability.
+1. **Well-known hosts** — `github.com` and `*.ghe.com` are GitHub, `gitlab.com` is GitLab. Pure string work.
+2. **The forge CLIs' own config** — `github-hosts.ts` (#1426) reads the host keys of `gh`'s `hosts.yml` plus `GH_HOST`; `gitlab-hosts.ts` reads the `hosts:` keys of `glab`'s `config.yml` (`GLAB_CONFIG_DIR`, else `$XDG_CONFIG_HOME/glab-cli`, else `~/.config/glab-cli`) plus `GITLAB_HOST` / `GL_HOST`. Each is a TTL-cached (30 s) `readFileSync`; a missing or garbled file means "the well-known hosts only". GitHub is asked first.
 
-An unknown host answers `null` — `forge: null`, plain-git features only, exactly today's behaviour for every non-GitHub remote. **No rung ever makes an HTTP request from cezar** (Q3).
+An unknown host answers `null` — `forge: null`, plain-git features only. **Nothing here runs a subprocess or makes an HTTP request** (Q3), and cezar keeps no cache file of its own.
+
+*Revision (2026-10-23, rebase onto #1426).* This spec first shipped a three-rung ladder: the well-known table, a `~/.cache/cez/forge-hosts.json` cache, and a boot-time + every-10-minutes `gh auth status` / `glab auth status` probe that warmed it. `main` meanwhile landed #1426, which classifies GitHub Enterprise hosts from `gh`'s `hosts.yml` synchronously. Keeping both would have classified a GHE host and a GitLab host by two mechanisms with different cold-start behaviour (the probe left a first-run window where an Enterprise project's routes answered unavailable). The probe ladder is removed; GitLab mirrors #1426. What the probe was load-bearing for — recognizing hosts a user logged in to — is fully covered by the config files, since `gh auth login` / `glab auth login` write exactly those keys.
 
 `parseRemote()` gets one correctness fix independent of discovery: it takes the last two path segments, so a GitLab **subgroup** remote (`gitlab.com/group/sub/repo`) yields `owner: 'sub'` and silently drops the group. The parsed remote must carry the full project path (`group/sub/repo`) for GitLab; `ParsedRemote` grows an additive `path` field and `owner`/`repo` keep their current meaning for GitHub.
 
@@ -116,11 +119,10 @@ A route whose driver lacks the method answers the family's existing in-payload d
 
 ## 📝 Data Model
 
-No entities, no migrations, no schema versioning. Two additive state items:
+No entities, no migrations, no schema versioning, and no new state file (the discovery cache this spec first had is gone — § Forge discovery). One additive value:
 
 | Item | Location | Shape | If deleted |
 |---|---|---|---|
-| Forge discovery cache | `~/.cache/cez/forge-hosts.json` | `{ version: 1, hosts: { "<host>": "github" \| "gitlab" \| "none" }, updatedAt: string }` | Re-probed on next boot; zero user impact |
 | Per-project forge classification | already exists — `GET /api/v1/projects` `forge?` (#698) | additive value `'gitlab'` on an existing optional key | n/a |
 
 No credentials are read, stored, forwarded or logged by cezar: `glab` owns GitLab auth exactly as `gh` owns GitHub auth. `core/secret-redaction.ts` gains the GitLab PAT patterns (`glpat-…`, and the CI job-token shapes) so a token that appears in agent output is redacted before it reaches the NDJSON transcript — a defensive addition, not a storage decision.
@@ -187,7 +189,7 @@ Only what is unique; the tab, list, thread and detail panes render unchanged fro
 | Timeline event kind GitLab has and cezar does not | Dropped by the existing allowlist — the documented rule in `types.ts`. A new event type can never crash or clutter the thread. |
 | MR with no pipeline | `checks: null` (no CI configured) — distinct from an absent field (query failed), the distinction `types.ts` already documents. |
 | Rate limiting / slow instance | The shared bounded-pagination budget from `cli.ts` (deadline-aware, minimum viable page window) applies unchanged; a page that cannot finish is not spawned. |
-| A repo whose remote is GitHub Enterprise | Discovered as `github` via `gh auth status` and served by the existing GitHub adapter. `viewUrl` must build from the parsed remote origin instead of the `https://github.com` literal it uses today — a small correctness win this change gets for free. |
+| A repo whose remote is GitHub Enterprise | Classified as `github` from `gh`'s `hosts.yml` (#1426) and served by the existing GitHub adapter. `viewUrl` must build from the parsed remote origin instead of the `https://github.com` literal it uses today — a small correctness win this change gets for free. |
 | Two projects on different forges open at once | Caches are keyed `${kind}:${repoRoot}`; each project's availability is its own. |
 | `POST /runs/:id/pr` on a GitLab project | Same flow — final autosave, push, then `glab mr create --draft`. The PR-URL scrape matches the instance host, not `github.com`. |
 | `CEZ_DRY_RUN=1` | Each adapter keeps its own mock path, as `forge/github.ts` does today, so the whole flow stays testable without a network. |
@@ -233,8 +235,8 @@ Only what is unique; the tab, list, thread and detail panes render unchanged fro
 
 ### Phase 2 — Discovery
 
-9. **Add `forge/discovery.ts`.** Well-known host map (`github.com`, `gitlab.com`), the `~/.cache/cez/forge-hosts.json` reader/writer (zod-validated, corrupt file → empty map, never a throw), and `warmForgeDiscovery()` parsing `gh auth status` / `glab auth status`. *Test:* unit tests over each parser with real CLI output fixtures, a corrupt cache file, and an absent cache directory.
-10. **Wire discovery into `forge/index.ts`.** `forgeKindOfRemote()` and `resolveForge()` consult well-known → warm cache → `null`, and stay synchronous and I/O-free; `warmForgeDiscovery()` is called at boot and on the existing bounded interval, never from a request. *Test:* `forge/index.test.ts` covers an on-prem host present in the cache, absent from it, and a cache entry of `'none'`.
+9. **Add `forge/discovery.ts`.** Well-known host map (`github.com`, `gitlab.com`), the `~/.cache/cez/forge-hosts.json` reader/writer (zod-validated, corrupt file → empty map, never a throw), and `warmForgeDiscovery()` parsing `gh auth status` / `glab auth status`. *Test:* unit tests over each parser with real CLI output fixtures, a corrupt cache file, and an absent cache directory. *(Superseded on the rebase onto #1426 — see § Forge discovery, Revision: replaced by `gitlab-hosts.ts`.)*
+10. **Wire discovery into `forge/index.ts`.** `forgeKindOfRemote()` and `resolveForge()` consult well-known → warm cache → `null`, and stay synchronous and I/O-free; `warmForgeDiscovery()` is called at boot and on the existing bounded interval, never from a request. *Test:* `forge/index.test.ts` covers an on-prem host present in the cache, absent from it, and a cache entry of `'none'`. *(Superseded on the rebase onto #1426 — see § Forge discovery, Revision: replaced by `gitlab-hosts.ts`.)*
 11. **Fix `parseRemote` for subgroups and add `path`.** `ParsedRemote` gains `path` (the full project path); `owner`/`repo` keep their meaning. *Test:* table test over `gitlab.com/group/repo`, `gitlab.com/group/sub/repo`, 3-level nesting, scp-like and port-bearing spellings, plus every existing GitHub case unchanged.
 12. **Build `viewUrl` from the parsed origin.** Replace the `https://github.com` literal in `createGithubDriver().viewUrl` with the parsed remote's origin, so GitHub Enterprise links resolve correctly. *Test:* `viewUrl` cases for github.com and an enterprise host.
 

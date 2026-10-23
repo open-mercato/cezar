@@ -6,7 +6,7 @@ import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
-  AttachmentInput,
+  AttachmentEntry,
   DispatchIntent,
   ModelDiscoveryRunner,
   Runner,
@@ -51,9 +51,11 @@ export interface RunnerOption {
 export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
+  { id: 'junie', label: 'junie', desc: 'JetBrains Junie CLI' },
   { id: 'opencode', label: 'opencode', desc: 'OpenCode (serve)' },
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
+  { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
 ]
 
 export interface ModelPreset {
@@ -86,6 +88,9 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   opencode: [
     { id: '', label: 'auto', desc: 'Use your OpenCode default model' },
   ],
+  junie: [
+    { id: '', label: 'auto', desc: 'Use your Junie default model' },
+  ],
   cursor: [
     { id: '', label: 'auto', desc: 'Use your Cursor default model' },
   ],
@@ -95,6 +100,13 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'anthropic/claude-opus-4-8', label: 'claude-opus-4.8', desc: 'via Anthropic' },
     { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
     { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
+  ],
+  // Copilot has no host catalog here (it stays out of `MODEL_DISCOVERY_RUNNERS`), and its own
+  // catalog is fetched from GitHub per account, so nothing dated can be listed truthfully. `auto`
+  // is Copilot's own documented value for "let Copilot pick" (`copilot --help`), and the field
+  // stays free text for anything the account is entitled to.
+  copilot: [
+    { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
   ],
 }
 
@@ -187,6 +199,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  junie: 'Junie',
   cursor: 'Cursor',
 }
 
@@ -318,10 +331,14 @@ export function buildCreateRunBody(opts: {
    *  project's own selection, applying to `runner`. Absent/empty follows the project. */
   agentProfile?: string | null
   variants: number
-  images: readonly AttachmentInput[]
+  images: readonly AttachmentEntry[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
    *  explicitly off; the default (isolated worktree) stays implicit. */
   worktree?: boolean
+  /** With the worktree off: fork the checkout onto a new branch first, named `branch` when
+   *  given (spec 2026-10-19-repo-git-sync). Ignored with the worktree on or for variants. */
+  newBranch?: boolean
+  branch?: string
   /** true → autonomous run (never pauses for the user). Sent only when on. */
   autonomous?: boolean
   /** false → do not ask the agent for follow-up todos. Sent only when off. */
@@ -336,6 +353,10 @@ export function buildCreateRunBody(opts: {
    *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
    *  and force the worktree. */
   dispatch?: DispatchIntent | null
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects) — single runs only. */
+  readOnly?: boolean
+  /** The project defaults to in-place, so an isolated worktree must be asked for explicitly. */
+  inPlaceByDefault?: boolean
 }): CreateRunInput {
   const {
     task,
@@ -349,11 +370,17 @@ export function buildCreateRunBody(opts: {
     variants,
     images,
     worktree,
+    newBranch,
+    branch,
     autonomous,
     generateFollowups,
     todoId,
     dispatch,
+    readOnly,
+    inPlaceByDefault,
   } = opts
+  const asking = readOnly === true && variants <= 1 && !dispatch
+  const inPlace = worktree === false && variants <= 1 && !dispatch && !asking
   return {
     task,
     ...(source?.source === 'skill'
@@ -366,13 +393,40 @@ export function buildCreateRunBody(opts: {
     agentProfile: agentProfile || undefined,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
-    // Off only matters for a single run — variants always isolate.
-    worktree: worktree === false && variants <= 1 ? false : undefined,
+    // Off only matters for a single run — variants always isolate. On is sent only against an
+    // in-place project default, which would otherwise win.
+    worktree: asking
+      ? undefined
+      : worktree === false && variants <= 1
+        ? false
+        : inPlaceByDefault && worktree !== false && variants <= 1
+          ? true
+          : undefined,
+    ...(asking ? { readOnly: true } : {}),
+    ...(inPlace && newBranch ? { newBranch: true, ...(branch?.trim() ? { branch: branch.trim() } : {}) } : {}),
     autonomous: autonomous === true ? true : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
     dispatch: dispatch ?? undefined,
   }
+}
+
+/**
+ * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
+ * read-only task, else its default skill — only when that skill exists in the catalog.
+ */
+export function projectDefaultSource(
+  config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
+  readOnly: boolean,
+  skills: readonly Skill[],
+): TaskSource | null {
+  const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
+  return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
+}
+
+/** A trunk-based project asks by default when the message reads as a question. */
+export function looksLikeQuestion(text: string): boolean {
+  return /\?\s*$/.test(text.trim())
 }
 
 /** The automation editor persists the exact New task serialization, with only the transport-
@@ -381,7 +435,8 @@ export function buildCreateRunBody(opts: {
 export function buildAutomationTask(
   opts: Parameters<typeof buildCreateRunBody>[0],
 ): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
-  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+  // A reusable template has no per-launch branch: an automation always runs with its own policy.
+  const { task, images: _images, todoId: _todoId, newBranch: _nb, branch: _b, ...body } = buildCreateRunBody(opts)
   return { prompt: task, ...body }
 }
 

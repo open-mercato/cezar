@@ -131,7 +131,7 @@ export function bookmarkletUrl(
  * Derives the GitLab hosts a caller should pass to `bookmarkletUrl` from the project registry
  * (`GET /api/v1/projects`): every registered `forge: 'gitlab'` project's `repoUrl` origin — a
  * self-managed instance the workspace already knows about — plus `gitlab.com`, the well-known
- * default (mirroring the server's `forge/discovery.ts` well-known host map).
+ * default (the one GitLab host the server's `gitlab-hosts.ts` accepts with no `glab` config).
  *
  * `gitlab.com` is seeded only when the workspace HAS at least one GitLab project (Step 5.8).
  * Seeding it unconditionally meant every real launcher carried the GitLab alternation and the

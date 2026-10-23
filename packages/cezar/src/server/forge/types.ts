@@ -29,7 +29,8 @@ export interface ForgeItem {
   author: string;
   createdAt: string;
   labels: string[];
-  body: string;
+  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
+  body?: string;
   url: string;
   comments: number;
   /** PRs only. */
@@ -126,6 +127,7 @@ export interface ForgeCommentsData {
    *  the legacy comments-only call. Capped independently of `comments`, which keeps its exact
    *  pre-#525 shape, contents and cap (BACKWARD_COMPATIBILITY.md §2). */
   events?: ForgeTimelineEvent[];
+  detail?: { body: string; additions?: number; deletions?: number };
 }
 
 export interface ForgeListOptions {
@@ -133,6 +135,8 @@ export interface ForgeListOptions {
   refresh?: boolean;
   /** Max items to fetch (driver-capped). */
   limit?: number;
+  issuesCursor?: string;
+  prsCursor?: string;
 }
 
 /** The `GET /api/github` payload — the tab's whole listing: availability, both open sets and the
@@ -151,6 +155,12 @@ export interface ForgeListData {
   /** Repo-wide map of label name → 6-hex color (no `#`), so the UI can tint chips like GitHub
    *  does. Additive (BACKWARD_COMPATIBILITY): absent on old payloads, chips fall back to neutral. */
   labelColors?: Record<string, string>;
+  /** Paged hydration (#1362): repo-wide open counts and the cursor for each set's next page
+   *  (`null` = no more pages). Absent when the driver serves one page only. */
+  issuesTotal?: number;
+  prsTotal?: number;
+  issuesNextCursor?: string | null;
+  prsNextCursor?: string | null;
 }
 
 /** The `GET /api/github/search` payload (#730). The list tier (`listIssues`/`listPRs`) only ever
@@ -327,6 +337,8 @@ export interface DraftPrInput {
   run: RunRecord;
   /** The task's handoff.md — becomes the PR body (goal + progress skim). */
   handoffText: string;
+  /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
+  draft?: boolean;
 }
 
 /** Purpose-specific creation feed; independent of open lists and relevance search. */

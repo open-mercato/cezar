@@ -2,6 +2,7 @@ import {
   normalizeSchedule,
   type AutomationDefinition,
   type AutomationEvent,
+  type AutomationFilters,
   type AutomationKind,
   type AutomationSchedule,
   type AutomationTemplate,
@@ -69,9 +70,14 @@ export interface EditorDraft {
   maxSubtasks: number
   reviewChild: boolean
   enabled: boolean
+  /** `task.checkout`/`task.allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3). The editor
+   *  has no control for them yet; they are carried so saving a PR-head verifier from the cockpit
+   *  never silently turns it back into a base-branch one. */
+  checkout?: 'base' | 'pr-head'
+  allowForkHeads?: boolean
 }
 
-/** The seven events the poller reconstructs (Q6: nothing else is offered). */
+/** The nine events the poller reconstructs (Q6: nothing else is offered). */
 export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.opened',
   'issue.opened',
@@ -80,6 +86,8 @@ export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
+  'pull_request.closed',
+  'pull_request.merged',
 ]
 
 type TaskSteps = NonNullable<AutomationDefinition['task']['steps']>
@@ -155,6 +163,20 @@ export function splitList(text: string): string[] {
   return text.split(',').map((item) => item.trim()).filter((item) => item.length > 0)
 }
 
+function draftFiltersOf(filters: AutomationFilters): DraftFilters {
+  return {
+    authors: joinList(filters.authors),
+    assignees: joinList(filters.assignees),
+    anyLabels: joinList(filters.anyLabels),
+    allLabels: joinList(filters.allLabels),
+    excludeLabels: joinList(filters.excludeLabels),
+    changedLabels: joinList(filters.changedLabels),
+    reviewers: joinList(filters.reviewers),
+    lookbackDays: filters.lookbackDays,
+    maxRecords: filters.maxRecords,
+  }
+}
+
 export function fromDefinition(definition: AutomationDefinition): EditorDraft {
   const base = newDraft()
   const { task, filters } = definition
@@ -167,19 +189,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     schedule: definition.schedule ? { ...definition.schedule } : base.schedule,
     events: definition.events?.length ? [...definition.events] : base.events,
     intervalSeconds: definition.intervalSeconds ?? base.intervalSeconds,
-    filters: filters
-      ? {
-          authors: joinList(filters.authors),
-          assignees: joinList(filters.assignees),
-          anyLabels: joinList(filters.anyLabels),
-          allLabels: joinList(filters.allLabels),
-          excludeLabels: joinList(filters.excludeLabels),
-          changedLabels: joinList(filters.changedLabels),
-          reviewers: joinList(filters.reviewers),
-          lookbackDays: filters.lookbackDays,
-          maxRecords: filters.maxRecords,
-        }
-      : base.filters,
+    filters: filters ? draftFiltersOf(filters) : base.filters,
     prompt: task.prompt,
     workflow: task.workflow ?? base.workflow,
     skill,
@@ -192,14 +202,20 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     maxSubtasks: task.dispatch?.maxSubtasks ?? base.maxSubtasks,
     reviewChild: task.dispatch?.reviewChild ?? base.reviewChild,
     enabled: definition.enabled,
+    ...(task.checkout !== undefined ? { checkout: task.checkout } : {}),
+    ...(task.allowForkHeads !== undefined ? { allowForkHeads: task.allowForkHeads } : {}),
   }
 }
 
 /** What the palette hands over: a built-in template or another project's automation. */
 export type TemplatePick = Pick<AutomationTemplateDraft, 'name' | 'kind' | 'schedule' | 'events' | 'intervalSeconds' | 'prompt' | 'workflow' | 'dispatch'> & {
+  filters?: AutomationFilters
+  steps?: TaskSteps
   runner?: string
   model?: string
   autonomous?: boolean
+  checkout?: 'base' | 'pr-head'
+  allowForkHeads?: boolean
 }
 
 export function templatePick(template: AutomationTemplate): TemplatePick {
@@ -209,20 +225,31 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
     ...(template.schedule ? { schedule: template.schedule } : {}),
     ...(template.events ? { events: template.events } : {}),
     ...(template.intervalSeconds !== undefined ? { intervalSeconds: template.intervalSeconds } : {}),
+    ...(template.filters ? { filters: template.filters } : {}),
     prompt: template.task.prompt,
     ...(template.task.workflow ? { workflow: template.task.workflow } : {}),
+    ...(template.task.steps ? { steps: template.task.steps } : {}),
     ...(template.task.runner ? { runner: template.task.runner } : {}),
     ...(template.task.model !== undefined ? { model: template.task.model } : {}),
     ...(template.task.autonomous !== undefined ? { autonomous: template.task.autonomous } : {}),
     ...(template.task.dispatch ? { dispatch: template.task.dispatch } : {}),
+    ...(template.task.checkout ? { checkout: template.task.checkout } : {}),
+    ...(template.task.allowForkHeads !== undefined ? { allowForkHeads: template.task.allowForkHeads } : {}),
   }
 }
 
 const isRunner = (value: string): value is Runner =>
-  value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi'
+  value === 'claude' ||
+  value === 'codex' ||
+  value === 'junie' ||
+  value === 'opencode' ||
+  value === 'cursor' ||
+  value === 'pi' ||
+  value === 'copilot'
 
-/** "Use this": the template fills name, kind, trigger, prompt and task; everything else stays. */
+/** "Use this": the template fills name, kind, trigger (filters too), prompt and task source; the rest stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {
+  const skill = skillOfSteps(template.steps)
   return {
     ...draft,
     name: template.name,
@@ -230,8 +257,15 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     schedule: template.schedule ? { ...template.schedule } : draft.schedule,
     events: template.events?.length ? [...template.events] : draft.events,
     intervalSeconds: template.intervalSeconds ?? draft.intervalSeconds,
+    // The trigger and the task source are the template's, or the default: a second pick must never
+    // inherit the first one's filters, skill or (control-less) fork-head admission.
+    filters: template.filters ? draftFiltersOf(template.filters) : { ...DEFAULT_FILTERS },
     prompt: template.prompt,
-    ...(template.workflow ? pickSource({ source: 'workflow', ref: template.workflow }) : {}),
+    ...(template.steps
+      ? { skill, customSteps: skill ? null : template.steps, workflow: QUICK_TASK }
+      : pickSource(template.workflow ? { source: 'workflow', ref: template.workflow } : null)),
+    checkout: template.checkout,
+    allowForkHeads: template.allowForkHeads,
     runner: template.runner !== undefined && isRunner(template.runner) ? template.runner : draft.runner,
     // An account belongs to one runner; a template that names a runner must not inherit it.
     account: template.runner !== undefined && isRunner(template.runner) ? null : draft.account,
@@ -298,7 +332,11 @@ export function toBody(draft: EditorDraft): AutomationBody {
       lookbackDays: clamp(f.lookbackDays, 1, 90),
       maxRecords: clamp(f.maxRecords, 1, 100),
     },
-    task,
+    task: {
+      ...task,
+      ...(draft.checkout !== undefined ? { checkout: draft.checkout } : {}),
+      ...(draft.allowForkHeads !== undefined ? { allowForkHeads: draft.allowForkHeads } : {}),
+    },
   }
 }
 
@@ -323,6 +361,30 @@ export function cliDefinitionOf(draft: EditorDraft): CliDefinition {
     task: body.task,
     ...(draft.enabled ? { enable: true } : {}),
   }
+}
+
+// A login right after user/author/by, as `login`, `@login` or @login (not an npm scope):
+// a bare @word elsewhere ("cc @x", "@ts-ignore") is not a launch condition.
+const LOGIN = '([a-z\\d](?:[a-z\\d]|-(?=[a-z\\d])){0,38})'
+const PROMPT_LOGIN = new RegExp(`\\b(?:user|author|by)\\s+(?:\`@?${LOGIN}\`|@${LOGIN}(?![\\w/-]))`, 'gi')
+
+/**
+ * GitHub logins the prompt names that no people filter enforces. Prompt text never decides which
+ * items launch — "when user `x` opens a PR" with empty Authors launches for everyone.
+ */
+export function unenforcedPromptLogins(draft: Pick<EditorDraft, 'kind' | 'prompt' | 'filters'>): string[] {
+  if (draft.kind !== 'github') return []
+  const enforced = new Set(
+    [draft.filters.authors, draft.filters.assignees, draft.filters.reviewers]
+      .flatMap(splitList)
+      .map((login) => login.replace(/^@/, '').toLowerCase()),
+  )
+  const found = new Map<string, string>()
+  for (const match of draft.prompt.matchAll(PROMPT_LOGIN)) {
+    const login = match[1] ?? match[2]
+    if (login && !enforced.has(login.toLowerCase()) && !found.has(login.toLowerCase())) found.set(login.toLowerCase(), login)
+  }
+  return [...found.values()]
 }
 
 /** A label event needs `changedLabels` — the server's rule, surfaced before the 400. */

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // below drive `gh repo view` entirely through this mock — no real `gh` on the box. Everything else
 // in this file is pure and never touches child_process, so the default passthrough is harmless.
 const execFileMock = vi.hoisted(() => vi.fn());
+/** `gh` spawns only: `gh()` also asks git for the origin host (GitHub Enterprise pin). */
+const ghSpawns = () => execFileMock.mock.calls.filter((c) => c[0] === 'gh').length;
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   execFileMock.mockImplementation((...args: unknown[]) =>
@@ -14,6 +16,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 import {
+  pickBranchPr,
   AGGREGATE_CHECK_NAME,
   __clearCommentsCacheForTests,
   __clearMergeStateCacheForTests,
@@ -48,6 +51,7 @@ import {
   normalizeReviews,
   normalizeMergeState,
   parseCountsPage,
+  parseGithubListPage,
   parseOwnerName,
   rollupToChecks,
   THREAD_ENTRY_CAP,
@@ -59,6 +63,39 @@ import type { ForgeComment } from './types.ts';
 /** `rollupToChecks` collapses a `gh … --json statusCheckRollup` array — already zod-validated
  *  via `ghCheckRunSchema` at the call site — down to the single enum the GitHub tab renders,
  *  both on PR rows (#400) and in the detail pane's `ChecksBadge`. */
+
+describe('pickBranchPr — adopting the PR the agent opened', () => {
+  const pr = (number: number, login?: string, state = 'OPEN') => ({
+    url: `https://github.com/open-mercato/cezar/pull/${number}`,
+    number,
+    state,
+    ...(login ? { headRepositoryOwner: { login } } : {}),
+  });
+
+  it('a same-repo head takes the newest match', () => {
+    expect(pickBranchPr([pr(12, 'open-mercato'), pr(9, 'open-mercato')], undefined)).toMatchObject({ number: 12 });
+  });
+
+  it('a fork head only adopts a PR from that owner — never another fork with the same branch name', () => {
+    expect(pickBranchPr([pr(12, 'someone-else'), pr(9, 'Me')], 'me')).toMatchObject({ number: 9 });
+    expect(pickBranchPr([pr(12, 'someone-else')], 'me')).toBeNull();
+  });
+
+  it('a closed or merged PR on a reused branch name is never adopted — only an open one', () => {
+    expect(pickBranchPr([pr(12, 'open-mercato', 'MERGED'), pr(9, 'open-mercato', 'CLOSED')], undefined)).toBeNull();
+    expect(pickBranchPr([pr(12, 'open-mercato', 'CLOSED'), pr(14, 'open-mercato')], undefined)).toMatchObject({ number: 14 });
+  });
+
+  it('a same-repo head only adopts a PR from the base repo’s owner — never a stranger’s fork with that branch name', () => {
+    // `findBranchPr` passes the base repo's owner when the head is not owner-qualified.
+    expect(pickBranchPr([pr(31, 'stranger'), pr(30, 'open-mercato')], 'open-mercato')).toMatchObject({ number: 30 });
+    expect(pickBranchPr([pr(31, 'stranger')], 'open-mercato')).toBeNull();
+  });
+
+  it('no PRs → null', () => {
+    expect(pickBranchPr([], undefined)).toBeNull();
+  });
+});
 
 describe('ghCheckRunSchema', () => {
   it('accepts a real gh rollup entry (conclusion + status, no state)', () => {
@@ -438,6 +475,10 @@ const ghByCwd = () =>
     const who = opts?.cwd?.includes('proj-b') ? 'b' : 'a';
     let stdout = '';
     if (argv[0] === 'repo') stdout = `owner/${who}\n`;
+    else if (argv[0] === 'api' && argv[1] === 'graphql') stdout = JSON.stringify({ data: { repository: {
+      issues: { totalCount: 1, nodes: [{ number: 1, title: `${who}-issue`, author: { login: who }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: `https://github.com/owner/${who}/issues/1` }], pageInfo: { hasNextPage: false, endCursor: null } },
+      pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } });
     else if (argv[0] === 'issue')
       stdout = JSON.stringify([
         {
@@ -462,7 +503,7 @@ const ghByCwd = () =>
         },
       ]);
     else if (argv[1]?.includes('/reviews')) stdout = '[]';
-    else stdout = '{}'; // graphql counts — malformed page degrades to empty maps
+    else stdout = '{}';
     cb(null, { stdout, stderr: '' });
   });
 
@@ -559,11 +600,11 @@ describe('detectGithubCached', () => {
     // Cold start: nothing cached yet → null (contract-safe "unknown"), and it fires one probe.
     expect(detectGithubCached(repoRoot)).toBeNull();
     await vi.advanceTimersByTimeAsync(0); // let the fire-and-forget probe settle
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
 
     // Warm: within the 60 s window the cached result is served with no new probe.
     expect(detectGithubCached(repoRoot)).toEqual({ available: true });
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
 
     // Cache expires. The bug returned null here (item vanishes); the fix returns the stale value.
     vi.setSystemTime(CACHE_MS + 1);
@@ -571,7 +612,7 @@ describe('detectGithubCached', () => {
 
     // …and a background revalidate was kicked off exactly once for the stale read.
     await vi.advanceTimersByTimeAsync(0);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghSpawns()).toBe(2);
   });
 
   it('probes once when a cold read is followed by an awaited detect', async () => {
@@ -583,7 +624,7 @@ describe('detectGithubCached', () => {
     const awaited = createGithubDriver(coldRoot, null).detect();
     await vi.advanceTimersByTimeAsync(0);
     expect(await awaited).toEqual({ available: true });
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
   });
 
   it('keeps one project\'s cached availability when a different project is probed afterward', async () => {
@@ -1372,7 +1413,7 @@ describe('resolveRepoHandle (#525 Phase 2)', () => {
     expect(await resolveRepoHandle('/tmp/a')).toEqual({ owner: 'o', name: 'one' });
     ghReturns('o/two');
     expect(await resolveRepoHandle('/tmp/b')).toEqual({ owner: 'o', name: 'two' });
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghSpawns()).toBe(2);
   });
 });
 
@@ -1531,37 +1572,82 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
   });
 
   it('does not request the rollup field and leaves list PR checks null', async () => {
-    let prJsonArg = '';
+    let graphqlQuery = '';
     execFileMock.mockImplementation((...args: unknown[]) => {
       const argv = args[1] as string[];
       const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
       let stdout = '{}';
       if (argv[0] === 'repo') stdout = 'owner/n\n';
-      else if (argv[0] === 'issue') stdout = '[]';
-      else if (argv[0] === 'pr') {
-        prJsonArg = argv[argv.indexOf('--json') + 1] ?? '';
-        stdout = JSON.stringify([
-          {
-            number: 7,
-            title: 'a pr',
-            author: { login: 'x' },
-            createdAt: '2026-07-01T00:00:00Z',
-            labels: [],
-            body: 'b',
-            url: 'https://github.com/owner/n/pull/7',
-            isDraft: false,
-            additions: 1,
-            deletions: 2,
-          },
-        ]);
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        graphqlQuery = argv[argv.indexOf('-f') + 1] ?? '';
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          pullRequests: { totalCount: 9, nodes: [{ number: 7, title: 'a pr', author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: 'https://github.com/owner/n/pull/7', comments: { totalCount: 4 }, isDraft: false, additions: 1, deletions: 2 }], pageInfo: { hasNextPage: true, endCursor: 'next-pr' } },
+        } } });
       }
       cb(null, { stdout, stderr: '' });
     });
 
     const data = await fetchGithub('/repo/no-rollup-664');
-    expect(prJsonArg).not.toContain('statusCheckRollup');
-    expect(prJsonArg).toContain('isDraft');
+    expect(graphqlQuery).not.toContain('statusCheckRollup');
+    expect(graphqlQuery).toContain('isDraft');
+    expect(graphqlQuery).toContain('comments { totalCount }');
     expect(data.prs[0]?.checks).toBeNull();
+    expect(data.prs[0]?.comments).toBe(4);
+    expect(data.prsTotal).toBe(9);
+    expect(data.prsNextCursor).toBe('next-pr');
+  });
+
+  it('sends page sizes typed and splits a limit above 100 into exact pages', async () => {
+    // `-f limit=30` reached GitHub as a String and failed the whole tab ("Could not coerce value to Int").
+    const calls: string[][] = [];
+    const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [{ name: 'bug', color: 'd73a4a' }] }, url: `https://github.com/owner/n/issues/${n}`, comments: { totalCount: 0 } });
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '{}';
+      if (argv[0] === 'repo') stdout = 'owner/n\n';
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        calls.push(argv);
+        const value = (key: string) => argv.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
+        const issuesSize = Number(value('issuesLimit'));
+        const start = value('issuesCursor') ? Number(value('issuesCursor')) : 0;
+        const nodes = Array.from({ length: issuesSize }, (_, i) => node(start + i + 1));
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 500, nodes, pageInfo: { hasNextPage: true, endCursor: issuesSize ? String(start + issuesSize) : null } },
+          pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        } } });
+      }
+      cb(null, { stdout, stderr: '' });
+    });
+
+    const data = await fetchGithub('/repo/typed-limit', false, 150);
+    expect(calls.length).toBe(2);
+    for (const argv of calls) {
+      for (const key of ['issuesLimit', 'prsLimit']) {
+        const at = argv.findIndex((a) => a.startsWith(`${key}=`));
+        expect(argv[at - 1]).toBe('-F');
+      }
+      expect(Number(argv.find((a) => a.startsWith('issuesLimit='))?.split('=')[1])).toBeLessThanOrEqual(100);
+    }
+    expect(data.issues.map((i) => i.number)).toEqual(Array.from({ length: 150 }, (_, i) => i + 1));
+    expect(data.issuesNextCursor).toBe('150');
+    expect(data.issuesTotal).toBe(500);
+    expect(data.issues[0]?.labels).toEqual(['bug']); // GraphQL labels arrive as a connection
+    expect(data.labelColors).toEqual({ bug: 'd73a4a' });
+  });
+
+  it('reports gh stderr, not a line of the multi-line query argv', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') return cb(null, { stdout: 'owner/n\n', stderr: '' });
+      const err = Object.assign(new Error(`Command failed: gh ${argv.join(' ')}`), { stderr: "gh: Field 'name' doesn't exist on type 'LabelConnection'\n" });
+      cb(err, null);
+    });
+    const data = await fetchGithub('/repo/stderr-reason', true);
+    expect(data.available).toBe(false);
+    expect(data.reason).toBe("gh: Field 'name' doesn't exist on type 'LabelConnection'");
   });
 });
 
@@ -1660,6 +1746,34 @@ describe('searchGithubItems (#730)', () => {
 
     const res = await searchGithubItems('/repo/search-hash', 'issue', '#4507');
     expect(res.items.map((i) => i.number)).toEqual([4507]);
+  });
+
+  it('does not misidentify a PR returned by the numeric issue lookup', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'issue' && argv[1] === 'view') {
+        return JSON.stringify({
+          number: 4507,
+          title: 'a pull request sharing the issue number',
+          author: { login: 'someone' },
+          createdAt: '2026-07-25T07:08:17Z',
+          labels: [],
+          body: '',
+          url: 'https://github.com/owner/n/pull/4507',
+        });
+      }
+      if (argv[0] === 'repo') return 'owner/n\n';
+      if (argv[0] === 'search') {
+        return JSON.stringify([searchHit({ title: 'a genuine issue mentioning 4507', url: 'https://github.com/owner/n/issues/12' })]);
+      }
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-issue-kind', 'issue', '4507');
+
+    expect(res.available).toBe(true);
+    expect(res.items[0]?.kind).toBe('issue');
+    expect(res.items[0]?.title).toBe('a genuine issue mentioning 4507');
+    expect(argvs.some((a) => a[0] === 'search' && a[1] === 'issues')).toBe(true);
   });
 
   it('searches text with NO --state flag, so closed and merged hits are included', async () => {
@@ -3361,5 +3475,49 @@ describe('an unauthenticated gh: every route reports what gh said, not the comma
     expect(await d.listChecks!([3])).toMatchObject({ available: false, reason: GH_401 });
     expect(await d.prDiff!(3)).toMatchObject({ available: false, reason: GH_401 });
     expect(await d.refStatus!([3], [1])).toMatchObject({ available: false, reason: GH_401 });
+  });
+});
+
+describe('GH_HOST pinning (GitHub Enterprise)', () => {
+  const answer = (origin: string) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const stdout = args[0] === 'git' ? `${origin}\n` : '{"nameWithOwner":"acme/widgets"}';
+      cb(null, { stdout, stderr: '' });
+    });
+  const ghEnv = (root: string) =>
+    execFileMock.mock.calls.find((c) => c[0] === 'gh' && (c[2] as { cwd: string }).cwd === root)?.[2] as
+      { env?: Record<string, string> };
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('pins each repo to its own origin host, with no help from the driver', async () => {
+    answer('git@acme.ghe.com:acme/widgets.git');
+    await resolveRepoHandle('/repo/ghe-pin');
+    expect(ghEnv('/repo/ghe-pin').env?.GH_HOST).toBe('acme.ghe.com');
+    answer('git@github.com:open-mercato/cezar.git');
+    await resolveRepoHandle('/repo/com-pin');
+    expect(ghEnv('/repo/com-pin').env?.GH_HOST).toBeUndefined();
+  });
+
+  it('pins the first remote\'s host when there is no origin, as getRepoInfo does', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const [bin, argv] = args as [string, string[]];
+      if (bin === 'gh') return cb(null, { stdout: 'acme/widgets', stderr: '' });
+      const cmd = argv.join(' ');
+      if (cmd === 'rev-parse --show-toplevel') return cb(null, { stdout: '/repo/no-origin\n', stderr: '' });
+      if (cmd === 'rev-parse --abbrev-ref HEAD') return cb(null, { stdout: 'main\n', stderr: '' });
+      if (cmd === 'remote get-url origin') return cb(new Error('No such remote'), { stdout: '', stderr: '' });
+      if (cmd === 'remote') return cb(null, { stdout: 'ghe\n', stderr: '' });
+      if (cmd === 'remote get-url ghe') return cb(null, { stdout: 'git@acme.ghe.com:acme/widgets.git\n', stderr: '' });
+      return cb(new Error(`unexpected git ${cmd}`), { stdout: '', stderr: '' });
+    });
+    await resolveRepoHandle('/repo/no-origin');
+    expect(ghEnv('/repo/no-origin').env?.GH_HOST).toBe('acme.ghe.com');
   });
 });

@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { ghEnv } from '../../core/gh-env.ts';
 
 /**
  * Forge-neutral CLI plumbing shared by the forge adapters (spec 2026-08-10-forge-provider-adapters
@@ -14,6 +15,8 @@ const exec = promisify(execFile);
 export interface RunCliOptions {
   timeoutMs: number;
   maxBuffer: number;
+  /** Laid over the base environment — e.g. `GH_HOST` to pin a GitHub Enterprise host (#1426). */
+  env?: NodeJS.ProcessEnv;
 }
 
 /**
@@ -31,6 +34,8 @@ export async function runCli(
     cwd: repoRoot,
     timeout: opts.timeoutMs,
     maxBuffer: opts.maxBuffer,
+    // `ghEnv`: neither `gh` nor `glab` may start a session bus of its own for a keyring read (#1469).
+    env: { ...ghEnv(), ...opts.env },
   });
   return stdout;
 }
@@ -47,7 +52,13 @@ export interface ExecResult {
  * A never-throwing sibling of `runCli` for mutations that report stderr to the user (draft-PR
  * push + create): resolves `{ ok, stdout, stderr, notFound }` instead of rejecting.
  */
-export function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000): Promise<ExecResult> {
+export function execTool(
+  args: string[],
+  cwd: string,
+  bin: string,
+  timeoutMs = 30_000,
+  env?: NodeJS.ProcessEnv,
+): Promise<ExecResult> {
   return new Promise((resolve) => {
     execFile(
       bin,
@@ -61,7 +72,7 @@ export function execTool(args: string[], cwd: string, bin: string, timeoutMs = 3
         // piped stdio is not enough to stop it. Without this a `git push` that
         // cannot authenticate hangs for the whole timeout and surfaces as a
         // blank one-minute stall instead of git's own "could not read Username".
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+        env: { ...ghEnv(), GIT_TERMINAL_PROMPT: '0', ...env },
       },
       (err, stdout, stderr) =>
         resolve({

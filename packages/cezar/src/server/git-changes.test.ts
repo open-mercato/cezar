@@ -17,6 +17,7 @@ import {
   isOsOpenableImage,
   patchByPath,
   pushCurrentBranch,
+  worktreeGitStatus,
   readWorktreePath,
   splitPatch,
   type ChangesPayload,
@@ -218,6 +219,21 @@ describe('collectChanges — structured diff vs base', () => {
     if (!result.ok) return;
     expect(result.changes.files[0]?.patch.length).toBeLessThan(300);
     expect(result.changes.files[0]?.patch).toContain('… (patch truncated)');
+  });
+
+  it("excludeCezarData leaves cezar's own .ai/cezar files out of an in-place task's Changes", async () => {
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    mkdirSync(join(dir, '.ai/cezar'), { recursive: true });
+    for (const name of ['.gitignore', 'config.json', 'ui-state.json']) writeFileSync(join(dir, '.ai/cezar', name), '{}\n');
+    writeFileSync(join(dir, 'summary.md'), 'notes\n');
+
+    const scoped = await collectChanges(dir, 'main', { intentToAdd: false, excludeCezarData: true });
+    expect(scoped.ok && scoped.changes.files.map((f) => f.path)).toEqual(['summary.md']);
+    // The repo-wide view still shows everything.
+    const all = await collectChanges(dir, 'main', { intentToAdd: false });
+    expect(all.ok && all.changes.files.length).toBe(4);
   });
 
   it('intentToAdd:false never stages into the index (#major-index-mutation)', async () => {
@@ -564,6 +580,49 @@ describe('session git API routes', () => {
     expect((await apiRequest(app, '/api/v1/runs/nope/changes')).status).toBe(404);
   });
 
+  it('GET /git/status counts what has not left the worktree; 404 unknown, 409 no worktree', async () => {
+    writeFileSync(join(worktree, 'new.txt'), 'hi\n');
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
+    expect(res.status).toBe(200);
+    // No upstream yet: "never pushed" is null, not 0.
+    // The fixture's base `main` is where `task` forked from, so it is not behind (yet).
+    expect(await res.json()).toEqual({ uncommitted: 1, unpushed: null, behind: 0, ahead: 0 });
+
+    // Base moves on: two commits land on main that the task branch does not have.
+    g(worktree, 'checkout', '-q', 'main');
+    for (const n of [1, 2]) {
+      writeFileSync(join(worktree, `main-${n}.txt`), `${n}\n`);
+      g(worktree, 'add', `main-${n}.txt`);
+      g(worktree, 'commit', '-q', '-m', `main ${n}`);
+    }
+    g(worktree, 'checkout', '-q', 'task');
+    const behind = await apiRequest(app, `/api/v1/runs/${run.id}/git/status`);
+    expect(((await behind.json()) as { behind: number }).behind).toBe(2);
+
+    expect((await apiRequest(app, '/api/v1/runs/nope/git/status')).status).toBe(404);
+
+    // A run whose isolated worktree is gone answers the server's own 409, like /changes does.
+    const removed = store.createRun({ title: 'gone', workflow: 'quick-task', task: 'gone', steps: [] });
+    store.updateRun(removed.id, { worktreePath: join(repoRoot, 'missing-wt'), branch: 'task' });
+    expect((await apiRequest(app, `/api/v1/runs/${removed.id}/git/status`)).status).toBe(409);
+  });
+
+  it('GET /git/status answers for an in-place write task from the checkout, never for a read-only one', async () => {
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), '{}\n');
+    writeFileSync(join(repoRoot, 'summary.md'), 'notes\n');
+    const inPlace = store.createRun({ title: 'in place', workflow: 'quick-task', task: 'x', steps: [] });
+    store.updateRun(inPlace.id, { worktree: false });
+    const res = await apiRequest(app, `/api/v1/runs/${inPlace.id}/git/status`);
+    expect(res.status).toBe(200);
+    // cezar's own files are not the task's work; no upstream means null counts.
+    expect(await res.json()).toMatchObject({ uncommitted: 1, unpushed: null, behind: null });
+
+    const asked = store.createRun({ title: 'ask', workflow: 'quick-task', task: 'x', steps: [] });
+    store.updateRun(asked.id, { worktree: false, readOnly: true });
+    expect((await apiRequest(app, `/api/v1/runs/${asked.id}/git/status`)).status).toBe(409);
+  });
+
   it('GET /changes uses the persisted task branch to detect a repointed HEAD', async () => {
     writeFileSync(join(worktree, 'reviewed.txt'), 'reviewed branch history\n');
     g(worktree, 'add', '-A');
@@ -838,6 +897,27 @@ describe('session git API routes', () => {
     expect((await commit(run.id, {})).status).toBe(400);
   });
 
+  it('POST pr/adopt records the PR found by branch, leaves the status alone, and is idempotent', async () => {
+    const previous = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1'; // the forge lookup answers the fixed demo PR, no gh
+    try {
+      const adopt = () => apiRequest(app, `/api/v1/runs/${run.id}/pr/adopt`, { method: 'POST' });
+      // No remote, no target: nothing to look up.
+      expect(await (await adopt()).json()).toEqual({ found: false });
+
+      g(worktree, 'remote', 'add', 'origin', 'git@github.com:open-mercato/cezar.git');
+      store.updateRun(run.id, { status: 'waiting' });
+      const url = 'https://github.com/open-mercato/demo/pull/777';
+      expect(await (await adopt()).json()).toEqual({ found: true, url });
+      expect(store.getRun(run.id)).toMatchObject({ pullRequestUrl: url, status: 'waiting' });
+      expect(await (await adopt()).json()).toEqual({ found: true, url });
+      expect((await apiRequest(app, '/api/v1/runs/nope/pr/adopt', { method: 'POST' })).status).toBe(404);
+    } finally {
+      if (previous === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = previous;
+    }
+  });
+
   it('POST git/push with no remote is a 409 with a human reason', async () => {
     const res = await apiRequest(app, `/api/v1/runs/${run.id}/git/push`, { method: 'POST' });
     expect(res.status).toBe(409);
@@ -898,6 +978,23 @@ describe('repo git API routes (R5 Step 1.3 — main working tree)', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
+
+  it('GET /api/v1/repo marks branches another worktree holds (telemetry da5ca728)', async () => {
+    const other = `${repoRoot}-wt`;
+    g(repoRoot, 'worktree', 'add', '-q', '-b', 'held', other);
+    try {
+      const res = await apiRequest(app, '/api/v1/repo');
+      const body = (await res.json()) as { branches: string[]; checkedOutElsewhere: Record<string, string> };
+      expect(body.branches).toContain('held');
+      expect(Object.keys(body.checkedOutElsewhere)).toEqual(['held']);
+
+      const sw = await branch({ name: 'held' });
+      expect(sw.status).toBe(409);
+      expect(((await sw.json()) as { error: string }).error).toContain('checked out in another worktree');
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 
   it('GET /api/v1/repo/changes reports uncommitted main-tree changes vs HEAD', async () => {
     writeFileSync(join(repoRoot, 'base.txt'), 'base changed\n');
@@ -1157,6 +1254,43 @@ describe('createOrSwitchBranch — dash-guard on both operands (#431)', () => {
   });
 });
 
+describe('createOrSwitchBranch — a branch another worktree holds (telemetry da5ca728)', () => {
+  let dir: string;
+  let other: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-held-'));
+    other = `${dir}-wt`;
+    initRepo(dir);
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(dir, 'worktree', 'add', '-q', '-b', 'held', other);
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+  });
+
+  it('names the holding worktree instead of surfacing git’s bare fatal', async () => {
+    const res = await createOrSwitchBranch(dir, 'held');
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).not.toMatch(/^fatal:/);
+      expect(res.error).toContain('checked out in another worktree');
+    }
+    expect(g(dir, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('main');
+  });
+
+  it('switches once the holding worktree’s directory is gone (stale registration pruned)', async () => {
+    rmSync(other, { recursive: true, force: true });
+    const res = await createOrSwitchBranch(dir, 'held');
+    expect(res).toEqual({ ok: true, branch: 'held', created: false });
+    expect(g(dir, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe('held');
+  });
+});
+
 describe('commitAll / pushCurrentBranch — direct degradation paths', () => {
   it('commitAll on a non-repo dir fails with a reason, never throws', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cez-norepo-'));
@@ -1180,6 +1314,140 @@ describe('commitAll / pushCurrentBranch — direct degradation paths', () => {
       const res = await pushCurrentBranch(dir);
       expect(res.ok).toBe(false);
       if (!res.ok) expect(res.error).toContain('detached HEAD');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('worktreeGitStatus — what has not left the worktree', () => {
+  it('counts uncommitted files (untracked and renamed included) and reports no upstream as null', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-'));
+    try {
+      initRepo(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a\n');
+      writeFileSync(join(dir, 'b.txt'), 'b\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-m', 'base');
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: null, behind: null, ahead: null });
+
+      writeFileSync(join(dir, 'a.txt'), 'changed\n');
+      writeFileSync(join(dir, 'new.txt'), 'new\n');
+      g(dir, 'mv', 'b.txt', 'c.txt');
+      // modified + untracked + one rename (whose old path rides as an extra -z field)
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 3, unpushed: null, behind: null, ahead: null });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('counts commits the upstream has not seen', async () => {
+    const remote = mkdtempSync(join(tmpdir(), 'cez-gitstatus-remote-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-local-'));
+    try {
+      g(remote, 'init', '--bare', '-q');
+      initRepo(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-m', 'base');
+      g(dir, 'remote', 'add', 'origin', remote);
+      g(dir, 'push', '-q', '-u', 'origin', 'HEAD');
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: 0, behind: null, ahead: null });
+
+      writeFileSync(join(dir, 'a.txt'), 'b\n');
+      g(dir, 'commit', '-qam', 'second');
+      expect(await worktreeGitStatus(dir)).toEqual({ ok: true, uncommitted: 0, unpushed: 1, behind: null, ahead: null });
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('behind: counts base commits the branch lacks, preferring origin/<base>; null for a sha or a missing base', async () => {
+    const remote = mkdtempSync(join(tmpdir(), 'cez-gitstatus-behind-remote-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-behind-'));
+    try {
+      g(remote, 'init', '--bare', '-q');
+      initRepo(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'base');
+      g(dir, 'branch', '-M', 'main');
+      g(dir, 'remote', 'add', 'origin', remote);
+      g(dir, 'push', '-q', 'origin', 'main');
+      const fork = g(dir, 'rev-parse', 'HEAD').trim();
+      g(dir, 'checkout', '-q', '-b', 'task');
+      expect((await worktreeGitStatus(dir, 'main')) as { behind: number | null }).toMatchObject({ behind: 0, ahead: 0 });
+
+      // One commit lands on the REMOTE main (another clone pushed it) and is fetched — the local
+      // main never moves, so only the remote-tracking ref knows the branch is behind.
+      g(dir, 'checkout', '-q', 'main');
+      writeFileSync(join(dir, 'b.txt'), 'b\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'upstream');
+      g(dir, 'push', '-q', 'origin', 'main');
+      g(dir, 'reset', '-q', '--hard', fork);
+      g(dir, 'checkout', '-q', 'task');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1 });
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 1, ahead: 0 });
+
+      // The task commits its own work: ahead counts only what the branch would propose.
+      writeFileSync(join(dir, 'task.txt'), 't\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'task work');
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 1, ahead: 1 });
+
+      expect(await worktreeGitStatus(dir, fork)).toMatchObject({ behind: null, ahead: null });
+      expect(await worktreeGitStatus(dir, 'no-such-branch')).toMatchObject({ behind: null, ahead: null });
+      expect(await worktreeGitStatus(dir)).toMatchObject({ behind: null, ahead: null });
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('behind: measures a fork clone against the PR-target remote, not the fork origin (#1383)', async () => {
+    const fork = mkdtempSync(join(tmpdir(), 'cez-gitstatus-fork-'));
+    const canonical = mkdtempSync(join(tmpdir(), 'cez-gitstatus-canonical-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-forkclone-'));
+    try {
+      g(fork, 'init', '--bare', '-q');
+      g(canonical, 'init', '--bare', '-q');
+      initRepo(dir);
+      writeFileSync(join(dir, 'a.txt'), 'a\n');
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-qm', 'base');
+      g(dir, 'branch', '-M', 'main');
+      g(dir, 'remote', 'add', 'origin', fork);
+      g(dir, 'remote', 'add', 'upstream', canonical);
+      g(dir, 'push', '-q', 'origin', 'main');
+      // `gh repo set-default` picks the PR target without a network lookup.
+      g(dir, 'config', 'remote.upstream.gh-resolved', 'base');
+      const forkPoint = g(dir, 'rev-parse', 'HEAD').trim();
+      // Two commits land upstream only; the fork's main stays at the fork point.
+      for (const f of ['b', 'c']) {
+        writeFileSync(join(dir, `${f}.txt`), `${f}\n`);
+        g(dir, 'add', '-A');
+        g(dir, 'commit', '-qm', f);
+      }
+      g(dir, 'push', '-q', 'upstream', 'main');
+      g(dir, 'reset', '-q', '--hard', forkPoint);
+      g(dir, 'checkout', '-q', '-b', 'task');
+
+      expect(await worktreeGitStatus(dir, 'main')).toMatchObject({ behind: 2 });
+      expect(await worktreeGitStatus(dir, 'upstream/main')).toMatchObject({ behind: 2 });
+      // An old record that named the fork explicitly still measures against it.
+      expect(await worktreeGitStatus(dir, 'origin/main')).toMatchObject({ behind: 0 });
+    } finally {
+      for (const d of [fork, canonical, dir]) rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('a non-repo dir fails with a reason, never throws', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-norepo-'));
+    try {
+      const res = await worktreeGitStatus(dir);
+      expect(res.ok).toBe(false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

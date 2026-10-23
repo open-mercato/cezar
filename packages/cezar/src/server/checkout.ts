@@ -1,6 +1,8 @@
 import { execFile, spawn } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { isAbsolutePath } from '../paths.ts';
 import { GLAB_NOT_FOUND_REASON } from './forge/gitlab.ts';
 import { forgeKindOfHost, parseRemote } from './forge/index.ts';
 
@@ -102,7 +104,7 @@ const MAX_GITLAB_PATH_SEGMENTS = 21;
  * Parse `owner/repo`, `https://github.com/owner/repo(.git)`, `git@github.com:owner/repo.git`
  * or `github.com/owner/repo` into a normalized GitHub ref — or a full https /
  * ssh / scp URL on a host classified `gitlab` (`forgeKindOfHost`: gitlab.com or
- * a discovered on-prem instance) into a GitLab ref, subgroups allowed. `null`
+ * an on-prem instance `glab` is configured for) into a GitLab ref, subgroups allowed. `null`
  * when it is neither — the route answers 400 rather than handing an arbitrary
  * string to a CLI.
  *
@@ -231,14 +233,19 @@ export function ghCloneArgs(ref: RepoRef, dir: string): string[] {
   return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress'];
 }
 
+/** PR #968: the `git config --local` argument lists that route github.com HTTPS
+ *  credentials through `gh`. Reset inherited helpers first, as gh setup-git does.
+ *  Shared with the new-project flow (`create-project.ts`). */
+export const GH_CREDENTIAL_HELPER_CONFIG: readonly (readonly string[])[] = [
+  ['--replace-all', 'credential.https://github.com.helper', ''],
+  ['--add', 'credential.https://github.com.helper', '!gh auth git-credential'],
+];
+
 /** PR #968: gh injects credentials only for the clone command. Persist the
  * helper locally so subsequent raw git pushes (including task worktrees) use
- * the same OAuth grant. Reset inherited helpers first, as gh setup-git does. */
+ * the same OAuth grant. */
 async function persistGhCredentialHelper(dir: string): Promise<boolean> {
-  for (const args of [
-    ['--replace-all', 'credential.https://github.com.helper', ''],
-    ['--add', 'credential.https://github.com.helper', '!gh auth git-credential'],
-  ]) {
+  for (const args of GH_CREDENTIAL_HELPER_CONFIG) {
     const ok = await new Promise<boolean>((resolvePromise) => {
       execFile('git', ['-C', dir, 'config', '--local', ...args],
         { timeout: 10_000 }, (err) => resolvePromise(!err));
@@ -348,7 +355,7 @@ export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
     // No inherited stdin and `GH_PROMPT_DISABLED`: an unauthenticated `gh`
     // must fail with a message the dialog can show, not block on a prompt
     // nobody can see.
-    { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
+    { ...ghEnv(), GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
     'gh repo clone',
     async () => (await persistGhCredentialHelper(dir))
       ? { ok: true }
@@ -380,7 +387,7 @@ export function glabCloneArgs(ref: RepoRef, dir: string): string[] {
  *  `-c` flags already wrote (`glabCloneArgs`), so a task worktree's first raw `git push` against an
  *  HTTPS GitLab remote authenticates through `glab` even if the clone left no helper behind. Keyed
  *  on the clone's own origin — never a hardcoded host — because a GitLab source can be gitlab.com
- *  or any discovered on-prem instance, each needing its own `credential.<origin>.helper` entry. */
+ *  or any on-prem instance `glab` knows, each needing its own `credential.<origin>.helper` entry. */
 async function persistGlabCredentialHelper(dir: string, origin: string): Promise<boolean> {
   for (const args of [
     ['--replace-all', `credential.${origin}.helper`, ''],
@@ -428,7 +435,7 @@ export const glabCloneRunner: CloneRunner = async (ref, dir, onLine, signal) => 
   return spawnClone(
     'glab',
     args,
-    { ...process.env, GLAB_NO_PROMPT: '1', NO_PROMPT: '1', GIT_TERMINAL_PROMPT: '0' },
+    { ...ghEnv(), GLAB_NO_PROMPT: '1', NO_PROMPT: '1', GIT_TERMINAL_PROMPT: '0' },
     'glab repo clone',
     async () => (await persistGlabCredentialHelper(dir, origin))
       ? { ok: true }
@@ -485,7 +492,7 @@ export async function checkoutRepo(opts: CheckoutOptions): Promise<CheckoutResul
   if (!isValidCheckoutName(name)) {
     return { ok: false, status: 400, error: `not a valid folder name: ${name.slice(0, 200)}` };
   }
-  if (!opts.projectsDir.startsWith('/')) {
+  if (!isAbsolutePath(opts.projectsDir)) {
     return { ok: false, status: 500, error: `checkout root is not an absolute path: ${opts.projectsDir}` };
   }
   const root = resolve(opts.projectsDir);

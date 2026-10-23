@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
+import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -38,6 +38,8 @@ export interface WorkspaceResourceLimits {
   maxParallel: number;
   /** Durable monitoring sessions that do not consume active-task capacity. */
   maxMonitoringSessions?: number;
+  /** Plain waiting/ASK session idle timeout in minutes; null/0 disables it. */
+  idleTimeoutMinutes?: number | null;
   /** Automatic monitoring re-check cadence in minutes. Default ON at
    *  `DEFAULT_MONITORING_WAKE_MINUTES`; explicit `null` means stay parked; absent means
    *  "this loader predates the key" and reads as the default. */
@@ -106,11 +108,15 @@ export interface SemaphoreParticipant {
    * and any caller that predates the hold — keeps working; absent simply holds nothing.
    */
   accountHolds?(): AccountHolds;
+  /** Runs a restart would interrupt (queued, waiting or running) — the self-update dialog's
+   *  warning. Optional for stubs; absent counts none. */
+  activeRuns?(): number;
 }
 
 const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   maxParallel: 2,
   maxMonitoringSessions: 2,
+  idleTimeoutMinutes: DEFAULT_IDLE_TIMEOUT_MINUTES,
   monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
   autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
@@ -131,6 +137,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
   return {
     maxParallel: resources.maxParallel,
     maxMonitoringSessions: resources.maxMonitoringSessions,
+    idleTimeoutMinutes: resources.idleTimeoutMinutes,
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
@@ -178,6 +185,22 @@ export class WorkspaceSemaphore {
     return total;
   }
 
+  /** Runs a restart would interrupt, across every registered project — not just the boot one. */
+  activeRuns(): number {
+    let total = 0;
+    for (const participant of this.participants) total += participant.activeRuns?.() ?? 0;
+    return total;
+  }
+
+  /** No slot held and nothing queued anywhere in the workspace — when "update when idle" may
+   *  restart. Waiting runs do not count (#347): they are parked on the user, and boot resumes them. */
+  idle(): boolean {
+    for (const participant of this.participants) {
+      if (participant.busySlots() > 0 || participant.oldestQueuedAt() !== null) return false;
+    }
+    return true;
+  }
+
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;
@@ -185,6 +208,12 @@ export class WorkspaceSemaphore {
 
   maxMonitoringSessions(): number {
     return this.limits.maxMonitoringSessions ?? 2;
+  }
+
+  idleTimeoutMinutes(): number | null {
+    return this.limits.idleTimeoutMinutes === undefined
+      ? DEFAULT_IDLE_TIMEOUT_MINUTES
+      : this.limits.idleTimeoutMinutes;
   }
 
   /** Cadence for automatic monitoring re-checks, or null when the operator chose "park

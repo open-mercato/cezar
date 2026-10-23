@@ -152,6 +152,14 @@ export class AgentBrowser {
     this.run(['open', url])
   }
 
+  /** operation: reload — a genuine document reload, unlike `goto` to the same URL (which,
+   *  against an already-open tab, leaves the SPA's in-memory React Query cache exactly as it
+   *  was). Specs that mutate state OUTSIDE the browser — a `git` command run directly against
+   *  the worktree — need this to make the next read honest. */
+  reload(): void {
+    this.run(['reload'])
+  }
+
   /** operation: snapshot — the accessibility tree, as the string the descriptor documents. */
   snapshot(): string {
     return String(this.run(['snapshot', '-i']).snapshot ?? '')

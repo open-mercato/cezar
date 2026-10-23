@@ -44,7 +44,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -189,10 +189,13 @@ describe('skillsUpdateMarkerOf', () => {
 })
 
 describe('sidebar wiring', () => {
+  // The global Tasks page is the one non-project page WITH a sidebar: settings pages render no
+  // sidebar at all (chromeless, spec 2026-10-13-unified-settings), so there is no tracker row
+  // there to keep. Both workspace shapes, since single-project mode changes the nav.
   it.each([
-    ['/settings/global', false],
+    ['/tasks', false],
     ['/tasks', true],
-  ] as const)('keeps the boot tracker across global navigation on %s (singleProject=%s)', async (entry, singleProject) => {
+  ] as const)('keeps the boot tracker on the global Tasks page %s (singleProject=%s)', async (entry, singleProject) => {
     serve({
       '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject, followups: false } },
       '/api/v1/projects': { projects: [{ ...PROJECT, tracker: 'linear' }], bootProject: PROJECT.id, projectsDir: '/repos' },
@@ -231,7 +234,7 @@ describe('sidebar wiring', () => {
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
   it('drops the Inbox nav item and its badge when the server has follow-ups off', async () => {
     serve({
-      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
     })
     renderShell()
@@ -246,7 +249,7 @@ describe('sidebar wiring', () => {
 
   it('never asks for todos on a server with the inbox off', async () => {
     serve({
-      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
     })
     renderShell()
@@ -282,6 +285,27 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
+  })
+
+  // #1412 — a recognized remote keeps its GitHub tab while the probe is cold or failing: remote
+  // mode has no health push, so a tab hidden on that answer stayed hidden until a reload.
+  it.each([
+    ['a cold probe', { kind: 'github' as const }],
+    ['a failed probe', { kind: 'github' as const, available: false, reason: 'gh timed out' }],
+  ])('keeps the GitHub nav item for a recognized remote with %s', async (_label, forge) => {
+    serve({ '/api/v1/health': { ...HEALTH, forge }, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+  })
+
+  it('drops the GitHub nav item when no forge remote is recognized', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
   })
 
   it('renders no badge for an empty inbox', async () => {

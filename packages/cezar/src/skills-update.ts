@@ -131,6 +131,7 @@ export class SkillsUpdateService {
   private readonly invalidateCatalog: NonNullable<SkillsUpdateServiceOptions['invalidateCatalog']>;
   private readonly states = new Map<string, SkillsUpdateState>();
   private readonly pending = new Map<string, Promise<SkillsUpdateState>>();
+  private readonly updating = new Set<string>();
   private globalScopeCache?: SkillsUpdateScopeState;
   private operationTail: Promise<void> = Promise.resolve();
 
@@ -143,8 +144,11 @@ export class SkillsUpdateService {
     this.invalidateCatalog = options.invalidateCatalog ?? (() => undefined);
   }
 
+  /** An in-flight apply shows as `updating`, so a cockpit whose apply request dropped can
+   * follow it to the end instead of guessing (telemetry edd8c83e). */
   snapshot(repoRoot: string): SkillsUpdateState {
-    return this.states.get(repoRoot) ?? this.makeState();
+    const state = this.states.get(repoRoot) ?? this.makeState();
+    return this.updating.has(repoRoot) ? { ...state, status: 'updating' } : state;
   }
 
   check(repoRoot: string, force = false): Promise<SkillsUpdateState> {
@@ -163,7 +167,11 @@ export class SkillsUpdateService {
   update(repoRoot: string, rejectIfBusy = false): Promise<SkillsUpdateState> {
     const active = this.pending.get(repoRoot);
     if (active) return rejectIfBusy ? Promise.reject(new SkillsUpdateConflictError()) : active;
-    const task = this.serialized(() => this.performUpdate(repoRoot, rejectIfBusy)).finally(() => this.pending.delete(repoRoot));
+    this.updating.add(repoRoot);
+    const task = this.serialized(() => this.performUpdate(repoRoot, rejectIfBusy)).finally(() => {
+      this.pending.delete(repoRoot);
+      this.updating.delete(repoRoot);
+    });
     this.pending.set(repoRoot, task);
     return task;
   }

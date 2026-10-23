@@ -5,12 +5,12 @@
 // (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
 //
 // Unlike the snapshot pipeline, this is the ONLY thing that ever moves the
-// `latest` dist-tag, and it never runs from a push — a human dispatches it and
-// picks the bump (patch/minor/major, or `existing` to publish the version
-// already committed). It stamps every manifest in the release set (intra-release
+// `latest` dist-tag, and it never runs from a push. The Release workflow calls it
+// with `existing` after scripts/release-line.mjs has committed the version bump to
+// the release branch; the other bumps remain for local use. It stamps every manifest in the release set (intra-release
 // dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
 // releases), then publishes them in DEPENDENCY ORDER — api-client, then the
-// service, then the aliases — always with `--tag latest`. Publishing a dependent
+// service, then the aliases — under `--tag latest` unless told otherwise. Publishing a dependent
 // before its dependency would briefly advertise a version that is not on the
 // registry yet.
 //
@@ -29,7 +29,12 @@
 // The workflow reads `version`/`published` from $GITHUB_OUTPUT to tag the
 // commit and cut the GitHub Release only on a real publish.
 //
-// Usage: node scripts/release.mjs <patch|minor|major|existing> [--dry-run]
+// `--dist-tag <tag>` overrides `latest`: the release-line workflow passes `latest-X.Y` for a
+// backport to an older line (resolveStableDistTag), so it never moves `latest` backwards.
+// A package whose version is already on the registry is skipped, so a re-run after a
+// half-finished publish completes instead of failing on E403.
+//
+// Usage: node scripts/release.mjs <patch|minor|major|existing> [--dry-run] [--dist-tag <tag>]
 // Env override for tests: CEZ_RELEASE_ROOT (defaults to the repo root).
 
 import { execFileSync } from 'node:child_process';
@@ -90,6 +95,13 @@ if (!version) {
   process.exit(1);
 }
 
+const distTagIndex = process.argv.indexOf('--dist-tag');
+const distTag = distTagIndex > 0 ? (process.argv[distTagIndex + 1] ?? '').trim() : 'latest';
+if (!/^[a-z][a-z0-9.-]*$/.test(distTag)) {
+  console.error(`release: invalid --dist-tag "${distTag}".`);
+  process.exit(1);
+}
+
 let dryRun = process.argv.includes('--dry-run');
 const token = process.env.NODE_AUTH_TOKEN ?? '';
 if (!dryRun && !token) {
@@ -102,7 +114,7 @@ const stamped = stampStableManifests(manifests, version);
 for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) writeManifest(dirs[key], stamped[key]);
 const stampedNames = ['contract', 'apiClient', 'cezar', 'alias', 'runAlias'].map((key) => stamped[key].name);
 console.log(
-  `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag latest${dryRun ? ', dry run' : ''})`,
+  `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag ${distTag}${dryRun ? ', dry run' : ''})`,
 );
 
 // Provenance needs the job's OIDC token (permissions: id-token: write); only
@@ -118,10 +130,23 @@ const runNpm = (args, cwd) => {
     execFileSync(npmCli, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
   }
 };
+const alreadyPublished = (name) => {
+  if (dryRun) return false;
+  try {
+    const out = execFileSync('npm', ['view', `${name}@${version}`, 'version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      shell: process.platform === 'win32',
+    });
+    return out.trim() === version;
+  } catch {
+    return false;
+  }
+};
 const publish = (dir, label) => {
   const args = [
     'publish',
-    '--tag', 'latest',
+    '--tag', distTag,
     '--access', 'public',
     '--ignore-scripts',
     ...provenance,
@@ -140,7 +165,11 @@ for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;
   }
-  publish(dirs[key], stamped[key].name);
+  if (alreadyPublished(stamped[key].name)) {
+    console.log(`release: ${stamped[key].name}@${version} is already on the registry — skipped.`);
+  } else {
+    publish(dirs[key], stamped[key].name);
+  }
   published.push(stamped[key].name);
 }
 
@@ -149,6 +178,7 @@ emitOutput({
   dryRun,
   bump,
   version,
+  distTag,
   rootName: stamped.cezar.name,
   apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,

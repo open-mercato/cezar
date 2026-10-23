@@ -4,20 +4,19 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetGithubHostsCache } from '../../github-hosts.ts';
+import { resetGitlabHostsCache } from '../../gitlab-hosts.ts';
 import type { RepoInfo } from '../git.ts';
 import {
-  __setForgeHostCacheFileForTests,
   __setForgeHostsForTests,
   forgeKindOfHost,
   forgeKindOfRemote,
   forgeWebRoot,
-  refreshForgeDiscovery,
   forgePrDiff,
   forgeRefStatus,
   listForgeChecks,
   listForgeComments,
   listForgeItems,
-  loadForgeDiscoveryCache,
   NO_FORGE_REASON,
   parseRemote,
   resolveForge,
@@ -25,8 +24,8 @@ import {
 } from './index.ts';
 import type { ForgeChecksData, ForgeDriver, ForgeItem, ForgePrDiffResult, ForgeRefStatusData } from './types.ts';
 
-// Pass-through spies, so the discovery cases below can assert the classification call path does
-// no file read and spawns nothing (spec 2026-08-10-forge-provider-adapters § Forge discovery).
+// Pass-through spies, so the classification cases below can assert the call path spawns nothing
+// and re-reads no file inside the TTL (spec 2026-08-10-forge-provider-adapters § Forge discovery).
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
@@ -94,17 +93,14 @@ describe('parseRemote', () => {
     ['https://git lab.com/group/repo'],
     ['https://gitlab_com/group/repo'], // underscore: not a DNS label
     ['https://-gitlab.com/group/repo'], // a label may not start with a hyphen
-    ['http://[::1]:8929/group/repo'], // no IPv6 literal, here or in discovery's header rule
+    ['http://[::1]:8929/group/repo'], // no IPv6 literal
   ])('rejects the malformed host in %j', (remote) => {
     expect(parseRemote(remote)).toBeNull();
   });
 });
 
 describe('forgeWebRoot with path/origin (Step 2.3)', () => {
-  afterEach(() => {
-    __setForgeHostsForTests(null);
-    __setForgeHostCacheFileForTests(null);
-  });
+  afterEach(() => __setForgeHostsForTests(null));
 
   it.each([
     ['https://gitlab.com/group/repo.git', 'https://gitlab.com/group/repo'],
@@ -147,7 +143,7 @@ describe('forgeKindOfRemote', () => {
   it.each([
     ['https://github.com/acme/demo.git', 'github'],
     ['git@github.com:acme/demo.git', 'github'],
-    ['git@gitlab.com:acme/demo.git', 'gitlab'], // well-known, even with an empty discovery map
+    ['git@gitlab.com:acme/demo.git', 'gitlab'], // well-known, with no glab config at all
     ['https://git.example.com/acme/demo.git', null],
     ['/srv/git/demo.git', null],
     [undefined, null],
@@ -187,15 +183,13 @@ describe('resolveForge', () => {
   });
 });
 
-describe('forge discovery in the host ladder', () => {
-  // Spec 2026-08-10-forge-provider-adapters § Forge discovery: well-known → in-memory discovery
-  // map → null, and the map is the only thing an on-prem host can be classified from.
-  afterEach(() => {
-    __setForgeHostsForTests(null);
-    __setForgeHostCacheFileForTests(null);
-  });
+describe('host classification', () => {
+  // Spec 2026-08-10-forge-provider-adapters § Forge discovery: well-known hosts, then the hosts
+  // each forge CLI already lists in its own config — the only thing an on-prem host can be
+  // classified from.
+  afterEach(() => __setForgeHostsForTests(null));
 
-  it('builds the GitLab driver for an on-prem gitlab host from the discovery map', () => {
+  it('builds the GitLab driver for an on-prem gitlab host', () => {
     __setForgeHostsForTests({ 'gitlab.acme.internal': 'gitlab' });
     const remote = 'git@gitlab.acme.internal:platform/api.git';
     expect(forgeKindOfRemote(remote)).toBe('gitlab');
@@ -203,7 +197,7 @@ describe('forge discovery in the host ladder', () => {
     expect(resolveForge(info(remote))?.kind).toBe('gitlab');
   });
 
-  it('builds the GitHub driver for a GitHub Enterprise host from the discovery map', () => {
+  it('builds the GitHub driver for a GitHub Enterprise host', () => {
     __setForgeHostsForTests({ 'github.acme.internal': 'github' });
     const remote = 'https://github.acme.internal/platform/api.git';
     expect(forgeKindOfRemote(remote)).toBe('github');
@@ -211,7 +205,7 @@ describe('forge discovery in the host ladder', () => {
     expect(resolveForge(info(remote))?.kind).toBe('github');
   });
 
-  it('answers null for a host absent from the map', () => {
+  it('answers null for an unknown host', () => {
     __setForgeHostsForTests({ 'gitlab.acme.internal': 'gitlab' });
     const remote = 'git@git.other.internal:platform/api.git';
     expect(forgeKindOfRemote(remote)).toBeNull();
@@ -219,40 +213,72 @@ describe('forge discovery in the host ladder', () => {
     expect(resolveForge(info(remote))).toBeNull();
   });
 
-  it("answers null for a host recorded as 'none'", () => {
-    __setForgeHostsForTests({ 'git.acme.internal': 'none' });
-    expect(forgeKindOfHost('git.acme.internal')).toBeNull();
-    expect(forgeKindOfRemote('git@git.acme.internal:platform/api.git')).toBeNull();
-  });
-
-  it('keeps the well-known hosts with an empty map, case-insensitively', () => {
-    __setForgeHostsForTests({});
+  it('keeps the well-known hosts with nothing configured, case-insensitively', () => {
     expect(forgeKindOfHost('GitLab.com')).toBe('gitlab');
     expect(forgeKindOfHost('github.com')).toBe('github');
+    expect(forgeKindOfHost(' gitlab.com ')).toBe('gitlab');
   });
 
-  describe('with a cache file', () => {
-    let dir: string;
+  describe("from the CLIs' own config files", () => {
+    let ghDir: string;
+    let glabDir: string;
+    const saved = { gh: process.env.GH_CONFIG_DIR, glab: process.env.GLAB_CONFIG_DIR };
     beforeEach(() => {
-      dir = mkdtempSync(join(tmpdir(), 'cez-forge-hosts-'));
+      ghDir = mkdtempSync(join(tmpdir(), 'cez-gh-'));
+      glabDir = mkdtempSync(join(tmpdir(), 'cez-glab-'));
+      process.env.GH_CONFIG_DIR = ghDir;
+      process.env.GLAB_CONFIG_DIR = glabDir;
+      resetGithubHostsCache();
+      resetGitlabHostsCache();
       vi.mocked(fs.readFileSync).mockClear();
       vi.mocked(childProcess.execFile).mockClear();
       vi.mocked(childProcess.spawn).mockClear();
     });
-    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+    afterEach(() => {
+      rmSync(ghDir, { recursive: true, force: true });
+      rmSync(glabDir, { recursive: true, force: true });
+      process.env.GH_CONFIG_DIR = saved.gh;
+      process.env.GLAB_CONFIG_DIR = saved.glab;
+      resetGithubHostsCache();
+      resetGitlabHostsCache();
+    });
 
-    const writeCache = (file: string, hosts: Record<string, string>): void =>
-      writeFileSync(file, JSON.stringify({ version: 1, hosts, updatedAt: '2026-09-22T00:00:00.000Z' }));
+    const glabConfig = (hosts: string[]): void =>
+      writeFileSync(
+        join(glabDir, 'config.yml'),
+        `git_protocol: ssh\nhost: gitlab.com\nhosts:\n${hosts.map((h) => `    ${h}:\n        api_protocol: https\n        user: me\n`).join('')}`,
+      );
 
-    it('loads the cache once, lazily, and classifies with no further I/O', () => {
-      const file = join(dir, 'forge-hosts.json');
-      writeCache(file, { 'gitlab.acme.internal': 'gitlab' });
-      __setForgeHostCacheFileForTests(file);
-      expect(fs.readFileSync).not.toHaveBeenCalled(); // nothing read until first use
+    it('classifies a self-managed GitLab host glab is configured for, and nothing else', () => {
+      const remote = 'git@gitlab.acme.internal:platform/api.git';
+      expect(forgeKindOfRemote(remote)).toBeNull();
+      glabConfig(['gitlab.com', 'gitlab.acme.internal']);
+      resetGitlabHostsCache();
+      expect(forgeKindOfRemote(remote)).toBe('gitlab');
+      expect(resolveForge(info(remote))?.kind).toBe('gitlab');
+      expect(forgeKindOfRemote('git@git.other.internal:platform/api.git')).toBeNull();
+    });
 
+    it('classifies GitHub and GitLab hosts by the same mechanism, side by side', () => {
+      writeFileSync(join(ghDir, 'hosts.yml'), 'github.com:\n    user: me\nghe.acme.corp:\n    user: me\n');
+      glabConfig(['gitlab.acme.internal']);
+      expect(forgeKindOfHost('ghe.acme.corp')).toBe('github');
+      expect(forgeKindOfHost('gitlab.acme.internal')).toBe('gitlab');
+    });
+
+    it('honors GITLAB_HOST, as a bare host or a URL', () => {
+      process.env.GITLAB_HOST = 'https://gitlab.acme.internal:8443/';
+      try {
+        expect(forgeKindOfHost('gitlab.acme.internal')).toBe('gitlab');
+      } finally {
+        delete process.env.GITLAB_HOST;
+        resetGitlabHostsCache();
+      }
+    });
+
+    it('spawns nothing, and re-reads no file inside the TTL', () => {
+      glabConfig(['gitlab.acme.internal']);
       expect(forgeKindOfRemote('git@gitlab.acme.internal:platform/api.git')).toBe('gitlab');
-      expect(vi.mocked(fs.readFileSync).mock.calls.filter(([p]) => p === file)).toHaveLength(1);
-
       vi.mocked(fs.readFileSync).mockClear();
       for (let i = 0; i < 5; i++) {
         forgeKindOfRemote('git@gitlab.acme.internal:platform/api.git');
@@ -264,74 +290,12 @@ describe('forge discovery in the host ladder', () => {
       expect(childProcess.spawn).not.toHaveBeenCalled();
     });
 
-    it('treats a missing or corrupt cache file as an empty map', () => {
-      __setForgeHostCacheFileForTests(join(dir, 'absent.json'));
+    it('treats a missing or garbled glab config as "gitlab.com only"', () => {
       expect(forgeKindOfHost('gitlab.acme.internal')).toBeNull();
-      const corrupt = join(dir, 'corrupt.json');
-      writeFileSync(corrupt, '{not json');
-      __setForgeHostCacheFileForTests(corrupt);
+      writeFileSync(join(glabDir, 'config.yml'), '{not: [yaml');
+      resetGitlabHostsCache();
       expect(forgeKindOfHost('gitlab.acme.internal')).toBeNull();
       expect(forgeKindOfHost('gitlab.com')).toBe('gitlab');
-    });
-
-    it('swaps in the map a warm-up returns', async () => {
-      const file = join(dir, 'forge-hosts.json');
-      __setForgeHostCacheFileForTests(file);
-      expect(forgeKindOfHost('github.acme.internal')).toBeNull();
-      await refreshForgeDiscovery({
-        run: async (bin) =>
-          bin === 'gh'
-            ? { stdout: '', stderr: 'github.acme.internal\n  ✓ Logged in to github.acme.internal account someone (keyring)\n' }
-            : { stdout: '', stderr: '', notFound: true },
-      });
-      expect(forgeKindOfHost('github.acme.internal')).toBe('github');
-    });
-
-    // Step 2.2's review fix: the lazy load's first caller is in practice INSIDE a request
-    // (`/api/v1/projects` → per-project probe → `forgeKindOfRemote`), so `createApp` reads the
-    // cache eagerly at boot instead. The lazy path stays as the fallback.
-    it('loads the cache eagerly, before anything classifies a host', () => {
-      const file = join(dir, 'forge-hosts.json');
-      writeCache(file, { 'ghe.acme.corp': 'github' });
-      __setForgeHostCacheFileForTests(file);
-
-      loadForgeDiscoveryCache();
-      expect(vi.mocked(fs.readFileSync).mock.calls.filter(([p]) => p === file)).toHaveLength(1);
-
-      // Already in memory: classifying reads nothing more, and the answer survives the file going
-      // away — which is what proves the read happened at load time, not on first use.
-      vi.mocked(fs.readFileSync).mockClear();
-      rmSync(file, { force: true });
-      expect(forgeKindOfRemote('git@ghe.acme.corp:acme/widgets.git')).toBe('github');
-      expect(fs.readFileSync).not.toHaveBeenCalled();
-    });
-
-    it('is idempotent — a second call re-reads nothing', () => {
-      const file = join(dir, 'forge-hosts.json');
-      writeCache(file, { 'gitlab.acme.internal': 'gitlab' });
-      __setForgeHostCacheFileForTests(file);
-      loadForgeDiscoveryCache();
-      vi.mocked(fs.readFileSync).mockClear();
-      loadForgeDiscoveryCache();
-      loadForgeDiscoveryCache();
-      expect(fs.readFileSync).not.toHaveBeenCalled();
-      expect(forgeKindOfHost('gitlab.acme.internal')).toBe('gitlab');
-    });
-
-    it('keeps the lazy fallback for every caller that never loaded eagerly', () => {
-      const file = join(dir, 'forge-hosts.json');
-      writeCache(file, { 'gitlab.acme.internal': 'gitlab' });
-      __setForgeHostCacheFileForTests(file); // resets the map; nothing calls the eager loader
-      expect(fs.readFileSync).not.toHaveBeenCalled();
-      expect(forgeKindOfRemote('git@gitlab.acme.internal:platform/api.git')).toBe('gitlab');
-      expect(vi.mocked(fs.readFileSync).mock.calls.filter(([p]) => p === file)).toHaveLength(1);
-    });
-
-    it('never warms from a test without an injected runner', async () => {
-      __setForgeHostCacheFileForTests(join(dir, 'forge-hosts.json'));
-      await refreshForgeDiscovery();
-      expect(childProcess.execFile).not.toHaveBeenCalled();
-      expect(fs.existsSync(join(dir, 'forge-hosts.json'))).toBe(false);
     });
   });
 });
@@ -672,5 +636,61 @@ describe('forgePrDiff (the /github/prs/:number/changes route)', () => {
       prDiff: async () => { throw new NotFound('nope'); },
     };
     await expect(forgePrDiff(driver, 1, {})).rejects.toBeInstanceOf(NotFound);
+  });
+});
+
+describe('GitHub Enterprise', () => {
+  let configDir: string;
+  const savedConfigDir = process.env.GH_CONFIG_DIR;
+  beforeEach(() => {
+    configDir = mkdtempSync(join(tmpdir(), 'cez-ghe-'));
+    process.env.GH_CONFIG_DIR = configDir;
+    resetGithubHostsCache();
+  });
+  afterEach(() => {
+    rmSync(configDir, { recursive: true, force: true });
+    process.env.GH_CONFIG_DIR = savedConfigDir;
+    resetGithubHostsCache();
+  });
+
+  it.each([
+    'https://company.ghe.com/acme/demo.git',
+    'git@acme.ghe.com:acme/widgets.git',
+  ])('recognizes %s without any gh config', (remote) => {
+    expect(forgeKindOfRemote(remote)).toBe('github');
+    expect(resolveForge(info(remote))?.kind).toBe('github');
+  });
+
+  it.each([
+    'git@github.company.com:acme/demo.git',
+    'https://github.internal/o/r',
+  ])('does not guess GitHub from a github.* name without a login (%s)', (remote) => {
+    expect(forgeKindOfRemote(remote)).toBeNull();
+  });
+
+  it('recognizes any host gh is signed in to, on any domain', () => {
+    const remote = 'git@code.corp.example:acme/demo.git';
+    expect(forgeKindOfRemote(remote)).toBeNull();
+    writeFileSync(join(configDir, 'hosts.yml'), 'github.com:\n    user: me\ncode.corp.example:\n    user: me\n    oauth_token: x\n');
+    resetGithubHostsCache();
+    expect(forgeKindOfRemote(remote)).toBe('github');
+    expect(forgeKindOfRemote('git@other.example:acme/demo.git')).toBeNull();
+  });
+
+  it('honors GH_HOST', () => {
+    process.env.GH_HOST = 'code.corp.example';
+    try {
+      expect(forgeKindOfRemote('git@code.corp.example:acme/demo.git')).toBe('github');
+    } finally {
+      delete process.env.GH_HOST;
+    }
+  });
+
+  it('builds web root and view URLs on the enterprise host', () => {
+    const remote = 'https://user:token@company.ghe.com/acme/demo.git';
+    expect(forgeWebRoot(remote)).toBe('https://company.ghe.com/acme/demo');
+    const driver = resolveForge(info(remote))!;
+    expect(driver.viewUrl('pr', 7)).toBe('https://company.ghe.com/acme/demo/pull/7');
+    expect(driver.viewUrl('issue', 3)).toBe('https://company.ghe.com/acme/demo/issues/3');
   });
 });

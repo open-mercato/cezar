@@ -1,4 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The real resolver probes the host's PATH; `cursor-bin.test.ts` covers it.
+vi.mock('../core/cursor-bin.ts', () => ({
+  resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
+}));
+
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { isSafeSessionId, quoteResumeBin, resumeCommand } from './server.ts';
 
@@ -17,6 +23,9 @@ describe('resumeCommand — session id validation', () => {
     expect(resumeCommand('opencode', id)).toBe(`opencode --session ${id}`);
     expect(resumeCommand('cursor', id)).toBe(`agent --resume ${id}`);
     expect(resumeCommand('pi', id)).toBe(`pi --session ${id}`);
+    // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the last session; the
+    // target is named by the separate `--session-id=<id>` flag, not a positional argument.
+    expect(resumeCommand('junie', id)).toBe(`junie --resume --session-id=${id}`);
   });
 
   // Every runner id must map to a command — an id that fell through to the `claude` default

@@ -10,7 +10,10 @@ let started = false;
 process.stdin.once('data', () => {
   if (started) return;
   started = true;
-  const lease = store.acquireLease();
-  process.stdout.write(`${JSON.stringify({ held: Boolean(lease) })}\n`);
-  setTimeout(() => lease?.release(), 1_000);
+  const delayMs = Number.parseInt(process.argv[3] ?? '0', 10);
+  setTimeout(() => {
+    const lease = store.acquireLease();
+    process.stdout.write(`${JSON.stringify({ held: Boolean(lease) })}\n`);
+    setTimeout(() => lease?.release(), 1_000);
+  }, delayMs);
 });

@@ -1,14 +1,16 @@
-import { autosaveCommit } from '../../git-worktree.ts';
+import { splitRemoteRef, type TaskRemotes } from '../../git-remotes.ts';
+import { autosaveCommit, taskRemotes } from '../../git-worktree.ts';
+import { baseDivergence } from '../git-changes.ts';
 import { execTool } from './cli.ts';
 import type { DraftPrInput } from './types.ts';
 
 /**
  * The forge-neutral prelude of "publish this task as a draft PR/MR" (spec
  * 2026-08-10-forge-provider-adapters, Step 4.1): final autosave-commit → dry-run short-circuit →
- * `git remote get-url origin` → `git push -u origin <branch>` → base branch + body. Extracted from
- * `createDraftPr` (forge/github.ts) unchanged in wording, timeouts and ordering, so the GitHub
- * (`gh pr create`) and GitLab (`glab mr create`) drivers only differ in the create call itself.
- * Never throws.
+ * the task's base and push remotes (#1383) → refuse an empty branch before pushing it
+ * (telemetry 16aef26d) → `git push -u <push remote> <branch>` → base branch + body. Shared by the
+ * GitHub (`gh pr create`) and GitLab (`glab mr create`) drivers, which only differ in the create
+ * call itself. Never throws.
  */
 
 export const PUSH_TIMEOUT_MS = 60_000;
@@ -26,7 +28,12 @@ export type PublishPrelude =
       base: string | null;
       title: string;
       body: string;
+      /** The remotes the branch was pushed to and the PR targets (`base`/`push` both set). */
+      remotes: TaskRemotes & { base: string; push: string };
     };
+
+export const nothingToPropose = (branch: string, base: string | null | undefined): string =>
+  `nothing to propose — ${branch} has no commits that ${base ?? 'the base branch'} does not already have`;
 
 export async function preparePublish(input: DraftPrInput): Promise<PublishPrelude> {
   const { run } = input;
@@ -56,24 +63,40 @@ export async function preparePublish(input: DraftPrInput): Promise<PublishPrelud
   // with a fake URL so the whole review → PR flow is testable without a forge.
   if (process.env.CEZ_DRY_RUN === '1') return { kind: 'dryRun' };
 
-  const remote = await execTool(['remote', 'get-url', 'origin'], worktree, 'git');
-  if (!remote.ok || !remote.stdout.trim()) {
+  // Push to the push remote, open the PR on the base remote the task forked from (#1383).
+  const remotes = await taskRemotes(worktree);
+  const { base: baseRemote, push: pushRemote } = remotes;
+  if (!pushRemote || !baseRemote) {
     return { kind: 'error', error: 'no git remote — add one (git remote add origin <url>) or merge the branch locally' };
-  }
-
-  const push = await execTool(['push', '-u', 'origin', branch], worktree, 'git', PUSH_TIMEOUT_MS);
-  if (!push.ok) {
-    return { kind: 'error', error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
   }
 
   // Target the branch the worktree forked from (config `baseBranch`) — without
   // an explicit base, the forge CLI aims at the repo default (main) even when
-  // work started on develop. `origin/x` normalizes to `x`; a raw sha
+  // work started on develop. `<remote>/x` normalizes to `x`; a raw sha
   // (detached-HEAD fork point) can't be a PR base, so it falls back to the
   // default branch.
-  const prBase = run.baseBranch?.replace(/^origin\//, '');
+  const prBase = run.baseBranch ? splitRemoteRef(run.baseBranch, remotes.names).branch : undefined;
   const base = prBase && !/^[0-9a-f]{7,40}$/i.test(prBase) ? prBase : null;
-  return { kind: 'ready', worktree, branch, base, title: run.title, body: buildPrBody(input.handoffText, run.task) };
+
+  // Refuse an empty branch BEFORE pushing it (telemetry 16aef26d): the forge CLI would only refuse
+  // after the push, leaving a branch on the remote with nothing in it. Unknown base → let it decide.
+  const { ahead } = await baseDivergence(worktree, run.baseBranch);
+  if (ahead === 0) return { kind: 'error', error: nothingToPropose(branch, prBase) };
+
+  const push = await execTool(['push', '-u', pushRemote, branch], worktree, 'git', PUSH_TIMEOUT_MS);
+  if (!push.ok) {
+    return { kind: 'error', error: `git push failed — ${tail(push.stderr) || 'unknown error'}` };
+  }
+
+  return {
+    kind: 'ready',
+    worktree,
+    branch,
+    base,
+    title: run.title,
+    body: buildPrBody(input.handoffText, run.task),
+    remotes: { ...remotes, base: baseRemote, push: pushRemote },
+  };
 }
 
 /**
@@ -82,7 +105,7 @@ export async function preparePublish(input: DraftPrInput): Promise<PublishPrelud
  * the cezar footer.
  */
 export function buildPrBody(handoffText: string, task: string): string {
-  const goal = section(handoffText, '## Goal') || task.trim();
+  const goal = section(handoffText, '## Goal') || task.trim() || '(given as attachments only)';
   const progress = section(handoffText, '## Progress log')
     .split('\n')
     .filter((l) => l.trim())

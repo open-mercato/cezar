@@ -86,6 +86,12 @@ export class StepAborted extends Error {}
 /** Thrown from an optional step's `run()` to record it as `skipped` (e.g. certbot DNS not ready). */
 export class StepSkipped extends Error {}
 
+/** Extra context for a failed verification, when retrying cannot change the result. */
+export interface VerifyFailure {
+  message: string;
+  retryable: boolean;
+}
+
 export interface SudoStepOpts {
   /** One-line description of what/why (shown above the command). */
   description: string;
@@ -115,6 +121,8 @@ export interface SudoStepOpts {
   inputLabel?: string;
   /** Prove the command actually took effect. Runs after every attempt. */
   verify: (ctx: InstallContext) => Promise<boolean>;
+  /** Explain a failed verification and optionally classify it as terminal. */
+  verifyFailure?: (ctx: InstallContext) => Promise<VerifyFailure | undefined>;
 }
 
 /**
@@ -225,7 +233,13 @@ export async function sudoStep(ctx: InstallContext, opts: SudoStepOpts): Promise
       return;
     }
 
-    ui.error('That did not take effect — the verification check still fails.');
+    const failure = await opts.verifyFailure?.(ctx);
+    if (failure) {
+      ui.error(failure.message);
+      if (!failure.retryable) throw new StepAborted(failure.message);
+    } else {
+      ui.error('That did not take effect — the verification check still fails.');
+    }
     if (ctx.assumeYes) {
       throw opts.skippable
         ? new StepSkipped(`verification failed for: ${opts.command}`)

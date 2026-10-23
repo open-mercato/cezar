@@ -3,8 +3,11 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
+import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
+import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -259,6 +262,8 @@ export async function collectChanges(
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
+    /** Leave cezar's own `.ai/cezar/` out — an in-place task's Changes show what would land. */
+    excludeCezarData?: boolean;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
@@ -295,12 +300,20 @@ export async function collectChanges(
       },
     );
 
-    const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
-    if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };
-    const numstat = await git(dir, ['diff', '--numstat', '-z', '-M', base], env);
-    if (!numstat.ok) return { ok: false, error: gitReason(numstat, 'git diff failed') };
-    const patchOut = await git(dir, ['diff', '--patch', '-M', '--no-color', base], env);
-    if (!patchOut.ok) return { ok: false, error: gitReason(patchOut, 'git diff failed') };
+    // Three independent read-only listings, run concurrently. `GIT_OPTIONAL_LOCKS=0` keeps them
+    // from racing each other for `index.lock` over the opportunistic stat refresh `git diff` writes,
+    // so that refresh is written once here instead — else every poll re-reads each stat-dirty file.
+    await git(dir, ['update-index', '-q', '--refresh'], env);
+    const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
+    const scope = opts.excludeCezarData ? ['--', '.', CEZAR_DATA_EXCLUDE] : [];
+    const [nameStatus, numstat, patchOut] = await Promise.all([
+      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
+    ]);
+    for (const listing of [nameStatus, numstat, patchOut]) {
+      if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };
+    }
 
     return {
       ok: true,
@@ -442,6 +455,88 @@ export async function collectCommitChanges(
 
   const payload = assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap);
   return { ok: true, commit: { sha: fullSha, subject, author, when, ...payload } };
+}
+
+// ---- repository path index ----------------------------------------------------
+
+/**
+ * Max paths `GET /repo/tree` will return. This repository is ~1,900 paths, so the cap is ~10×
+ * headroom; past it the answer is `truncated: true` and the Files tab says so, because presenting
+ * a partial repository as the whole one is the one failure mode a flat index has.
+ */
+export const REPO_TREE_CAP = 20_000;
+
+/**
+ * Hard byte bound on the captured `git ls-files` output — the cap for unusually long paths, which
+ * the entry count alone cannot bound. Deliberately well under `git()`'s 32 MB `maxBuffer`, so the
+ * limit that fires is this explicit one with its own message rather than an opaque subprocess
+ * failure. Exceeding it is a failure, NEVER a partial successful tree.
+ */
+export const REPO_TREE_BYTES_CAP = 8 * 1024 * 1024;
+
+export type RepoPathsResult =
+  | { ok: true; paths: string[]; truncated: boolean }
+  | { ok: false; error: string };
+
+/**
+ * The project repository's own path index, for `GET /repo/tree` (spec
+ * `.ai/specs/2026-10-05-repo-file-browser.md`, #1279): tracked files plus untracked-but-not-ignored
+ * ones, sorted, capped.
+ *
+ * `git ls-files` rather than a filesystem walk: one bounded subprocess instead of a recursive
+ * descent, and it respects `.gitignore` for free — a walk of a monorepo spends its whole budget
+ * inside `node_modules` before reaching any source. The set it returns is also what makes the
+ * content route safe to point at the user's REAL checkout: `readWorktreePath` knows nothing about
+ * `.gitignore`, so membership in this index is the only thing standing between
+ * `GET /repo/files?path=.env` and the file.
+ *
+ * `-z` because a path may contain anything but NUL (git would otherwise quote it and we would be
+ * un-quoting git's C escapes by hand). Never throws — `{ ok: false, error }` with git's own first
+ * stderr line, which the route turns into a 409.
+ */
+export async function listRepoPaths(
+  root: string,
+  cap = REPO_TREE_CAP,
+  bytesCap = REPO_TREE_BYTES_CAP,
+): Promise<RepoPathsResult> {
+  const res = await git(root, ['ls-files', '-z', '--cached', '--others', '--exclude-standard']);
+  if (!res.ok) return { ok: false, error: gitReason(res, 'git ls-files failed') };
+  // Byte-length, not `.length`: the cap bounds the WIRE, and a UTF-8 path costs more bytes than
+  // it has JS code units.
+  const bytes = Buffer.byteLength(res.stdout, 'utf8');
+  if (bytes > bytesCap) {
+    return {
+      ok: false,
+      error: `repository path index is too large to serve (${bytes} bytes, cap ${bytesCap})`,
+    };
+  }
+  // `-z` terminates every entry, so the split leaves one trailing empty string; an empty repo
+  // produces nothing at all. Filtering empties covers both without a special case.
+  const all = res.stdout.split('\0').filter((p) => p !== '');
+  // Code-unit order, NOT `localeCompare`: the ordering is part of the wire contract, and a
+  // locale-sensitive collation would make it depend on the server's environment.
+  all.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { ok: true, paths: all.slice(0, cap), truncated: all.length > cap };
+}
+
+/**
+ * The Q5 guard for `GET /repo/files`: is `relPath` one of the paths the repository index lists?
+ *
+ * Derived from `listRepoPaths` with the ENTRY cap lifted on purpose. `REPO_TREE_CAP` exists to
+ * bound a *response*; applying it here would make a tracked file past the 20,000th path
+ * unreadable — a cap on what the viewer may open, which nobody asked for. The byte cap still
+ * bounds the subprocess, so this stays bounded.
+ *
+ * Answers the membership question only. Traversal, `.git` and symlink refusals remain
+ * `readWorktreePath`'s job, and both guards run.
+ */
+export async function repoIndexContains(
+  root: string,
+  relPath: string,
+): Promise<{ ok: true; indexed: boolean } | { ok: false; error: string }> {
+  const index = await listRepoPaths(root, Number.MAX_SAFE_INTEGER);
+  if (!index.ok) return index;
+  return { ok: true, indexed: new Set(index.paths).has(relPath) };
 }
 
 // ---- worktree file browsing ---------------------------------------------------
@@ -634,6 +729,16 @@ export async function createOrSwitchBranch(
 
   const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`]);
   if (exists.ok) {
+    // git refuses a branch another worktree holds; say where it is instead of a bare `fatal:`.
+    const holder = (await branchesCheckedOutElsewhere(dir)).get(name);
+    if (holder) {
+      return {
+        ok: false,
+        error: `${name} is checked out in another worktree (${holder}) — open it there, or remove that worktree first`,
+      };
+    }
+    // A deleted worktree's stale registration still blocks the checkout until pruned.
+    await git(dir, ['worktree', 'prune']);
     const sw = await git(dir, ['checkout', name]);
     if (!sw.ok) return { ok: false, error: gitReason(sw, `git checkout ${name} failed`) };
     return { ok: true, branch: name, created: false };
@@ -656,19 +761,88 @@ export async function createOrSwitchBranch(
 export type CommitResult = { ok: true; sha: string } | { ok: false; error: string };
 
 /** `git add -A && git commit -m <message>` in `dir`. A clean tree, a failing
- *  hook or missing identity all come back as `{ ok:false, error }`. */
+ *  hook or missing identity all come back as `{ ok:false, error }`.
+ *
+ *  Refuses a worktree that is mid-merge or still carries conflict markers —
+ *  same guard as the graph `git.commit` node's `commitAll` (git-worktree.ts),
+ *  so a blind `git add -A` through this manual route cannot commit a
+ *  half-resolved merge either (see the #471 incident behind `autosaveCommit`). */
 export async function commitAll(dir: string, message: string): Promise<CommitResult> {
   const status = await git(dir, ['status', '--porcelain']);
   if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
   if (!status.stdout.trim()) {
     return { ok: false, error: 'nothing to commit — the working tree is clean' };
   }
+  const unresolved = await unresolvedConflicts(dir, status.stdout);
+  if (unresolved) return { ok: false, error: `refusing to commit: ${unresolved}` };
   const add = await git(dir, ['add', '-A']);
   if (!add.ok) return { ok: false, error: gitReason(add, 'git add failed') };
-  const commit = await git(dir, ['commit', '-m', message]);
+  const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
+  const commit = await git(dir, [...identityArgs, 'commit', '-m', message]);
   if (!commit.ok) return { ok: false, error: gitReason(commit, 'git commit failed') };
   const head = await git(dir, ['rev-parse', 'HEAD']);
   return { ok: true, sha: head.ok ? head.stdout.trim() : '' };
+}
+
+export type GitStatusResult =
+  | { ok: true; uncommitted: number; unpushed: number | null; behind: number | null; ahead: number | null }
+  | { ok: false; error: string };
+
+/** What has not left the worktree yet: the files `commitAll` would commit, and the commits the
+ *  upstream has not seen (`null` with no upstream — the branch was never pushed). Plus how the
+ *  branch stands against the task's base: commits the base has that it lacks (`behind`) and the
+ *  commits it would propose (`ahead`), both `null` when the base cannot be resolved. Read-only,
+ *  and offline on purpose: the base is read from the remote-tracking ref as last fetched, never
+ *  fetched here — this is polled. */
+export async function worktreeGitStatus(dir: string, baseBranch?: string): Promise<GitStatusResult> {
+  const status = await git(dir, ['status', '--porcelain', '-z']);
+  if (!status.ok) return { ok: false, error: gitReason(status, 'git status failed') };
+  // `-z` ends every entry with NUL, and a rename or copy — in EITHER column of the `XY` code (a
+  // worktree-side rename shows in Y once the tree has intent-to-add entries) — carries its old
+  // path as one extra NUL field that is not an entry of its own.
+  const entries = status.stdout.split('\0').filter(Boolean);
+  let uncommitted = 0;
+  for (let i = 0; i < entries.length; i++) {
+    uncommitted++;
+    if (/^(?:[RC].|.[RC])/.test(entries[i] as string)) i++;
+  }
+  const { behind, ahead } = await baseDivergence(dir, baseBranch);
+  const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (!upstream.ok) return { ok: true, uncommitted, unpushed: null, behind, ahead };
+  const count = await git(dir, ['rev-list', '--count', '@{u}..HEAD']);
+  const unpushed = count.ok ? Number.parseInt(count.stdout.trim(), 10) : Number.NaN;
+  return { ok: true, uncommitted, unpushed: Number.isFinite(unpushed) ? unpushed : null, behind, ahead };
+}
+
+/** How the worktree's HEAD stands against the task's base branch: commits the base has that HEAD
+ *  lacks (`behind`) and commits HEAD has that the base lacks (`ahead` — what a PR would propose).
+ *  The freshest base ref first (`<base remote>/<base>`, then the local `<base>`; agents fetch, they
+ *  never pull — the same reasoning as `resolveTaskDiffBase`). The base remote is the PR target
+ *  (`git-remotes.ts`, #1383), or the remote a recorded `upstream/main` names. Both `null` when there
+ *  is no named base: none recorded, a raw sha (a detached-HEAD fork point has no "latest" to be
+ *  behind), or a ref this repo lacks. */
+export async function baseDivergence(
+  dir: string,
+  baseBranch: string | undefined,
+): Promise<{ behind: number | null; ahead: number | null }> {
+  const unknown = { behind: null, ahead: null };
+  if (!baseBranch || !isSafeGitRef(baseBranch) || /^[0-9a-f]{7,40}$/i.test(baseBranch)) return unknown;
+  const remotes = await resolveTaskRemotes((args) => git(dir, args));
+  const split = splitRemoteRef(baseBranch, remotes.names);
+  const remote = split.remote ?? remotes.base;
+  for (const ref of remote ? [`${remote}/${split.branch}`, split.branch] : [split.branch]) {
+    const exists = await git(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    if (!exists.ok) continue;
+    // `--left-right` over `HEAD...ref` prints "<only in HEAD>\t<only in ref>".
+    const count = await git(dir, ['rev-list', '--left-right', '--count', `HEAD...${ref}`]);
+    if (!count.ok) return unknown;
+    const [ahead, behind] = count.stdout.trim().split(/\s+/).map((n) => Number.parseInt(n, 10));
+    return {
+      behind: Number.isFinite(behind) ? (behind as number) : null,
+      ahead: Number.isFinite(ahead) ? (ahead as number) : null,
+    };
+  }
+  return unknown;
 }
 
 export type PushResult =
@@ -689,7 +863,7 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   if (remotes.length === 0) {
     return { ok: false, error: 'no remote configured — add one with `git remote add origin <url>`' };
   }
-  const remote = remotes.includes('origin') ? 'origin' : (remotes[0] as string);
+  const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   const push = await git(dir, args);
