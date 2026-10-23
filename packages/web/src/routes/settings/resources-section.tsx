@@ -9,6 +9,7 @@ import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mer
 import { CenteredState } from '@/components/centered-state'
 import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { MachineCard } from './machine-card'
 import { SettingsField } from './settings-field'
@@ -296,6 +297,29 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
         ) : (
           <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
         )}
+      </SettingsField>
+
+      <SettingsField
+        title="Test toolchains"
+        hint="Let agents install the JDK, Android SDK, emulator image and Flutter they need to test mobile apps. Downloads several GB from Google, Adoptium and Flutter into ~/.cezar/tools; nothing is installed unless a task asks."
+      >
+        <div className="flex items-center gap-3">
+          <Switch
+            id="tools-auto-install"
+            data-slot="resources-tools-install"
+            aria-label="Install test toolchains"
+            checked={config.toolsAutoInstall}
+            disabled={save.isPending}
+            onCheckedChange={(checked) => save.mutate({ toolsAutoInstall: checked })}
+          />
+          <span className="text-xs text-soft-foreground">{config.toolsAutoInstall ? 'On' : 'Off'}</span>
+        </div>
+        {config.effectiveToolsAutoInstall !== config.toolsAutoInstall ? (
+          <p data-slot="resources-tools-install-env" className="text-[11px] text-soft-foreground">
+            CEZ_TOOL_INSTALL in the environment that started cezar overrides this: installs are currently{' '}
+            {config.effectiveToolsAutoInstall ? 'on' : 'off'}.
+          </p>
+        ) : null}
       </SettingsField>
 
       <SettingsField

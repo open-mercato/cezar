@@ -31,7 +31,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
-    effectiveSkillsAutoUpdate: true,
+    effectiveSkillsAutoUpdate: true, toolsAutoInstall: false, effectiveToolsAutoInstall: false,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -61,6 +61,10 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(state)
       if (url === '/api/v1/workspace/config' && method === 'PUT') {
         Object.assign(state.resources, (body?.resources ?? {}) as object)
+        if (typeof body?.toolsAutoInstall === 'boolean') {
+          state.toolsAutoInstall = body.toolsAutoInstall
+          state.effectiveToolsAutoInstall = body.toolsAutoInstall
+        }
         return json(state)
       }
       return new Promise<never>(() => {})
@@ -136,6 +140,22 @@ describe('Global settings → Resources', () => {
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 6 } })
     expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/config')).toBe(false)
+  })
+
+  it('turns tool provisioning on from Settings, and says when CEZ_TOOL_INSTALL overrides it', async () => {
+    serve()
+    renderResources()
+    const toggle = await waitFor(() => {
+      const el = document.querySelector<HTMLButtonElement>('[data-slot="resources-tools-install"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(document.querySelector('[data-slot="resources-tools-install-env"]')).toBeNull()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ toolsAutoInstall: true })
   })
 
   it('links workspace limits to the per-project controls', async () => {

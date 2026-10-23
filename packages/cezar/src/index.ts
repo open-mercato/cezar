@@ -39,6 +39,7 @@ import { devVersion } from './self-update/semver.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
 import { runSelfUpdateCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
+import { runToolsCommand } from './tools/tools-cli.ts';
 import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
@@ -68,6 +69,7 @@ Usage:
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
   cezar telemetry [status|enable|disable|inspect]  opt-in usage data (off until you enable it)
+  cezar tools <list|ensure|env|emulator|simulator>  provision mobile-test toolchains (CEZ_TOOL_INSTALL=1 to install)
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -124,6 +126,11 @@ async function main(): Promise<void> {
   // cockpit's parser can refuse them. It only talks to an already-running cockpit.
   if (process.argv[2] === 'task') {
     process.exitCode = await runTaskCommand(process.argv.slice(3));
+    return;
+  }
+  // `cezar tools …` (spec 2026-10-21-tool-provisioning): in-process like telemetry, no cockpit needed.
+  if (process.argv[2] === 'tools') {
+    process.exitCode = await runToolsCommand(process.argv.slice(3));
     return;
   }
   // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.

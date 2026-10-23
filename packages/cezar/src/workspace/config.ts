@@ -207,6 +207,9 @@ const workspaceConfigSchema = z
     /** Optional auto-update override. Absence inherits the environment/default
      *  and must stay absent on unrelated merge-writes. */
     skillsAutoUpdate: z.boolean().optional().catch(undefined),
+    /** Settings switch letting `cezar tools ensure` install toolchains (spec 2026-10-21-tool-provisioning).
+     *  Absent = off; `CEZ_TOOL_INSTALL` can force it either way. */
+    toolsAutoInstall: z.boolean().optional().catch(undefined),
     /** Release channel the self-updater follows (`stable` → npm `latest`, `nightly` → `nightly`,
      *  `development` → none: a worktree or PR preview picked by hand). Absent inherits
      *  `CEZ_UPDATE_CHANNEL`, then stable. */

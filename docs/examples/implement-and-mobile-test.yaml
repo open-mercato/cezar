@@ -1,0 +1,31 @@
+# Implement a change in a Flutter app, then prove it on an Android emulator.
+# Copy to .ai/cezar/workflows/. Needs the cockpit started with CEZ_TOOL_INSTALL=1 to install
+# missing toolchains (docs/mobile-testing.md); without it the first check fails and says what is missing.
+# The emulator is left running afterwards so later steps and tasks reuse it; stop it with
+# `node "$CEZ_BIN" tools emulator stop` (add it as a final check step if you want it gone).
+name: implement-and-mobile-test
+description: Implement, then run Flutter integration tests on a headless Android emulator (toolchain provisioned by cezar).
+steps:
+  - id: toolchain
+    name: Toolchain
+    command: |
+      eval "$(node "$CEZ_BIN" tools ensure flutter android-emulator)"
+
+  - id: implement
+    name: Implement
+    prompt: |
+      {{task}}
+
+      The Flutter SDK and an Android emulator are provisioned for you. If a mobile test fails,
+      read its output before changing anything.
+
+  - id: mobile-test
+    name: Flutter integration tests
+    command: |
+      eval "$(node "$CEZ_BIN" tools env)"
+      node "$CEZ_BIN" tools emulator start
+      flutter pub get
+      flutter test integration_test -d emulator-5554
+    onFail:
+      retry: implement
+      max: 2
