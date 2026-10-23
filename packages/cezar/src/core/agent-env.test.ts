@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BACKEND_ALLOW_PREFIXES, buildChildEnv, isClaudeBackend, looksSecret } from './agent-env.ts';
+import { BACKEND_ALLOW_PREFIXES, buildCheckEnv, buildChildEnv, isClaudeBackend, looksSecret } from './agent-env.ts';
 
 /**
  * #427: the spawned backend must NOT inherit the full host environment. It
@@ -370,4 +370,105 @@ it.each(['claude', 'codex', 'opencode'] as const)('does not forward tracker cred
   } });
   expect(env.JIRA_API_TOKEN).toBeUndefined();
   expect(env.LINEAR_API_KEY).toBeUndefined();
+});
+
+describe('buildCheckEnv', () => {
+  const host = {
+    PATH: '/usr/bin',
+    HOME: '/home/u',
+    LANG: 'en_US.UTF-8',
+    LC_ALL: 'C',
+    TERM: 'xterm',
+    CI: 'true',
+    CEZ_DRY_RUN: '1',
+    NODE_OPTIONS: '--max-old-space-size=4096',
+    GITHUB_TOKEN: 'gh',
+    ANTHROPIC_API_KEY: 'sk-a',
+    OPENAI_API_KEY: 'sk-o',
+    AWS_SECRET_ACCESS_KEY: 'aws',
+    DATABASE_URL: 'postgres://u:p@h/db',
+    NODE_AUTH_TOKEN: 'npm',
+  };
+
+  it('keeps the host environment and drops only its credentials', () => {
+    expect(Object.keys(buildCheckEnv(host)).sort()).toEqual(
+      ['CEZ_DRY_RUN', 'CI', 'DATABASE_URL', 'GITHUB_TOKEN', 'HOME', 'LANG', 'LC_ALL', 'NODE_OPTIONS', 'PATH', 'TERM'].sort(),
+    );
+  });
+
+  it('keeps host settings outside the agent allowlist: a profile PATH, connection URLs, cloud profiles', () => {
+    const env = buildCheckEnv({
+      PATH: '/home/u/.nvm/versions/node/v20/bin:/usr/bin',
+      NVM_DIR: '/home/u/.nvm',
+      REDIS_URL: 'redis://localhost:6379',
+      AWS_PROFILE: 'dev',
+      AWS_REGION: 'eu-central-1',
+      MY_APP_MODE: 'test',
+    });
+    expect(Object.keys(env).sort()).toEqual(['AWS_PROFILE', 'AWS_REGION', 'MY_APP_MODE', 'NVM_DIR', 'PATH', 'REDIS_URL']);
+  });
+
+  it('drops every credential-shaped name, in any spelling, but not the non-secret names the pattern catches', () => {
+    const env = buildCheckEnv({
+      NPM_TOKEN: 'npm',
+      aws_secret_access_key: 'aws',
+      AWS_ACCESS_KEY_ID: 'akia',
+      AWS_SESSION_TOKEN: 'sess',
+      POSTGRES_PASSWORD: 'pw',
+      STRIPE_API_KEY: 'sk',
+      SENTRY_AUTH: 'auth',
+      SIGNING_PRIVATE_KEY: 'pk',
+      GOOGLE_APPLICATION_CREDENTIALS: '/k.json',
+      SSH_AUTH_SOCK: '/tmp/ssh.sock',
+      XDG_SESSION_TYPE: 'wayland',
+      CEZ_HANDOFF_TOKEN: 'cez',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'safe.directory',
+      GIT_CONFIG_VALUE_0: '*',
+    });
+    expect(Object.keys(env).sort()).toEqual(
+      ['CEZ_HANDOFF_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'SSH_AUTH_SOCK', 'XDG_SESSION_TYPE'],
+    );
+  });
+
+  it('honours CEZ_ENV_PASSTHROUGH and CEZ_AGENT_ENV_FULL for credentials', () => {
+    const pass = buildCheckEnv({ ...host, CEZ_ENV_PASSTHROUGH: 'node_auth_token, AWS_SECRET_ACCESS_KEY' });
+    expect(pass.NODE_AUTH_TOKEN).toBe('npm');
+    expect(pass.AWS_SECRET_ACCESS_KEY).toBe('aws');
+    expect(pass.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(buildCheckEnv({ ...host, CEZ_AGENT_ENV_FULL: '1' })).toEqual({ ...host, CEZ_AGENT_ENV_FULL: '1' });
+  });
+
+  describe('untrusted head', () => {
+    const gh = {
+      ...host,
+      GH_TOKEN: 'ghp',
+      GH_ENTERPRISE_TOKEN: 'ghe',
+      GH_CONFIG_DIR: '/home/u/.config/gh',
+      GH_HOST: 'github.example.com',
+    };
+
+    it('drops every gh credential but keeps GH_HOST and the rest of the base', () => {
+      const env = buildCheckEnv(gh, { untrusted: true });
+      expect(env.GITHUB_TOKEN).toBeUndefined();
+      expect(env.GH_TOKEN).toBeUndefined();
+      expect(env.GH_ENTERPRISE_TOKEN).toBeUndefined();
+      expect(env.GH_CONFIG_DIR).toBeUndefined();
+      expect(env.GH_HOST).toBe('github.example.com');
+      expect(env.PATH).toBe('/usr/bin');
+    });
+
+    it('is not undone by CEZ_AGENT_ENV_FULL or CEZ_ENV_PASSTHROUGH', () => {
+      const full = buildCheckEnv({ ...gh, CEZ_AGENT_ENV_FULL: '1' }, { untrusted: true });
+      expect(full.GITHUB_TOKEN).toBeUndefined();
+      expect(full.GH_TOKEN).toBeUndefined();
+      const pass = buildCheckEnv({ ...gh, CEZ_ENV_PASSTHROUGH: 'gh_token' }, { untrusted: true });
+      expect(pass.GH_TOKEN).toBeUndefined();
+    });
+
+    it('a trusted check still receives them', () => {
+      expect(buildCheckEnv(gh).GITHUB_TOKEN).toBe('gh');
+      expect(buildCheckEnv(gh, { untrusted: false }).GH_TOKEN).toBe('ghp');
+    });
+  });
 });

@@ -42,6 +42,15 @@ const SECRET_VALUE_NAME_ALLOW: ReadonlySet<string> = new Set([
   'XDG_SESSION_DESKTOP',
 ]);
 
+/** `GIT_CONFIG_KEY_<n>` holds a git config key name (`_KEY_` matches it); its `GIT_CONFIG_VALUE_<n>`
+ *  partner is unaffected. Dropping one of the pair makes every git command fail to parse its config. */
+const GIT_CONFIG_KEY_RE = /^GIT_CONFIG_KEY_\d+$/i;
+
+/** A var whose value is a credential: its name looks like one and is not a known non-secret. */
+export function isCredentialName(name: string): boolean {
+  return SECRET_NAME_RE.test(name) && !SECRET_VALUE_NAME_ALLOW.has(name.toUpperCase()) && !GIT_CONFIG_KEY_RE.test(name);
+}
+
 /**
  * Below this length a "secret" value is too common a word to redact safely.
  * Verified over-redaction at the old floor of 8 (#427 review): a dev box with
@@ -79,8 +88,7 @@ export function collectSecretValues(env: NodeJS.ProcessEnv = process.env): strin
   const values = new Set<string>();
   for (const [name, value] of Object.entries(env)) {
     if (!value || value.length < MIN_SECRET_LEN) continue;
-    if (SECRET_VALUE_NAME_ALLOW.has(name.toUpperCase())) continue;
-    if (SECRET_NAME_RE.test(name)) values.add(value);
+    if (isCredentialName(name)) values.add(value);
   }
   return [...values].sort((a, b) => b.length - a.length);
 }

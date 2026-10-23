@@ -46,6 +46,8 @@ import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
+import { killLiveChecks } from './workflows/check-step.ts';
+import { installRunSignalHandlers } from './run-signals.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
@@ -276,6 +278,7 @@ async function serveCommand(
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
     stopping = true;
+    killLiveChecks();
     store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
     void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
       .catch((error: unknown) => {
@@ -291,6 +294,7 @@ async function serveCommand(
   };
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
+  process.on('SIGHUP', () => shutdown('signal'));
   const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -350,6 +354,7 @@ async function serveCommand(
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
+      killLiveChecks();
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });
         // The old process stops here, so it reports its own stop before handing over (bounded).
@@ -575,19 +580,8 @@ async function runCommand(
   const semaphore = new WorkspaceSemaphore();
   await semaphore.refresh();
   const manager = new RunManager(store, repoRoot, { semaphore });
-  let shuttingDown = false;
-  const shutdown = (exitCode: number) => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    void manager.lifecycle.shutdown().then(() => process.exit(exitCode)).catch((error: unknown) => {
-      console.error('cezar: lifecycle shutdown failed', error);
-      process.exit(1);
-    });
-  };
-  const interrupt = () => shutdown(130);
-  const terminate = () => shutdown(143);
-  process.on('SIGINT', interrupt);
-  process.on('SIGTERM', terminate);
+  // Check steps run in their own process group, out of reach of the terminal's Ctrl-C.
+  const uninstallSignalHandlers = installRunSignalHandlers(store, undefined, () => manager.lifecycle.shutdown());
 
   store.on('event', ({ event }) => {
     switch (event.type) {
@@ -639,8 +633,7 @@ async function runCommand(
   console.log(`\nrun ${final} — ${record?.tokensUsed ?? 0} tokens — details in the cockpit: npx cezar`);
   await manager.lifecycle.shutdown();
   manager.dispose();
-  process.off('SIGINT', interrupt);
-  process.off('SIGTERM', terminate);
+  uninstallSignalHandlers();
   process.exitCode = final === 'done' || final === 'review' ? 0 : 1;
   await flushTelemetry();
 }
