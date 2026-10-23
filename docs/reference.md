@@ -29,7 +29,8 @@ Three words, no jargon — **task**, **skill**, **chain**:
   the live session while it works.
 - 📖 **Skills** are Markdown playbooks. Drop them in `.ai/skills/` or
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
-  git clone cached globally in `~/.cache/cez/`). A workflow step references one by
+  git clone cached globally in `~/.cache/cez/`, or `$CEZ_HOME/.cache/cez/` when
+  `CEZ_HOME` is pinned). A workflow step references one by
   `skill: <name>` and its body becomes the agent's extra system prompt — so you
   shape *how* the agent reasons without touching code.
 - 🔗 **Chains (workflows)** stitch steps into a pipeline: agent steps plus shell
@@ -473,6 +474,7 @@ Useful environment variables:
 | Var | Effect |
 |---|---|
 | `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
+| `CEZ_HOME=/path/to/state` | Override cezar's global state directory (default `~/.cezar`; an empty value falls back to the default). It holds `config.json` — the workspace config and project registry — and relocates the global cache to `$CEZ_HOME/.cache/cez`, so a pinned install re-clones its team skills repos once. Two cockpits with different `CEZ_HOME` values serve disjoint projects. If this directory is inside a checkout, ignore it in that repository (for example, add `/cezar-state/` to `.gitignore` for `CEZ_HOME=<checkout>/cezar-state`); its `.cache/cez/` tree contains generated bare clones and has no generated ignore guard. The skills-update mutex remains under `~/.cache/cez/` because it protects the shared `~/.agents/` installation. |
 | `CEZ_REMOTE_AGENT_ACCOUNTS=1` | Allow **Settings → Agent accounts** in a remote/self-hosted cockpit. Enable this only behind an authenticated perimeter: account folders expose absolute host paths and the details view can expose account identity. Remotely added folders are confined to `CEZ_BROWSE_ROOT`, including symlink ancestry. Local desktop actions stay disabled; **Connect** returns the exact login command to run on the host. |
 | `CEZ_TELEMETRY=0` | Block usage telemetry even after you opted in. Telemetry is opt-in — nothing is sent until you answer yes in the cockpit, Settings → Privacy or `cezar telemetry enable` ([docs/telemetry.md](telemetry.md)). `DO_NOT_TRACK=1` works too. `CEZ_TELEMETRY=1` only lifts the CI / test-runner / `CEZ_DRY_RUN=1` block; it never grants consent. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |

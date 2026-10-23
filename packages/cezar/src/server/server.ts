@@ -194,14 +194,14 @@ import {
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
-import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStatForRun, worktreeSizeForRun } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
 import { atomicLifecycleWrite, LifecycleStoreError } from '../worktree-lifecycle/store.ts';
 import { validateLifecycleCommand } from '../worktree-lifecycle/templates.ts';
 import { setConfigInputSchema, type WorktreeLifecycleInvalidation } from '@open-mercato/cezar-contract';
-import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
+import { clearRepoInfoCache, getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
 import {
   collectChanges,
   collectCommitChanges,
@@ -5856,7 +5856,7 @@ export function createApp(deps: ServerDeps) {
           ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}),
           diffStat:
             r.worktreePath && existsSync(r.worktreePath)
-              ? await worktreeDiffStat(r.worktreePath, r.baseBranch ?? 'HEAD')
+              ? await worktreeDiffStatForRun(r.id, r.worktreePath, r.baseBranch ?? 'HEAD', r.finishedAt != null)
               : '',
           handoffExcerpt: handoffProgressExcerpt(readHandoff(dataDir, r.id)),
         })),
@@ -6035,7 +6035,8 @@ export function createApp(deps: ServerDeps) {
           status: r.status,
           branch: r.branch ?? null,
           // POSIX `du` — degrades to null (Windows / du missing / error); never blocks.
-          sizeBytes: await worktreeSizeBytes(r.worktreePath as string),
+          // Memoized once the run has finalized (`finishedAt`).
+          sizeBytes: await worktreeSizeForRun(r.id, r.worktreePath as string, r.finishedAt != null),
           finishedAt: r.finishedAt ?? null,
           reclaimable: isReclaimable(r),
         })),
@@ -7068,6 +7069,8 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const result = await createOrSwitchBranch(info.root, parsed.data.name, parsed.data.from);
       if (!result.ok) return c.json({ error: result.error }, 409);
+      // HEAD moved: the memoized branch must not outlive the checkout.
+      clearRepoInfoCache();
       return c.json({ branch: result.branch, created: result.created });
     })
 
