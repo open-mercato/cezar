@@ -31,5 +31,5 @@ Let the user drag the border between the Changes file tree and the diff to widen
 
 ### Phase 1: Splitter
 
-- [ ] 1.1 Pure width helper with tests
-- [ ] 1.2 Resize handle wired into both Changes views
+- [x] 1.1 Pure width helper with tests — 5a8c0d3e3
+- [x] 1.2 Resize handle wired into both Changes views — 63f2632b4
