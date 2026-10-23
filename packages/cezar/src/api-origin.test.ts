@@ -12,6 +12,12 @@ describe('cockpit API origin', () => {
     expect(apiOrigin('[::1]', 4321)).toBe('http://[::1]:4321');
   });
 
+  it('dials loopback for a wildcard bind', () => {
+    expect(apiOrigin('0.0.0.0', 4321)).toBe('http://127.0.0.1:4321');
+    expect(apiOrigin('::', 4321)).toBe('http://[::1]:4321');
+    expect(apiOrigin('[::]', 4321)).toBe('http://[::1]:4321');
+  });
+
   it('probes and selects ports on the configured interface', async () => {
     const nonLoopbackIpv4 = Object.values(networkInterfaces())
       .flatMap((entries) => entries ?? [])
