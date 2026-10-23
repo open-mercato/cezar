@@ -99,6 +99,12 @@ from the line. If *Release publish* fails (npm, the changelog PR, the GitHub
 Release), use **Re-run jobs** on that run: it rebuilds the same tagged commit,
 skips what already reached npm, and finishes.
 
+*Release publish* runs one at a time across every line (two lines publishing at
+once could both read `latest` before either moves it). GitHub keeps only **one**
+waiting run per group: if a third tag arrives while one publishes and one waits,
+the waiting run is cancelled. The tag survives, and the next *Release* on that
+line reports it as tagged but not released — re-run its *Release publish* run.
+
 Only `release/vX.Y.x` branches can run `Release`; the pre-release-lines
 `release/0.9.x` branch is retired.
 

@@ -160,11 +160,13 @@ describe('githubClient', () => {
     const page1 = Array.from({ length: 100 }, (_, i) => ({ tag_name: `v0.0.${i}` }));
     stubGitHub({
       'GET /repos/acme/app/releases?per_page=100&page=1': { status: 200, data: page1 },
-      'GET /repos/acme/app/releases?per_page=100&page=2': { status: 200, data: [{ tag_name: 'v1.0.0' }] },
+      'GET /repos/acme/app/releases?per_page=100&page=2': { status: 200, data: [{ tag_name: 'v1.0.0' }, { tag_name: 'v1.0.1', draft: true }] },
     });
     const tags = await client().releasedTags();
     expect(tags).toHaveLength(101);
     expect(tags.at(-1)).toBe('v1.0.0');
+    // A draft is not "done": hasRelease() cannot see it either.
+    expect(tags).not.toContain('v1.0.1');
   });
 
   it('reads a file over 1 MB through the blob API', async () => {

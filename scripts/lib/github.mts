@@ -98,12 +98,13 @@ export function githubClient({ token, repository }: { token: string | undefined;
       await ok('POST', `${r}/git/refs`, { ref: `refs/tags/${tag}`, sha });
       return true;
     },
-    /** Tag names that have a GitHub Release (drafts included: they still claim the tag). */
+    /** Tag names that have a published GitHub Release. Drafts don't count — the same definition
+     *  as `hasRelease`, whose by-tag lookup never returns a draft. */
     async releasedTags(): Promise<string[]> {
       const tags: string[] = [];
       for (let page = 1; page <= 20; page += 1) {
-        const batch = await ok<{ tag_name: string }[]>('GET', `${r}/releases?per_page=100&page=${page}`);
-        tags.push(...batch.map((rel) => rel.tag_name));
+        const batch = await ok<{ tag_name: string; draft?: boolean }[]>('GET', `${r}/releases?per_page=100&page=${page}`);
+        tags.push(...batch.filter((rel) => rel.draft !== true).map((rel) => rel.tag_name));
         if (batch.length < 100) break;
       }
       return tags;

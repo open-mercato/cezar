@@ -40,7 +40,7 @@
 // Usage: node scripts/release.mts <patch|minor|major|existing> [--dry-run] [--dist-tag <tag>] [--reconcile-tag]
 // Env override for tests: CEZ_RELEASE_ROOT (defaults to the repo root).
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,14 +129,30 @@ console.log(
 const provenance = !dryRun && process.env.GITHUB_ACTIONS === 'true' ? ['--provenance'] : [];
 // Same cross-platform npm resolution as scripts/release-snapshot.mjs.
 const npmExecpath = process.env.npm_execpath;
-const runNpm = (args: string[], cwd: string) => {
-  if (npmExecpath) {
-    execFileSync(process.execPath, [npmExecpath, ...args], { cwd, stdio: 'inherit' });
-  } else {
-    const npmCli = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    execFileSync(npmCli, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+// stderr is captured (and always echoed) so a failed publish can be told apart by its code.
+class NpmError extends Error {
+  readonly stderr: string;
+  constructor(args: string[], status: number | null, stderr: string) {
+    super(`npm ${args[0]} exited with ${status}`);
+    this.stderr = stderr;
   }
+}
+const runNpm = (args: string[], cwd: string) => {
+  const [cmd, argv] = npmExecpath
+    ? [process.execPath, [npmExecpath, ...args]]
+    : [process.platform === 'win32' ? 'npm.cmd' : 'npm', args];
+  const result = spawnSync(cmd, argv, {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'inherit', 'pipe'],
+    shell: !npmExecpath && process.platform === 'win32',
+  });
+  process.stderr.write(result.stderr ?? '');
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new NpmError(args, result.status, result.stderr ?? '');
 };
+const publishedOverAlready = (error: unknown) =>
+  error instanceof NpmError && /EPUBLISHCONFLICT|previously published|cannot publish over/i.test(error.stderr);
 const alreadyPublished = (name: string) => {
   if (dryRun) return false;
   try {
@@ -167,7 +183,13 @@ const publish = (dir: string, label: string) => {
     console.log(`release: publishing ${label} failed (${(error as Error).message}) — retrying once in 15s.`);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15_000);
     if (alreadyPublished(label)) return;
-    runNpm(args, dir);
+    try {
+      runNpm(args, dir);
+    } catch (retryError) {
+      // The first attempt went through after all; `npm view` simply had not caught up yet.
+      if (!publishedOverAlready(retryError)) throw retryError;
+      console.log(`release: ${label}@${version} was already published by the first attempt — done.`);
+    }
   }
 };
 
