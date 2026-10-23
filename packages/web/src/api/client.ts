@@ -32,6 +32,9 @@ import type {
   RemoveAgentProfileResponse,
   SelectAgentProfileInput,
   UpdateAgentProfileInput,
+  AgentFallbackPolicy,
+  GetAgentFallbackPolicyQuery,
+  PutAgentFallbackPolicy,
   AutomationsResponse,
   AutomationCheck,
   AutomationCheckQueuedResponse,
@@ -2467,6 +2470,20 @@ export async function getAgentProfiles(opts?: ReadOptions): Promise<AgentProfile
     defaults: answer.defaults ?? {},
     profiles: (answer.profiles ?? []).map((profile) => ({ ...profile, files: profile.files ?? [] })),
   }
+}
+
+export async function getAgentFallbackPolicy(input: GetAgentFallbackPolicyQuery, opts?: ReadOptions): Promise<AgentFallbackPolicy> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles']['fallback-policy'].$get({ query: input }, init(opts)),
+    '/workspace/agent-profiles/fallback-policy',
+  )
+}
+
+export async function putAgentFallbackPolicy(input: PutAgentFallbackPolicy, opts?: ReadOptions): Promise<AgentFallbackPolicy> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles']['fallback-policy'].$put({ json: input }, init(opts)),
+    '/workspace/agent-profiles/fallback-policy',
+  )
 }
 
 /** Register an extra config dir as an account. The id is allocated server-side from the label. */

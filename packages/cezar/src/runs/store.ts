@@ -191,6 +191,11 @@ export const runRecordSchema = z.object({
    *  own selection — an override for Claude says nothing about which Codex account a mixed
    *  workflow's codex step should use. Absent = follow the project. */
   agentProfile: z.string().optional(),
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
+  }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
    *  Deliberately NOT the full composed prompt — skill bodies and the handoff
@@ -323,6 +328,19 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Accounts this run exhausted before a fallback moved it on (spec 2026-10-20-agent-usage-limit-fallback):
+   *  known reset times also persist in the workspace hold store, independently of this run. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional().catch(undefined),
+  /** The current unattended fallback episode: every provider:account already tried (the starting one
+   *  included) and the continuation step reserved for the successor. Reset by a human Continue. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    /** Selection ended without a successor, or was cancelled; automatic recovery must not reopen it. */
+    done: z.boolean().optional(),
+  }).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -1084,6 +1102,7 @@ export class RunStore extends EventEmitter {
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
+    fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
     worktree?: false;
@@ -1105,6 +1124,7 @@ export class RunStore extends EventEmitter {
       model: input.model,
       runner: input.runner,
       agentProfile: input.agentProfile,
+      fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
       worktree: input.worktree,

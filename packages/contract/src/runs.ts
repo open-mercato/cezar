@@ -173,6 +173,14 @@ export const runRecordSchema = z.object({
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Enabled policy captured at task creation; manual Continue does not refresh it. */
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(),
+    incarnation: z.string().nullable(),
+    revocation: z.string().nullable(),
+  }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -262,6 +270,16 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** Accounts this run exhausted before a fallback moved it on; each holds its queue until its reset. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional(),
+  /** The unattended fallback episode: provider:account keys already tried and the reserved successor step. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    done: z.boolean().optional(),
+  }).optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */

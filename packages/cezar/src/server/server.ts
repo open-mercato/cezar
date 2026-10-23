@@ -58,6 +58,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
+import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -188,7 +189,7 @@ import {
   repoFileQuerySchema,
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
-import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
@@ -263,6 +264,13 @@ import {
   type ProjectListEntry,
 } from '../workspace/projects.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import {
+  candidateKey,
+  FallbackPolicyBusyError,
+  FallbackPolicyInputError,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
+} from '../workspace/agent-fallback.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { createProjectInputSchema } from '@open-mercato/cezar-contract';
@@ -1456,6 +1464,9 @@ export function createApp(deps: ServerDeps) {
     if (disabled) return message;
     return unavailableProviderMessage(required, await judged(true));
   };
+  // Fallback admission asks the same gate a human Continue meets (spec 2026-10-20-agent-usage-limit-fallback).
+  setFallbackProviderCheck((provider, profileId, repoRoot) =>
+    providerActionError([provider], { repoRoot, profileFor: () => profileId }));
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
@@ -2464,6 +2475,45 @@ export function createApp(deps: ServerDeps) {
   };
 
   const agentProfilesRoutes = new Hono<ProjectApiEnv>()
+    .get('/workspace/agent-profiles/fallback-policy', queryZodValidator(getAgentFallbackPolicyQuerySchema), async (c) => {
+      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      const { projectId } = c.req.valid('query');
+      const root = await projectRootFor(projectId);
+      if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
+      if (!(await stat(root).catch(() => null))?.isDirectory()) {
+        return c.json({ error: `project folder not found: ${projectId}` }, 409);
+      }
+      return c.json(await getAgentFallbackPolicy(root));
+    })
+    .put('/workspace/agent-profiles/fallback-policy', jsonZodValidator(putAgentFallbackPolicySchema), async (c) => {
+      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      const body = c.req.valid('json');
+      const root = await projectRootFor(body.projectId);
+      if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
+      if (!(await stat(root).catch(() => null))?.isDirectory()) {
+        return c.json({ error: `project folder not found: ${body.projectId}` }, 409);
+      }
+      // Only rows the user is ADDING must name a live account: a row whose account was removed
+      // later is skipped at run time, and must never block switching fallback off or removing it.
+      const stored = new Set((await getAgentFallbackPolicy(root)).candidates.map(candidateKey));
+      const accountStore = await loadAgentAccounts().catch(() => null);
+      const unavailable = body.candidates.find((candidate) =>
+        !stored.has(candidateKey(candidate)) &&
+        candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID &&
+        !accountStore?.accounts.some((account) => account.id === candidate.profileId && account.provider === candidate.provider),
+      );
+      if (unavailable) return c.json({ error: `agent account '${unavailable.profileId}' is unavailable for ${unavailable.provider}` }, 400);
+      let result;
+      try {
+        result = await putAgentFallbackPolicy(root, body);
+      } catch (error) {
+        if (error instanceof FallbackPolicyInputError) return c.json({ error: error.message }, 400);
+        if (error instanceof FallbackPolicyBusyError) return c.json({ error: error.message }, 409);
+        return c.json({ error: 'could not save fallback policy' }, 500);
+      }
+      if ('conflict' in result) return c.json({ error: 'fallback policy changed; reload and try again' }, 409);
+      return c.json(result);
+    })
     .get('/workspace/agent-profiles', async (c) => {
       const editable = capabilities().localHandoff;
       // Hosted mode withholds the listing entirely rather than serving it read-only: the paths

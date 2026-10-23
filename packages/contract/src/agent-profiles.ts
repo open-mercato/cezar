@@ -161,6 +161,47 @@ export const agentProfileSelectionsResponseSchema = z.object({
 });
 export type AgentProfileSelectionsResponse = z.infer<typeof agentProfileSelectionsResponseSchema>;
 
+/** Ordered provider/account fallback after a recognized usage-exhaustion error. */
+export const agentFallbackCandidateSchema = z.object({
+  provider: providerIdSchema,
+  profileId: z.string().min(1).max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
+  model: z.string().min(1).max(200).optional(),
+});
+export type AgentFallbackCandidate = z.infer<typeof agentFallbackCandidateSchema>;
+
+export const agentFallbackPolicySchema = z.object({
+  enabled: z.boolean(),
+  candidates: z.array(agentFallbackCandidateSchema).max(10),
+  revision: z.number().int().nonnegative(),
+  incarnation: z.string().nullable(),
+  revocation: z.string().nullable(),
+});
+export type AgentFallbackPolicy = z.infer<typeof agentFallbackPolicySchema>;
+
+export const getAgentFallbackPolicyQuerySchema = z.object({
+  projectId: z.string().min(1).max(64),
+});
+export type GetAgentFallbackPolicyQuery = z.infer<typeof getAgentFallbackPolicyQuerySchema>;
+
+export const putAgentFallbackPolicySchema = z.object({
+  projectId: z.string().min(1).max(64),
+  expectedRevision: z.number().int().nonnegative(),
+  expectedIncarnation: z.string().nullable(),
+  enabled: z.boolean(),
+  candidates: z.array(agentFallbackCandidateSchema).max(10).superRefine((items, ctx) => {
+    const seen = new Set<string>();
+    items.forEach((item, index) => {
+      const key = `${item.provider}:${item.profileId}`;
+      if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index], message: 'duplicate fallback candidate' });
+      seen.add(key);
+    });
+  }),
+}).superRefine((value, ctx) => {
+  if (value.enabled && value.candidates.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['candidates'], message: 'enabled fallback policy requires at least one candidate' });
+  }
+});
+export type PutAgentFallbackPolicy = z.infer<typeof putAgentFallbackPolicySchema>;
 
 /** `GET /api/v1/workspace/agent-profiles/:id/status` — one account's auth state, probed for real.
  *  `?refresh=1` drops this account's cached answer and re-probes; `?recheck=1` (the pane's Check
