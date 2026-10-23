@@ -2,19 +2,21 @@
 // Release-line orchestrator — the side-effect half of packages/cezar/src/release/{stable,bump}.ts,
 // driven by the release workflows (docs/publishing.md § Release lines):
 //
-//   cut       (Release cut, from main)   main at X.Y.Z → creates release/vX.Y.x at main's tip and
-//                                        opens the PR that moves main to X.(Y+1).0.
-//   prepare   (Release, from release/*)  picks the next version (patch bump once x.y.z is tagged),
-//                                        stamps every manifest + lockfile + changelog and commits
-//                                        the bump to the release branch BEFORE anything is built.
-//   announce  (Release, after publish)   GitHub Release + tag at the bump commit, and a PR carrying
-//                                        the changelog entry back to main.
+//   cut       (Release cut, from main)       main at X.Y.Z → creates release/vX.Y.x at main's tip and
+//                                            opens the PR that moves main to X.(Y+1).0.
+//   prepare   (Release, from release/*)      picks the version (planRelease), stamps manifests +
+//                                            lockfile + changelog and commits the bump to the line.
+//   tag       (Release, after verify)        tags the bump commit; the tag starts Release publish.
+//   verify    (Release publish, at the tag)  the tag names the manifests and sits on its line; skips
+//                                            a version already released; resolves the dist-tag.
+//   announce  (Release publish, last)        the changelog PR to main, then the GitHub Release —
+//                                            the "done" marker, so it is created last.
 //
 // Every write to GitHub goes through scripts/lib/github.mjs. `--dry-run` computes and stamps the
-// working tree but calls no API. Outputs go to $GITHUB_OUTPUT for the workflow's later steps.
+// working tree but calls no write API. Outputs go to $GITHUB_OUTPUT.
 //
-// Env: GITHUB_REPOSITORY, GH_TOKEN, GITHUB_REF_NAME, and CEZ_RELEASE_ROOT like release.mjs.
-// Tests pin `--latest <version|none>` (skips the registry lookup) and `--date <YYYY-MM-DD>`.
+// Env: GITHUB_REPOSITORY, GH_TOKEN (the release App's token), GITHUB_REF_NAME, CEZ_RELEASE_ROOT.
+// Tests pin `--registry <file.json>` ({ name: { latest, versions } }) and `--date <YYYY-MM-DD>`.
 
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -22,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import {
+  highestLatest,
   nextMinorVersion,
   planRelease,
   releaseBranchFor,
@@ -47,7 +50,8 @@ const { positionals, values: flags } = parseArgs({
     version: { type: 'string' },
     sha: { type: 'string' },
     'dist-tag': { type: 'string' },
-    latest: { type: 'string' },
+    tag: { type: 'string' },
+    registry: { type: 'string' },
     date: { type: 'string' },
   },
 });
@@ -68,6 +72,8 @@ const SET = {
 };
 const COMPANIONS = ['packages/web'];
 const SKIP_NOTES_LABEL = 'skip-changelog';
+// Bookkeeping PRs enter the review pipeline like any other, and stay out of release notes.
+const BOOKKEEPING_LABELS = { bump: ['refactor', 'review', SKIP_NOTES_LABEL], changelog: ['documentation', 'review', SKIP_NOTES_LABEL] };
 
 const fail = (message) => {
   console.error(`release-line: ${message}`);
@@ -132,13 +138,12 @@ function github() {
 
 const files = () => [...changed].map(([p, content]) => ({ path: p, content }));
 
-async function openPr(gh, { branch, parentSha, message, title, body }) {
+async function openPr(gh, { branch, parentSha, message, title, body, labels }) {
   const sha = await gh.commitFiles({ parentSha, files: files(), message });
   await gh.setBranch(branch, sha);
   const pr = await gh.openPullRequest({ head: branch, base: 'main', title, body });
-  // Release bookkeeping stays out of generated notes (.github/release.yml excludes the label).
   await gh.ensureLabel(SKIP_NOTES_LABEL, 'ededed', 'Left out of generated release notes');
-  await gh.addLabels(pr.number, [SKIP_NOTES_LABEL]);
+  await gh.addLabels(pr.number, labels);
   log(`opened ${pr.html_url}`);
   return pr.html_url;
 }
@@ -162,7 +167,12 @@ async function cut() {
   } else {
     const gh = github();
     const existing = await gh.getBranchSha(releaseBranch);
-    if (existing) log(`${releaseBranch} already exists at ${existing.slice(0, 12)} — left as it is`);
+    // A re-run is only safe from the commit the line was cut at: rebuilt from a newer main,
+    // the bump PR would drop an `# Unreleased` the line never received.
+    if (existing && existing !== head) {
+      fail(`${releaseBranch} was already cut at ${existing.slice(0, 12)} and main has moved to ${head.slice(0, 12)} — finish the open bump PR by hand`);
+    }
+    if (existing) log(`${releaseBranch} already exists at ${head.slice(0, 12)} — re-running the rest of the cut`);
     else await gh.createBranch(releaseBranch, head);
     await gh.ensureLabel(`backport ${releaseBranch}`, 'c5def5', `Cherry-pick into ${releaseBranch} once merged`);
     await gh.ensureLabel('backport main', 'c5def5', 'Forward-port a release-line hotfix to main once merged');
@@ -172,40 +182,71 @@ async function cut() {
       message: `chore(release): open ${next} on main\n\n${releaseBranch} now carries ${current} and its patches.`,
       title: `chore(release): open ${next} on main`,
       body: `\`${releaseBranch}\` was cut from \`${head.slice(0, 12)}\`. This moves main's release set to \`${next}\`, so features keep landing here while \`${releaseBranch}\` takes only fixes (label a PR \`backport ${releaseBranch}\`).`,
+      labels: BOOKKEEPING_LABELS.bump,
     });
   }
   emit({ releaseBranch, current, nextVersion: next, prUrl });
 }
 
-async function latestOnRegistry(name) {
-  if (flags.latest !== undefined) return flags.latest === 'none' ? null : flags.latest;
+/** The release set's npm-published names (a `private` manifest is stamped, never published). */
+function publishedNames() {
+  return Object.values(SET)
+    .map((dir) => readJson(`${dir}/package.json`))
+    .filter((m) => m.private !== true)
+    .map((m) => m.name);
+}
+
+/** `{ latest, versions }` for a package, `null` when npm has never heard of it. Fails closed on
+ *  anything else: guessing would let a backport move `latest` backwards. */
+function registryInfo(name) {
+  if (flags.registry) {
+    const entry = JSON.parse(readFileSync(flags.registry, 'utf8'))[name];
+    return entry ? { latest: entry.latest ?? null, versions: entry.versions ?? [] } : null;
+  }
   try {
-    return execFileSync('npm', ['view', name, 'dist-tags.latest'], {
+    const out = execFileSync('npm', ['view', name, 'dist-tags', 'versions', '--json'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: process.platform === 'win32',
-    }).trim() || null;
+    });
+    const data = JSON.parse(out);
+    return { latest: data['dist-tags']?.latest ?? null, versions: [data.versions ?? []].flat() };
   } catch (error) {
-    // Failing closed: guessing "nothing is latest" would let a backport move `latest` back.
-    fail(`cannot read ${name}'s dist-tags from npm: ${error.message}`);
+    if (/E404|404 Not Found/.test(`${error.stderr ?? ''}${error.message}`)) return null;
+    fail(`cannot read ${name} from npm: ${error.message}`);
   }
+}
+
+function resolveDistTag(version) {
+  const latest = highestLatest(publishedNames().map((name) => registryInfo(name)?.latest));
+  return resolveStableDistTag(version, latest);
 }
 
 async function prepare() {
   const branch = flags.branch ?? process.env.GITHUB_REF_NAME ?? '';
   const cezar = readJson(`${SET.cezar}/package.json`);
   const tags = git('tag', '--list', 'v*').split('\n').filter(Boolean);
-  const plan = planRelease({ branch, manifestVersion: cezar.version, tags });
+  const token = Boolean(process.env.GH_TOKEN);
+  if (!token && !dryRun) fail('GH_TOKEN is not set');
+  // A tokenless dry run cannot see GitHub Releases; it treats every tag as released.
+  const releasedTags = token ? await github().releasedTags() : tags;
+  const manifestPublished = publishedNames().some((name) => registryInfo(name)?.versions.includes(cezar.version));
+  const plan = planRelease({ branch, manifestVersion: cezar.version, tags, releasedTags, manifestPublished });
   if (!plan.ok) fail(plan.error);
-  const { version, bumped, previousTag } = plan;
-  const distTag = resolveStableDistTag(version, await latestOnRegistry(cezar.name));
-  log(`${branch}: releasing ${version}${bumped ? ` (patch bump from ${cezar.version})` : ''} under "${distTag}"`);
+  const { version, bumped, resume, previousTag } = plan;
+
+  if (resume) {
+    const sha = git('rev-list', '-n', '1', `v${version}`);
+    emit({ version, resume, sha });
+    fail(`v${version} is tagged at ${sha.slice(0, 12)} but has no GitHub Release — finish it: re-run its "Release publish" run (or run Release publish from the v${version} tag). Fixes merged since ship in the next patch.`);
+  }
+  log(`${branch}: releasing ${version}${bumped ? ` (patch bump from ${cezar.version})` : ''} under "${resolveDistTag(version)}" (re-checked at publish)`);
 
   if (bumped) stampEverything(version);
   const head = git('rev-parse', 'HEAD');
   let notes = flags['notes-file'] ? readFileSync(flags['notes-file'], 'utf8') : '';
   const changelog = existsSync(abs('CHANGELOG.md')) ? readText('CHANGELOG.md') : '';
-  if (!notes && !dryRun && !changelogSection(changelog, version)) {
+  if (!notes && token && !changelogSection(changelog, version)) {
     notes = await github().generateNotes({ tag: `v${version}`, target: head, previousTag });
   }
   const entry = ensureChangelogEntry(changelog, version, today(), notes);
@@ -215,16 +256,45 @@ async function prepare() {
   let sha = head;
   if (changed.size > 0 && !dryRun) {
     const gh = github();
-    sha = await gh.commitFiles({
-      parentSha: head,
-      files: files(),
-      message: `chore(release): ${version}`,
-    });
+    sha = await gh.commitFiles({ parentSha: head, files: files(), message: `chore(release): ${version}` });
     // Not forced: a branch that moved since checkout fails here instead of losing a commit.
     await gh.moveBranch(branch, sha, false);
     log(`committed the bump to ${branch} as ${sha.slice(0, 12)}`);
   }
-  emit({ version, bumped, distTag, sha, previousTag: previousTag ?? '', changelog: entry.source });
+  emit({ version, bumped, resume, sha, previousTag: previousTag ?? '', changelog: entry.source });
+}
+
+async function tag() {
+  const version = flags.version ?? fail('--version is required');
+  const sha = flags.sha ?? fail('--sha is required');
+  if (dryRun) {
+    log(`dry run — would tag v${version} at ${sha.slice(0, 12)}`);
+    return;
+  }
+  const created = await github().createTag(`v${version}`, sha);
+  log(created ? `tagged v${version} at ${sha.slice(0, 12)} — Release publish takes it from here` : `v${version} already tags ${sha.slice(0, 12)}`);
+}
+
+async function verify() {
+  const tagName = flags.tag ?? process.env.GITHUB_REF_NAME ?? '';
+  if (!/^v\d+\.\d+\.\d+$/.test(tagName)) fail(`"${tagName}" is not a vX.Y.Z release tag`);
+  const version = tagName.slice(1);
+  const manifest = readJson(`${SET.cezar}/package.json`).version;
+  if (manifest !== version) fail(`${tagName} names ${version} but the tagged manifests say ${manifest}`);
+  const line = releaseBranchFor(version);
+  const sha = git('rev-parse', 'HEAD');
+  if (git('remote').split('\n').includes('origin')) {
+    git('fetch', '--no-tags', 'origin', `+refs/heads/${line}:refs/remotes/origin/${line}`);
+  }
+  try {
+    git('merge-base', '--is-ancestor', sha, `refs/remotes/origin/${line}`);
+  } catch {
+    fail(`${tagName} (${sha.slice(0, 12)}) is not on ${line} — only the Release workflow tags releases`);
+  }
+  const released = await github().hasRelease(tagName);
+  const distTag = resolveDistTag(version);
+  log(released ? `${tagName} is already released — nothing to do` : `${tagName} at ${sha.slice(0, 12)} on ${line}: publishing under "${distTag}"`);
+  emit({ version, distTag, released, sha, line });
 }
 
 async function announce() {
@@ -249,15 +319,14 @@ async function announce() {
   ].join('\n');
 
   if (dryRun) {
-    log(`dry run — would release v${version} at ${sha.slice(0, 12)} (latest: ${distTag === 'latest'})`);
+    log(`dry run — would carry the entry to main, then release v${version} at ${sha.slice(0, 12)} (latest: ${distTag === 'latest'})`);
     console.log(body);
     emit({ released: false, changelogPr: '' });
     return;
   }
   const gh = github();
-  const created = await gh.createRelease({ tag: `v${version}`, sha, name: `v${version}`, body, makeLatest: distTag === 'latest' });
-  log(created ? `released v${version}` : `v${version} already has a GitHub Release — left as it is`);
-
+  // The changelog PR first: the GitHub Release marks the version done, and a re-run after a
+  // failed carry-back must still find the version unfinished.
   const mainSha = await gh.getBranchSha('main');
   const mainChangelog = await gh.readFile('CHANGELOG.md', mainSha);
   const carried = insertChangelogEntry(mainChangelog, version, `${section.heading}\n\n${section.body}\n`);
@@ -271,11 +340,14 @@ async function announce() {
       message: `docs(changelog): add the ${version} entry`,
       title: `docs(changelog): add the ${version} entry`,
       body: `Carries the \`${version}\` changelog entry released from \`${releaseBranchFor(version)}\` back to main.`,
+      labels: BOOKKEEPING_LABELS.changelog,
     });
   }
+  const created = await gh.createRelease({ tag: `v${version}`, sha, name: `v${version}`, body, makeLatest: distTag === 'latest' });
+  log(created ? `released v${version}` : `v${version} already has a GitHub Release — left as it is`);
   emit({ released: created, changelogPr });
 }
 
-const commands = { cut, prepare, announce };
-if (!commands[command]) fail(`unknown command "${command ?? ''}" — expected cut, prepare or announce`);
+const commands = { cut, prepare, tag, verify, announce };
+if (!commands[command]) fail(`unknown command "${command ?? ''}" — expected cut, prepare, tag, verify or announce`);
 await commands[command]();

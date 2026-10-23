@@ -1,9 +1,8 @@
 // The few GitHub REST/GraphQL calls the release-line workflows make (scripts/release-line.mjs).
 //
-// Commits go through the git data API rather than `git push`: GitHub signs them, which a
-// signed-commits ruleset requires, and a plain token can create them on a branch it may write.
-// A PR opened with the workflow's own GITHUB_TOKEN triggers no CI, so callers pass
-// RELEASE_TOKEN when it is configured (docs/publishing.md).
+// Commits go through the git data API rather than `git push`, so GitHub signs them. Callers pass
+// the release GitHub App's installation token: PRs and tags made with the workflow's own
+// GITHUB_TOKEN trigger no workflows (docs/publishing.md § Release lines).
 
 const API = (process.env.GITHUB_API_URL ?? 'https://api.github.com').replace(/\/$/, '');
 
@@ -63,7 +62,38 @@ export function githubClient({ token, repository }) {
     },
     async readFile(path, ref) {
       const data = await ok('GET', `${r}/contents/${path}?ref=${encodeURIComponent(ref)}`);
-      return Buffer.from(data.content, 'base64').toString('utf8');
+      // Over 1 MB the contents API omits `content`; the blob API still serves it.
+      const content = data.content || (await ok('GET', `${r}/git/blobs/${data.sha}`)).content;
+      return Buffer.from(content, 'base64').toString('utf8');
+    },
+    /** The commit a tag points at, or `null` when there is no such tag. */
+    async getTagSha(tag) {
+      const { status, data } = await call('GET', `${r}/git/ref/tags/${encodeURIComponent(tag)}`);
+      if (status !== 200) return null;
+      if (data.object.type !== 'tag') return data.object.sha;
+      return (await ok('GET', `${r}/git/tags/${data.object.sha}`)).object.sha;
+    },
+    /** Tag `sha`; an existing tag is fine only when it already points there. */
+    async createTag(tag, sha) {
+      const existing = await this.getTagSha(tag);
+      if (existing === sha) return false;
+      if (existing) throw new Error(`tag ${tag} already points at ${existing}, not ${sha}`);
+      await ok('POST', `${r}/git/refs`, { ref: `refs/tags/${tag}`, sha });
+      return true;
+    },
+    /** Tag names that have a GitHub Release (drafts included: they still claim the tag). */
+    async releasedTags() {
+      const tags = [];
+      for (let page = 1; page <= 20; page += 1) {
+        const batch = await ok('GET', `${r}/releases?per_page=100&page=${page}`);
+        tags.push(...batch.map((rel) => rel.tag_name));
+        if (batch.length < 100) break;
+      }
+      return tags;
+    },
+    async hasRelease(tag) {
+      const { status } = await call('GET', `${r}/releases/tags/${encodeURIComponent(tag)}`);
+      return status === 200;
     },
     /** Open a PR, or return the open one already proposing `head` → `base`. */
     async openPullRequest({ head, base, title, body }) {
@@ -88,8 +118,7 @@ export function githubClient({ token, repository }) {
     },
     /** Create the release (and its tag at `sha`); a release that already exists is left alone. */
     async createRelease({ tag, sha, name, body, makeLatest }) {
-      const { status } = await call('GET', `${r}/releases/tags/${encodeURIComponent(tag)}`);
-      if (status === 200) return false;
+      if (await this.hasRelease(tag)) return false;
       await ok('POST', `${r}/releases`, {
         tag_name: tag,
         target_commitish: sha,

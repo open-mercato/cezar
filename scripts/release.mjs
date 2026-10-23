@@ -32,9 +32,12 @@
 // `--dist-tag <tag>` overrides `latest`: the release-line workflow passes `latest-X.Y` for a
 // backport to an older line (resolveStableDistTag), so it never moves `latest` backwards.
 // A package whose version is already on the registry is skipped, so a re-run after a
-// half-finished publish completes instead of failing on E403.
+// half-finished publish completes instead of failing on E403; `--reconcile-tag` then points the
+// dist-tag at it, or a resumed `latest-X.Y` release would leave that package untagged. A failed
+// publish is retried once: npm's provenance step reads a short-lived OIDC token, and that read
+// fails transiently (IDENTITY_TOKEN_READ_ERROR half-published 0.16.2).
 //
-// Usage: node scripts/release.mjs <patch|minor|major|existing> [--dry-run] [--dist-tag <tag>]
+// Usage: node scripts/release.mjs <patch|minor|major|existing> [--dry-run] [--dist-tag <tag>] [--reconcile-tag]
 // Env override for tests: CEZ_RELEASE_ROOT (defaults to the repo root).
 
 import { execFileSync } from 'node:child_process';
@@ -103,6 +106,7 @@ if (!/^[a-z][a-z0-9.-]*$/.test(distTag)) {
 }
 
 let dryRun = process.argv.includes('--dry-run');
+const reconcileTag = process.argv.includes('--reconcile-tag');
 const token = process.env.NODE_AUTH_TOKEN ?? '';
 if (!dryRun && !token) {
   console.log('release: NPM_TOKEN is not configured — forcing --dry-run.');
@@ -153,7 +157,15 @@ const publish = (dir, label) => {
     ...(dryRun ? ['--dry-run'] : []),
   ];
   console.log(`release: npm ${args.join(' ')}  (${label})`);
-  runNpm(args, dir);
+  try {
+    runNpm(args, dir);
+  } catch (error) {
+    if (dryRun) throw error;
+    console.log(`release: publishing ${label} failed (${error.message}) — retrying once in 15s.`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 15_000);
+    if (alreadyPublished(label)) return;
+    runNpm(args, dir);
+  }
 };
 
 // Dependency order — see the header. `ReleaseManifests` declares its fields in this order for
@@ -167,6 +179,10 @@ for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) {
   }
   if (alreadyPublished(stamped[key].name)) {
     console.log(`release: ${stamped[key].name}@${version} is already on the registry — skipped.`);
+    if (reconcileTag) {
+      console.log(`release: npm dist-tag add ${stamped[key].name}@${version} ${distTag}`);
+      runNpm(['dist-tag', 'add', `${stamped[key].name}@${version}`, distTag], dirs[key]);
+    }
   } else {
     publish(dirs[key], stamped[key].name);
   }
