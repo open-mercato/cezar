@@ -27,6 +27,8 @@ Let the user drag the border between the Changes file tree and the diff to widen
 
 ## Progress
 
+PR: #1650
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Splitter
