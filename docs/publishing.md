@@ -52,18 +52,36 @@ release/v0.15.x    └─ 0.15.3 ─ 0.15.4 (fixes)          │
 release/v0.16.x                                        └─ 0.16.0 ─ 0.16.1 …
 ```
 
-Three workflows, no hand-edited versions:
+Four workflows, no hand-edited versions. Every write they make uses the
+release GitHub App's token (step 6 below), never `GITHUB_TOKEN`: PRs and tags
+made with that token start no workflows.
 
 | Workflow | Run from | Does |
 |---|---|---|
-| [`Release cut`](../.github/workflows/release-cut.yml) | `main` | With main at `X.Y.Z`: creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` label, and opens the PR moving main (manifests, cockpit, lockfile) to `X.(Y+1).0`. |
-| [`Release`](../.github/workflows/release.yml) | a `release/vX.Y.x` branch (the *Use workflow from* picker) | Bumps first: once `vX.Y.Z` is tagged the next patch is chosen (a fresh line's `X.Y.0` ships as committed). Stamps every manifest, the lockfile and `CHANGELOG.md`, commits that to the branch, then verifies, builds and publishes **that commit**, tags it, cuts the GitHub Release and opens a PR carrying the changelog entry to `main`. |
-| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line; `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. A PR from a fork is skipped (no secrets on `pull_request`): port it by hand. |
+| [`Release cut`](../.github/workflows/release-cut.yml) | `main` | With main at `X.Y.Z`: creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` / `backport main` labels, hands main's `# Unreleased` to the line, and opens the PR moving main (manifests, cockpit, lockfile) to `X.(Y+1).0`. A re-run from the same main commit finishes a half-done cut; once main has moved past it, it refuses. |
+| [`Release`](../.github/workflows/release.yml) | a `release/vX.Y.x` branch (the *Use workflow from* picker) | Picks the version (below), stamps every manifest, the lockfile and `CHANGELOG.md`, commits that to the line, verifies and builds **that commit**, then tags it `vX.Y.Z`. It publishes nothing itself. |
+| [`Release publish`](../.github/workflows/release-publish.yml) | the `vX.Y.Z` tag (started by the tag) | Runs **at the tagged commit**, so npm provenance attests the code that ships. Checks the tag names the manifests and sits on its line, skips a version already released, resolves the dist-tag, builds, publishes, opens the changelog PR to `main`, and **last** creates the GitHub Release. One publish at a time across all lines. |
+| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line (carrying its category, priority, risk and QA labels — never `qa-approved` — plus `backport`, `review`); `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. Fork PRs are skipped (no secrets on `pull_request`): port them by hand. |
+
+**How Release picks the version.** A release is *done* when its GitHub Release
+exists; the tag pins its commit.
+
+| The line's state | Release does |
+|---|---|
+| newest tag `vX.Y.Z` has a GitHub Release | bumps the patch, commits, tags the bump |
+| a fresh line (`X.Y.0` committed, untagged, not on npm) | ships `X.Y.0` as committed |
+| a bump whose run died before tagging (untagged, not on npm) | ships it as committed |
+| newest tag has **no** GitHub Release | stops: re-run that tag's **Release publish** run. Fixes merged since go to the next patch — one npm version never mixes two commits |
+| untagged version **already on npm** (its tag was deleted) | refuses: restore the tag at the commit it was published from. **Never delete a release tag.** |
 
 **Dist-tags.** Only the newest line moves `latest`, which the cockpit's stable
-update channel follows. A patch to an older line publishes under
-`latest-X.Y` (`npx cezar-run@latest-0.15`) and its GitHub Release is not marked
-latest — so a 0.15.4 after 0.16.0 never offers anyone a downgrade.
+update channel follows. *Release publish* compares against the highest
+`latest` across every published package (failing closed when npm can't be
+read), so a half-published run can't let a patch move one package's `latest`
+backwards. A patch to an older line publishes under `latest-X.Y`
+(`npx cezar-run@latest-0.15`) and its GitHub Release is not marked latest. A
+package already on npm is skipped and its dist-tag re-pointed
+(`--reconcile-tag`).
 
 **Changelog.** A hand-written entry wins: an existing `# X.Y.Z` heading is kept,
 and a leading `# Unreleased` on the line is renamed to the version (*Release
@@ -72,35 +90,42 @@ entry is GitHub's generated notes since the previous tag on that line, grouped b
 PR label per [`.github/release.yml`](../.github/release.yml) — `feature` → ✨ Features,
 `security` → 🔒 Security, `bug` → 🐛 Fixes, `refactor`/`dependencies`/`documentation`
 → 🧹 Maintenance — with contributors credited. Backport PRs keep the original title and
-labels; the release workflows' own PRs carry `skip-changelog` and are left out. The
-same entry, plus the install command, is the GitHub Release body.
+labels; the release workflows' own PRs carry `skip-changelog` (plus a category and
+`review`) and are left out. The same entry, plus the install command, is the
+GitHub Release body.
 
-**Re-runs are safe.** A version already tagged is skipped past, a package
-already on npm is not published again, and an existing GitHub Release, branch
-or PR is reused — so a release that failed half-way is finished by running it
-again from the same branch.
+**Finishing a failed release.** If *Release* fails before tagging, run it again
+from the line. If *Release publish* fails (npm, the changelog PR, the GitHub
+Release), use **Re-run jobs** on that run: it rebuilds the same tagged commit,
+skips what already reached npm, and finishes.
+
+*Release publish* runs one at a time across every line (two lines publishing at
+once could both read `latest` before either moves it). GitHub keeps only **one**
+waiting run per group: if a third tag arrives while one publishes and one waits,
+the waiting run is cancelled. The tag survives, and the next *Release* on that
+line reports it as tagged but not released — re-run its *Release publish* run.
 
 Only `release/vX.Y.x` branches can run `Release`; the pre-release-lines
 `release/0.9.x` branch is retired.
 
-The `Release` job is gated behind the `production` environment (required
-reviewers). Without `NPM_TOKEN` it degrades to a loud dry run, and its
-`dry_run` input computes and builds a release without committing, publishing
-or tagging anything.
+*Release publish* is gated behind the `production` environment (required
+reviewers, deployment tag rule `v*`). Without `NPM_TOKEN` it degrades to a loud
+dry run. *Release*'s `dry_run` input plans, stamps, verifies, builds and
+previews the release body without committing or tagging anything.
 
 **Running a workflow:** GitHub → **Actions** → pick the workflow in the left
 sidebar → **Run workflow** → choose the branch in **Use workflow from** → tick
-`dry_run` to rehearse → **Run workflow**. A Release run then waits for the
-`production` environment approval (the run page shows *Review deployments*).
+`dry_run` to rehearse → **Run workflow**.
 
 ### Hotfix from telemetry (a patch on the current line)
 
 1. Open the fix PR against **`main`**, labelled `backport release/v0.16.x`
    (the newest line — `git branch -r --list 'origin/release/v*'`). Merge it.
-2. The **Backport** workflow opens `[Backport release/v0.16.x] …` against the
+2. The **Backport** workflow opens a PR with the same title against the
    line. Wait for CI, approve, merge. Repeat 1–2 for every fix that should ship.
 3. Actions → **Release** → *Use workflow from* **`release/v0.16.x`** → run
-   (optionally `dry_run` first) → approve the deployment. `0.16.1` is on npm.
+   (optionally `dry_run` first). It tags `v0.16.1`, which starts **Release
+   publish** → approve its deployment. `0.16.1` is on npm.
 4. Merge the `docs(changelog): add the 0.16.1 entry` PR it opens on `main`.
 
 ### Next minor (cut a new line)
@@ -111,8 +136,9 @@ sidebar → **Run workflow** → choose the branch in **Use workflow from** → 
 2. Merge the `chore(release): open 0.18.0 on main` PR it opens. Features keep
    landing on `main` from here; only backports reach `release/v0.17.x`.
 3. Stabilize: fixes go to `main` labelled `backport release/v0.17.x`, as above.
-4. Actions → **Release** → *Use workflow from* **`release/v0.17.x`** → run →
-   approve. `0.17.0` is on npm and moves `latest`.
+4. Actions → **Release** → *Use workflow from* **`release/v0.17.x`** → run;
+   approve the **Release publish** run its tag starts. `0.17.0` is on npm and
+   moves `latest`.
 5. Merge the changelog PR on `main`.
 
 The previous line keeps working: a fix labelled `backport release/v0.16.x` and a
@@ -183,8 +209,9 @@ prereleases are inert).
 | `packages/cezar/src/release/snapshot.ts` | pure decisions: channel/version/dist-tag, install lines (unit-tested) |
 | `packages/cezar/src/release/manifests.ts` | the shared stamper: which manifests exist, and how each pins the next (unit-tested) |
 | `packages/cezar/src/release/stable.ts`, `bump.ts` | pure release-line decisions: next version, dist-tag, lockfile/changelog stamping (unit-tested) |
-| `scripts/release-line.mjs` | `cut` / `prepare` / `announce` for the release-line workflows; GitHub writes through `scripts/lib/github.mjs` (`--dry-run` e2e-tested) |
-| `scripts/release.mjs` | publishes the release set in dependency order under `--dist-tag` (`latest` by default) |
+| `scripts/release-line.mts` | `cut` / `prepare` / `tag` / `verify` / `announce` for the release-line workflows; GitHub writes through `scripts/lib/github.mts` (e2e-tested against a fake GitHub API) |
+| `scripts/release.mts` | publishes the release set in dependency order under `--dist-tag` (`latest` by default) |
+| `scripts/tsconfig.release.json` | strict typecheck of the `.mts` release tooling (`npm run typecheck:release`); Node runs it directly with type stripping (Node ≥ 22.18), importing `packages/cezar/src/release/*.ts` — no build step |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
 | `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
 | `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
@@ -229,22 +256,36 @@ On **GitHub** (this repository):
 
 5. Settings → Secrets and variables → Actions → new repository secret
    **`NPM_TOKEN`** with the token from step 3.
-6. **`RELEASE_TOKEN`**: a GitHub App or fine-grained token with
-   *Contents* and *Pull requests* read/write on this repo. Required once the
-   step 7 ruleset exists — `GITHUB_TOKEN` cannot bypass it, so *Release* could
-   not commit the bump to the line. GitHub runs no CI on
-   a PR opened with the workflow's own `GITHUB_TOKEN`, so without it the
-   main-bump, changelog and backport PRs wait for a manual re-run of their checks.
-   Those PRs are never auto-merged: approve and merge them like any other.
-7. A ruleset for `release/v*` (no deletion, no force-push; PRs required) with the
-   `RELEASE_TOKEN` identity on its bypass list — the Release workflow commits
-   the version bump straight to the line through the API (GitHub-signed).
-8. Nothing else — the workflows declare their own `permissions:` blocks, so
-   repo-level Actions defaults can stay read-only.
+6. **The release GitHub App** — every release workflow mints a one-hour token
+   from it (`actions/create-github-app-token`); there is no fallback.
+   - Create it under the **org**: `https://github.com/organizations/<org>/settings/apps/new`
+     (an App made under a personal account can only be installed there).
+     Homepage = the repository URL, no callback URL, webhook **off**,
+     "Only on this account".
+   - Repository permissions: **Contents, Pull requests, Issues, Workflows —
+     read & write**. Install it on this repository only.
+   - Store its **Client ID** (`Iv23…`, not the numeric App ID) as the
+     repository *variable* `RELEASE_APP_CLIENT_ID`, and a generated private key
+     (the whole `.pem`) as the *secret* `RELEASE_APP_PRIVATE_KEY`.
+   - Why an App: nothing expires, PRs it opens are authored by the App (so any
+     maintainer can approve them), its tags and PRs start workflows, and its
+     API commits are GitHub-signed.
+7. Branch ruleset **`release lines`** on `release/v*`: restrict creations and
+   deletions, block force pushes, require a PR (1 approval) and the CI checks
+   ("do not require status checks on creation" ✅), signed commits optional —
+   with the **App** on its bypass list (*Always*): *Release* commits the bump
+   straight to the line.
+8. Tag ruleset on `v*`: restrict creations, updates and deletions, App on its
+   bypass list. Anyone who can push a `v*` tag would otherwise start a publish.
+9. Environment **`production`**: required reviewers, and a deployment tag rule
+   `v*` so only release tags can deploy to it.
+10. Nothing else — the workflows declare their own `permissions:` blocks, so
+   repo-level Actions defaults can stay read-only. `RELEASE_TOKEN` is no longer
+   read and can be deleted.
 
 After the first stable publish under a new package name (post-rename only):
 
-9. Publish a final forwarding patch of the old scoped package and deprecate
+11. Publish a final forwarding patch of the old scoped package and deprecate
    it: `npm deprecate <old-name> "moved to <new-name> — npx cezar-run still works"`.
 
 ## Verifying a preview
