@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -14,6 +14,21 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 /** Every spec a (mocked) runner's `startSession` receives, in spawn order. */
 const captured = vi.hoisted(() => ({ specs: [] as AgentRunSpec[] }));
+
+/** `provisionSkills` calls, and a hook that runs at the start of each. */
+const provisionSpy = vi.hoisted(() => ({ calls: 0, before: undefined as (() => void) | undefined }));
+
+vi.mock('../skills-provision.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../skills-provision.ts')>();
+  return {
+    ...actual,
+    provisionSkills: (...args: Parameters<typeof actual.provisionSkills>) => {
+      provisionSpy.calls++;
+      provisionSpy.before?.();
+      return actual.provisionSkills(...args);
+    },
+  };
+});
 
 // The seam under test is what `runContinuation` puts INTO the spec, so the runner is a
 // capture stub: the spec→argv mapping below it is `claude-cli-runner.test.ts`'s business
@@ -91,6 +106,8 @@ describe('a resumed session keeps its workflow step tools', () => {
 
   beforeEach(async () => {
     captured.specs.length = 0;
+    provisionSpy.calls = 0;
+    provisionSpy.before = undefined;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-tools-'));
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
@@ -295,6 +312,108 @@ describe('a resumed session keeps its workflow step tools', () => {
     expect(spec.allowedTools).toEqual(TOOLS);
     expect(spec.bashAllowlist).toEqual(BASH);
     await settled(id);
+  });
+
+  it("Continue never grants a skill's source directory (--add-dir is read+write)", async () => {
+    // A directory skill outside `.agents/skills` is read through its in-worktree path; granting
+    // its source dir would let the resumed agent rewrite the skill every concurrent run shares.
+    mkdirSync(join(repoRoot, '.ai/skills/demo-dir'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/skills/demo-dir/SKILL.md'), '---\nname: demo-dir\n---\nbody\n');
+    const def: WorkflowDef = {
+      name: 'skilled-task',
+      source: 'file',
+      steps: [{ id: 'work', name: 'Work', prompt: '{{task}}', skill: 'demo-dir' }],
+    };
+    const id = terminalRun({ def, steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }] });
+
+    expect(manager!.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.additionalDirectories ?? []).not.toContain(join(repoRoot, '.ai/skills/demo-dir'));
+    expect(spec.additionalDirectories ?? []).not.toContain(join(repoRoot, '.ai/skills'));
+    await settled(id);
+  });
+
+  it('names the provisioned skill path instead of the body, on the opening spawn and on Continue', async () => {
+    mkdirSync(join(repoRoot, '.ai/skills/demo-dir'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/skills/demo-dir/SKILL.md'), '---\nname: demo-dir\n---\nDirectory skill body.\n');
+    const def: WorkflowDef = {
+      name: 'skilled-task',
+      source: 'file',
+      steps: [{ id: 'work', name: 'Work', prompt: '{{task}}', skill: 'demo-dir' }],
+    };
+    const record = manager!.startRun(def, { task: 'do the thing', worktree: true, runner: 'claude' });
+    const opening = await specAt(0);
+    const wt = store.getRun(record.id)!.worktreePath!;
+    const file = join(wt, '.claude/skills/demo-dir/SKILL.md');
+    expect(opening.cwd).toBe(wt);
+    expect(opening.systemPrompt).toContain(`Skill file: ${file}`);
+    expect(opening.systemPrompt).not.toContain('Directory skill body.');
+    await settled(record.id);
+
+    // A reclaimed worktree comes back without the provisioned entries; Continue reinstalls them.
+    for (const dir of ['.claude/skills', '.agents/skills']) rmSync(join(wt, dir), { recursive: true, force: true });
+    expect(manager!.continueRun(record.id, { text: '/demo-dir once more', runner: 'claude' })).toEqual({ ok: true });
+    const resumed = await specAt(1);
+    expect(resumed.userPrompt).toContain(`Skill file: ${file}`);
+    expect(resumed.userPrompt).not.toContain('Directory skill body.');
+    expect(existsSync(file)).toBe(true);
+    await expect
+      .poll(() => store.getRun(record.id)?.steps.find((s) => s.id === 'continue-1')?.status, { timeout: 15_000 })
+      .toSatisfy((status) => ['done', 'failed', 'cancelled'].includes(String(status)));
+    await settled(record.id);
+  });
+
+  describe("the owning step's skill on Continue", () => {
+    const def: WorkflowDef = {
+      name: 'skilled-task',
+      source: 'file',
+      steps: [{ id: 'work', name: 'Work', prompt: '{{task}}', skill: 'demo-dir' }],
+    };
+
+    /** A settled worktree run whose step skill `demo-dir` was provisioned; resets the provision spy. */
+    async function provisionedRun(): Promise<{ id: string; wt: string }> {
+      mkdirSync(join(repoRoot, '.ai/skills/demo-dir'), { recursive: true });
+      writeFileSync(join(repoRoot, '.ai/skills/demo-dir/SKILL.md'), '---\nname: demo-dir\n---\nDirectory skill body.\n');
+      const record = manager!.startRun(def, { task: 'do the thing', worktree: true, runner: 'claude' });
+      await specAt(0);
+      await settled(record.id);
+      const wt = store.getRun(record.id)!.worktreePath!;
+      expect(existsSync(join(wt, '.agents/skills/demo-dir/SKILL.md'))).toBe(true);
+      provisionSpy.calls = 0;
+      return { id: record.id, wt };
+    }
+
+    it('does not reinstall an on-disk skill whose entry already carries it', async () => {
+      const { id, wt } = await provisionedRun();
+      // One matching entry left: ready, so the missing mirror is not put back.
+      rmSync(join(wt, '.agents/skills/demo-dir'), { recursive: true, force: true });
+      expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+      await specAt(1);
+      expect(provisionSpy.calls).toBe(0);
+      expect(existsSync(join(wt, '.agents/skills/demo-dir'))).toBe(false);
+      await settled(id);
+    });
+
+    it('reinstalls it when its entries are gone', async () => {
+      const { id, wt } = await provisionedRun();
+      for (const dir of ['.claude/skills', '.agents/skills']) rmSync(join(wt, dir), { recursive: true, force: true });
+      expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+      await specAt(1);
+      expect(provisionSpy.calls).toBe(1);
+      expect(existsSync(join(wt, '.claude/skills/demo-dir/SKILL.md'))).toBe(true);
+      await settled(id);
+    });
+
+    it('starts no session when the run is cancelled while its skills are provisioned', async () => {
+      const { id, wt } = await provisionedRun();
+      for (const dir of ['.claude/skills', '.agents/skills']) rmSync(join(wt, dir), { recursive: true, force: true });
+      provisionSpy.before = () => manager!.cancel(id);
+      expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+      await expect.poll(() => provisionSpy.calls, { timeout: 15_000 }).toBe(1);
+      await settled(id);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(captured.specs).toHaveLength(1);
+    });
   });
 
   it('the usage-limit auto-resume keeps the step tools too', async () => {

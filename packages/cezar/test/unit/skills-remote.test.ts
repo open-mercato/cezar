@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { mock } from 'node:test';
 import {
   ensureBareClone,
   getTeamSkillsCached,
@@ -12,7 +12,9 @@ import {
   listRemoteSkills,
   refreshTeamSkills,
   safeRemoteFor,
+  waitForTeamSkills,
 } from '../../src/skills-remote.js';
+import { provisionedSkillFile, provisionSkills } from '../../src/skills-provision.js';
 
 // ---- safeRemoteFor: repo/URL injection guard (#428) --------------------------
 
@@ -203,4 +205,121 @@ test('team-skills cache is keyed by repoRoot — projects never see each other\'
   // A's scope was served B's skills. Each root must keep its own entry.
   assert.deepEqual(getTeamSkillsCached(rootA).map((s) => s.name), ['alpha-skill']);
   assert.deepEqual(getTeamSkillsCached(rootB).map((s) => s.name), ['beta-skill']);
+});
+
+// ---- passive refresh after the TTL (B19) -------------------------------------
+
+/** A local skills repo, a project root pointing at it, and a mocked `Date`; all undone after `t`. */
+function ttlFixture(t: { after: (fn: () => void) => void }) {
+  const home = mkdtempSync(join(tmpdir(), 'cez-home-'));
+  const src = mkdtempSync(join(tmpdir(), 'cez-src-ttl-'));
+  const root = mkdtempSync(join(tmpdir(), 'cez-root-ttl-'));
+  const prevHome = process.env.HOME;
+  process.env.HOME = home;
+  mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  t.after(() => {
+    mock.timers.reset();
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    for (const d of [home, src, root]) rmSync(d, { recursive: true, force: true });
+  });
+  const g = (args: string[]) => execFileSync('git', args, { cwd: src, encoding: 'utf8' });
+  const addSkill = (name: string) => {
+    mkdirSync(join(src, name));
+    writeFileSync(join(src, name, 'SKILL.md'), `---\ndescription: ${name}\n---\n${name} body\n`);
+    g(['add', '-A']);
+    g(['commit', '-m', name]);
+  };
+  g(['-c', 'init.defaultBranch=main', 'init']);
+  g(['config', 'user.email', 'test@example.com']);
+  g(['config', 'user.name', 'Test']);
+  addSkill('first-skill');
+  mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+  writeFileSync(join(root, '.ai/cezar', 'config.json'), JSON.stringify({ skillsRepos: [{ repo: src, ref: 'main' }] }));
+  const names = () => getTeamSkillsCached(root).map((s) => s.name);
+  /** Real timers still run: `Date` is the only mocked API. */
+  const until = async (predicate: () => boolean) => {
+    const deadline = performance.now() + 15_000;
+    while (!predicate()) {
+      if (performance.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  return { root, addSkill, names, until };
+}
+
+const HOUR = 60 * 60 * 1_000;
+
+test('a passive touch reloads team skills in the background once the last load is older than the six-hour TTL', async (t) => {
+  const { root, addSkill, names, until } = ttlFixture(t);
+  assert.deepEqual((await waitForTeamSkills(root)).map((s) => s.name), ['first-skill']);
+  addSkill('second-skill');
+
+  // A reload reads config.json again; with the source gone it would empty the list.
+  const config = join(root, '.ai/cezar/config.json');
+  const sources = readFileSync(config, 'utf8');
+  writeFileSync(config, JSON.stringify({ skillsRepos: [] }));
+  mock.timers.tick(HOUR);
+  getTeamSkillsCached(root);
+  assert.deepEqual((await waitForTeamSkills(root)).map((s) => s.name), ['first-skill']);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.deepEqual(names(), ['first-skill'], 'still fresh: no reload');
+  writeFileSync(config, sources);
+
+  mock.timers.tick(5 * HOUR + 1);
+  // The TTL reload never blocks a waiter: it answers with the list already held.
+  assert.deepEqual((await waitForTeamSkills(root)).map((s) => s.name), ['first-skill']);
+  await until(() => names().includes('second-skill'));
+  assert.deepEqual(names(), ['first-skill', 'second-skill']);
+});
+
+test('the TTL and the fetch time share one clock, so a slow load does not stretch the interval', async (t) => {
+  const { root, addSkill, names, until } = ttlFixture(t);
+  const first = waitForTeamSkills(root);
+  // The first load is still cloning when a minute passes.
+  mock.timers.tick(60 * 1_000);
+  assert.deepEqual((await first).map((s) => s.name), ['first-skill']);
+  addSkill('second-skill');
+
+  mock.timers.tick(6 * HOUR);
+  getTeamSkillsCached(root);
+  await until(() => names().includes('second-skill'));
+});
+
+test('a team skill path is named only after this process materialized it, and while it holds that blob', async (t) => {
+  const { root, names, until } = ttlFixture(t);
+  await waitForTeamSkills(root);
+  await until(() => names().includes('first-skill'));
+  const skill = getTeamSkillsCached(root).find((s) => s.name === 'first-skill')!;
+  const cwd = mkdtempSync(join(tmpdir(), 'cez-team-cwd-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const file = join(cwd, '.claude/skills/first-skill/SKILL.md');
+
+  // A same-named entry cezar did not write: never named.
+  mkdirSync(join(cwd, '.claude/skills/first-skill'), { recursive: true });
+  writeFileSync(file, '---\nname: first-skill\n---\nsomething else\n');
+  assert.equal(provisionedSkillFile(cwd, skill), undefined);
+
+  assert.deepEqual(await provisionSkills(cwd, [skill], [skill]), ['first-skill']);
+  assert.equal(provisionedSkillFile(cwd, skill), file);
+
+  // Edited after materialization: no longer the team blob.
+  writeFileSync(file, '---\nname: first-skill\n---\nedited\n');
+  assert.equal(provisionedSkillFile(cwd, skill), undefined);
+});
+
+test('a failed re-materialization over an earlier success inlines the team skill', async (t) => {
+  const { root, names, until } = ttlFixture(t);
+  await waitForTeamSkills(root);
+  await until(() => names().includes('first-skill'));
+  const skill = getTeamSkillsCached(root).find((s) => s.name === 'first-skill')!;
+  const cwd = mkdtempSync(join(tmpdir(), 'cez-team-cwd-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  assert.deepEqual(await provisionSkills(cwd, [skill], [skill]), ['first-skill']);
+  assert.equal(provisionedSkillFile(cwd, skill), join(cwd, '.claude/skills/first-skill/SKILL.md'));
+
+  // A pinned commit the clone does not have: the copy on disk is unchanged, but this materialization failed.
+  const gone = { ...skill, team: { ...skill.team!, ref: 'f'.repeat(40) } };
+  assert.deepEqual(await provisionSkills(cwd, [gone], [gone]), []);
+  assert.equal(provisionedSkillFile(cwd, skill), undefined);
 });

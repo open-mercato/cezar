@@ -59,12 +59,12 @@ import {
   sanitizeAttachmentName,
   storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
-import type { AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
+import type { AgentBackend, AgentEvent, AgentRunResult, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { automationsReachable } from '../automations/builtin-skill.ts';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
-import { provisionSkills } from '../skills-provision.ts';
+import { provisionedSkillFile, provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
@@ -4712,6 +4712,18 @@ export class RunManager {
 
     const runner = createRunner(continueBackend);
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
+    // The owning step's skill as well as a leading `/skill`: a reclaimed worktree is re-created
+    // without its provisioned entries, and the resumed agent loads the step's skill by name through
+    // its native loader (and, on Codex and OpenCode, through the path the session's first user
+    // message named). An on-disk skill whose entry already carries it needs no reinstall and no
+    // team-skill wait; a team skill is always materialized again, so a fetched update lands.
+    const ownedSkill = toolsStep?.skill ? state.skills?.find((s) => s.name === toolsStep.skill) : undefined;
+    const ownedSkillReady =
+      ownedSkill !== undefined && ownedSkill.source !== 'team' && provisionedSkillFile(state.cwd, ownedSkill) !== undefined;
+    await this.provisionTaskSkills(state, {
+      stepSkill: ownedSkillReady ? undefined : toolsStep?.skill,
+      slash: leadingSlashSkillName(prompt),
+    });
     if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
@@ -4719,8 +4731,12 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
-    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    const continueTools = state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
+    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? [], {
+      backend: continueBackend,
+      cwd: state.cwd,
+      allowedTools: continueTools,
+    });
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
@@ -4753,7 +4769,7 @@ export class RunManager {
             : contextualOpeningPrompt,
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
-          allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          allowedTools: continueTools,
           bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
@@ -6413,6 +6429,9 @@ export class RunManager {
     graphHooks?: { resumeSessionId?: string; lastTurn?: { text: string } },
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
+    let stepSkill: Skill | undefined;
+    const skillBackend = step.runner ?? taskBackend;
+    const skillTools = state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS;
     // An attachment-only task (telemetry 18c930de) — the note stands in for the missing text, so a
     // step template (`Review: {{task}}`) still reads as a sentence.
     const taskText = input.task.trim() === '' && attachments.length ? ATTACHMENT_ONLY_TASK : input.task;
@@ -6429,7 +6448,8 @@ export class RunManager {
         // name and catalog description in the normalized runner payload so a
         // numeric task such as "432" still gives the model enough context to
         // describe the work — and therefore derive a useful title (#432).
-        systemPrompt = skillSystemPrompt(skill);
+        systemPrompt = skillSystemPrompt(skill, skillDelivery(skill, skillBackend, state.cwd, skillTools));
+        stepSkill = skill;
       } else {
         emit({
           type: 'note',
@@ -6447,7 +6467,12 @@ export class RunManager {
     // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
     // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
-    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? [], {
+      backend: skillBackend,
+      cwd: state.cwd,
+      stepSkill: stepSkill?.name,
+      allowedTools: skillTools,
+    });
     if (chainNote) userPrompt = `${chainNote}\n\n---\n\n${userPrompt}`;
     // A commander recovered after a restart opens its first session holding whatever its children
     // reported while it was gone (spec Q7). Prepended and cleared here, after the slash expansion
@@ -8341,6 +8366,44 @@ export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCoun
   return chars.length > 80 ? `${chars.slice(0, 79).join('').trimEnd()}…` : chars.join('');
 }
 
+/** How a selected skill reaches the agent: its whole body, or its identity and file path. */
+export type SkillDelivery =
+  | { mode: 'inline' }
+  | { mode: 'path'; file: string; skillTool: boolean };
+
+/* Verified to discover `SKILL.md` directories natively (spec 2026-09-30-skills-in-worktree). */
+const NATIVE_SKILL_BACKENDS: ReadonlySet<AgentBackend> = new Set(['claude', 'claude-cli', 'codex', 'opencode']);
+
+/** Claude's `--allowedTools` is default-deny, so a named file needs `Read`; the other native backends ignore it. */
+function canLoadSkillPath(backend: AgentBackend, allowedTools: readonly string[]): boolean {
+  if (backend !== 'claude' && backend !== 'claude-cli') return true;
+  return allowedTools.includes('Read');
+}
+
+/**
+ * Directory skills on a backend with a native skill loader travel as a path; everything else
+ * keeps the inlined body. The path is only ever the `SKILL.md` inside `cwd` that
+ * `provisionSkills` installed (or a team skill materialized there, or an in-place run's own
+ * installed copy), and only when it carries the selected skill: a tracked or user-owned entry
+ * under the same name, which provisioning leaves alone, is never named. A Claude allowlist
+ * without `Read` inlines too, since a path it cannot read is worse than the body.
+ */
+export function skillDelivery(
+  skill: Pick<Skill, 'name' | 'path' | 'source'>,
+  backend: AgentBackend,
+  cwd: string,
+  allowedTools: readonly string[] = DEFAULT_ALLOWED_TOOLS,
+): SkillDelivery {
+  if (!NATIVE_SKILL_BACKENDS.has(backend) || !canLoadSkillPath(backend, allowedTools)) {
+    return { mode: 'inline' };
+  }
+  if (skill.source !== 'team' && basename(skill.path) !== 'SKILL.md') return { mode: 'inline' };
+  const file = provisionedSkillFile(cwd, skill);
+  if (!file) return { mode: 'inline' };
+  const isClaude = backend === 'claude' || backend === 'claude-cli';
+  return { mode: 'path', file, skillTool: !isClaude || allowedTools.includes('Skill') };
+}
+
 /**
  * Skill identity is context, while the Markdown body remains instructions.
  *
@@ -8353,14 +8416,26 @@ export function makeRunTitle(task: string, workflow: WorkflowDef, attachmentCoun
  * current `npx skills`-installed copy, so a worktree agent and the main
  * checkout read the exact same, up-to-date files. Team skills are omitted here:
  * they are materialized into the worktree separately (see the call site).
+ *
+ * A `path` delivery replaces the body with the skill file's path and an instruction to load it.
  */
 export function skillSystemPrompt(
   skill: Pick<Skill, 'name' | 'description' | 'body'> & Partial<Pick<Skill, 'path' | 'source'>>,
+  delivery: SkillDelivery = { mode: 'inline' },
 ): string {
   const lines = [
     `Selected skill: /${skill.name}`,
     ...(skill.description ? [`Description: ${skill.description}`] : []),
   ];
+  if (delivery.mode === 'path') {
+    lines.push(
+      '',
+      `Skill file: ${delivery.file}`,
+      `${delivery.skillTool ? 'Load this skill with your skill tool, or read that file' : 'Read that file'} before acting. ` +
+        `Resolve any file it references (for example references/*.md) against its directory.`,
+    );
+    return lines.join('\n');
+  }
   if (skill.source && skill.source !== 'team' && skill.path) {
     const dir = dirname(skill.path);
     lines.push(
@@ -8406,15 +8481,29 @@ export function leadingSlashSkillName(text: string): string | undefined {
  * `expandRegistrySlashSkill`, and a continuation's opening prompt, which becomes
  * the session's `userPrompt` and never passes through `deliverMessage` at all
  * (#811).
+ *
+ * With `backend` + `cwd` the skill follows `skillDelivery`; without them the body is inlined
+ * (live chat, S9). `stepSkill` names the skill the step's system prompt already carries: that one
+ * is not delivered a second time, only the request is kept.
  */
-export function expandRegistrySlashSkillText(text: string, skills: readonly Skill[]): string {
+export function expandRegistrySlashSkillText(
+  text: string,
+  skills: readonly Skill[],
+  opts: { backend?: AgentBackend; cwd?: string; stepSkill?: string; allowedTools?: readonly string[] } = {},
+): string {
   const name = leadingSlashSkillName(text);
   if (!name) return text;
   const skill = skills.find((candidate) => candidate.name === name);
   if (!skill) return text;
 
   const request = text.slice(name.length + 1).trim();
-  return request ? `${skillSystemPrompt(skill)}\n\nUser request:\n${request}` : skillSystemPrompt(skill);
+  if (opts.stepSkill === skill.name) return request || `Follow the selected skill /${skill.name}.`;
+  const delivery =
+    opts.backend && opts.cwd !== undefined
+      ? skillDelivery(skill, opts.backend, opts.cwd, opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS)
+      : undefined;
+  const prompt = skillSystemPrompt(skill, delivery);
+  return request ? `${prompt}\n\nUser request:\n${request}` : prompt;
 }
 
 /**
