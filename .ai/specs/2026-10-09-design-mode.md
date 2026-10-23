@@ -226,6 +226,23 @@ When the worktree needs installing, the install now runs in a tab of its own tha
 status (`<install> && exit 0 || exit 1`), and the services start only once it succeeded — one shell
 running `<install> && <service>` cannot hold several services back.
 
+## 7d. Following in-page moves (2026-10-23)
+
+A page that moves without a load (`pushState`, `replaceState`, a hash change) is invisible to a
+cross-origin embedder, so the bar kept the first address and Reload went back to it. A **location
+reporter** inside the page now posts `{ source: 'cezar-preview', type: 'location', url, how }` to its
+parent at the cockpit's origin; it only reports and obeys nothing. Two carriers: the Design Mode
+picker (`location-reporter.ts`, so it works through the mirror), and the desktop shell, which injects
+a copy into every frame and acts only in a direct child of a cockpit origin (`FRAME_SCRIPT`). A plain
+browser cockpit with Design Mode off has no carrier and behaves as before.
+
+The view takes a report only from its own frame at the frame's origin. Pushes become Back entries, a
+replace rewrites the current one, the bar follows unless the user is typing in it, and the address is
+kept for the tab. Reload reopens the page's current address. An address that differs from the page
+on show by its hash alone — typed, or reached with Back/Forward — re-points `src` without rebuilding
+the frame (it is keyed by the address without its hash), so the page gets `hashchange` and no reload;
+that needs no reporter. Back to a `pushState` entry on another path is still a load of that address.
+
 ## 8. Verification
 
 - `packages/cezar/src/server/preview/design-proxy.test.ts` — the proxy against a real loopback
