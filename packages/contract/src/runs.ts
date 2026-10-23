@@ -5,6 +5,10 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+
+/** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
+export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
+export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
 // Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
