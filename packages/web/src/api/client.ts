@@ -578,7 +578,7 @@ export async function browseFs(
 /** The authoritative run list — sorted newest-first by the server. */
 export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
   return unwrap(
-    await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId: queryScope() } }, init(opts)),
+    await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId: queryScope() }, query: {} }, init(opts)),
     '/runs',
   )
 }
@@ -588,7 +588,7 @@ export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
  *  already-`/api/p/`-prefixed path passes through `apiPath` untouched, so this stays
  *  correct whatever scope is mounted. */
 export async function getProjectRuns(projectId: string, opts?: ReadOptions): Promise<ApiRun[]> {
-  return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId } }, init(opts)), '/runs')
+  return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId }, query: {} }, init(opts)), '/runs')
 }
 
 /** The cross-project task index (`GET /api/v1/workspace/runs-index`) — what lets ⌘K find a task

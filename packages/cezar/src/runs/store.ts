@@ -489,10 +489,10 @@ export interface RunEvent {
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
 const DEFAULT_RUNS_KEPT = 300;
 const DEFAULT_ARCHIVED_KEPT = 500;
-/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs (live ones are never pruned) the index keeps. */
+/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs the index keeps (at least 1; live runs and active dispatch trees are never pruned). */
 function keepLimit(name: string, fallback: number): number {
   const n = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
 }
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;

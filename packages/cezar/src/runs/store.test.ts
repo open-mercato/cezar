@@ -2566,7 +2566,7 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
           status: 'done',
         });
       }
-      expect(store.listRuns().length).toBeLessThanOrEqual(6);
+      expect(store.listRuns().length).toBe(5);
     } finally {
       delete process.env.CEZ_RUNS_KEEP;
     }
