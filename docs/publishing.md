@@ -144,6 +144,34 @@ sidebar → **Run workflow** → choose the branch in **Use workflow from** → 
 The previous line keeps working: a fix labelled `backport release/v0.16.x` and a
 Release run from that branch publish `0.16.x` under `latest-0.16`.
 
+### Resolving a conflicted backport
+
+A cherry-pick conflicts when the change depends on a commit that `main` has and the
+line does not. The Backport workflow then opens a **draft** with the conflict markers
+committed and posts the commands on the original PR. Never merge the draft as is.
+
+1. **Find the missing commit.** For each conflicted file:
+   ```bash
+   git fetch origin main release/v0.16.x
+   git log --oneline "$(git merge-base origin/main origin/release/v0.16.x)..<merge commit>^" -- <file>
+   ```
+   lists what `main` changed there that the line never got.
+2. **Decide what that commit is:**
+   - **a fix the line should have too:** backport it first (label its PR
+     `backport release/v0.16.x`, merge that backport), then close the draft and re-run
+     the original's backport: remove its label and add it again. No hand edits.
+   - **a feature, or unrelated:** resolve on the draft's branch. Keep the line's code
+     and apply only what the original PR intended. Taking `main`'s version of a whole
+     file is right only when the original PR replaced that file and the leftover
+     difference is harmless (#1642: a one-line test-fixture tweak from #1427).
+   - **the code moved or was refactored on `main`:** close the draft and port the fix
+     by hand in a PR against the line where the code lives, labelled `backport`, linking
+     the original.
+3. **Validate on the branch** (the release tests at least; the full gate for code),
+   push, run `gh pr ready <n>`, and comment what conflicted and how it was resolved.
+4. **Review** it like any backport: CI green, and its diff changes only what the
+   original PR's diff changed (`gh pr diff <original>` vs `gh pr diff <backport>`).
+
 ## Nightlies
 
 Every night at **03:17 UTC**, [`nightly.yml`](../.github/workflows/nightly.yml)
