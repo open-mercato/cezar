@@ -678,6 +678,32 @@ describe('AppShell', () => {
       expect(sidebar()).toBeTruthy()
     })
 
+    it('Mod+B from a focused textarea keeps focus there', () => {
+      renderShell('/', {}, <textarea aria-label="composer" />)
+      const composer = screen.getByRole('textbox', { name: 'composer' })
+      composer.focus()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).toBe(composer)
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(composer)
+    })
+
+    it('ignores a held Mod+B and one pressed behind a dialog', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', repeat: true, ...mod })
+      expect(sidebar()).toBeTruthy()
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      document.body.append(dialog)
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      dialog.remove()
+    })
+
     it('loads folded without stealing focus', () => {
       localStorage.setItem('cez-sidebar-folded', '1')
       renderShell()

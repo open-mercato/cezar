@@ -131,6 +131,11 @@ describe('bindings', () => {
     expect(() => [...effectiveBindings(sanitizeOverrides({ pin: 5 })).values()].map((chord) => formatChord(chord))).not.toThrow()
   })
 
+  it('drops a stored override on a chord cezar reserved later, so the default comes back', () => {
+    expect(sanitizeOverrides({ 'tab:1': 'Mod+B', pin: 'Mod+J' })).toEqual({ pin: 'Mod+J' })
+    expect(effectiveBindings(sanitizeOverrides({ 'tab:1': 'Mod+B' })).get('tab:1')).toBe('Mod+1')
+  })
+
   it('a stale map that double-books a chord still runs one command — the override wins', () => {
     const byChord = bindingsByChord({ pin: 'Mod+/' })
     expect(byChord.get('Mod+/')).toBe('pin')
