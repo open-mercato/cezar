@@ -220,7 +220,7 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   const title = startTitle(value, ready, currentOptions?.timeZone)
   useEffect(() => { onLabelChange?.(value ? { text: label, title } : undefined) }, [value ? `${label}\n${title}` : undefined])
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" aria-label="Choose task start time" title={title}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button></PopoverTrigger>
+    <PopoverTrigger asChild><Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25 transition-none" aria-label="Choose task start time" title={title}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button></PopoverTrigger>
     <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
       <fieldset className="space-y-3">
       <legend className="font-medium">Start task</legend>
