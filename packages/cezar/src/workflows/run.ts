@@ -4470,8 +4470,15 @@ export class RunManager {
       (event) => this.store.appendEvent(runId, { ...event, stepId }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
     );
+    // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
+    if (backend !== 'claude') this.store.clearLiveUsage(runId);
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'usage-status') {
+        // Record-only: the header gauges read the run record, the transcript never shows it.
+        this.store.setLiveUsage(runId, event.status);
+        return;
+      }
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -6529,8 +6536,15 @@ export class RunManager {
       (event) => emit({ ...event, stepId: step.id }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
     );
+    // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
+    if (backend !== 'claude') this.store.clearLiveUsage(runId);
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'usage-status') {
+        // Record-only: the header gauges read the run record, the transcript never shows it.
+        this.store.setLiveUsage(runId, event.status);
+        return;
+      }
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
