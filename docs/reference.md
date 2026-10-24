@@ -105,6 +105,10 @@ acts on that task without opening it; ⌥↵ opens a view beside the current one
 Shortcuts run those commands with the palette closed: ⌘1–⌘9 switch the task's tabs and
 ⌘/ opens the terminal in a column; hold ⌘ to see each tab's number. Rebind any command with ⇧↵ on its row, or in
 Settings → Keyboard. Shortcuts are saved in `~/.cezar/ui-state.json`.
+**⌥↑ / ⌥↓** (Alt on Windows and Linux) open the previous / next task in the sidebar's order,
+**⌥⇧↑ / ⌥⇧↓** the previous / next task that needs you — Slack's channel keys, from any page,
+wrapping at the ends. In the desktop app **⌃⌥↑ / ⌃⌥↓** do the Needs-you step from any
+application: the window comes to the front on the task.
 
 ---
 

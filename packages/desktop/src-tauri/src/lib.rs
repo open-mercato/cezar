@@ -39,6 +39,7 @@ pub use disclaim::disclaim_exec_if_asked;
 use telemetry::Failure;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 /// Exit status the sidecar uses to say "relaunch me" after a self-update (EX_TEMPFAIL).
 const RESTART_EXIT_CODE: i32 = 75;
@@ -616,6 +617,42 @@ fn offer_update(window: &WebviewWindow, version: &str) {
     ));
 }
 
+/// The chords that reach the window from ANY app: ⌃⌥↑ / ⌃⌥↓ step to the previous / next task
+/// that needs you (spec 2026-10-17-task-palette § Switching by arrow). ⌃⌥ because ⌥-arrows alone
+/// are every text field's paragraph jump, and a global registration takes them from every app.
+const TASK_SWITCH_SHORTCUTS: [(Code, &str); 2] = [(Code::ArrowUp, "previous"), (Code::ArrowDown, "next")];
+
+/// What the shell runs in the page on a press: the cockpit does the stepping
+/// (`use-task-switch-shortcut.ts` listens); a cockpit that predates the event ignores it.
+fn task_switch_script(direction: &str) -> String {
+    format!(
+        "window.dispatchEvent(new CustomEvent('cezar:switch-task', {{ detail: {} }}))",
+        js_string(direction)
+    )
+}
+
+/// Registers the global task-switch chords. Another app may already own one — then that chord
+/// is logged and skipped; the in-window ⌥-arrows still work.
+fn register_task_switch_shortcuts(app: &AppHandle) {
+    for (code, direction) in TASK_SWITCH_SHORTCUTS {
+        let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), code);
+        let registered = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                let _ = window.eval(&task_switch_script(direction));
+            }
+        });
+        if let Err(error) = registered {
+            eprintln!("[shortcut] ctrl+alt+{direction} task switch not registered: {error}");
+        }
+    }
+}
+
 pub fn run() {
     telemetry::install_panic_hook();
     let shell = Arc::new(Shell {
@@ -651,12 +688,14 @@ pub fn run() {
     let shell_for_state = shell.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
+            register_task_switch_shortcuts(&handle);
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -2139,6 +2178,16 @@ mod tests {
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
     /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
     /// onto the brand row (shell 0.1.1).
+    /// The cockpit listens for exactly this event name and detail (`use-task-switch-shortcut.ts`).
+    #[test]
+    fn a_global_chord_dispatches_the_switch_event_the_cockpit_listens_for() {
+        assert_eq!(
+            task_switch_script("next"),
+            "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
+        );
+        assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
+    }
+
     #[test]
     fn the_development_channel_follows_no_dist_tag() {
         assert_eq!(channel_tag(Some("development")), None);

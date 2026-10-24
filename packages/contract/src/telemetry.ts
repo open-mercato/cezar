@@ -157,8 +157,9 @@ export function taskCommandLabel(id: string): TaskCommandLabel | undefined {
 /** Which palette opened — `palette_opened`'s label. `task_switch` is ⌘P off a task page. */
 export const PALETTE_KINDS = ['command', 'task', 'task_switch'] as const;
 /** How the user moved to another task — `task_switched`'s label. `cycle` is ⌘P ⌘P… then ↵;
- *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K. */
-export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab'] as const;
+ *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K; `arrow`
+ *  is ⌥↑/⌥↓ (and ⌥⇧ for the Needs-you ring), no palette at all. */
+export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab', 'arrow'] as const;
 /** What a palette session searched with — `palette_mode_used`'s label: a prefix (`@` tasks, `>`
  *  commands, `#` files), or a search shape (`pr_number`, `automation`). Never the text itself. */
 export const PALETTE_MODES = ['tasks', 'commands', 'files', 'pr_number', 'automation'] as const;

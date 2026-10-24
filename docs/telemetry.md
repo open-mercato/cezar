@@ -56,7 +56,7 @@ following the server then found it `recovered`, `not_applied`, `unreachable` or 
 a ⌘P row or from its keyboard shortcut — as a fixed command name such as `pin`, `git:push` or
 `view:changes`; saved layouts, Open-in targets and ⌘1–⌘9 are folded into `layout`, `open` and
 `tab`; counted in the tab and sent at most once a minute with how many times), `task_switched`
-(`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`), `palette_mode_used` (`tasks`, `commands`, `files`,
+(`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`, `arrow` for ⌥↑/⌥↓), `palette_mode_used` (`tasks`, `commands`, `files`,
 `pr_number`, `automation` — the shape of a search, never its text; a bare prefix such as the `@`
 ⌘P pre-fills is not counted), `palette_dismissed` (the view a
 palette was closed from with nothing chosen), `shortcut_rebound` (which command's shortcut was

@@ -26,6 +26,7 @@ sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+tauri-plugin-global-shortcut = "2"
 
 # The macOS agent trampoline (`disclaim.rs`) calls posix_spawn directly.
 [target.'cfg(target_os = "macos")'.dependencies]

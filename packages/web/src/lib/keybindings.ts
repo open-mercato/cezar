@@ -113,6 +113,10 @@ const RESERVED = new Set([
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
   'Mod+Shift+`', // new terminal tab
+  'Alt+Up', // previous / next task (use-task-switch-shortcut.ts)
+  'Alt+Down',
+  'Alt+Shift+Up', // previous / next task that needs you
+  'Alt+Shift+Down',
   'Mod+A',
   'Mod+C',
   'Mod+V',

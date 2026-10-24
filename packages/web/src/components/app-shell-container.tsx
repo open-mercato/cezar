@@ -15,6 +15,7 @@ import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
+import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { pageTitleContext } from '@/routes'
@@ -209,6 +210,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       <CommandPalette />
       {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
       <TaskPalette />
+      {/* ⌥↑/⌥↓ walk the sidebar's tasks, ⌥⇧ the ones that need you — on every page. */}
+      <TaskSwitchShortcut />
     </ListViewProvider>
   )
 })
