@@ -515,6 +515,11 @@ const CREATED_PR_RE =
 /** Referenced-tier working-set cap (spec 2026-07-16-pr-autodiscovery): past
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
+/** How far above the recovered high-water mark a restart resumes. `lastSeq` reaches disk only on
+ *  the next index save, so after a crash the ephemeral seqs handed out since then — delta flushes
+ *  and the v1 twins of persisted v2 items — are on neither the record nor the transcript, yet a
+ *  client already saw them. A gap is harmless: every dedup compares with `>`. */
+export const SEQ_RESTART_HEADROOM = 10_000;
 /** Enough for any command line or path; a longer tool input is file content, not a reference. */
 const MAX_TOOL_INPUT_HAYSTACK_CHARS = 8_192;
 
@@ -2002,12 +2007,15 @@ export class RunStore extends EventEmitter {
    *  of #424). One file read on the first post-restart append per run. */
   private rehydrateSeq(runId: string): number {
     const persisted = this.runs.get(runId)?.lastSeq;
-    if (persisted !== undefined) return Math.max(persisted, this.tailSeq(runId));
     let max = 0;
-    for (const event of this.readEvents(runId)) {
-      if (typeof event.seq === 'number' && event.seq > max) max = event.seq;
+    if (persisted !== undefined) {
+      max = Math.max(persisted, this.tailSeq(runId));
+    } else {
+      for (const event of this.readEvents(runId)) {
+        if (typeof event.seq === 'number' && event.seq > max) max = event.seq;
+      }
     }
-    return max;
+    return max === 0 ? 0 : max + SEQ_RESTART_HEADROOM;
   }
 
   /** The `seq` of the last parseable line. Only trusted next to a persisted `lastSeq`: files from
