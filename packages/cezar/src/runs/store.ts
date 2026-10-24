@@ -1642,8 +1642,17 @@ export class RunStore extends EventEmitter {
     this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
     if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    // A new step or Continue may run another backend: the last session's no longer names it.
+    if (full.type === 'step-start') this.sessionBackends.delete(runId);
     if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
-      reportAgentError(this.sessionBackends.get(runId) ?? run.runner, { type: full.type, message: full.message, fatal: full.fatal });
+      // The step's backend is recorded before spawn, so it names a session that failed before
+      // `session.started` too — a per-step runner or a Continue override, not `run.runner`.
+      const stepBackend = run.steps.find((s) => s.id === full.stepId)?.backend;
+      reportAgentError(stepBackend ?? this.sessionBackends.get(runId) ?? run.runner, {
+        type: full.type,
+        message: full.message,
+        fatal: full.fatal,
+      });
     }
     if (this.janitorSettled(run)) return full;
 

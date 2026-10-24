@@ -161,4 +161,31 @@ describe('RunStore.appendEvent → agent error reports', () => {
     store.appendEvent(run.id, { type: 'error', message: 'spawn codex ENOENT' });
     expect(reported()[0]?.context).toMatchObject({ 'agent.backend': 'codex' });
   });
+
+  it('names a per-step runner that failed before its session started (telemetry 26d1bbd7)', () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [{ id: 'code', name: 'Code', kind: 'agent' }], runner: 'claude' });
+    store.updateStep(run.id, 'code', { backend: 'cursor' });
+    store.appendEvent(run.id, { type: 'step-start', stepId: 'code' });
+    store.appendEvent(run.id, { type: 'error', stepId: 'code', message: 'cursor agent exited with code 1' });
+    expect(reported()[0]).toMatchObject({ message: 'cursor: cursor agent exited with code 1', context: { 'agent.backend': 'cursor' } });
+  });
+
+  it('a Continue on another backend is not named after the previous session (telemetry a58394cc, 9f07e687)', () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [{ id: 'task', name: 'Task', kind: 'agent' }], runner: 'codex' });
+    store.updateStep(run.id, 'task', { backend: 'codex' });
+    store.appendEvent(run.id, { type: 'session.started', stepId: 'task', sessionId: 's', backend: 'codex' });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+    store.updateStep(run.id, 'continue-1', { backend: 'opencode' });
+    store.appendEvent(run.id, { type: 'step-start', stepId: 'continue-1' });
+    store.appendEvent(run.id, { type: 'error', stepId: 'continue-1', message: 'opencode: POST /session → 405' });
+    expect(reported()[0]?.context).toMatchObject({ 'agent.backend': 'opencode' });
+  });
+
+  it('a new step drops the last session\'s backend when the step names none', () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [], runner: 'opencode' });
+    store.appendEvent(run.id, { type: 'session.started', sessionId: 's', backend: 'claude' });
+    store.appendEvent(run.id, { type: 'step-start', stepId: 'next' });
+    store.appendEvent(run.id, { type: 'error', stepId: 'next', message: 'boom' });
+    expect(reported()[0]?.context).toMatchObject({ 'agent.backend': 'opencode' });
+  });
 });
