@@ -1,3 +1,5 @@
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -32,6 +34,7 @@ import {
   defaultRunProviderCommand,
   isDefinitiveProviderAuthFailure,
   isRuntimeProviderAuthFailure,
+  probeCwdFallback,
   providerAuthChecksDisabled,
   versionManagerShimMiss,
   type ProviderCommandResult,
@@ -176,6 +179,31 @@ describe('runtime provider authentication failures', () => {
     ['OAuth access token could not be refreshed: another Claude Code process is holding the refresh lock', false],
   ])('classifies %s as definitive: %s', (message, definitive) => {
     expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
+  });
+
+  // The real telemetry messages (spec 2026-10-24 item 2), as the runners emit them.
+  it.each([
+    ['bca23063', 'Not logged in · Please run /login', false],
+    ['1e673dee', "cursor agent exited with code 1 — Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.", false],
+    ['e41761a1', 'Upstream request failed: Invalid credential', false],
+    ['75ae746c', 'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access', true],
+    ['c65a5ac5', 'API Error: 400 Identity verification is required to continue.', true],
+  ])('latches the vendor auth failure from %s', (_group, message, definitive) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(true);
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
+  });
+
+  it.each([
+    'add a test for the not-logged-in banner',
+    'show the not logged in banner when the session expires',
+    'the page says Not logged in until the user clicks Sign in',
+    'Authentication required for the /admin route — added middleware',
+    'handle invalid credentials gracefully in the login form',
+    'returns 403 when credentials are invalid for the admin route',
+    'documented that identity verification is required for payouts',
+  ])('does not latch on agent prose about logins: %s', (message) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(false);
   });
 });
 
@@ -2089,7 +2117,9 @@ describe('inconclusive probe reports', () => {
     expect(result.stdout).toContain('"sessionId":"s"');
   });
 
-  it('closes a held-open stdin before the timeout when the answer never comes', async () => {
+  // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,
+  // which read as unrecognized output and never got the longer re-ask a timeout gets.
+  it('closes a held-open stdin before the timeout and calls the missing answer a timeout', async () => {
     const result = await defaultRunProviderCommand(
       process.execPath,
       ['-e', "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('bye'));"],
@@ -2097,7 +2127,75 @@ describe('inconclusive probe reports', () => {
       undefined,
       { payload: 'not acp\n', closeWhen: copilotAcpAnswered },
     );
-    expect(result).toMatchObject({ exitCode: 0, timedOut: false, stdout: 'bye' });
+    expect(result).toMatchObject({ exitCode: 0, timedOut: true, stdout: 'bye' });
+  });
+
+  it('re-asks Copilot with the longer budget when session/new outlasted the first one', async () => {
+    const onInconclusive = vi.fn();
+    const budgets: number[] = [];
+    const service = new ProviderAuthService({
+      runCommand: async (executable, args, timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        budgets.push(timeoutMs);
+        const initialized = '{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1}}\n';
+        return budgets.length === 1
+          ? defaultRunProviderCommand(process.execPath, ['-e', `process.stdin.resume(); process.stdin.on('end', () => process.stdout.write(${JSON.stringify(initialized)}));`], 2_200, undefined, stdin)
+          : { stdout: `${initialized}${connectedResults.copilot!.stdout}\n`, stderr: '', exitCode: 0 };
+      },
+      onInconclusive,
+    });
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(budgets).toEqual([10_000, 30_000]);
+    expect(onInconclusive).not.toHaveBeenCalled();
+  });
+
+  // Telemetry acfb01e4: a CLI that exits before reading its payload raised an uncaught EPIPE.
+  it.each([
+    ['held open', copilotAcpAnswered],
+    ['closed at once', undefined],
+  ])('never lets a payload a CLI did not read crash cezar (stdin %s)', async (_label, closeWhen) => {
+    const result = await defaultRunProviderCommand(
+      process.execPath,
+      ['-e', 'process.exit(3)'],
+      5_000,
+      undefined,
+      { payload: 'x'.repeat(4 * 1024 * 1024), ...(closeWhen ? { closeWhen } : {}) },
+    );
+    expect(result.exitCode).toBe(3);
+  });
+
+  // Telemetry 35838a52 + b82b92cf: claude and codex both failed before answering, `claude
+  // --version` too — cezar's own cwd was unusable (deleted, or a folder the macOS app can't read).
+  it('runs a probe from the home directory when cezar\'s own cwd is unusable', async () => {
+    const gone = join(tmpdir(), `cez-gone-${process.pid}-${Date.now()}`);
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(gone);
+    try {
+      expect(probeCwdFallback()).toBe(homedir());
+      const result = await defaultRunProviderCommand(process.execPath, ['-e', 'process.stdout.write(process.cwd())'], 5_000);
+      expect(result.stdout).toBe(homedir());
+    } finally {
+      cwd.mockRestore();
+    }
+    expect(probeCwdFallback()).toBeUndefined();
+  });
+
+  // Telemetry a5c13018: exit 127, 176 bytes of stderr, no `--version` either — a wrapper whose
+  // shell could not find what it launches.
+  it('reports a launcher that exits 127 or 126 as not-installed, not inconclusive', async () => {
+    for (const exitCode of [127, 126]) {
+      const onInconclusive = vi.fn();
+      const service = new ProviderAuthService({
+        runCommand: async (executable) => executable === 'copilot'
+          ? { stdout: '', stderr: '/usr/local/bin/copilot: line 3: node: command not found\n', exitCode }
+          : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+        onInconclusive,
+      });
+      const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('node: command not found') });
+      expect(row?.hint).toContain('CEZ_COPILOT_BIN');
+      expect(onInconclusive).not.toHaveBeenCalled();
+    }
   });
 
   it('recognizes the session/new answer, result or error, and nothing earlier', () => {
