@@ -4961,6 +4961,15 @@ export function createApp(deps: ServerDeps) {
       return c.json({ cancelled });
     })
 
+    // "Start now": jump a queued run past the `maxParallel` cap.
+    .post('/runs/:id/start-now', (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      if (!manager.startNow(id)) return c.json({ error: 'run is not queued' }, 409);
+      return c.json({ started: true as const });
+    })
+
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {

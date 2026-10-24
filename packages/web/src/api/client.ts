@@ -71,6 +71,7 @@ import type {
   RunDraftsResponse,
   SetRunDraftInput,
   FinishResponse,
+  StartNowResponse,
   LandResponse,
   FsBrowseResponse,
   GitCommitResponse,
@@ -1463,6 +1464,16 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/cancel'),
+  )
+}
+
+/** "Start now": run a queued task over the `maxParallel` cap. 409 when it is no longer queued. */
+export async function startRunNow(id: string): Promise<StartNowResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['start-now'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/start-now'),
   )
 }
 

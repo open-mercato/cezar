@@ -644,6 +644,10 @@ export type DeleteRunResponse = z.infer<typeof deleteRunResponseSchema>;
 export const finishResponseSchema = z.object({ finished: z.literal(true) });
 export type FinishResponse = z.infer<typeof finishResponseSchema>;
 
+/** `POST /runs/:id/start-now` — start a queued run over the parallel cap; "not queued" is a 409. */
+export const startNowResponseSchema = z.object({ started: z.literal(true) });
+export type StartNowResponse = z.infer<typeof startNowResponseSchema>;
+
 /** `POST /runs/:id/land` — an in-place task's Commit to the base branch (spec
  *  2026-10-20-trunk-based-projects). Every outcome is a 200 carrying a human `message`. */
 export const landResponseSchema = z.object({

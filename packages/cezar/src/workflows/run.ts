@@ -1282,6 +1282,10 @@ export class RunManager {
    *  otherwise hand them straight back and the rescue would undo itself in a millisecond. */
   private readonly forceStarted = new Set<string>();
 
+  /** Queued runs the user asked to start now (`startNow`): they skip the parallel caps, never
+   *  the usage-limit hold. Retired at dequeue and when the run leaves the queue any other way. */
+  private readonly startNowRequested = new Set<string>();
+
   /** The workspace-wide parallel-cap semaphore + cached resource config
    *  (spec 2026-07-20, step 2.5). Boot constructs ONE and every manager shares
    *  it; the private fallback keeps single-manager callers and tests working. */
@@ -1346,7 +1350,7 @@ export class RunManager {
       cancelPending: id => {
         const queued = this.queue.indexOf(id);
         if (queued >= 0) this.queue.splice(queued, 1);
-        this.pendingJobs.delete(id); this.pendingContinuations.delete(id);
+        this.pendingJobs.delete(id); this.pendingContinuations.delete(id); this.startNowRequested.delete(id);
       },
       resume: async (id, launch) => {
         const run = this.store.getRun(id);
@@ -1895,6 +1899,8 @@ export class RunManager {
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
+          // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
+          if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
           return capacity();
         };
         // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
@@ -1909,6 +1915,7 @@ export class RunManager {
           if (next === -1) break; // nothing queued can start right now
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          this.startNowRequested.delete(runId);
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
           // question and would send this run straight back to the queue.
           if (forced) this.forceStarted.add(runId);
@@ -3469,6 +3476,18 @@ export class RunManager {
    * would be a cost brake that stops the one run that was only supervising. The answer is still
    * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
    */
+  /**
+   * Start a queued run now, over the workspace and project `maxParallel` caps — the queued
+   * placeholder's "Start now". The run still waits out a usage-limit hold on its account (starting
+   * into a closed window only fails it). False when the run is not in this manager's queue.
+   */
+  startNow(runId: string): boolean {
+    if (!this.queue.includes(runId)) return false;
+    this.startNowRequested.add(runId);
+    void this.pump();
+    return true;
+  }
+
   cancel(runId: string): boolean {
     if (this.lifecycle.isBlocked(runId)) return false;
     this.cancelDescendants(runId, new Set([runId]));
@@ -3484,6 +3503,7 @@ export class RunManager {
       this.pendingJobs.delete(runId);
       this.pendingBranchNames.delete(runId);
       this.pendingContinuations.delete(runId);
+      this.startNowRequested.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
       // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal

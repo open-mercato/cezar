@@ -1516,6 +1516,26 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="thread-empty"]')).toBeNull()
   })
 
+  it('the queued placeholder\'s Start now posts start-now; a usage-limit hold hides it', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(urlOf(input).endsWith('/start-now') ? '{"started":true}' : '[]', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { unmount } = renderView(<ThreadView run={run('queued')} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock) // after renderView, which stubs its own
+    fireEvent.click(document.querySelector('[data-slot="start-now"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/start-now'))).toBe(true))
+    unmount()
+
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
+  })
+
   it('the first real event replaces the queued placeholder', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([line(1, 'lifecycle', { message: 'cezar restarted — task re-queued' })])} />)
     expect(document.querySelector('[data-slot="queued-state"]')).toBeNull()
