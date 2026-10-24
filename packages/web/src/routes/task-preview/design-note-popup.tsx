@@ -1,4 +1,4 @@
-import { MessageSquareIcon, SendIcon, XIcon } from 'lucide-react'
+import { MessageSquareIcon, SendIcon, Trash2Icon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 
 import { StatusDot } from '@/components/status-dot'
@@ -14,8 +14,9 @@ import type { DesignNote, DesignNotes, NotePhase } from './design-notes'
  * (spec `.ai/specs/2026-10-09-design-mode.md` §7).
  *
  * Two faces of one small window, picked by where the note is in its life:
- *  - a DRAFT: a field and Add note. Closing it (✕ / Esc) throws the draft away and deselects the
- *    element — Add note or clicking another element keeps it. `DesignNotesTray` sends them all.
+ *  - a DRAFT: a field and Add note. Before it is added, closing it (✕ / Esc) throws it away and
+ *    deselects the element. Once added, ✕ / Esc only close it — removing it takes Delete.
+ *    `DesignNotesTray` sends them all.
  *  - WITH THE AGENT (in progress, asking, done): read-only. Closing only hides it.
  */
 
@@ -31,22 +32,30 @@ export function DesignNotePopup({
   onClose,
 }: {
   note: DesignNote
-  notes: Pick<DesignNotes, 'setText' | 'discard'>
+  notes: Pick<DesignNotes, 'setText' | 'markAdded' | 'discard'>
   /** Hide the popup. For a draft the host has already been told to discard it. */
   onClose: () => void
 }) {
   const isDraft = note.phase === 'draft'
   const empty = note.text.trim() === ''
+  // Only a note never added is thrown away by ✕ / Esc — an added one is removed deliberately.
+  const throwaway = isDraft && !note.added
 
-  /** ✕ and Esc: a draft is thrown away with its element's frame; anything sent is only hidden. */
   const dismiss = () => {
-    if (isDraft) notes.discard(note.key)
+    if (throwaway) notes.discard(note.key)
     onClose()
   }
 
-  // The draft is already kept (written through as it is typed); adding only puts the window away.
+  const remove = () => {
+    notes.discard(note.key)
+    onClose()
+  }
+
   const add = () => {
-    if (!empty) onClose()
+    if (note.added) return onClose()
+    if (empty) return
+    notes.markAdded(note.key)
+    onClose()
   }
 
   const status = isDraft ? null : STATUS[note.phase as Exclude<NotePhase, 'draft'>]
@@ -73,8 +82,8 @@ export function DesignNotePopup({
           variant="ghost"
           size="icon-sm"
           className="size-6"
-          aria-label={isDraft ? 'Discard note' : 'Close'}
-          title={isDraft ? 'Discard this note and deselect the element (Esc)' : 'Close (Esc)'}
+          aria-label={throwaway ? 'Discard note' : 'Close'}
+          title={throwaway ? 'Discard this note and deselect the element (Esc)' : 'Close (Esc)'}
           onClick={dismiss}
         >
           <XIcon aria-hidden="true" />
@@ -115,9 +124,17 @@ export function DesignNotePopup({
       )}
 
       {isDraft ? (
-        <div className="flex justify-end">
-          <Button type="button" size="sm" disabled={empty} title="Add note (Ctrl/⌘+Enter)" onClick={add}>
-            Add note
+        <div className="flex items-center justify-between gap-2">
+          {note.added ? (
+            <Button type="button" variant="ghost" size="sm" className="text-soft-foreground hover:text-danger" onClick={remove}>
+              <Trash2Icon aria-hidden="true" />
+              Delete
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Button type="button" size="sm" disabled={!note.added && empty} title={note.added ? 'Done (Ctrl/⌘+Enter)' : 'Add note (Ctrl/⌘+Enter)'} onClick={add}>
+            {note.added ? 'Done' : 'Add note'}
           </Button>
         </div>
       ) : null}

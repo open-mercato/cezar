@@ -118,6 +118,15 @@ describe('a draft', () => {
     expect(api.putRunDraft).not.toHaveBeenCalled()
   })
 
+  it('remembers being added across a reload', async () => {
+    const { result } = notesWithDraft(run())
+    act(() => result.current.markAdded('abc-1'))
+    expect(result.current.note('abc-1')?.added).toBe(true)
+    await act(() => vi.advanceTimersByTimeAsync(10))
+    const [, , body] = api.putRunDraft.mock.calls.at(-1) as [string, string, { text: string }]
+    expect(parseDraftNotes(body.text)[0]).toMatchObject({ key: 'abc-1', added: true })
+  })
+
   it('is deselected and forgotten when discarded', async () => {
     const { result } = notesWithDraft(run())
     act(() => result.current.discard('abc-1'))
@@ -301,7 +310,7 @@ describe('noteMessage', () => {
 })
 
 describe('the note popup', () => {
-  const actions = () => ({ setText: vi.fn(), discard: vi.fn() })
+  const actions = () => ({ setText: vi.fn(), markAdded: vi.fn(), discard: vi.fn() })
   const note = (over: Partial<DesignNote>): DesignNote => ({ key: 'abc-1', pick: PICK, text: 'make it bigger', phase: 'draft', ...over })
 
   it('names the element, takes the prompt, and adds it on Ctrl+Enter', () => {
@@ -315,8 +324,23 @@ describe('the note popup', () => {
     expect(notes.setText).toHaveBeenCalledWith('abc-1', 'make it bigger!')
     fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true })
     // Added: the draft is kept, the window put away, nothing discarded.
+    expect(notes.markAdded).toHaveBeenCalledWith('abc-1')
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(notes.discard).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['✕', () => fireEvent.click(screen.getByRole('button', { name: 'Close' }))],
+    ['Esc', () => fireEvent.keyDown(screen.getByLabelText('Note for the agent'), { key: 'Escape' })],
+  ])('never throws an added note away on %s — only Delete removes it', (_label, close) => {
+    const notes = actions()
+    const onClose = vi.fn()
+    render(<DesignNotePopup note={note({ added: true })} notes={notes} onClose={onClose} />)
+    close()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(notes.discard).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(notes.discard).toHaveBeenCalledWith('abc-1')
   })
 
   it('cannot add an empty note', () => {

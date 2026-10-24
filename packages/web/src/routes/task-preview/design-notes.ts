@@ -45,6 +45,8 @@ export interface DesignNote {
   phase: NotePhase
   /** The order it was sent in. Absent on a draft. */
   number?: number
+  /** A draft the user added (Add note): from then on only Delete removes it, never ✕ or Esc. */
+  added?: boolean
 }
 
 interface SentNote extends DesignNote {
@@ -58,6 +60,7 @@ interface DraftNote {
   key: string
   pick: NotePick
   text: string
+  added?: boolean
 }
 
 /** What the Preview tab tells the page to frame. */
@@ -120,13 +123,14 @@ export function parseDraftNotes(text: string): DraftNote[] {
       key: pick.mark,
       pick: { ...pick, mark: pick.mark },
       text: typeof record.text === 'string' ? record.text.slice(0, NOTE_TEXT_MAX) : '',
+      ...(record.added === true ? { added: true } : {}),
     })
   }
   return out
 }
 
 const serialize = (drafts: readonly DraftNote[]): string =>
-  drafts.length === 0 ? '' : JSON.stringify(drafts.map((draft) => ({ pick: draft.pick, text: draft.text })))
+  drafts.length === 0 ? '' : JSON.stringify(drafts.map((draft) => ({ pick: draft.pick, text: draft.text, ...(draft.added ? { added: true } : {}) })))
 
 const pathOf = (url: string): string | undefined => {
   try {
@@ -200,6 +204,8 @@ export interface DesignNotes {
   /** A new draft for a freshly picked element. `false` (with a toast) when it was not kept. */
   addDraft: (pick: NewDesignPick) => boolean
   setText: (key: string, text: string) => void
+  /** Keep a draft deliberately — see `DesignNote.added`. */
+  markAdded: (key: string) => void
   /** Throw a draft away — the element is deselected. */
   discard: (key: string) => void
   /** Drafts with words in them — what `sendAll` would send. */
@@ -294,6 +300,16 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
     [persist, publish, store],
   )
 
+  const markAdded = useCallback(
+    (key: string) => {
+      if (!store.drafts?.some((draft) => draft.key === key && !draft.added)) return
+      store.drafts = store.drafts.map((draft) => (draft.key === key ? { ...draft, added: true } : draft))
+      publish()
+      persist(0)
+    },
+    [persist, publish, store],
+  )
+
   const discard = useCallback(
     (key: string) => {
       if (!store.drafts?.some((draft) => draft.key === key)) return
@@ -361,5 +377,5 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
   const note = useCallback((key: string) => notes.find((entry) => entry.key === key), [notes])
   const ready = notes.filter((entry) => entry.phase === 'draft' && entry.text.trim() !== '').length
 
-  return { notes, marks, note, addDraft, setText, discard, ready, sendAll }
+  return { notes, marks, note, addDraft, setText, markAdded, discard, ready, sendAll }
 }

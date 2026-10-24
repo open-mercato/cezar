@@ -155,6 +155,8 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
 - **Sending is a batch (2026-10-24).** Like line comments on the Changes tab, notes are collected
   first: a tray in the frame's corner counts the written drafts and sends them all, as ONE
   message, when the user decides. The send names no session state — no "reopen" wording.
+  An ADDED note is removed only deliberately: reopened, ✕ / `Esc` just close it, and its window
+  offers **Delete**. `Esc`/✕ still throw away a draft that was never added.
 - **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.

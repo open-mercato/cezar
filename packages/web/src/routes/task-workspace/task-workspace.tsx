@@ -610,7 +610,9 @@ function WorkspaceView({
   const { addDraft, discard: discardNote, note: noteFor, marks: designMarks } = designNotes
   const escapeNote = useCallback(
     (mark: string) => {
-      if (noteFor(mark)?.phase === 'draft') discardNote(mark)
+      const note = noteFor(mark)
+      // An added note is removed only by its Delete button.
+      if (note?.phase === 'draft' && !note.added) discardNote(mark)
     },
     [discardNote, noteFor],
   )
