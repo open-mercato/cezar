@@ -288,6 +288,27 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'connected' } });
   });
 
+  it.each([
+    ['stdout', '***'],
+    ['stdout', 'sk-proj-***ABCDE'],
+    ['stderr', '***'],
+    ['stderr', 'sk-proj-***ABCDE'],
+  ])('recognizes Codex 0.164 configured API key on %s (%s)', async (channel, masked) => {
+    const output = `\u001B[32mAPI key configured - ${masked}\u001B[0m\nAuthentication is checked when you send a request.\n`;
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable.includes('codex')
+        ? { stdout: channel === 'stdout' ? output : '', stderr: channel === 'stderr' ? output : '', exitCode: 0 }
+        : resultFor(executable)),
+    });
+
+    const response = await service.status();
+    expect(response.providers.find(({ provider }) => provider === 'codex')).toEqual({
+      provider: 'codex',
+      status: 'connected',
+    });
+    expect(JSON.stringify(response)).not.toContain(masked);
+  });
+
   it('recognizes current Codex not-logged-in stderr on exit 1', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
@@ -311,6 +332,11 @@ describe('provider auth parsers', () => {
     {
       case: 'conflicting answers',
       stdout: 'Logged in using ChatGPT',
+      stderr: 'Not logged in',
+    },
+    {
+      case: 'conflicting configured API key answers',
+      stdout: 'API key configured - ***',
       stderr: 'Not logged in',
     },
   ])('treats Codex $case across output channels as unknown', async ({ stdout, stderr }) => {
@@ -339,10 +365,13 @@ describe('provider auth parsers', () => {
     expect(JSON.stringify(response)).not.toContain(masked);
   });
 
-  it('does not accept known Codex connected output on an unexpected nonzero exit', async () => {
+  it.each([
+    'Logged in using ChatGPT',
+    'API key configured - ***',
+  ])('does not accept known Codex connected output on an unexpected nonzero exit: %s', async (stdout) => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
-        ? { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 7 }
+        ? { stdout, stderr: '', exitCode: 7 }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 
@@ -372,10 +401,15 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ codex: { status: 'unknown' } });
   });
 
-  it('does not guess from unrecognized Codex output', async () => {
+  it.each([
+    'Codex status: account maybe ready',
+    'API key configured',
+    'API key configured - not-a-masked-key',
+    'API key configured - *** extra text',
+  ])('does not guess from unrecognized Codex output: %s', async (stdout) => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable.includes('codex')
-        ? { stdout: 'Codex status: account maybe ready', stderr: '', exitCode: 0 }
+        ? { stdout, stderr: '', exitCode: 0 }
         : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
     });
 
