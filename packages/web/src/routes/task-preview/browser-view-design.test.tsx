@@ -127,6 +127,18 @@ describe('the Design Mode toggle', () => {
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('leaves ⌥D to the field when Design Mode cannot switch on', () => {
+    health.designMode = false
+    renderView()
+    // `fireEvent` answers false when the default was prevented: ⌥D must still type its `∂`.
+    expect(fireEvent.keyDown(screen.getByLabelText('Address'), { code: 'KeyD', key: '∂', altKey: true })).toBe(true)
+    cleanup()
+    health.designMode = true
+    renderView(undefined, 'https://github.com/')
+    expect(fireEvent.keyDown(screen.getByLabelText('Address'), { code: 'KeyD', key: '∂', altKey: true })).toBe(true)
+    expect(fireEvent.keyDown(window, { code: 'KeyD', key: 'd', altKey: true })).toBe(true)
+  })
+
   it('switches off when ⌥D is pressed inside the page (the picker forwards it)', async () => {
     renderView()
     await enterDesignMode()

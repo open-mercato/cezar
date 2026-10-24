@@ -211,9 +211,11 @@ export function BrowserView({
   // ⌥D / Alt+D switches it — from any field too, so it works wherever the focus is in the cockpit.
   // Inside the page only the mirror's picker can hear it (and forwards it): a directly framed
   // page is another origin, whose keys never reach this window.
-  const toggleDesign = useRef(() => {})
+  const toggleDesign = useRef(() => false)
   toggleDesign.current = () => {
-    if (designAllowed && targetOrigin !== null) setDesign((on) => !on)
+    if (!designAllowed || targetOrigin === null) return false
+    setDesign((on) => !on)
+    return true
   }
   useEffect(() => {
     if (!designOffered) return
@@ -221,8 +223,8 @@ export function BrowserView({
       if (event.repeat || event.defaultPrevented || !isDesignKey(event)) return
       // A modal owns the keyboard; the note popup (not modal) does not.
       if (document.querySelector('[aria-modal="true"], [role="alertdialog"]')) return
-      event.preventDefault()
-      toggleDesign.current()
+      // Swallowed only when it switched something: unavailable, ⌥D still types its `∂`.
+      if (toggleDesign.current()) event.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
