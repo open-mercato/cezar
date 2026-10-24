@@ -20,6 +20,9 @@
 //                 a server whose turn boundary the runner has to synthesize.
 //   `#drop-then-die` destroy the message POST's socket AND then close the event
 //                 bus: the drop was real, and the runner has to say so.
+//   `#retry-limit` hold the POST open and report a `session.status` retry with a
+//                 spent-quota `action` and `next` hours away, as a spent free tier does.
+//   `#retry-soon` report a retry due in 1 s with no `action`, then finish normally.
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
 //                 the final text names the reply.
@@ -178,6 +181,18 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ info: info({}), parts: [] }));
         return;
       }
+
+      const retryStatus = (extra) =>
+        send({ type: 'session.status', properties: { sessionID: SESSION_ID, status: { type: 'retry', attempt: 1, ...extra } } });
+      if (promptText.includes('#retry-limit')) {
+        retryStatus({
+          message: 'Free usage exceeded, subscribe to Go',
+          action: { reason: 'free_tier_limit', provider: 'opencode', title: 'Free limit reached', message: 'Subscribe', label: 'subscribe' },
+          next: Date.now() + 3 * 60 * 60_000,
+        });
+        return; // the POST stays open, like the real server's retry loop
+      }
+      if (promptText.includes('#retry-soon')) retryStatus({ message: 'Overloaded', next: Date.now() + 1_000 });
 
       // The other half of the #897 shape: the POST drops AND the session is
       // really gone. Swallowing the drop must not swallow this.

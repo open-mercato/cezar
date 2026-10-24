@@ -8,11 +8,13 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
+import { parseUsageLimit } from './usage-limit.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
   SERVER_PORT_ATTEMPTS,
   SERVER_START_MAX_MS,
+  RETRY_GIVE_UP_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
   unsupportedServerMessage,
@@ -675,4 +677,43 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
       expect(notes).toEqual(reply === 'reject' ? [`opencode: refused external_directory permission for ${path}`] : []);
     }, 30_000);
   }
+});
+
+/**
+ * A spent OpenCode free tier puts the session in `retry` with `next` at the next day and no
+ * event in between; an interactive step has no wall clock, so the run held its slot for 11 h.
+ */
+describe('a session.status retry the turn cannot outwait', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const errors = (events: AgentEvent[]): string[] =>
+    events.filter((e): e is Extract<AgentEvent, { type: 'error' }> => e.type === 'error').map((e) => e.message);
+
+  it('fails a quota retry with a message that books the usage-limit resume', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it #retry-limit', cwd: process.cwd() },
+      (e) => events.push(e),
+      {},
+    );
+    await session.result;
+
+    const [error] = errors(events);
+    expect(error).toMatch(/^opencode: usage limit reached: Free usage exceeded, subscribe to Go — retry at /);
+    const hit = parseUsageLimit(error);
+    expect(hit?.resetAt.getTime()).toBeGreaterThan(Date.now() + RETRY_GIVE_UP_MS);
+    expect(events.at(-1)?.type).toBe('done');
+  }, 30_000);
+
+  it('rides out a short transient retry', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'do it #retry-soon', cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    expect(errors(events)).toEqual([]);
+    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+  }, 30_000);
 });
