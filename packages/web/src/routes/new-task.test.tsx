@@ -2440,13 +2440,14 @@ it('gates scheduling while unchecked, checking, unavailable and changed, includi
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r2' }))
   await waitFor(() => expect(send().disabled).toBe(false))
-  fireEvent.change(textarea(), { target: { value: 'Changed' } })
-  expect(send().disabled).toBe(true)
+  // Rewording the prompt keeps the check: the preview binds execution settings, not wording.
+  fireEvent.change(textarea(), { target: { value: 'Later, reworded' } })
+  expect(send().disabled).toBe(false)
+  expect(why()).toBeUndefined()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)) })
+  expect(previews()).toBe(3)
   fireEvent.change(textarea(), { target: { value: 'Later' } })
-  expect(send().disabled).toBe(true)
-  await waitFor(() => expect(previews()).toBe(4), { timeout: 3000 })
-  await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r3' }))
-  await waitFor(() => expect(send().disabled).toBe(false))
+  expect(send().disabled).toBe(false)
   const toggle = document.querySelector('[data-slot="autonomous-toggle"]')!
   fireEvent.click(toggle)
   expect(send().disabled).toBe(true)
@@ -2514,7 +2515,8 @@ describe('lost schedule response recovery', () => {
     }
     if (change === 'now') fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
     else {
-      // Restoring the draft invalidates the old preview, so the choice re-checks by itself.
+      // Changed settings (or a fresh mount) re-check by themselves; otherwise the user refreshes.
+      if (change !== 'settings' && change !== 'remount') fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }))
       await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2), { timeout: 3000 })
     }
     expect((screen.getByRole('button', { name: change === 'now' ? 'Start task' : 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)

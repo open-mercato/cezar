@@ -1,4 +1,4 @@
-import { StartTimePicker, type StartChoice } from '@/components/start-time-picker'
+import { previewSettingsKey, StartTimePicker, type StartChoice } from '@/components/start-time-picker'
 import { ApiError, createDeferredStart } from '@/api/client'
 import { deferredCreateInputSchema } from '@open-mercato/cezar-api-client'
 import { markScheduledTasks } from '@/lib/scheduled-tasks-gate'
@@ -518,7 +518,7 @@ export function NewTaskRoute() {
 
   const [startChoice, setStartChoice] = useState<StartChoice | null>(null)
   const [scheduleBlocked, setScheduleBlocked] = useState<string>()
-  const [scheduleLabel, setScheduleLabel] = useState<string>()
+  const [scheduleLabel, setScheduleLabel] = useState<{ text: string; title: string }>()
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const recoveryKey = scheduleRecoveryKey(draftProjectId)
   const [scheduleRecovery, setScheduleRecovery] = useState(() => readScheduleRecovery(recoveryKey))
@@ -603,7 +603,7 @@ export function NewTaskRoute() {
   }
   const schedulingDisabledReason = images.length ? 'Remove attachments to schedule this task.' : deepLink.todo ? 'Tasks linked to a todo can only start now.' : health.data?.capabilities?.automations !== true ? 'Scheduling is disabled on this server.' : undefined
   const previewTask = taskBody(draft.text, images)
-  const scheduleReady = !schedulingDisabledReason && !!startChoice?.preview && Date.parse(startChoice.preview.notBefore) > Date.now() && startChoice.taskJson === JSON.stringify(previewTask)
+  const scheduleReady = !schedulingDisabledReason && !!startChoice?.preview && Date.parse(startChoice.preview.notBefore) > Date.now() && startChoice.settingsKey === previewSettingsKey(previewTask)
   const submit = async (text: string, submitted: AttachmentEntry[]) => {
     if (scheduleRequest.current) throw new Error('Recover the original schedule before starting another task.')
     if (!providersReady || runner === null) {
@@ -625,7 +625,7 @@ export function NewTaskRoute() {
     }
     const body = taskBody(text, submitted)
     if (startChoice) {
-      if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.taskJson !== JSON.stringify(body)) throw new Error('Check the start time again after changing the task settings.')
+      if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.settingsKey !== previewSettingsKey(body)) throw new Error('Check the start time again after changing the task settings.')
       await sendSchedule({ task: body, start: startChoice.start, previewRevision: startChoice.preview.previewRevision, idempotencyKey: crypto.randomUUID() })
       trackTaskScheduled(startChoice.start.kind === 'at' ? 'at' : 'usage_reset')
       return
@@ -916,11 +916,11 @@ export function NewTaskRoute() {
           footerEnd={
             <>
               {startChoice && scheduleLabel && !scheduleBlocked ? (
-                <button type="button" data-slot="schedule-summary" title={scheduleLabel}
+                <button type="button" data-slot="schedule-summary" title={scheduleLabel.title}
                   onClick={() => setScheduleOpen(true)}
                   className="flex max-w-[16rem] items-center gap-1 truncate rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
                   <Clock3Icon aria-hidden="true" className="size-3.5 shrink-0" />
-                  <span className="truncate">{scheduleLabel}</span>
+                  <span className="truncate">{scheduleLabel.text}</span>
                 </button>
               ) : null}
               {startChoice && scheduleBlocked ? (

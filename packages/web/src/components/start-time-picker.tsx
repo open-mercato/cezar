@@ -8,34 +8,63 @@ import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { trackScheduleMenuOpened, trackStartOptionPicked } from '@/lib/telemetry'
 
-export type StartChoice = { start: StartCondition; preview?: Extract<DeferredPreview, { available: true }>; taskJson?: string; invalidated?: string }
+export type StartChoice = { start: StartCondition; preview?: Extract<DeferredPreview, { available: true }>; settingsKey?: string; invalidated?: string }
 type AtStart = Extract<StartCondition, { kind: 'at' }>
 
 /** Debounce before a complete date/time previews itself (#1340). */
 export const AUTO_PREVIEW_MS = 600
 const pad = (n: number) => String(n).padStart(2, '0')
 
-/** The trigger's text: the chosen start in the server zone, authoritative once previewed. */
-export function startLabel(value: StartChoice | null, ready?: StartChoice['preview']): string {
+/** What a preview depends on: the execution settings, never the prompt's wording — the server's
+ *  previewRevision digests the binding and start time only, so typing must not re-check. */
+export function previewSettingsKey(task: CreateRunInput): string {
+  return JSON.stringify({ ...task, task: '' })
+}
+
+/** Wall-clock date and time of an instant in a zone; an unknown zone falls back to the browser's. */
+function zoneParts(instant: number, timeZone?: string): { date: string; hour: number; minute: number } {
+  const format = (zone?: string) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(instant)
+  let parts: Intl.DateTimeFormatPart[]
+  try { parts = format(timeZone) } catch { parts = format() }
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? ''
+  return { date: `${part('year')}-${part('month')}-${part('day')}`, hour: Number(part('hour')), minute: Number(part('minute')) }
+}
+
+/** "Today, 13:00", "Tomorrow, 09:00", else "Tue 6 Jan, 18:00" (with the year when it differs). */
+function friendlyWhen(date: string, hour: number, minute: number, today: string): string {
+  const days = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000)
+  const time = `${pad(hour)}:${pad(minute)}`
+  if (days === 0) return `Today, ${time}`
+  if (days === 1) return `Tomorrow, ${time}`
+  const day = new Date(`${date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', ...(date.slice(0, 4) !== today.slice(0, 4) ? { year: 'numeric' } : {}), timeZone: 'UTC' }).replace(',', '')
+  return `${day}, ${time}`
+}
+
+/** The short summary of the chosen start, in the server zone; authoritative once previewed. */
+export function startLabel(value: StartChoice | null, ready?: StartChoice['preview'], timeZone?: string, now = Date.now()): string {
   if (!value) return 'Now'
-  const instant = ready && new Date(ready.notBefore).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: ready.timeZone }).replace(',', '')
-  if (value.start.kind === 'usage-reset') return instant ? `After reset · ${instant} · ${ready!.timeZone}` : 'After reset'
-  if (ready) return `Starts ${instant} · ${ready.timeZone}`
+  const today = zoneParts(now, ready?.timeZone ?? timeZone).date
+  const at = ready && zoneParts(Date.parse(ready.notBefore), ready.timeZone)
+  const when = at && friendlyWhen(at.date, at.hour, at.minute, today)
+  if (value.start.kind === 'usage-reset') return when ? `After reset · ${when}` : 'After reset'
+  if (when) return when
   if (!validDate(value.start.date)) return 'Pick a date'
   if (!validTime(value.start)) return 'Pick a time'
-  // The fields are a server-zone wall time already; format the date alone so no zone shifts it.
-  const day = new Date(`${value.start.date}T00:00:00Z`).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).replace(',', '')
-  return `Starts ${day} ${pad(value.start.hour)}:${pad(value.start.minute)}`
+  return friendlyWhen(value.start.date, value.start.hour, value.start.minute, today)
+}
+
+/** The tooltip: the full date with the server zone once previewed. */
+export function startTitle(value: StartChoice | null, ready?: StartChoice['preview'], timeZone?: string): string {
+  if (!value) return 'Schedule start'
+  if (!ready) return startLabel(value, ready, timeZone)
+  const full = new Date(ready.notBefore).toLocaleString('en-GB', { dateStyle: 'full', timeStyle: 'short', timeZone: ready.timeZone })
+  return `${value.start.kind === 'usage-reset' ? 'After the usage limit resets: ' : 'Starts '}${full} (${ready.timeZone})`
 }
 
 /** Pick date & time's default: the full hour after the next one, in the server zone (9:23 → 11:00). */
 export function defaultAtStart(timeZone?: string, now = Date.now()): AtStart {
-  const at = new Date(now + 2 * 3_600_000)
-  const format = (zone?: string) => new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' }).formatToParts(at)
-  let parts: Intl.DateTimeFormatPart[]
-  try { parts = format(timeZone) } catch { parts = format() }
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value ?? ''
-  return { kind: 'at', date: `${part('year')}-${part('month')}-${part('day')}`, hour: Number(part('hour')), minute: 0 }
+  const { date, hour } = zoneParts(now + 2 * 3_600_000, timeZone)
+  return { kind: 'at', date, hour, minute: 0 }
 }
 
 function validDate(date: string): boolean {
@@ -66,8 +95,8 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   task: CreateRunInput; value: StartChoice | null; onChange: (value: StartChoice | null) => void; disabledReason?: string
   /** Why Schedule task cannot submit yet, for the line beside the button; undefined when it can. */
   onBlockedChange?: (reason: string | undefined) => void
-  /** The chosen start as text (`startLabel`), or undefined while it is Now. */
-  onLabelChange?: (label: string | undefined) => void
+  /** The chosen start's summary (`startLabel`) and tooltip (`startTitle`), or undefined while it is Now. */
+  onLabelChange?: (label: { text: string; title: string } | undefined) => void
   open?: boolean; onOpenChange?: (open: boolean) => void
 }) {
   const [openState, setOpenState] = useState(false)
@@ -94,7 +123,8 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   const groupName = useId()
   const errorId = useId()
   const eligibilityId = useId()
-  const taskJson = JSON.stringify(task)
+  const settingsKey = previewSettingsKey(task)
+  const hasText = !!task.task.trim()
   // Eligibility depends on execution settings, never the wording of the prompt.
   const optionsKey = JSON.stringify({ ...task, task: 'Check scheduling options' })
   const currentOptions = options?.key === optionsKey ? options.data : undefined
@@ -121,11 +151,11 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
     setRetry(!!value?.invalidated)
     setTimeError(false)
     // Invalidate permanently: changing settings back must not resurrect an old check.
-    if (value?.preview && (value.taskJson !== taskJson || disabledReason)) {
+    if (value?.preview && (value.settingsKey !== settingsKey || disabledReason)) {
       onChange({ start: value.start })
     }
     return () => { generation.current++ }
-  }, [taskJson, choiceJson, disabledReason, value?.invalidated])
+  }, [settingsKey, choiceJson, disabledReason, value?.invalidated])
 
   useLayoutEffect(() => {
     if (value?.start.kind !== 'usage-reset' || !resetReason) return
@@ -143,7 +173,7 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
     try {
       const preview = await previewDeferredStart({ task, start: value.start })
       if (version !== generation.current) return
-      if (preview.available) onChange({ start: value.start, preview, taskJson })
+      if (preview.available) onChange({ start: value.start, preview, settingsKey })
       else { setMessage(preview.message); setTimeError(preview.reason === 'window-over'); setRetry(preview.reason === 'account-unverifiable') }
     } catch (error) {
       if (version === generation.current) {
@@ -158,10 +188,10 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   useEffect(() => {
     if (!value || disabledReason || !task.task.trim() || fieldMessage) return
     if (value.start.kind === 'usage-reset' && resetReason) return
-    if (value.preview && value.taskJson === taskJson) return
+    if (value.preview && value.settingsKey === settingsKey) return
     autoTimer.current = setTimeout(() => void check(), AUTO_PREVIEW_MS)
     return () => clearTimeout(autoTimer.current)
-  }, [taskJson, choiceJson, disabledReason, value?.start.kind === 'usage-reset' && resetReason])
+  }, [settingsKey, hasText, choiceJson, disabledReason, value?.start.kind === 'usage-reset' && resetReason])
 
   // Timers are capped for distant dates; closing the popover must not stop expiry.
   useEffect(() => {
@@ -176,7 +206,7 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
     return () => clearTimeout(timer)
   }, [value?.preview])
 
-  const ready = !(value?.start.kind === 'usage-reset' && resetReason) && !busy && !fieldMessage && !disabledReason && value?.taskJson === taskJson && value.preview && Date.parse(value.preview.notBefore) > Date.now() ? value.preview : undefined
+  const ready = !(value?.start.kind === 'usage-reset' && resetReason) && !busy && !fieldMessage && !disabledReason && value?.settingsKey === settingsKey && value.preview && Date.parse(value.preview.notBefore) > Date.now() ? value.preview : undefined
   const blocked = !value || ready ? undefined
     : disabledReason ?? (value.start.kind === 'usage-reset' && resetReason ? resetReason : busy ? 'Checking the start time…'
       : message ? message
@@ -186,10 +216,11 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   useEffect(() => { onBlockedChange?.(blocked) }, [blocked])
   const visibleFieldMessage = touched ? fieldMessage : undefined
   const describedBy = message || fieldMessage ? errorId : undefined
-  const label = startLabel(value, ready)
-  useEffect(() => { onLabelChange?.(value ? label : undefined) }, [value ? label : undefined])
+  const label = startLabel(value, ready, currentOptions?.timeZone)
+  const title = startTitle(value, ready, currentOptions?.timeZone)
+  useEffect(() => { onLabelChange?.(value ? { text: label, title } : undefined) }, [value ? `${label}\n${title}` : undefined])
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" aria-label="Choose task start time" title={value ? label : 'Schedule start'}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button></PopoverTrigger>
+    <PopoverTrigger asChild><Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" aria-label="Choose task start time" title={title}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button></PopoverTrigger>
     <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
       <fieldset className="space-y-3">
       <legend className="font-medium">Start task</legend>
