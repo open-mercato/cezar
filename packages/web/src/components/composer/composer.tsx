@@ -565,9 +565,7 @@ export function Composer({
       size={sendLabel ? "sm" : "icon-sm"}
       aria-label={sendAriaLabel}
       disabled={sendDisabled}
-      // No fade into the split state: an opacity transition on a sub-pixel row left a stale
-      // 1px strip of the previous bright button above it in Chrome.
-      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none transition-none")}
+      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
       onClick={submitDraft}
     >
       <ArrowUpIcon aria-hidden="true" />{sendLabel}
@@ -742,7 +740,9 @@ export function Composer({
                     over a working agent offers exactly one action. */}
                 {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
                   sendMenu ? (
-                    <div data-slot="composer-send" className="flex items-center">
+                    // Its own pixel-snapped layer: the row often sits at a fractional y, and Chrome
+                    // left a stale 1px strip of the previous button when the group changed shape.
+                    <div data-slot="composer-send" className="flex transform-gpu items-center">
                       {sendButton}
                       {/* Stays usable while Send is disabled, but dimmed to match it. */}
                       <div data-slot="composer-send-menu" className={cn("flex", sendDisabled && "opacity-50 hover:opacity-100 focus-within:opacity-100")}>
