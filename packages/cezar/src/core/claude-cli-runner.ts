@@ -356,9 +356,7 @@ export class ClaudeCliRunner implements AgentRunner {
       }
 
       if (exitCode !== 0 && exitCode !== null) {
-        const stderr = stderrChunks.join('').trim();
-        const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
-        const msg = `claude CLI exited with code ${exitCode}${detail}`;
+        const msg = claudeExitMessage(exitCode, stderrChunks.join(''));
         onEvent?.({ type: 'error', message: msg });
         throw new Error(msg);
       }
@@ -605,6 +603,21 @@ function handleClaudeMessage(
 // stringify/image helpers moved to claude-ui-mapper.ts (shared by v1 and v2).
 
 // ---- subprocess plumbing --------------------------------------------------
+
+/** The signals a `128 + n` exit names; only reached when cezar did NOT signal the child. */
+const EXIT_SIGNALS: Record<number, string> = { 1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 13: 'SIGPIPE', 15: 'SIGTERM' };
+
+/** A failed exit, naming the signal behind a `128 + n` code — a bare "code 129" (telemetry 046a0525)
+ *  read as a crash, and cezar never sends SIGHUP (Windows raises it when the console closes). */
+export function claudeExitMessage(exitCode: number, stderr: string): string {
+  const signal = exitCode > 128 ? EXIT_SIGNALS[exitCode - 128] : undefined;
+  const hint = signal === 'SIGHUP'
+    ? ' (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)'
+    : signal ? ` (${signal}: a signal cezar did not send)` : '';
+  const tail = stderr.trim();
+  const detail = tail ? ` — ${tail.split('\n').slice(-3).join(' | ')}` : '';
+  return `claude CLI exited with code ${exitCode}${hint}${detail}`;
+}
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   if (child.exitCode != null) return Promise.resolve(child.exitCode);

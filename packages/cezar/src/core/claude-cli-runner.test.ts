@@ -13,6 +13,7 @@ import {
   CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
+  claudeExitMessage,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
@@ -276,6 +277,22 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       expect(session.open).toBe(false);
       expect(session.sendMessage([{ type: 'text', text: 'are you there?' }])).toBe(false);
     });
+  });
+});
+
+describe('claudeExitMessage', () => {
+  it('names a hangup the CLI exited on, which cezar never sends (telemetry 046a0525)', () => {
+    expect(claudeExitMessage(129, '')).toBe(
+      'claude CLI exited with code 129 (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)',
+    );
+  });
+
+  it('names any other signal exit, and keeps the stderr tail', () => {
+    expect(claudeExitMessage(137, 'a\nb')).toBe('claude CLI exited with code 137 (SIGKILL: a signal cezar did not send) — a | b');
+  });
+
+  it('leaves an ordinary failure code alone', () => {
+    expect(claudeExitMessage(1, 'boom\n')).toBe('claude CLI exited with code 1 — boom');
   });
 });
 
