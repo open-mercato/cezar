@@ -355,9 +355,11 @@ function safeCwd(): string {
  *  become `<repo>`, the temp dir `<tmp>`, the home directory `~` — longest first, so a repo under
  *  home is `<repo>`, not `~/code/<name>`. */
 export function scrub(text: string): string {
+  // The desktop sidecar runs from home: a home cwd is not a repo, so `~` must win there.
+  const cwd = safeCwd();
   const pairs: Array<[string, string]> = [
     ...projectRoots.map((root): [string, string] => [root, '<repo>']),
-    [safeCwd(), '<repo>'],
+    [cwd === homedir() ? '' : cwd, '<repo>'],
     [tmpdir(), '<tmp>'],
     [homedir(), '~'],
   ];

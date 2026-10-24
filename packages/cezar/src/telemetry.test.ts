@@ -130,6 +130,15 @@ describe('telemetry', () => {
     expect(out).not.toContain(homedir());
   });
 
+  it('keeps a home-directory cwd as ~, not <repo> (the desktop sidecar runs from home)', () => {
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(homedir());
+    try {
+      expect(scrub(`at ${join(homedir(), '.npm', 'x.js')}`)).toBe(`at ${join('~', '.npm', 'x.js')}`);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it('masks a registered project root outside the home directory', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cez-roots-'));
     vi.stubEnv('CEZ_HOME', home);
