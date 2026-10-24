@@ -211,7 +211,7 @@ export function BrowserView({
   // ⌥D / Alt+D switches it — from any field too, so it works wherever the focus is in the cockpit.
   // Inside the page only the mirror's picker can hear it (and forwards it): a directly framed
   // page is another origin, whose keys never reach this window.
-  const toggleDesign = useRef(() => false)
+  const toggleDesign = useRef<() => boolean>(() => false)
   toggleDesign.current = () => {
     if (!designAllowed || targetOrigin === null) return false
     setDesign((on) => !on)
