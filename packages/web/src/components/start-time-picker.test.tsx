@@ -221,8 +221,11 @@ it('reports why scheduling cannot submit yet, and nothing once it can', async ()
   expect(blocked()).toBe('Checking the start time…')
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
   expect(blocked()).toBe('Finding when your usage limit resets…')
-  await waitFor(() => expect(previewDeferredStart).toHaveBeenCalledTimes(1))
-  expect(blocked()).toBe('Checking the start time…')
+  // The auto-check fires from a timer outside act: the call can land a render before `busy` reaches the report.
+  await waitFor(() => {
+    expect(previewDeferredStart).toHaveBeenCalledTimes(1)
+    expect(blocked()).toBe('Checking the start time…')
+  })
   await act(async () => finish({ available: false, reason: 'account-unverifiable', message: 'No observed reset.' }))
   expect(blocked()).toBe('No observed reset.')
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }))

@@ -29,9 +29,12 @@ import { trackMessageSent } from '@/lib/telemetry'
  * What it deliberately does NOT do:
  *  - retry when the fresh record agrees with the path already tried. That 409 is the server's
  *    considered answer (a disconnected provider, a locked model, a session with nothing to
- *    resume), and re-posting it would only turn one honest error into two. The one exception is
- *    the live path's `session closed`: a `running` run between sessions, retried on a bounded
- *    backoff (`SESSION_GAP_RETRY_DELAYS_MS`);
+ *    resume), and re-posting it would only turn one honest error into two. The two exceptions are
+ *    the transitional refusals, retried on a bounded backoff (`SESSION_GAP_RETRY_DELAYS_MS`): the
+ *    live path's `session closed` (a `running` run between sessions) and the Continue path's
+ *    `run is still active` (a run whose record already settled while the engine still unwinds it);
+ *  - re-post a request that got no answer at all, unless a fresh record proves it never landed.
+ *    Only Continue can prove that: an accepted one adds its step synchronously (7adbfbd7);
  *  - reopen a session for an EMPTY draft that a fresh record AGREES is settled — a genuine
  *    refusal. But an EMPTY draft whose refusal is `run is still active` is the opposite: the
  *    refetch proves the run is live already, which is the state the one-click Continue asked
@@ -60,6 +63,19 @@ function isSessionClosed(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 409 && error.message === 'session closed'
 }
 
+/** The record settles (review/done) BEFORE the engine drops the run — a Continue's turn-end autosave
+ *  runs in between — so `/continue` refuses a run its own fresh record calls settled (77117b95). */
+function isStillUnwinding(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 409 && error.message === 'run is still active'
+}
+
+/** The refusal on `path` that only means "not yet": worth the bounded wait, never a verdict. */
+function isTransitional(path: DeliveryPath, error: unknown): error is ApiError {
+  return path === 'live' ? isSessionClosed(error) : isStillUnwinding(error)
+}
+
+const continuations = (record: ApiRun) => record.steps.filter((step) => step.id.startsWith('continue-')).length
+
 export function useDeliverPrompt(
   run: ApiRun,
   continueWith: ContinueAction['continueWith'],
@@ -77,6 +93,7 @@ export function useDeliverPrompt(
   // memo for the same rule), so this callback is stable across the streaming re-renders a live
   // thread does constantly.
   const { mutateAsync: sendMessageAsync } = useSendMessage(run.id)
+  const knownContinuations = continuations(run)
 
   return useCallback(
     async (text: string, images: AttachmentEntry[]) => {
@@ -85,51 +102,67 @@ export function useDeliverPrompt(
         if (surface) trackMessageSent(surface)
         return result
       }
+      const refetch = () => queryClient.fetchQuery({ ...runQueryOptions(run.id), staleTime: 0 })
       const attempted = deliveryPath(run.status)
+      let firstError: unknown
       try {
         return await deliver(attempted)
       } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 409) throw error
-        let refusal: ApiError = error
-        for (let retry = 0; ; retry += 1) {
-          let fresh: ApiRun
-          try {
-            fresh = await queryClient.fetchQuery({ ...runQueryOptions(run.id), staleTime: 0 })
-          } catch {
-            // The refetch is the recovery, not the delivery: if it cannot answer, the user still
-            // gets the server's own words about the send they made.
-            throw refusal
-          }
-          const path = deliveryPath(fresh.status)
-          if (path === attempted) {
-            // Only the live path's `session closed` is a transient gap; any other agreeing 409 is
-            // the server's considered answer.
-            const delayMs = attempted === 'live' && isSessionClosed(refusal) ? SESSION_GAP_RETRY_DELAYS_MS[retry] : undefined
-            if (delayMs === undefined) throw refusal
-            await wait(delayMs)
-            try {
-              return await deliver('live')
-            } catch (retryError) {
-              if (!isSessionClosed(retryError)) throw retryError
-              refusal = retryError
-              continue
-            }
-          }
-          // Nothing to say and the run is already live: the empty submit was "reopen the session",
-          // and it is already open — the very state the one-click Continue asked for. The refetch
-          // above has already put the truth in the cache, so the thread redraws live instead of
-          // lying. Nothing was meant to be delivered, so this is a success, not the false failure
-          // the toast made of it (telemetry 77117b95).
-          if (path === 'live' && text.trim() === '' && images.length === 0) return undefined
-          // A record with no session to resume cannot take this prompt either — `POST /continue`
-          // would answer its own 409, which would read as the new failure rather than the real one.
-          // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
-          // which in this direction is precisely the record that says the run is still live.
-          if (path === 'continue' && lastSessionId(fresh) === undefined) throw refusal
-          return await deliver(path)
+        firstError = error
+      }
+      // No answer at all (status 0: a dropped socket, a restarting server). Re-post a Continue only
+      // when the fresh record still shows no new continuation step, so it cannot land twice.
+      if (attempted === 'continue' && firstError instanceof ApiError && firstError.status === 0) {
+        const fresh = await refetch().catch(() => undefined)
+        if (!fresh || deliveryPath(fresh.status) !== 'continue' || continuations(fresh) !== knownContinuations) {
+          throw firstError
+        }
+        try {
+          return await deliver('continue')
+        } catch (retryError) {
+          firstError = retryError
         }
       }
+      if (!(firstError instanceof ApiError) || firstError.status !== 409) throw firstError
+      let refusal: ApiError = firstError
+      for (let retry = 0; ; retry += 1) {
+        let fresh: ApiRun
+        try {
+          fresh = await refetch()
+        } catch {
+          // The refetch is the recovery, not the delivery: if it cannot answer, the user still
+          // gets the server's own words about the send they made.
+          throw refusal
+        }
+        const path = deliveryPath(fresh.status)
+        if (path === attempted) {
+          // Only a transitional refusal is worth the wait; any other agreeing 409 is the server's
+          // considered answer.
+          const delayMs = isTransitional(attempted, refusal) ? SESSION_GAP_RETRY_DELAYS_MS[retry] : undefined
+          if (delayMs === undefined) throw refusal
+          await wait(delayMs)
+          try {
+            return await deliver(attempted)
+          } catch (retryError) {
+            if (!isTransitional(attempted, retryError)) throw retryError
+            refusal = retryError
+            continue
+          }
+        }
+        // Nothing to say and the run is already live: the empty submit was "reopen the session",
+        // and it is already open — the very state the one-click Continue asked for. The refetch
+        // above has already put the truth in the cache, so the thread redraws live instead of
+        // lying. Nothing was meant to be delivered, so this is a success, not the false failure
+        // the toast made of it (telemetry 77117b95).
+        if (path === 'live' && text.trim() === '' && images.length === 0) return undefined
+        // A record with no session to resume cannot take this prompt either — `POST /continue`
+        // would answer its own 409, which would read as the new failure rather than the real one.
+        // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
+        // which in this direction is precisely the record that says the run is still live.
+        if (path === 'continue' && lastSessionId(fresh) === undefined) throw refusal
+        return await deliver(path)
+      }
     },
-    [continueWith, queryClient, run.id, run.status, sendMessageAsync, surface, wait],
+    [continueWith, knownContinuations, queryClient, run.id, run.status, sendMessageAsync, surface, wait],
   )
 }

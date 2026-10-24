@@ -174,4 +174,14 @@ describe('onDangerToast', () => {
     act(() => toast('again', { tone: 'danger' }))
     expect(seen).toEqual(['session closed'])
   })
+
+  it('skips an expected outcome, which still shows', () => {
+    const seen: string[] = []
+    const off = onDangerToast((message) => seen.push(message))
+    render(<Toaster />)
+    act(() => toast('a.png is too large (max 5 MB)', { tone: 'danger', expected: true }))
+    expect(seen).toEqual([])
+    expect(screen.getByText('a.png is too large (max 5 MB)')).toBeTruthy()
+    off()
+  })
 })
