@@ -235,7 +235,41 @@
         font-size: 11.5px;
         opacity: 0.8;
       }
-      .hidden {
+      .connect {
+        display: grid;
+        gap: 10px;
+        width: 100%;
+        text-align: left;
+      }
+      .connect label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted-foreground);
+      }
+      .connect input {
+        -webkit-user-select: text;
+        user-select: text;
+        height: 30px;
+        padding: 0 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--foreground);
+        font: 12.5px/1 var(--mono);
+      }
+      .connect input:focus {
+        outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+        outline-offset: 1px;
+      }
+      .connect .actions {
+        justify-content: flex-end;
+      }
+      .connect-error {
+        color: #f87171;
+      }
+      .hidden,
+      .button.hidden {
         display: none;
       }
     </style>
@@ -273,7 +307,25 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
             <span id="retry-label">Restart cezar</span>
           </button>
+          <button id="change-server" class="button restart hidden" type="button">Change server…</button>
+          <button id="use-local" class="button restart hidden" type="button">Use this computer</button>
         </div>
+        <form id="connect" class="connect hidden">
+          <label>
+            SSH address of the server
+            <input id="connect-ssh" name="ssh" placeholder="user@my-vps.example.com" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+          </label>
+          <label>
+            cezar port on the server
+            <input id="connect-port" name="port" type="number" min="1" max="65535" placeholder="4321" />
+          </label>
+          <p id="connect-error" class="connect-error hidden" role="alert"></p>
+          <div class="actions">
+            <button id="connect-cancel" class="button" type="button">Cancel</button>
+            <button id="connect-local" class="button hidden" type="button">Use this computer</button>
+            <button id="connect-submit" class="button primary" type="submit">Connect</button>
+          </div>
+        </form>
         <p id="hint" class="hidden"></p>
       </div>
     </main>
@@ -344,6 +396,48 @@
         },
       }
       const params = new URLSearchParams(location.search)
+      // Remote mode (src-tauri/src/remote.rs): `connect_server` saves the choice and restarts the
+      // app into it — `ssh: null` is this computer again. It rejects with a message to show.
+      function connectServer(ssh, port, onError) {
+        if (!window.__TAURI_INTERNALS__) return
+        window.__TAURI_INTERNALS__.invoke('connect_server', { ssh: ssh, port: port }).catch(function (error) {
+          onError(String(error))
+        })
+      }
+      function showConnect() {
+        window.cezarSplash.set('Connect to a server', 'Show the cezar running on another machine, through an SSH tunnel with your own keys.')
+        document.getElementById('spinner').classList.add('hidden')
+        const form = document.getElementById('connect')
+        const ssh = document.getElementById('connect-ssh')
+        const port = document.getElementById('connect-port')
+        const error = document.getElementById('connect-error')
+        form.classList.remove('hidden')
+        ssh.value = params.get('ssh') || ''
+        if (params.get('port') && params.get('port') !== '4321') port.value = params.get('port')
+        const showError = function (message) {
+          error.textContent = message
+          error.classList.remove('hidden')
+          document.getElementById('connect-submit').disabled = false
+        }
+        form.onsubmit = function (event) {
+          event.preventDefault()
+          error.classList.add('hidden')
+          document.getElementById('connect-submit').disabled = true
+          connectServer(ssh.value, port.value ? Number(port.value) : null, showError)
+        }
+        document.getElementById('connect-cancel').onclick = function () {
+          history.back()
+        }
+        if (params.get('remote') === '1') {
+          const local = document.getElementById('connect-local')
+          local.classList.remove('hidden')
+          local.onclick = function () {
+            connectServer(null, null, showError)
+          }
+        }
+        ssh.focus()
+      }
+      if (params.get('connect')) showConnect()
       if (params.get('report')) window.cezarSplash.report(params.get('report'))
       // Every failure page: the error, its log, the report card and "Restart cezar" — which checks
       // for updates and restarts the app (`restart_app`).
@@ -355,6 +449,23 @@
           this.disabled = true
           label.textContent = 'Restarting…'
           if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('restart_app')
+        }
+        if (params.get('remote') === '1') {
+          document.getElementById('retry-label').textContent = 'Reconnect'
+          const change = document.getElementById('change-server')
+          const local = document.getElementById('use-local')
+          change.classList.remove('hidden')
+          local.classList.remove('hidden')
+          change.onclick = function () {
+            location.search = '?connect=1&remote=1&ssh=' + encodeURIComponent(params.get('ssh') || '') + '&port=' + encodeURIComponent(params.get('port') || '')
+          }
+          local.onclick = function () {
+            this.disabled = true
+            connectServer(null, null, function (message) {
+              window.cezarSplash.set('Could not switch to this computer', message)
+              local.disabled = false
+            })
+          }
         }
       } else if (params.get('title')) {
         window.cezarSplash.set(params.get('title'), params.get('detail') || '')

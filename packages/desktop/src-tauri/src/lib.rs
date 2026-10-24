@@ -21,6 +21,8 @@
 //! spawned (`caller_is_trusted`) — the failure page's `restart_app` and `send_error_report` the
 //! splash alone (`caller_is_splash`) — and the window itself never stays on another local server
 //! (`is_own_origin`, enforced at page load: the navigation hook also sees the Preview's iframes). A dev server on `localhost:3000` is somebody else's page.
+//! `connect_server` (the splash's connect page) switches to remote mode — `remote.rs`, where the
+//! sidecar is an ssh tunnel to a server's cezar and every rule above stays as it is.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -33,6 +35,7 @@ use std::time::{Duration, Instant};
 
 mod disclaim;
 mod node_runtime;
+mod remote;
 mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
@@ -47,6 +50,12 @@ const LOG_TAIL: usize = 60;
 /// The cockpit's conventional port, tried first so `http://localhost:4321` works in a browser
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
+/// Remote mode's local tunnel ports: their own origin, so a server's cockpit never shares
+/// browser storage with this machine's.
+const REMOTE_PREFERRED_PORTS: std::ops::Range<u16> = 4341..4351;
+const REMOTE_HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
+/// Reconnects after a dropped tunnel (laptop asleep, network change) before the failure page.
+const REMOTE_RECONNECT_ATTEMPTS: u32 = 10;
 const PACKAGE: &str = "@open-mercato/cezar";
 
 /// Everything the supervisor thread and the menu handler share.
@@ -73,6 +82,9 @@ struct Shell {
     restarting: AtomicBool,
     /// The last page of ours the window finished loading — where it returns after a foreign page.
     cockpit_url: Mutex<Option<url::Url>>,
+    /// Remote mode (`remote.rs`), read once at launch — switching restarts the app. `None` is
+    /// the local sidecar; `Some(Err)` a server setting that cannot be used, shown as such.
+    remote: Option<Result<remote::Remote, String>>,
 }
 
 /// Runs at document start on EVERY page the window loads — the splash and, after navigation,
@@ -331,10 +343,14 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
 }
 
 fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
-    let update_item = MenuItem::with_id(app, "update-cezar", "Update cezar to latest…", true, None::<&str>)?;
+    // A server's cezar is updated on the server: this machine's install has nothing to do there.
+    let local = shell.remote.is_none();
+    let update_item = MenuItem::with_id(app, "update-cezar", "Update cezar to latest…", local, None::<&str>)?;
     let open_item = MenuItem::with_id(app, "open-browser", "Open view in browser", true, Some("CmdOrCtrl+Shift+O"))?;
     *shell.open_item.lock().unwrap() = Some(open_item.clone());
-    let versions_menu = Submenu::with_id(app, "versions", "Versions", true)?;
+    let versions_menu = Submenu::with_id(app, "versions", "Versions", local)?;
+    let connect_item = MenuItem::with_id(app, "connect-server", if local { "Connect to a server…" } else { "Change server…" }, true, None::<&str>)?;
+    let local_item = MenuItem::with_id(app, "use-local", "Use this computer", !local, None::<&str>)?;
     *shell.versions_menu.lock().unwrap() = Some(versions_menu.clone());
     refresh_versions_menu(app, shell);
     let app_menu = Submenu::with_items(
@@ -347,6 +363,9 @@ fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
             &update_item,
             &versions_menu,
             &open_item,
+            &PredefinedMenuItem::separator(app)?,
+            &connect_item,
+            &local_item,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::hide(app, None)?,
             &PredefinedMenuItem::hide_others(app, None)?,
@@ -484,6 +503,9 @@ fn stop_sidecar(child: &mut Child) {
 
 /// Point `current` at an installed id (atomic rename over the old link) and relaunch.
 fn switch_version(shell: &Shell, id: &str) -> bool {
+    if shell.remote.is_some() {
+        return false;
+    }
     let dir = cezar_home().join("versions");
     if !dir.join(id).join("node_modules").join("@open-mercato").join("cezar").join("dist").join("index.js").is_file() {
         return false;
@@ -595,7 +617,7 @@ fn offer_version(window: &WebviewWindow, version: &str) {
 /// native menu at the pointer. Menus are main-thread objects, commands are not.
 #[tauri::command]
 fn show_versions_menu(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
-    if !caller_is_trusted(&window, &shell) {
+    if !caller_is_trusted(&window, &shell) || shell.remote.is_some() {
         return;
     }
     use tauri::menu::ContextMenu;
@@ -631,6 +653,7 @@ pub fn run() {
         supervising: AtomicBool::new(false),
         restarting: AtomicBool::new(false),
         cockpit_url: Mutex::new(None),
+        remote: remote::resolve(std::env::var("CEZ_DESKTOP_REMOTE").ok(), &cezar_home()),
     });
     let shell_for_setup = shell.clone();
     let shell_for_menu = shell.clone();
@@ -651,7 +674,7 @@ pub fn run() {
     let shell_for_state = shell.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
+        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report, connect_server])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
@@ -695,6 +718,18 @@ pub fn run() {
                 let app = app.clone();
                 let shell = shell_for_menu.clone();
                 std::thread::spawn(move || update_cezar(&app, &shell, "Updating cezar…"));
+            }
+            "connect-server" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    show_connect_page(&window, &shell_for_menu);
+                }
+            }
+            "use-local" => {
+                if let Err(error) = switch_mode(app, &shell_for_menu, None) {
+                    if let Some(window) = app.get_webview_window("main") {
+                        fail(&window, "Could not switch to this computer", &error, "", None);
+                    }
+                }
             }
             "open-browser" => {
                 // The page the window is showing right now — route and all — so the browser tab
@@ -807,6 +842,12 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
         std::thread::sleep(Duration::from_millis(50));
     };
 
+    // A server's cockpit needs no Node here, no install and no sidecar — only ssh.
+    if let Some(choice) = shell.remote.clone() {
+        supervise_remote(&shell, &window, choice);
+        return;
+    }
+
     // Everything below needs Node 20+: the install, the sidecar, the update check. Without it
     // the honest answer is a page that says so, with the download link and a retry — not npm's
     // "command not found" three layers down.
@@ -828,7 +869,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
                 }
             }
         };
-        let port = pick_port();
+        let port = pick_port(PREFERRED_PORTS);
         shell.port.store(port, Ordering::SeqCst);
         if let Some(item) = shell.open_item.lock().unwrap().as_ref() {
             let _ = item.set_enabled(true);
@@ -889,20 +930,7 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
         }
 
         *shell.child.lock().unwrap() = Some(child);
-        let status = loop {
-            let mut guard = shell.child.lock().unwrap();
-            match guard.as_mut() {
-                Some(child) => match child.try_wait() {
-                    Ok(Some(status)) => break Some(status),
-                    Ok(None) => {}
-                    Err(_) => break None,
-                },
-                None => break None, // taken by Exit — the app is quitting
-            }
-            drop(guard);
-            std::thread::sleep(Duration::from_millis(250));
-        };
-        *shell.child.lock().unwrap() = None;
+        let status = wait_for_exit(&shell);
 
         let requested = shell.restart_requested.swap(false, Ordering::SeqCst);
         match status.and_then(|s| s.code()) {
@@ -922,6 +950,103 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             }
             None => return,
         }
+    }
+}
+
+/// Block until the child in `shell.child` exits, then clear the slot. `None` when Exit took the
+/// child (the app is quitting) or it cannot be waited on.
+fn wait_for_exit(shell: &Shell) -> Option<std::process::ExitStatus> {
+    let status = loop {
+        let mut guard = shell.child.lock().unwrap();
+        match guard.as_mut() {
+            Some(child) => match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {}
+                Err(_) => break None,
+            },
+            None => break None, // taken by Exit — the app is quitting
+        }
+        drop(guard);
+        std::thread::sleep(Duration::from_millis(250));
+    };
+    *shell.child.lock().unwrap() = None;
+    status
+}
+
+/// Remote mode (`remote.rs`): the ssh tunnel is the sidecar. A tunnel that drops after the
+/// cockpit came up is reopened on the same local port, so the page that is open reconnects on
+/// its own; a first connection that fails shows why (ssh's own words) at once.
+fn supervise_remote(shell: &Shell, window: &WebviewWindow, choice: Result<remote::Remote, String>) {
+    let remote = match choice {
+        Ok(remote) => remote,
+        Err(error) => {
+            fail_remote(window, None, "This server setting cannot be used", &error, "");
+            return;
+        }
+    };
+    let label = remote.label();
+    let _ = window.set_title(&format!("Cezar — {label}"));
+    let mut port = 0u16;
+    let mut connected = false;
+    let mut failures = 0u32;
+    loop {
+        if port == 0 || TcpListener::bind(("127.0.0.1", port)).is_err() {
+            port = pick_port(REMOTE_PREFERRED_PORTS);
+        }
+        if !connected {
+            splash_reset(window, &format!("Connecting to {label}…"), "Opening an SSH tunnel to the cezar on that server.");
+        }
+        let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let mut child = match spawn_tunnel(&remote, port, log.clone()) {
+            Ok(child) => child,
+            Err(error) => {
+                fail_remote(window, Some(&remote), "ssh could not start", &format!("{error}. cezar connects to a server through the ssh client (OpenSSH)."), "");
+                return;
+            }
+        };
+        match wait_for_health(port, &mut child, REMOTE_HEALTH_TIMEOUT) {
+            Some(version) => {
+                failures = 0;
+                *shell.running_version.lock().unwrap() = Some(version);
+                // Trusted only once it answers — and before the window goes there.
+                let moved = shell.port.swap(port, Ordering::SeqCst) != port;
+                if !connected || moved {
+                    let back = shell.cockpit_url.lock().unwrap().clone().filter(|url| url.scheme() == "http");
+                    let target = back
+                        .map(|mut url| {
+                            let _ = url.set_port(Some(port));
+                            url
+                        })
+                        .or_else(|| url::Url::parse(&format!("http://127.0.0.1:{port}")).ok());
+                    if let Some(target) = target {
+                        let _ = window.navigate(target);
+                    }
+                }
+                connected = true;
+            }
+            None => {
+                stop_sidecar(&mut child);
+                let _ = child.wait();
+                failures += 1;
+                if !connected || failures >= REMOTE_RECONNECT_ATTEMPTS {
+                    let tail = log.lock().unwrap().iter().cloned().collect::<Vec<_>>().join("\n");
+                    let detail = format!(
+                        "No cezar answered through an SSH tunnel to {} (cezar port {}). Check that `ssh {}` works in a terminal without a password prompt — the app cannot type one, so use a key in ssh-agent or the keychain — and that cezar runs on the server.",
+                        remote.ssh, remote.port, remote.ssh
+                    );
+                    fail_remote(window, Some(&remote), &format!("Could not reach {label}"), &detail, &tail);
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(u64::from(failures * 2).min(15)));
+                continue;
+            }
+        }
+        *shell.child.lock().unwrap() = Some(child);
+        if wait_for_exit(shell).is_none() {
+            return;
+        }
+        // The tunnel dropped (sleep, a network change): reopen it on the same port.
+        std::thread::sleep(Duration::from_secs(1));
     }
 }
 
@@ -1037,14 +1162,57 @@ fn restart_app(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Ar
     std::thread::spawn(move || {
         splash_reset(&window, "Checking for updates…", "A newer version may already fix this.");
         install_shell_update_now(&app, &window);
-        update_cezar_if_newer(&app, &shell);
-        splash_reset(&window, "Restarting cezar…", "");
-        if let Some(mut child) = shell.child.lock().unwrap().take() {
-            stop_sidecar(&mut child);
-            let _ = child.wait();
+        if shell.remote.is_none() {
+            update_cezar_if_newer(&app, &shell);
         }
-        app.restart();
+        splash_reset(&window, "Restarting cezar…", "");
+        restart_now(&app, &shell);
     });
+}
+
+/// Stop the sidecar (or the tunnel) and start the app over.
+fn restart_now(app: &AppHandle, shell: &Shell) -> ! {
+    if let Some(mut child) = shell.child.lock().unwrap().take() {
+        stop_sidecar(&mut child);
+        let _ = child.wait();
+    }
+    app.restart()
+}
+
+/// The connect page's "Connect" (`ssh` set) and "Use this computer" (`ssh` null): save the
+/// choice and restart into it. The splash only — the cockpit never picks what the window shows.
+#[tauri::command]
+fn connect_server(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>, ssh: Option<String>, port: Option<u16>) -> Result<(), String> {
+    if !caller_is_splash(&window) {
+        return Err("Not available on this page.".into());
+    }
+    let choice = ssh.map(|ssh| remote::Remote::new(&ssh, port)).transpose()?;
+    switch_mode(&app, shell.inner(), choice.as_ref())
+}
+
+fn switch_mode(app: &AppHandle, shell: &Arc<Shell>, choice: Option<&remote::Remote>) -> Result<(), String> {
+    if std::env::var_os("CEZ_DESKTOP_REMOTE").is_some_and(|value| !value.is_empty()) {
+        return Err("CEZ_DESKTOP_REMOTE is set for this app, and it wins. Unset it to choose here.".into());
+    }
+    remote::save(&cezar_home(), choice).map_err(|error| format!("Could not save the choice: {error}"))?;
+    if shell.restarting.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let app = app.clone();
+    let shell = shell.clone();
+    std::thread::spawn(move || restart_now(&app, &shell));
+    Ok(())
+}
+
+/// The connect page, filled with the current choice.
+fn show_connect_page(window: &WebviewWindow, shell: &Shell) {
+    let current = shell.remote.as_ref().and_then(|choice| choice.as_ref().ok());
+    let ssh = current.map(|remote| remote.ssh.as_str()).unwrap_or("");
+    let port = current.map(|remote| remote.port).unwrap_or(remote::DEFAULT_REMOTE_PORT);
+    let remote_mode = shell.remote.is_some();
+    if let Ok(url) = url::Url::parse(&format!("{}?connect=1&ssh={}&port={port}&remote={}", app_origin(), urlencode(ssh), u8::from(remote_mode))) {
+        let _ = window.navigate(url);
+    }
 }
 
 /// The shell's own update, installed now rather than on the next launch — the restart that
@@ -1185,6 +1353,9 @@ fn update_managed_node_in_background() {
 /// npm's output to the splash. On success with a sidecar running, asks the supervisor loop to
 /// relaunch. Returns whether the install succeeded.
 fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
+    if shell.remote.is_some() {
+        return false;
+    }
     // The development channel never replaces the build picked by hand; only a machine with no
     // cezar at all gets the newest release, so the app can start.
     let tag = match release_tag() {
@@ -1282,6 +1453,23 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
         }
     }
     let mut child = command.spawn().map_err(|error| format!("could not start node: {error}"))?;
+    capture_output(&mut child, log);
+    Ok(child)
+}
+
+/// Remote mode's sidecar: `ssh -N -L 127.0.0.1:<port>:127.0.0.1:<server port>` (`remote.rs`).
+fn spawn_tunnel(remote: &remote::Remote, port: u16, log: Arc<Mutex<VecDeque<String>>>) -> Result<Child, String> {
+    let args = remote.tunnel_args(port);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut command = tool_command("ssh", &args);
+    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| format!("could not start ssh: {error}"))?;
+    capture_output(&mut child, log);
+    Ok(child)
+}
+
+/// The child's stdout and stderr, last `LOG_TAIL` lines — what a failure page shows.
+fn capture_output(child: &mut Child, log: Arc<Mutex<VecDeque<String>>>) {
     for reader in [
         child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
         child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
@@ -1300,7 +1488,6 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
             }
         });
     }
-    Ok(child)
 }
 
 /// `program` with `args`, the way this platform finds the user's tools.
@@ -1858,14 +2045,16 @@ fn wait_for_health(port: u16, child: &mut Child, timeout: Duration) -> Option<St
     None
 }
 
-/// 4321 first (the port every README names), the next few when it is busy, then anything free.
-fn pick_port() -> u16 {
-    for port in PREFERRED_PORTS {
+/// The first free port of `preferred` (`PREFERRED_PORTS` starts at 4321, the port every README
+/// names), then anything free.
+fn pick_port(preferred: std::ops::Range<u16>) -> u16 {
+    let fallback = preferred.start;
+    for port in preferred {
         if TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
     }
-    TcpListener::bind("127.0.0.1:0").and_then(|listener| listener.local_addr()).map(|addr| addr.port()).unwrap_or(4321)
+    TcpListener::bind("127.0.0.1:0").and_then(|listener| listener.local_addr()).map(|addr| addr.port()).unwrap_or(fallback)
 }
 
 // ---- window geometry -----------------------------------------------------------------------
@@ -2081,6 +2270,23 @@ fn fail(window: &WebviewWindow, title: &str, detail: &str, log: &str, failure: O
         urlencode(detail),
         urlencode(title),
         urlencode(log)
+    )) {
+        let _ = window.navigate(url);
+    }
+}
+
+/// Remote mode's failure page: "Reconnect", "Change server…" and "Use this computer" instead
+/// of "Restart cezar". No error report — the problem is the server or the network, not the app.
+fn fail_remote(window: &WebviewWindow, remote: Option<&remote::Remote>, title: &str, detail: &str, log: &str) {
+    let (ssh, port) = remote.map(|remote| (remote.ssh.as_str(), remote.port)).unwrap_or(("", remote::DEFAULT_REMOTE_PORT));
+    if let Ok(url) = url::Url::parse(&format!(
+        "{}?error={}&title={}&log={}&report={}&remote=1&ssh={}&port={port}",
+        app_origin(),
+        urlencode(detail),
+        urlencode(title),
+        urlencode(log),
+        telemetry::Reported::Off.as_param(),
+        urlencode(ssh)
     )) {
         let _ = window.navigate(url);
     }

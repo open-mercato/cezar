@@ -70,6 +70,31 @@ line in its systemd unit / launchd plist). Each home carries its own registry,
 global config and server state, so instances share nothing — and `--domain`
 already gives them separate ports, nginx sites and logins.
 
+## Desktop app as a window onto the server
+
+The cezar desktop app can show a server's cockpit instead of running cezar on
+your machine: agents, worktrees and runs stay on the server, the app is only the
+window. In the app menu choose **Connect to a server…** and enter the server's
+SSH address (`user@host` or a `~/.ssh/config` alias) — or set
+`CEZ_DESKTOP_REMOTE=user@host` before launching it.
+
+The app opens `ssh -N -L 127.0.0.1:<local port>:127.0.0.1:4321 <server>` and
+loads the cockpit through it, so:
+
+- the login is your **SSH key** — nginx and its Basic-Auth are not in the path,
+  and a server without a public front at all works too;
+- the key must work **without a prompt** (the app has no terminal to type a
+  passphrase into): load it into `ssh-agent` / the macOS keychain. Check with
+  `ssh <server>` in a terminal first. A custom SSH port belongs in `~/.ssh/config`;
+- a server seen for the first time is trusted and remembered
+  (`StrictHostKeyChecking=accept-new`); a **changed** host key is refused;
+- a dropped tunnel (sleep, network change) is reopened on its own;
+- **Use this computer** in the same menu goes back to the local cezar. Updating
+  and switching versions apply to the server's cezar there, not from the app.
+
+The cockpit behaves exactly as it does in a browser on that server — hosted
+mode, so no terminal, no Design Mode and no "Open in…" on your machine.
+
 ## Redeploying a new version
 
 `npx cezar-run server-deploy --platform <id>` is the standardized, per-strategy way to

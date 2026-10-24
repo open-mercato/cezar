@@ -18,6 +18,7 @@
     "allow-update-cezar-command",
     "allow-restart-app",
     "allow-show-versions-menu",
-    "allow-send-error-report"
+    "allow-send-error-report",
+    "allow-connect-server"
   ]
 }
