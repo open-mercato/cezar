@@ -316,6 +316,7 @@ import {
   type TelemetryConsentPayload,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
+import { alertConfigFromEnv, RunAlerts } from '../agent-gateway/alerts.ts';
 import {
   providerForActiveRun,
   providerForExistingRun,
@@ -398,6 +399,10 @@ export interface ServerDeps {
    *  watching the boot store before recovery; createApp builds one for legacy
    *  callers and tests. */
   providerRuntimeAuth?: ProviderRuntimeAuthObserver;
+  /** Task alerts to OpenClaw / Hermes (spec 2026-10-21-agent-gateway-integrations); tests inject one. */
+  runAlerts?: RunAlerts;
+  /** Address the cockpit listens on, for the link in an alert; set by `startServer`. */
+  cockpitUrl?: string;
   /** Local terminal handoff for provider-owned login. */
   openTerminal?: typeof openInTerminal;
   /** When Connect re-checks the login it opened (`LOGIN_WATCH_OFFSETS_MS`); tests pass `[]`. */
@@ -1649,6 +1654,23 @@ export function createApp(deps: ServerDeps) {
   }
   contexts.onStoreCreated((store) => providerRuntimeAuth.watch(store));
   contexts.onContextBuilt((ctx) => providerRuntimeAuth.watch(ctx.store));
+
+  // Opt-in alerts (CEZ_OPENCLAW_* / CEZ_HERMES_*): inert, and no listener attached, when unconfigured.
+  // Attached after each project's recovery (boot's already ran), so a restart replays nothing.
+  const runAlerts = deps.runAlerts ?? (() => {
+    const config = alertConfigFromEnv();
+    for (const warning of config.warnings) console.warn(`[alerts] ${warning}`);
+    return new RunAlerts(config, undefined, deps.cockpitUrl);
+  })();
+  if (runAlerts.enabled) {
+    runAlerts.watch(bootContext.store, bootContext.id, { dataDir: bootContext.dataDir });
+    deps.onDispose?.(() => runAlerts.dispose());
+    for (const id of contexts.ids()) {
+      const ctx = contexts.peek(id);
+      if (ctx) runAlerts.watch(ctx.store, ctx.id, { dataDir: ctx.dataDir });
+    }
+    contexts.onContextBuilt((ctx) => runAlerts.watch(ctx.store, ctx.id, { dataDir: ctx.dataDir }));
+  }
 
   const app = new Hono();
 
@@ -8021,6 +8043,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const appCleanups: Array<() => void> = [];
   const app = createApp({
     ...deps,
+    cockpitUrl: deps.cockpitUrl ?? (deps.bindHost ? undefined : `http://127.0.0.1:${port}`),
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
     automationStore: bootAutomationStore,
