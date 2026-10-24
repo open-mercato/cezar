@@ -48,6 +48,8 @@ export interface DesignNote {
   number?: number
   /** A draft the user added (Add note): from then on only Delete removes it, never ✕ or Esc. */
   added?: boolean
+  /** A draft in the batch on its way — frozen until it lands. */
+  sending?: boolean
 }
 
 interface SentNote extends DesignNote {
@@ -370,7 +372,14 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `store.version` is the store's change signal
   const notes = useMemo<DesignNote[]>(
-    () => [...(store.drafts ?? []).map((draft) => ({ ...draft, phase: 'draft' as const })), ...store.sent],
+    () => [
+      ...(store.drafts ?? []).map((draft) => ({
+        ...draft,
+        phase: 'draft' as const,
+        ...(store.inFlight?.has(draft.key) ? { sending: true } : {}),
+      })),
+      ...store.sent,
+    ],
     [store, store.version],
   )
   const marks = useMemo<DesignMark[]>(

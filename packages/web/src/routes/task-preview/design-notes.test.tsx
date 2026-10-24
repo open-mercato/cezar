@@ -223,6 +223,38 @@ describe('sending a note', () => {
     expect(result.current.note('abc-1')).toMatchObject({ phase: 'running', text: 'make it bigger' })
   })
 
+  it('freezes only the batch: a draft picked mid-send stays editable', async () => {
+    let land!: () => void
+    api.sendMessage.mockReturnValue(new Promise<void>((resolve) => (land = resolve)))
+    const { result } = notesWithDraft(run({ status: 'running' }))
+    let sent!: Promise<void>
+    act(() => {
+      sent = result.current.sendAll()
+    })
+    act(() => {
+      result.current.addDraft({ ...PICK, mark: 'abc-2', selector: 'main > p.price' })
+      result.current.setText('abc-2', 'red')
+    })
+    expect(result.current.note('abc-1')?.sending).toBe(true)
+    expect(result.current.note('abc-2')).toMatchObject({ text: 'red' })
+    expect(result.current.note('abc-2')?.sending).toBeUndefined()
+    await act(async () => {
+      land()
+      await sent
+    })
+    expect(result.current.note('abc-2')).toMatchObject({ phase: 'draft', text: 'red' })
+  })
+
+  it('unfreezes the batch when the send fails, leaving it editable', async () => {
+    api.sendMessage.mockRejectedValue(new ApiError(500, 'boom'))
+    const { result } = notesWithDraft(run({ status: 'running' }))
+    await expect(act(() => result.current.sendAll())).rejects.toThrow(/boom/)
+    expect(result.current.sending).toBe(false)
+    expect(result.current.note('abc-1')?.sending).toBeUndefined()
+    act(() => result.current.setText('abc-1', 'try again'))
+    expect(result.current.note('abc-1')).toMatchObject({ phase: 'draft', text: 'try again' })
+  })
+
   it('numbers notes in the order they were sent', async () => {
     const { result } = notesWithDraft(run())
     await act(() => result.current.sendAll())
@@ -338,7 +370,7 @@ describe('noteMessage', () => {
 })
 
 describe('the note popup', () => {
-  const actions = () => ({ setText: vi.fn(), markAdded: vi.fn(), discard: vi.fn(), sending: false })
+  const actions = () => ({ setText: vi.fn(), markAdded: vi.fn(), discard: vi.fn() })
   const note = (over: Partial<DesignNote>): DesignNote => ({ key: 'abc-1', pick: PICK, text: 'make it bigger', phase: 'draft', ...over })
 
   it('names the element, takes the prompt, and adds it on Ctrl+Enter', () => {
@@ -369,6 +401,15 @@ describe('the note popup', () => {
     expect(notes.discard).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
     expect(notes.discard).toHaveBeenCalledWith('abc-1')
+  })
+
+  it('is read-only, with Delete off, only while its own batch is on its way', () => {
+    const { rerender } = render(<DesignNotePopup note={note({ added: true, sending: true })} notes={actions()} onClose={vi.fn()} />)
+    expect((screen.getByLabelText('Note for the agent') as HTMLTextAreaElement).readOnly).toBe(true)
+    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(true)
+    rerender(<DesignNotePopup note={note({ added: true })} notes={actions()} onClose={vi.fn()} />)
+    expect((screen.getByLabelText('Note for the agent') as HTMLTextAreaElement).readOnly).toBe(false)
+    expect((screen.getByRole('button', { name: 'Delete' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('cannot add an empty note', () => {

@@ -31,7 +31,7 @@ export function DesignNotePopup({
   onClose,
 }: {
   note: DesignNote
-  notes: Pick<DesignNotes, 'setText' | 'markAdded' | 'discard' | 'sending'>
+  notes: Pick<DesignNotes, 'setText' | 'markAdded' | 'discard'>
   /** Hide the popup. For a draft the host has already been told to discard it. */
   onClose: () => void
 }) {
@@ -111,7 +111,7 @@ export function DesignNotePopup({
           }}
           placeholder="What should change here?"
           // A batch on its way carries this text; an edit now would be lost to it.
-          readOnly={notes.sending}
+          readOnly={note.sending === true}
           aria-label="Note for the agent"
           // The window appears because the user just pointed at something to talk about.
           autoFocus
@@ -127,7 +127,7 @@ export function DesignNotePopup({
       {isDraft ? (
         <div className="flex items-center justify-between gap-2">
           {note.added ? (
-            <Button type="button" variant="ghost" size="sm" className="text-soft-foreground hover:text-danger" disabled={notes.sending} onClick={remove}>
+            <Button type="button" variant="ghost" size="sm" className="text-soft-foreground hover:text-danger" disabled={note.sending === true} onClick={remove}>
               <Trash2Icon aria-hidden="true" />
               Delete
             </Button>
