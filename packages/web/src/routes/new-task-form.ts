@@ -142,12 +142,18 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
  *  on the other backends. */
 const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
 
+/** Runners whose own catalog ids ARE other vendors' bare ids (Copilot's `claude-sonnet-4`,
+ *  Cursor's `gpt-5`) — mirrors `VENDOR_ID_HOSTING_RUNNERS` in `core/model-presets.ts`. */
+const VENDOR_ID_HOSTING_RUNNERS: readonly Runner[] = ['copilot', 'cursor']
+
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).
  * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
 export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
   if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
+  // Before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id.
+  if (VENDOR_ID_HOSTING_RUNNERS.includes(runner) && Object.values(NATIVE_MODEL_ID_PREFIX).some((p) => p.test(model))) return false
   return Object.entries(MODELS_BY_RUNNER).some(
     ([other, presets]) =>
       other !== runner &&
