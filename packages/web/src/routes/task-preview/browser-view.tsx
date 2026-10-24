@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
+import { chordFromEvent, formatChord, isApplePlatform } from '@/lib/keybindings'
 import { cn } from '@/lib/utils'
 
 import {
@@ -62,6 +63,7 @@ export function BrowserView({
   renderDesignNote,
   onDesignEscape,
   designTray,
+  designShortcut,
   renderEmpty,
 }: {
   state: BrowserState
@@ -92,6 +94,8 @@ export function BrowserView({
   /** The host's batch send for its notes, floated in the frame's corner while Design Mode is on;
    *  `null` when there is nothing to send. */
   designTray?: React.ReactNode
+  /** The chord that switches Design Mode on and off (`keybindings.ts` spelling), if any. */
+  designShortcut?: string
   /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
    *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
   renderEmpty?: (open: (url: string) => void) => React.ReactNode
@@ -207,6 +211,22 @@ export function BrowserView({
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
+  // Heard here, and forwarded by the picker when the key is pressed inside the mirrored page.
+  const designChord = designOffered ? designShortcut : undefined
+  const toggleDesign = useRef(() => {})
+  toggleDesign.current = () => {
+    if (designAllowed && targetOrigin !== null) setDesign((on) => !on)
+  }
+  useEffect(() => {
+    if (!designChord) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented || chordFromEvent(event) !== designChord) return
+      event.preventDefault()
+      toggleDesign.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [designChord])
   const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
   // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
   // be loaded again a moment later through the mirror.
@@ -328,6 +348,13 @@ export function BrowserView({
   useEffect(() => {
     if (pickerReady) sendMarks()
   }, [pickerReady, sendMarks])
+  useEffect(() => {
+    if (!pickerReady || mirror === null) return
+    frameRef.current?.contentWindow?.postMessage(
+      { source: 'cezar-design-host', type: 'set-shortcut', chord: designChord ?? null, apple: isApplePlatform() },
+      mirror,
+    )
+  }, [designChord, mirror, pickerReady])
 
   // What Esc in the page means depends on state the listener below must read fresh.
   const openNote = useRef<string | null>(null)
@@ -348,6 +375,7 @@ export function BrowserView({
       } | null
       if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
       if (data.type === 'ready') setPickerReady(true)
+      else if (data.type === 'toggle') toggleDesign.current()
       else if (data.type === 'cancel') {
         // Esc in the page: with a note open it closes that note (the host discards a draft);
         // with none it leaves Design Mode.
@@ -671,8 +699,8 @@ export function BrowserView({
             disabled={designUnavailable !== null || targetOrigin === null}
             title={
               designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? 'Stop selecting elements (Esc)'
-              : 'Click an element of the page to send it to the agent')
+              : designActive ? `Stop selecting elements (Esc${designChord ? ` or ${formatChord(designChord)}` : ''})`
+              : `Click an element of the page to send it to the agent${designChord ? ` (${formatChord(designChord)})` : ''}`)
             }
             onClick={() => setDesign((on) => !on)}
             className="ml-1 disabled:opacity-40"

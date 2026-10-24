@@ -218,3 +218,28 @@ describe('the cockpit is the authority on what is selected', () => {
     expect(marks()).toHaveLength(1)
   })
 })
+
+describe('the Design Mode shortcut', () => {
+  const key = (init: KeyboardEventInit) => {
+    const event = new page.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    page.document.body.dispatchEvent(event)
+    return event
+  }
+
+  it('is forwarded to the cockpit from inside the page — a key here never reaches it otherwise', async () => {
+    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: false })
+    expect(key({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(true)
+    // Another chord stays the page's.
+    expect(key({ code: 'KeyD', key: 'd', ctrlKey: true }).defaultPrevented).toBe(false)
+    await settle()
+    expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(1)
+  })
+
+  it('works with the picker switched off — that is how Design Mode is switched back on', async () => {
+    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: true })
+    tell({ type: 'set-active', active: false })
+    key({ code: 'KeyD', key: 'D', metaKey: true, shiftKey: true })
+    await settle()
+    expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(1)
+  })
+})
