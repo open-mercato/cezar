@@ -67,7 +67,6 @@ import {
   bumpSkillUsage,
   orderSkillsByUsage,
 } from '@/lib/skills'
-import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 import { usableRunners } from '@/lib/provider-status'
 
@@ -741,7 +740,7 @@ export function NewTaskRoute() {
                 : 'Connect an agent provider before starting a task.'
           }
           autocompleteSkills
-          sendShortcut={submitShortcutHint()}
+          sendShortcut="↵"
           sendMenu={
             <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
               disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}

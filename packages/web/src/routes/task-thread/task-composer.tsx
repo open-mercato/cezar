@@ -5,7 +5,6 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Composer } from '@/components/composer/composer'
 import { toast } from '@/components/ui/toaster'
 import { Link } from '@/lib/project-router'
-import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 
 import { useActiveProviderAvailability } from './active-provider'
@@ -156,7 +155,7 @@ export function TaskComposer({
         // are a message on their own.
         allowEmptySubmit={continuable || hasDiffComments}
         sendAriaLabel={continuable ? 'Continue' : 'Send'}
-        sendShortcut={submitShortcutHint()}
+        sendShortcut="↵"
         stop={stoppable ? { label: 'Stop the run', onStop: stopRun.request, pending: stopRun.pending } : undefined}
         placeholder={
           queued ? 'Add to the prompt — sent when the run starts…'

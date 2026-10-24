@@ -95,7 +95,7 @@ export interface ComposerProps {
   sendLabel?: string
   /** Joined to the send button's right edge as a split button — the /new start-time menu. */
   sendMenu?: ReactNode
-  /** The submit chord (`submitShortcutHint()`), shown in the send button's tooltip. */
+  /** The key that sends (plain Enter, `isSubmitShortcut`), shown in the send button's tooltip. */
   sendShortcut?: string
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
