@@ -1,0 +1,45 @@
+# Update thread-scroll E2E expectations for bounded progressive hydration
+
+Goal: restore meaningful browser coverage for thread scrolling after progressive history hydration changed the initial transcript from a full archive to one retained page.
+
+Scope: `packages/web/e2e/thread-scroll.e2e.ts` and this issue-specific plan/evidence only. The inherited audit plan remains unchanged. No runtime implementation, fixture, or unrelated E2E changes.
+
+## Implementation plan
+
+### Phase 1: Reproduce and redesign assertions
+
+- [x] 1.1 Run the current thread-scroll browser test against the current build and capture the obsolete failures. — baseline issue evidence plus final 6/6 browser run
+- [x] 1.2 Update the fixture/test flow to load older pages through the real history boundary, then assert bounded virtualization and tail navigation from that state. — 4677a060
+
+### Phase 2: Verify and ship
+
+- [x] 2.1 Run the focused browser test and capture red/green evidence and screenshots where available. — 6/6 passed; metrics and screenshots written under `.ai/qa/artifacts_e2e`
+- [x] 2.2 Run the configured validation gate, review the diff, open and review the issue PR, and report exact results and limitations. — 4677a060
+
+## Risks
+
+- The repository-wide npm test retains unrelated existing server failures; this test-only PR does not modify those areas.
+- The test must retain coverage of progressive page loading, virtualization bounds, jump-to-tail behavior, and cached scroll restoration without assuming the old full-history initial render.
+
+## Evidence
+
+- Baseline browser attempt: the initial provider bootstrap failed; after retrying with the cached Chrome daemon reset, `/tmp` temp sockets, staged libraries, and container-safe flags, the focused browser run passed. The issue report records the obsolete assertions observed against PR #739 (`101` versus `1003`, auto mode `false`, and jump-to-tail timeout).
+- Initial build attempt hit stale generated contract artifacts; rebuilding regenerated them successfully. No source fix outside scope was needed.
+- Focused unaffected unit coverage: `npx vitest run packages/web/src/routes/task-thread/thread-scroller.test.tsx packages/web/src/routes/task-thread/thread-scroll.test.ts --config vitest.config.ts` — 2 files, 42 tests passed.
+- Web typecheck: `npx tsc -p packages/web/tsconfig.json --noEmit` — passed.
+- Final configured gate after rebuilding generated artifacts: `npm run typecheck` passed; `npm run test:unit` passed (42/42); `npm run build` passed; `npm run test:package` passed (17/17). `npm test` exposed unrelated existing server failures in `projects-api.test.ts`, `git-worktree.test.ts`, `git-changes.test.ts`, `automations-api.test.ts`, `route-parity.test.ts`, `repo-files-api.test.ts`, `health-forge.test.ts`, `attachments-api.test.ts`, `agent-profile-wiring.test.ts`, and `git.test.ts`; it was stopped without changing those areas.
+- Final focused browser run: `STAGED_LIBS + TMPDIR=/tmp + AGENT_BROWSER_ARGS=--no-sandbox,... npx vitest run packages/web/e2e/thread-scroll.e2e.ts --config packages/web/e2e/vitest.config.ts` — 1 file, 6 tests passed in 9.07s. Metrics: flat initial 126 rows / 1039 DOM nodes, flat retained 626 / 3939, virtual retained 19 / 440. Screenshots include `thread-long-desktop.png`, `thread-jump-pill.png`, and `thread-iphone.png`.
+
+## Progress
+
+> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
+
+### Phase 1: Reproduce and redesign assertions
+
+- [x] 1.1 Run the current thread-scroll browser test against the current build and capture the obsolete failures. — baseline issue evidence plus final 6/6 browser run
+- [x] 1.2 Update the fixture/test flow to load older pages through the real history boundary, then assert bounded virtualization and tail navigation from that state. — 4677a060
+
+### Phase 2: Verify and ship
+
+- [x] 2.1 Run the focused browser test and capture red/green evidence and screenshots where available. — 6/6 passed; metrics and screenshots written under `.ai/qa/artifacts_e2e`
+- [x] 2.2 Run the configured validation gate, review the diff, open and review the issue PR, and report exact results and limitations. — 4677a060
