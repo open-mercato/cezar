@@ -558,6 +558,12 @@ function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAttempts = undefined;
 }
 
+/** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
+function isAccessDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
+}
+
 /**
  * Archiving is resigning from a task, so it also resigns from the question the task was left
  * waiting on — an archived run must not keep a "needs you" signal alive in the attention layer.
@@ -936,7 +942,7 @@ export class RunStore extends EventEmitter {
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
-  /** `open` could not create `runs/`: events stay live-only instead of failing every run. */
+  /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */
   private eventsUnwritable = false;
 
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
@@ -1403,10 +1409,20 @@ export class RunStore extends EventEmitter {
   private persistEvent(runId: string, event: RunEvent): void {
     const line = `${JSON.stringify(event)}\n`;
     if (!this.eventsUnwritable) {
-      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      try {
+        appendFileSync(this.eventsPath(runId), line, 'utf8');
+      } catch (err) {
+        // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
+        // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
+        // else — a removed project's ENOENT (#1105) — still throws.
+        if (!isAccessDenied(err)) throw err;
+        this.eventsUnwritable = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[cez] cannot write task history (${message}); events stay live-only until it is writable again`);
+      }
       return;
     }
-    // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    // Degraded (already warned): retry, so access granted mid-session starts persisting.
     try {
       mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
       appendFileSync(this.eventsPath(runId), line, 'utf8');

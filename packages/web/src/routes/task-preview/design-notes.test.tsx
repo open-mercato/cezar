@@ -1,7 +1,9 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+import type { ReactNode } from 'react'
 
 import { DesignNotePopup } from './design-note-popup'
 import { advance, noteMessage, parseDraftNotes, resetDesignNotes, useDesignNotes, type DesignNote } from './design-notes'
@@ -18,6 +20,7 @@ const api = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   continueRun: vi.fn(),
   putRunDraft: vi.fn(),
+  getRun: vi.fn(),
 }))
 vi.mock('@/api/client', () => ({
   ...api,
@@ -33,6 +36,9 @@ const { ApiError } = await import('@/api/client')
 
 const stored = vi.hoisted(() => ({ text: undefined as string | undefined, ready: true }))
 vi.mock('@/api/queries', () => ({
+  // The delivery seam's two reads, over the same stubbed server.
+  useSendMessage: (id: string) => ({ mutateAsync: (message: unknown) => api.sendMessage(id, message) }),
+  runQueryOptions: (id: string) => ({ queryKey: ['run', id], queryFn: () => api.getRun(id) }),
   useRunDrafts: () => ({
     isSuccess: stored.ready,
     data: stored.ready ? { surfaces: stored.text === undefined ? {} : { 'design-picks': { text: stored.text } } } : undefined,
@@ -54,7 +60,10 @@ const PICK = {
   source: '',
   mark: 'abc-1',
 }
-const run = (over: Partial<ApiRun> = {}): ApiRun => ({ id: 'run-1', status: 'running', ...over }) as ApiRun
+const run = (over: Partial<ApiRun> = {}): ApiRun =>
+  ({ id: 'run-1', status: 'running', steps: [{ id: 'task', sessionId: 'sess-1' }], ...over }) as ApiRun
+let queryClient: QueryClient
+const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 
 beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -62,6 +71,8 @@ beforeEach(() => {
   api.sendMessage.mockResolvedValue({ queued: true })
   api.continueRun.mockResolvedValue({ ok: true })
   api.putRunDraft.mockResolvedValue({})
+  api.getRun.mockResolvedValue(run({ status: 'done' }))
+  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   toast.mockReset()
   stored.text = undefined
   stored.ready = true
@@ -74,7 +85,7 @@ afterEach(() => {
 
 /** The hook with a run the test can change, plus one draft with text in it. */
 function notesWithDraft(initial: ApiRun, text = 'make it bigger') {
-  const hook = renderHook(({ current }) => useDesignNotes(current), { initialProps: { current: initial } })
+  const hook = renderHook(({ current }) => useDesignNotes(current), { initialProps: { current: initial }, wrapper })
   act(() => {
     expect(hook.result.current.addDraft(PICK)).toBe(true)
     hook.result.current.setText('abc-1', text)
@@ -103,13 +114,13 @@ describe('a draft', () => {
 
   it('comes back after a reload, text and element', () => {
     stored.text = JSON.stringify([{ pick: PICK, text: 'half-written' }])
-    const { result } = renderHook(() => useDesignNotes(run()))
+    const { result } = renderHook(() => useDesignNotes(run()), { wrapper })
     expect(result.current.note('abc-1')).toMatchObject({ phase: 'draft', text: 'half-written' })
   })
 
   it('is not accepted before the stored drafts arrived — an early pick would overwrite them', () => {
     stored.ready = false
-    const { result } = renderHook(() => useDesignNotes(run()))
+    const { result } = renderHook(() => useDesignNotes(run()), { wrapper })
     let kept = true
     act(() => {
       kept = result.current.addDraft(PICK)
@@ -157,12 +168,27 @@ describe('sending a note', () => {
     expect(result.current.note('abc-1')?.phase).toBe('running')
   })
 
-  it('keeps the draft exactly as it was, with the first refusal, when both paths are refused', async () => {
+  it('keeps the draft exactly as it was when a fresh record agrees with the refused path', async () => {
     api.sendMessage.mockRejectedValue(new ApiError(409, 'provider disconnected'))
-    api.continueRun.mockRejectedValue(new ApiError(409, 'nothing to resume'))
+    api.getRun.mockResolvedValue(run({ status: 'running' }))
     const { result } = notesWithDraft(run({ status: 'running' }))
     await expect(act(() => result.current.send('abc-1'))).rejects.toThrow(/provider disconnected/)
+    expect(api.continueRun).not.toHaveBeenCalled()
     expect(result.current.note('abc-1')).toMatchObject({ phase: 'draft', text: 'make it bigger' })
+  })
+
+  it('waits out a run still unwinding its settled turn instead of failing the note (telemetry 77117b95)', async () => {
+    api.continueRun.mockRejectedValueOnce(new ApiError(409, 'run is still active'))
+    api.sendMessage.mockRejectedValue(new ApiError(409, 'session closed'))
+    const { result } = notesWithDraft(run({ status: 'done' }))
+    await act(async () => {
+      const sent = result.current.send('abc-1')
+      await vi.advanceTimersByTimeAsync(300)
+      await sent
+    })
+    expect(api.continueRun).toHaveBeenCalledTimes(2)
+    expect(api.sendMessage).not.toHaveBeenCalled()
+    expect(result.current.note('abc-1')).toMatchObject({ phase: 'running', number: 1 })
   })
 
   it('does not retry anything but a 409', async () => {

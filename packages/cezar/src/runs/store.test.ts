@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -70,6 +70,41 @@ describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
     rmSync(blocker);
     store.appendEvent(run.id, { type: 'note', text: 'two' });
     expect(readFileSync(join(dataDir, 'runs', `${run.id}.ndjson`), 'utf8')).toContain('"text":"two"');
+  });
+
+  // chmod cannot deny root, and Windows ignores the write bit on files.
+  const canDenyWrites = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+  it.skipIf(!canDenyWrites)('degrades to live-only when an event file stops being writable mid-session (telemetry 73c6e796)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const eventsFile = join(dataDir, 'runs', `${run.id}.ndjson`);
+    // A read-only event file: the append is refused with EACCES, as macOS refused it with EPERM.
+    writeFileSync(eventsFile, '');
+    chmodSync(eventsFile, 0o444);
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+
+    expect(() => store.appendEvent(run.id, { type: 'user-message', text: 'one' })).not.toThrow();
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'two' })).not.toThrow();
+    expect(live).toHaveLength(2);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('events stay live-only'));
+
+    chmodSync(eventsFile, 0o644);
+    store.appendEvent(run.id, { type: 'note', text: 'three' });
+    expect(readFileSync(eventsFile, 'utf8')).toContain('"text":"three"');
+  });
+
+  it('still throws when the project itself is gone — only a refused write degrades (#1105)', () => {
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    rmSync(dataDir, { recursive: true, force: true });
+
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'late' })).toThrow(/ENOENT/);
   });
 });
 
