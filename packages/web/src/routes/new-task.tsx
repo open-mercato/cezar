@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckIcon,
   ChevronDownIcon,
+  Clock3Icon,
   FolderOpenIcon,
   SparklesIcon,
   SquareIcon,
@@ -103,7 +104,7 @@ import {
   type TaskSource,
 } from './new-task-form'
 import { parseNewTaskParams } from './new-task-params'
-import { trackMessageSent } from '@/lib/telemetry'
+import { trackMessageSent, trackTaskScheduled } from '@/lib/telemetry'
 
 // Keep recovery across route changes and reloads in this tab. Storage can be unavailable;
 // the memory copy still protects navigation within the running cockpit.
@@ -517,6 +518,8 @@ export function NewTaskRoute() {
 
   const [startChoice, setStartChoice] = useState<StartChoice | null>(null)
   const [scheduleBlocked, setScheduleBlocked] = useState<string>()
+  const [scheduleLabel, setScheduleLabel] = useState<string>()
+  const [scheduleOpen, setScheduleOpen] = useState(false)
   const recoveryKey = scheduleRecoveryKey(draftProjectId)
   const [scheduleRecovery, setScheduleRecovery] = useState(() => readScheduleRecovery(recoveryKey))
   const scheduleRequest = useRef<DeferredCreateInput | null>(scheduleRecovery)
@@ -624,6 +627,7 @@ export function NewTaskRoute() {
     if (startChoice) {
       if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.taskJson !== JSON.stringify(body)) throw new Error('Check the start time again after changing the task settings.')
       await sendSchedule({ task: body, start: startChoice.start, previewRevision: startChoice.preview.previewRevision, idempotencyKey: crypto.randomUUID() })
+      trackTaskScheduled(startChoice.start.kind === 'at' ? 'at' : 'usage_reset')
       return
     }
     const created = await createRun(body)
@@ -737,11 +741,13 @@ export function NewTaskRoute() {
                 : 'Connect an agent provider before starting a task.'
           }
           autocompleteSkills
+          sendMenu={
+            <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
+              disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}
+              onLabelChange={setScheduleLabel} open={scheduleOpen} onOpenChange={setScheduleOpen} />
+          }
           footerStart={
             <>
-              <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
-                disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked} />
-
               {/* The project pill LEADS the row (mockup new-task-project.html): everything to
                   its right is resolved against it, so it reads left-to-right as "in this
                   project, run this skill, with this model". Rendered only once the workspace
@@ -908,6 +914,14 @@ export function NewTaskRoute() {
           }
           footerEnd={
             <>
+              {startChoice && scheduleLabel && !scheduleBlocked ? (
+                <button type="button" data-slot="schedule-summary" title={scheduleLabel}
+                  onClick={() => setScheduleOpen(true)}
+                  className="flex max-w-[16rem] items-center gap-1 truncate rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+                  <Clock3Icon aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="truncate">{scheduleLabel}</span>
+                </button>
+              ) : null}
               {startChoice && scheduleBlocked ? (
                 <span role="status" data-slot="schedule-blocked" title={scheduleBlocked}
                   className="max-w-[16rem] truncate text-xs text-muted-foreground">

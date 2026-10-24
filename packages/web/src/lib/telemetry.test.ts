@@ -78,6 +78,14 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
   })
+
+  it('carries scheduling events with closed option labels only', () => {
+    expect(telemetryEventInputSchema.safeParse({ event: 'schedule_menu_opened', label: 'new_task' }).success).toBe(true)
+    for (const label of ['now', 'at', 'usage_reset']) expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'usage_reset' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'now' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label: '2099-01-01 09:00' }).success).toBe(false)
+  })
 })
 
 describe('attachment count buckets (telemetry 7054e5f2)', () => {

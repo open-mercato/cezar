@@ -12,6 +12,7 @@ import {
   type AddProjectDialog,
   type MessageSurface,
   type SkillsUpdateDropOutcome,
+  type StartOption,
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
@@ -54,6 +55,21 @@ function send(path: string, body: unknown): void {
  *  the send succeeded, never before — a failed send is not a sent message. */
 export function trackMessageSent(surface: Exclude<MessageSurface, 'cli'>): void {
   send('/api/v1/telemetry/event', { event: 'message_sent', label: surface })
+}
+
+/** The new-task start-time menu (the arrow beside Send) was opened. */
+export function trackScheduleMenuOpened(): void {
+  send('/api/v1/telemetry/event', { event: 'schedule_menu_opened', label: 'new_task' })
+}
+
+/** The user picked a start option in that menu. */
+export function trackStartOptionPicked(option: StartOption): void {
+  send('/api/v1/telemetry/event', { event: 'start_option_picked', label: option })
+}
+
+/** A task was scheduled from the composer — after the server accepted it. */
+export function trackTaskScheduled(kind: 'at' | 'usage_reset'): void {
+  send('/api/v1/telemetry/event', { event: 'task_scheduled', label: kind })
 }
 
 /** A review comment added on the Changes tab's diff, after it was accepted (a duplicate the

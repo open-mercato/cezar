@@ -1,10 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { Clock3Icon } from 'lucide-react'
+import { ChevronDownIcon } from 'lucide-react'
 import type { CreateRunInput, DeferredOptions, DeferredPreview, StartCondition } from '@open-mercato/cezar-api-client'
 import { getDeferredStartOptions, previewDeferredStart } from '@/api/client'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
+import { trackScheduleMenuOpened, trackStartOptionPicked } from '@/lib/telemetry'
 
 export type StartChoice = { start: StartCondition; preview?: Extract<DeferredPreview, { available: true }>; taskJson?: string; invalidated?: string }
 type AtStart = Extract<StartCondition, { kind: 'at' }>
@@ -45,12 +47,26 @@ function dateErrors(start: AtStart): { date?: string; time?: string } {
   return {}
 }
 
-export function StartTimePicker({ task, value, onChange, disabledReason, onBlockedChange }: {
+/**
+ * The start-time menu: a chevron joined to the composer's send button (Gmail's "Schedule send"),
+ * moved off the footer pill row where it read as the project switcher. The host renders the
+ * chosen start from `onLabelChange` and may open the menu through `open`/`onOpenChange`.
+ */
+export function StartTimePicker({ task, value, onChange, disabledReason, onBlockedChange, onLabelChange, open: openProp, onOpenChange }: {
   task: CreateRunInput; value: StartChoice | null; onChange: (value: StartChoice | null) => void; disabledReason?: string
   /** Why Schedule task cannot submit yet, for the line beside the button; undefined when it can. */
   onBlockedChange?: (reason: string | undefined) => void
+  /** The chosen start as text (`startLabel`), or undefined while it is Now. */
+  onLabelChange?: (label: string | undefined) => void
+  open?: boolean; onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [openState, setOpenState] = useState(false)
+  const open = openProp ?? openState
+  const setOpen = (next: boolean) => {
+    if (next && !open) trackScheduleMenuOpened()
+    setOpenState(next); onOpenChange?.(next)
+  }
+  const pick = (option: 'now' | 'at' | 'usage_reset', next: StartChoice | null) => { trackStartOptionPicked(option); onChange(next) }
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [retry, setRetry] = useState(false)
@@ -159,14 +175,15 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   const visibleFieldMessage = touched ? fieldMessage : undefined
   const describedBy = message || fieldMessage ? errorId : undefined
   const label = startLabel(value, ready)
+  useEffect(() => { onLabelChange?.(value ? label : undefined) }, [value ? label : undefined])
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button type="button" variant="ghost" size="sm" className="h-auto min-h-[30px] min-w-0 max-w-full whitespace-normal py-1 text-left" aria-label="Choose task start time" title={ready ? label : undefined}><Clock3Icon className="size-4" /><span className="min-w-0 break-words">{label}</span></Button></PopoverTrigger>
-    <PopoverContent align="start" className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
+    <PopoverTrigger asChild><Button type="button" size="icon-sm" data-slot="start-time-trigger" className="h-8 w-7 rounded-l-none border-l border-primary-foreground/25" aria-label="Choose task start time" title={value ? label : 'Schedule start'}><ChevronDownIcon aria-hidden="true" className={cn('size-4 transition-transform', open && 'rotate-180')} /></Button></PopoverTrigger>
+    <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] max-h-(--radix-popover-content-available-height) overflow-y-auto overscroll-contain space-y-3">
       <fieldset className="space-y-3">
       <legend className="font-medium">Start task</legend>
-      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} checked={!value} onChange={() => onChange(null)} />Now</label>
-      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} disabled={!!disabledReason} checked={value?.start.kind === 'at'} onChange={() => onChange({ start: lastAt.current ?? { kind: 'at', date: '', hour: 9, minute: 0 } })} />Pick date &amp; time</label>
-      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={resetReason ? eligibilityId : describedBy} disabled={!!resetReason} checked={value?.start.kind === 'usage-reset'} onChange={() => onChange({ start: { kind: 'usage-reset' } })} />After usage limit resets</label>
+      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} checked={!value} onChange={() => pick('now', null)} />Now</label>
+      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} disabled={!!disabledReason} checked={value?.start.kind === 'at'} onChange={() => pick('at', { start: lastAt.current ?? { kind: 'at', date: '', hour: 9, minute: 0 } })} />Pick date &amp; time</label>
+      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={resetReason ? eligibilityId : describedBy} disabled={!!resetReason} checked={value?.start.kind === 'usage-reset'} onChange={() => pick('usage_reset', { start: { kind: 'usage-reset' } })} />After usage limit resets</label>
       </fieldset>
       {resetReason && !disabledReason && <p id={eligibilityId} className="text-sm text-muted-foreground">{resetReason}</p>}
       {optionsError && <Button type="button" variant="outline" onClick={() => setOptionsAttempt(n => n + 1)}>Retry options</Button>}

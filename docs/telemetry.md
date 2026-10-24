@@ -59,8 +59,10 @@ a ⌘P row or from its keyboard shortcut — as a fixed command name such as `pi
 (`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`), `palette_mode_used` (`tasks`, `commands`, `files`,
 `pr_number`, `automation` — the shape of a search, never its text; a bare prefix such as the `@`
 ⌘P pre-fills is not counted), `palette_dismissed` (the view a
-palette was closed from with nothing chosen) and `shortcut_rebound` (which command's shortcut was
-changed; a reset is not counted). Pins and archives also say `palette` or `shortcut` when they came from there. Every label
+palette was closed from with nothing chosen), `shortcut_rebound` (which command's shortcut was
+changed; a reset is not counted), `schedule_menu_opened` (the start-time menu beside the new-task
+Send button was opened), `start_option_picked` (`now`, `at`, `usage_reset`) and `task_scheduled`
+(`at`, `usage_reset` — a task was scheduled; never the time itself). Pins and archives also say `palette` or `shortcut` when they came from there. Every label
 comes from a closed set the server enforces.
 
 Error reports carry the error type, message and stack with your home directory, working

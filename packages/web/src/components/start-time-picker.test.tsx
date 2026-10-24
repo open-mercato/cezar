@@ -153,22 +153,21 @@ function Reporting({ text = 'Later', disabledReason }: { text?: string; disabled
 const trigger = () => screen.getByRole('button', { name: 'Choose task start time' })
 const blocked = () => screen.getByTestId('blocked').textContent
 
-it('labels the trigger with the chosen start, authoritative once checked', async () => {
+it('titles the trigger with the chosen start, authoritative once checked', async () => {
   vi.mocked(previewDeferredStart).mockResolvedValue({ ...preview, notBefore: '2099-01-06T18:00:00Z' })
   render(<Harness />)
-  expect(trigger().textContent).toBe('Now')
+  expect(trigger().getAttribute('title')).toBe('Schedule start')
   fireEvent.click(trigger())
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  expect(trigger().textContent).toBe('After reset')
+  expect(trigger().getAttribute('title')).toBe('After reset')
   fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
-  await waitFor(() => expect(trigger().textContent).toBe('After reset · Tue 6 Jan 18:00 · UTC'))
-  expect(trigger().getAttribute('title')).toContain('UTC')
+  await waitFor(() => expect(trigger().getAttribute('title')).toBe('After reset · Tue 6 Jan 18:00 · UTC'))
   fireEvent.click(screen.getByLabelText('Pick date & time'))
-  expect(trigger().textContent).toBe('Pick a date')
+  expect(trigger().getAttribute('title')).toBe('Pick a date')
   fireEvent.change(screen.getByLabelText('Time (server time zone)'), { target: { value: '18:00' } })
   fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2099-01-06' } })
-  expect(trigger().textContent).toBe('Starts Tue 6 Jan 18:00')
+  expect(trigger().getAttribute('title')).toBe('Starts Tue 6 Jan 18:00')
 })
 
 it('keeps the entered date and time when Pick date is chosen again', async () => {
@@ -267,7 +266,7 @@ it.each([
   fireEvent.click(trigger())
   fireEvent.blur(screen.getByLabelText('Date'))
   expect(screen.getByRole('alert').textContent).toBe(error)
-  expect(trigger().textContent).not.toContain('Invalid Date')
+  expect(trigger().getAttribute('title')).not.toContain('Invalid Date')
   await new Promise(resolve => setTimeout(resolve, AUTO_PREVIEW_MS + 100))
   expect(previewDeferredStart).not.toHaveBeenCalled()
 })
@@ -308,7 +307,7 @@ it.each(['at', 'usage-reset'] as const)('expires %s readiness at notBefore while
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
     await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     expect(blocked()).toContain('passed')
-    expect(trigger().textContent).not.toBe('Now')
+    expect(trigger().getAttribute('title')).not.toBe('Schedule start')
     fireEvent.click(trigger())
     expect(screen.queryByText(/Earliest start:/)).toBeNull()
     if (kind === 'at') expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2099-01-01')

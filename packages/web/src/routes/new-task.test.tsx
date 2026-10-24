@@ -2390,6 +2390,25 @@ it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedu
   expect((preview.body as { task: { task: string } }).task.task).toBe('Later')
 })
 
+it('puts the start-time menu beside Send, not on the pill row, and summarizes a chosen start', async () => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  renderNewTask()
+  await pillReady()
+  const menu = screen.getByRole('button', { name: 'Choose task start time' })
+  expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
+  expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
+  expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  fireEvent.click(menu)
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
+  await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'))
+})
+
 it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {
   const delayed = deferredJson<unknown>()
   serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } }, deferredPreview: delayed.fetch })

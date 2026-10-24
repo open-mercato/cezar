@@ -308,6 +308,7 @@ export const TELEMETRY_EVENTS = [
   'skill_missing_in_session', 'session_resume_fallback', 'task_failed', 'skills_update_apply_dropped',
   'attachments_sent', 'attachments_restaged', 'palette_opened', 'task_command_run', 'task_shortcut_used',
   'task_switched', 'palette_mode_used', 'palette_dismissed', 'shortcut_rebound',
+  'schedule_menu_opened', 'start_option_picked', 'task_scheduled',
 ] as const;
 
 /** Once per UTC day while telemetry is on: `cezar_run`. Without consent: nothing at all. */

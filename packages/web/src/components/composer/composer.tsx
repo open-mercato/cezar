@@ -93,6 +93,8 @@ export interface ComposerProps {
   /** The send button's accessible name. */
   sendAriaLabel?: string
   sendLabel?: string
+  /** Joined to the send button's right edge as a split button — the /new start-time menu. */
+  sendMenu?: ReactNode
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
    * the only button (an empty box over a working agent offers to stop it); once there is something
@@ -168,6 +170,7 @@ export function Composer({
   footerEnd,
   sendAriaLabel = 'Send',
   sendLabel,
+  sendMenu,
   stop,
   disabled = false,
   submitDisabled = false,
@@ -551,6 +554,20 @@ export function Composer({
   }
 
   const recording = dictation.recording
+  const sendButton = (
+    <Button
+      type="button"
+      size={sendLabel ? "sm" : "icon-sm"}
+      aria-label={sendAriaLabel}
+      disabled={
+        disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+      }
+      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
+      onClick={submitDraft}
+    >
+      <ArrowUpIcon aria-hidden="true" />{sendLabel}
+    </Button>
+  )
 
   return (
     <Popover open={menuOpen} onOpenChange={(open) => (open ? undefined : closeMenu())}>
@@ -705,18 +722,12 @@ export function Composer({
                 {/* With Stop showing, Send appears only once there is something to send: an empty box
                     over a working agent offers exactly one action. */}
                 {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
-                  <Button
-                    type="button"
-                    size={sendLabel ? "sm" : "icon-sm"}
-                    aria-label={sendAriaLabel}
-                    disabled={
-                      disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-                    }
-                    className={sendLabel ? "h-8" : "size-8"}
-                    onClick={submitDraft}
-                  >
-                    <ArrowUpIcon aria-hidden="true" />{sendLabel}
-                  </Button>
+                  sendMenu ? (
+                    <div data-slot="composer-send" className="flex items-center">
+                      {sendButton}
+                      {sendMenu}
+                    </div>
+                  ) : sendButton
                 ) : null}
               </div>
             </div>
