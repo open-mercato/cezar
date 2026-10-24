@@ -698,10 +698,56 @@ describe('a session.status retry the turn cannot outwait', () => {
     );
     await session.result;
 
+    expect(errors(events)).toHaveLength(1);
     const [error] = errors(events);
     expect(error).toMatch(/^opencode: usage limit reached: Free usage exceeded, subscribe to Go — retry at /);
     expect(parseUsageLimit(error)).toEqual({ resetAt: new Date(next), evidence: 'timestamp' });
     expect(events.at(-1)?.type).toBe('done');
+  }, 30_000);
+
+  async function retryErrors(status: Record<string, unknown>, env: Record<string, string> = {}, timeoutMs = 0): Promise<string[]> {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs }).startSession(
+      { userPrompt: 'do it #retry-limit', cwd: process.cwd(), env: { MOCK_RETRY_STATUS: JSON.stringify(status), ...env } },
+      (e) => events.push(e),
+      {},
+    );
+    await session.result;
+    return errors(events);
+  }
+
+  it('fails a long backoff with no action, and resumes only on a limit OpenCode names', async () => {
+    const next = Date.now() + 60 * 60_000;
+    const [error, ...rest] = await retryErrors({ message: 'Provider is overloaded', next });
+    expect(rest).toEqual([]);
+    expect(error).toBe(`opencode: Provider is overloaded — retry at ${new Date(next).toISOString()}`);
+    expect(parseUsageLimit(error)).toBeNull();
+  }, 30_000);
+
+  it('never books a resume for an action that is not a quota', async () => {
+    const next = Date.now() + 60 * 60_000;
+    const [error] = await retryErrors({
+      message: 'Rate limit: sign in again',
+      action: { reason: 'auth_required', provider: 'opencode', title: 'Sign in', message: 'Sign in', label: 'sign in' },
+      next,
+    });
+    expect(error).toBe(`opencode: Rate limit: sign in again — next attempt ${new Date(next).toISOString()}`);
+    expect(parseUsageLimit(error)).toBeNull();
+  }, 30_000);
+
+  it('fails a quota action with no retry instant, without inventing one', async () => {
+    const [error] = await retryErrors({
+      message: 'Go limit reached',
+      action: { reason: 'account_rate_limit', provider: 'opencode', title: 'Go limit reached', message: 'x', label: 'open settings' },
+    });
+    expect(error).toBe('opencode: usage limit reached: Go limit reached');
+    expect(parseUsageLimit(error)).toBeNull();
+  }, 30_000);
+
+  it("ignores another session's retry", async () => {
+    const status = { message: 'Free usage exceeded', action: { reason: 'free_tier_limit' }, next: Date.now() + 60 * 60_000 };
+    // Only the wall clock ends this turn: the retry belongs to a subtask session.
+    expect(await retryErrors(status, { MOCK_RETRY_SESSION: 'ses_other' }, 1_500)).toEqual(['opencode timed out after 0m and was killed']);
   }, 30_000);
 
   it('rides out a short transient retry', async () => {

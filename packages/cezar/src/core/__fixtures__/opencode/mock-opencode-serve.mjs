@@ -22,7 +22,8 @@
 //                 bus: the drop was real, and the runner has to say so.
 //   `#retry-limit` hold the POST open and report a `session.status` retry with a
 //                 spent-quota `action` and `next` hours away (`MOCK_RETRY_NEXT` pins it),
-//                 as a spent free tier does.
+//                 as a spent free tier does. `MOCK_RETRY_STATUS` (JSON) replaces the status
+//                 and `MOCK_RETRY_SESSION` the session it is reported for.
 //   `#retry-soon` report a retry due in 1 s with no `action`, then finish normally.
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
@@ -184,9 +185,12 @@ const server = createServer((req, res) => {
       }
 
       const retryStatus = (extra) =>
-        send({ type: 'session.status', properties: { sessionID: SESSION_ID, status: { type: 'retry', attempt: 1, ...extra } } });
+        send({
+          type: 'session.status',
+          properties: { sessionID: process.env.MOCK_RETRY_SESSION ?? SESSION_ID, status: { type: 'retry', attempt: 1, ...extra } },
+        });
       if (promptText.includes('#retry-limit')) {
-        retryStatus({
+        retryStatus(process.env.MOCK_RETRY_STATUS ? JSON.parse(process.env.MOCK_RETRY_STATUS) : {
           message: 'Free usage exceeded, subscribe to Go',
           action: { reason: 'free_tier_limit', provider: 'opencode', title: 'Free limit reached', message: 'Subscribe', label: 'subscribe' },
           next: Number(process.env.MOCK_RETRY_NEXT) || Date.now() + 3 * 60 * 60_000,

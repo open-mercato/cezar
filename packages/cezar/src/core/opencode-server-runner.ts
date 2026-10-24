@@ -73,6 +73,10 @@ export const TURN_IDLE_GRACE_MS = 5_000;
  */
 export const RETRY_GIVE_UP_MS = 10 * 60_000;
 
+/** `action.reason`s that mean a spent quota — OpenCode 1.19 sends `free_tier_limit` and
+ *  `account_rate_limit`. Any other action still fails the turn, but books no auto-resume. */
+const QUOTA_REASON_RE = /limit|quota/i;
+
 /**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
  * the opencode TUI talks to) with an SSE event stream. One server per session,
@@ -197,6 +201,8 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** Set once `giveUpOnLongRetry` has reported the failure — the held POST's hang-up is not news. */
+  private retryGaveUp = false;
   /** One teardown per session — see `terminate()`. */
   private signalled = false;
 
@@ -231,7 +237,7 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut) {
+        if (!this.timedOut && !this.retryGaveUp) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
@@ -710,16 +716,20 @@ class OpencodeSession implements AgentSession {
     }
   }
 
-  /** Fail the turn on a retry that needs a human (`action`: a spent quota) or waits past
-   *  `RETRY_GIVE_UP_MS`. The message carries the retry instant so a usage limit auto-resumes. */
+  /** Fail the turn on a retry that needs a human (`action`) or waits past `RETRY_GIVE_UP_MS`.
+   *  A quota `action` is worded as a usage limit and books the auto-resume; any other action never
+   *  does (resuming meets the same refusal). A long backoff without one auto-resumes only when
+   *  OpenCode's own text names a limit, else it waits for a manual Continue. */
   private giveUpOnLongRetry(status: unknown): void {
     if (!isRecord(status) || status.type !== 'retry' || !this.serverOpen) return;
     const next = typeof status.next === 'number' && Number.isFinite(status.next) ? status.next : undefined;
-    const needsHuman = isRecord(status.action);
-    if (!needsHuman && (next === undefined || next - Date.now() < RETRY_GIVE_UP_MS)) return;
+    const action = isRecord(status.action) ? status.action : undefined;
+    if (!action && (next === undefined || next - Date.now() < RETRY_GIVE_UP_MS)) return;
+    const quota = QUOTA_REASON_RE.test(action ? stringField(action, 'reason') ?? '' : '');
     const reason = stringField(status, 'message') ?? 'the provider refused the request';
-    const at = next === undefined ? '' : ` — retry at ${new Date(next).toISOString()}`;
-    this.emit({ type: 'error', message: `opencode: ${needsHuman ? 'usage limit reached: ' : ''}${reason}${at}` });
+    const at = next === undefined ? '' : ` — ${action && !quota ? 'next attempt' : 'retry at'} ${new Date(next).toISOString()}`;
+    this.retryGaveUp = true;
+    this.emit({ type: 'error', message: `opencode: ${quota ? 'usage limit reached: ' : ''}${reason}${at}` });
     this.interrupt();
   }
 
