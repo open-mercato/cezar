@@ -573,7 +573,7 @@ export function Composer({
         <kbd
           aria-hidden="true"
           data-slot="composer-send-shortcut"
-          className="rounded-[4px] bg-primary-foreground/15 px-1 py-px font-mono text-[10.5px] font-medium"
+          className="-ml-0.5 inline-flex items-center font-sans text-xs leading-none font-medium opacity-60"
         >
           {sendShortcut}
         </kbd>
