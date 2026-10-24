@@ -102,6 +102,13 @@ it('drops an inherited model on a child whose runner differs, like dispatch() (4
   const preview = await previewDeferredStart(root, { task: { ...task, model: 'opus' }, start }, true);
   expect(preview.binding!.models!.map(m => m.model)).toEqual([undefined, undefined, 'opus']);
 });
+it('binds no task model to an agent step on another runner, like runAgentStep', async () => {
+  write('parent', { steps: [{ id: 'a', prompt: 'a', runner: 'codex' }, { id: 'b', prompt: 'b' }, { id: 'c', prompt: 'c', runner: 'codex', model: 'gpt-5.1' }] });
+  const result = await resolveDeferredExecution(root, { ...task, model: 'opus' });
+  expect(result.models.map(({ runner, model }) => ({ runner, model }))).toEqual([
+    { runner: 'codex', model: undefined }, { runner: 'claude', model: 'opus' }, { runner: 'codex', model: 'gpt-5.1' },
+  ]);
+});
 it.each(['missing', 'cycle', 'depth'])('refuses %s references visibly before preview', async kind => {
   graph('parent', [{ type: 'workflow', workflow: kind === 'cycle' ? 'parent' : 'child' }]);
   if (kind === 'depth') for (let i = 0; i < 35; i++) graph(i ? `child${i}` : 'child', [{ type: 'workflow', workflow: `child${i + 1}` }]);

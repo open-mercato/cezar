@@ -68,7 +68,8 @@ async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['tas
       if (!('type' in node)) {
         if (stepKind(node) !== 'agent') continue;
         const backend = node.runner ?? context.runner;
-        work.push({ ...context, runner: backend, model: locked ? undefined : node.model ?? context.model,
+        // Same rule as runAgentStep: the task's model only follows its own runner.
+        work.push({ ...context, runner: backend, model: locked ? undefined : node.model ?? (backend === context.runner ? context.model : undefined),
           agentProfile: backend === context.runner ? context.agentProfile : undefined, step });
       } else if (node.type === 'workflow') {
         const child = catalog.find(w => w.name === node.workflow);
@@ -79,7 +80,8 @@ async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['tas
         work.push({ ...childContext(node), step });
       } else if (node.type === 'agent') {
         const backend = node.runner ?? context.runner;
-        work.push({ ...context, runner: backend, model: locked ? undefined : node.model ?? context.model,
+        // Same rule as runAgentStep: the task's model only follows its own runner.
+        work.push({ ...context, runner: backend, model: locked ? undefined : node.model ?? (backend === context.runner ? context.model : undefined),
           agentProfile: backend === context.runner ? context.agentProfile : undefined, step });
       }
     }
