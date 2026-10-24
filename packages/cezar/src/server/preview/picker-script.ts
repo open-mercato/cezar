@@ -441,13 +441,11 @@ const PICKER_SOURCE = String.raw`(function () {
     post({ type: 'cancel' });
   }
 
-  // The cockpit's Design Mode key (a bare D) — forwarded from here because a key pressed inside
-  // this frame never reaches the cockpit. Typing in the page's own fields keeps it.
+  // The cockpit's Design Mode key (Alt+D, by physical key: a Mac reports ⌥D as a typed glyph) —
+  // forwarded from here because a key pressed inside this frame never reaches the cockpit.
   function onToggleKey(event) {
-    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (event.key !== 'd' && event.key !== 'D') return;
-    var target = event.target;
-    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ''))) return;
+    if (event.repeat || !event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    if (event.code ? event.code !== 'KeyD' : event.key !== 'd' && event.key !== 'D') return;
     swallow(event);
     post({ type: 'toggle' });
   }

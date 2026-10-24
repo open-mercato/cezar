@@ -157,9 +157,11 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   message, when the user decides. The send names no session state — no "reopen" wording.
   An ADDED note is removed only deliberately: reopened, ✕ / `Esc` just close it, and its window
   offers **Delete**. `Esc`/✕ still throw away a draft that was never added.
-- **Key.** A bare `D` switches Design Mode on and off — shown on the button, like the workspace's
-  other bare keys (`F`, `[`, `]`); not while typing, not with a modifier. A key pressed inside the
-  mirrored page never reaches the cockpit, so the picker forwards that one key (`toggle`).
+- **Key.** `⌥D` / `Alt+D` switches Design Mode on and off, shown on the button. Matched by the
+  physical key (a Mac reports ⌥D as `∂`), and from text fields too; never with ⌘/Ctrl (Ctrl+Alt
+  is AltGr off a Mac). A key pressed inside the page reaches the cockpit only through the mirror's
+  picker, which forwards it (`toggle`) — a directly framed page is another origin, so before the
+  first switch-on the key works only with the focus in the cockpit.
 - **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.

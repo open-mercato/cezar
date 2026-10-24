@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
-import { isEditableTarget } from '@/lib/use-command-shortcut'
+import { formatChord } from '@/lib/keybindings'
 import { cn } from '@/lib/utils'
 
 import {
@@ -208,8 +208,9 @@ export function BrowserView({
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
-  // `D` switches it, like the workspace's other bare keys (`F`, `[`, `]`): heard here, and
-  // forwarded by the picker when pressed inside the mirrored page.
+  // ⌥D / Alt+D switches it — from any field too, so it works wherever the focus is in the cockpit.
+  // Inside the page only the mirror's picker can hear it (and forwards it): a directly framed
+  // page is another origin, whose keys never reach this window.
   const toggleDesign = useRef(() => {})
   toggleDesign.current = () => {
     if (designAllowed && targetOrigin !== null) setDesign((on) => !on)
@@ -217,8 +218,9 @@ export function BrowserView({
   useEffect(() => {
     if (!designOffered) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.repeat || event.defaultPrevented || !isDesignKey(event) || isEditableTarget(event.target)) return
-      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
+      if (event.repeat || event.defaultPrevented || !isDesignKey(event)) return
+      // A modal owns the keyboard; the note popup (not modal) does not.
+      if (document.querySelector('[aria-modal="true"], [role="alertdialog"]')) return
       event.preventDefault()
       toggleDesign.current()
     }
@@ -690,8 +692,8 @@ export function BrowserView({
             disabled={designUnavailable !== null || targetOrigin === null}
             title={
               designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? 'Stop selecting elements (D or Esc)'
-              : 'Click an element of the page to send it to the agent (D)')
+              : designActive ? `Stop selecting elements (${formatChord(DESIGN_CHORD)} or Esc)`
+              : `Click an element of the page to send it to the agent (${formatChord(DESIGN_CHORD)})`)
             }
             onClick={() => setDesign((on) => !on)}
             className="ml-1 disabled:opacity-40"
@@ -703,7 +705,7 @@ export function BrowserView({
               aria-hidden="true"
               className="ml-0.5 rounded border border-current/25 px-1 font-sans text-[10px] leading-4 opacity-70"
             >
-              D
+              {formatChord(DESIGN_CHORD)}
             </kbd>
           </Button>
         ) : null}
@@ -820,9 +822,12 @@ export function BrowserView({
   )
 }
 
-/** The Design Mode key: a bare `D` — no modifier, so it never collides with a browser chord. */
-function isDesignKey(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey'>): boolean {
-  return (event.key === 'd' || event.key === 'D') && !event.metaKey && !event.ctrlKey && !event.altKey
+const DESIGN_CHORD = 'Alt+D'
+
+/** ⌥D / Alt+D, by the physical key: on a Mac ⌥D reports `∂`. Ctrl+Alt is AltGr off a Mac — typing. */
+function isDesignKey(event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>): boolean {
+  const d = event.code ? event.code === 'KeyD' : event.key === 'd' || event.key === 'D'
+  return d && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey
 }
 
 function ToolbarButton({

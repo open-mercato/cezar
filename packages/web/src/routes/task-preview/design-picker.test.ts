@@ -226,19 +226,20 @@ describe('the Design Mode key', () => {
     return event
   }
 
-  it('forwards a bare D to the cockpit — picker on or off — and keeps it from the page', async () => {
+  it('forwards ⌥D / Alt+D to the cockpit — picker on or off, from a field too — and keeps it from the page', async () => {
     tell({ type: 'set-active', active: false })
-    expect(press({ key: 'd' }).defaultPrevented).toBe(true)
-    await settle()
-    expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(1)
-  })
-
-  it('leaves D with a modifier, and D typed into the page\'s own field, to the page', async () => {
     const field = page.document.createElement('input')
     page.document.body.appendChild(field)
-    expect(press({ key: 'd', metaKey: true }).defaultPrevented).toBe(false)
-    expect(press({ key: 'd', ctrlKey: true }).defaultPrevented).toBe(false)
-    expect(press({ key: 'd' }, field).defaultPrevented).toBe(false)
+    expect(press({ code: 'KeyD', key: '∂', altKey: true }).defaultPrevented).toBe(true)
+    expect(press({ code: 'KeyD', key: '∂', altKey: true }, field).defaultPrevented).toBe(true)
+    await settle()
+    expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(2)
+  })
+
+  it('leaves a bare D, and D with another modifier, to the page', async () => {
+    expect(press({ code: 'KeyD', key: 'd' }).defaultPrevented).toBe(false)
+    expect(press({ code: 'KeyD', key: 'd', metaKey: true, altKey: true }).defaultPrevented).toBe(false)
+    expect(press({ code: 'KeyD', key: 'd', ctrlKey: true, altKey: true }).defaultPrevented).toBe(false)
     await settle()
     expect(posted.some((message) => message.type === 'toggle')).toBe(false)
   })

@@ -109,24 +109,25 @@ describe('the Design Mode toggle', () => {
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('switches on and off with D, and shows that key on the button', async () => {
+  it('switches on and off with ⌥D / Alt+D — from a text field too — and shows that key on the button', async () => {
     renderView()
-    expect(document.querySelector('[data-slot=browser-design-key]')!.textContent).toBe('D')
-    fireEvent.keyDown(window, { key: 'd' })
+    expect(document.querySelector('[data-slot=browser-design-key]')!.textContent).toMatch(/^(⌥D|Alt\+D)$/)
+    // On a Mac ⌥D reports the glyph it types: the physical key is what counts.
+    fireEvent.keyDown(screen.getByLabelText('Address'), { code: 'KeyD', key: '∂', altKey: true })
     expect(toggle().getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => expect(openDesignProxy).toHaveBeenCalledTimes(1))
-    fireEvent.keyDown(window, { key: 'd' })
+    fireEvent.keyDown(window, { code: 'KeyD', key: 'd', altKey: true })
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('leaves D alone while the user types, and with a modifier', () => {
+  it('leaves a bare D, and Ctrl+Alt+D (AltGr off a Mac), to the page and the fields', () => {
     renderView()
-    fireEvent.keyDown(screen.getByLabelText('Address'), { key: 'd' })
-    fireEvent.keyDown(window, { key: 'd', metaKey: true })
+    fireEvent.keyDown(window, { code: 'KeyD', key: 'd' })
+    fireEvent.keyDown(window, { code: 'KeyD', key: 'd', altKey: true, ctrlKey: true })
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('switches off when D is pressed inside the page (the picker forwards it)', async () => {
+  it('switches off when ⌥D is pressed inside the page (the picker forwards it)', async () => {
     renderView()
     await enterDesignMode()
     deliver({ source: 'cezar-design', type: 'toggle' }, MIRROR, frame().contentWindow)
