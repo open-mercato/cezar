@@ -134,6 +134,9 @@ export class ClaudeCliRunner implements AgentRunner {
       throw wrapSpawnError(err, this.bin);
     }
 
+    // A write racing the child's exit reports EPIPE as an async 'error', which the try/catch in
+    // sendMessage cannot see; unhandled, it kills the server (acfb01e4). Exit owns settlement.
+    child.stdin.on('error', () => {});
     let stdinOpen = true;
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
