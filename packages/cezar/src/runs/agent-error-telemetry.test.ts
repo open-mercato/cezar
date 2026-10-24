@@ -50,6 +50,38 @@ describe('scrubAgentErrorMessage', () => {
       .toBe('fetch <url> failed');
   });
 
+  // Spec 2026-10-24 item 9: the keys of a JSON envelope never reach the masker (36b68a95, eb4b12dc, 919887a0).
+  it.each([
+    [
+      'codex',
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"Unsupported parameter: reasoning.summary"}}',
+      '400 invalid_request_error: Unsupported parameter: reasoning.summary',
+    ],
+    [
+      'claude',
+      'API Error: 400 [400]: {"error":{"type":"invalid_request_error","message":"Invalid model name passed in model=gpt-5","param":null,"code":null}}',
+      'API Error: 400 [400]: invalid_request_error: Invalid model name passed in model=gpt-5',
+    ],
+    [
+      'opencode',
+      'POST /session/ses_1/message → 500 {"name":"ProviderInitError","data":{"message":"provider not configured"}}',
+      'POST <path> → 500 ProviderInitError: provider not configured',
+    ],
+  ])('reads a %s JSON error envelope as its type and message', (backend, message, expected) => {
+    expect(scrubAgentErrorMessage(message, backend)).toBe(expected);
+  });
+
+  it('still masks paths, emails and quoted values inside an unwrapped message', () => {
+    expect(scrubAgentErrorMessage(
+      '{"error":{"type":"invalid_request_error","message":"cannot read /Users/me/acme/.env for me@acme.io: \'sk-secret\'"}}',
+      'claude',
+    )).toBe('invalid_request_error: cannot read <path> for <email> <value>');
+  });
+
+  it('masks JSON that is not an error envelope the way it always did', () => {
+    expect(scrubAgentErrorMessage('tool failed: {"path":"secret.txt"}', 'codex')).toBe('tool failed: {<value>:<value>}');
+  });
+
   it('masks Windows paths too', () => {
     expect(scrubAgentErrorMessage('cannot open C:\\work\\acme\\app.ts', 'codex')).toBe('cannot open <path>');
   });

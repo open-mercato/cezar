@@ -27,7 +27,7 @@ import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } 
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
-import { modelConflictsWithRunner } from '../core/model-presets.ts';
+import { modelConflictsWithRunner, modelNativeToRunner } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
   ModelIdentityError,
@@ -3915,11 +3915,15 @@ export class RunManager {
       // `opus` would survive a switch to codex and `runContinuation` would hand it to the codex
       // runner. Clearing (not rejecting) is right — the pin belonged to the old backend and is
       // meaningless for the new one, which is exactly what the composer already displays (auto).
-      // Only a recognizably foreign preset is cleared; a free-form/custom id is left alone.
+      // On a real switch only a pin native to the target survives: Claude accepts gateway ids, so
+      // the conflict guard alone let OpenCode's `openai/gpt-5.1` reach `claude --model` (8e1173b1).
+      const runnerSwitched = targetRunner !== (run.runner ?? 'claude');
       const inheritedPinIsForeign =
         opts.model === undefined &&
         run.model !== undefined &&
-        modelConflictsWithRunner(run.model, targetRunner);
+        (runnerSwitched
+          ? !modelNativeToRunner(run.model, targetRunner)
+          : modelConflictsWithRunner(run.model, targetRunner));
       // An account belongs to ONE agent, so a runner switch that names no account must not leave
       // the previous backend's login on the record. It is inert immediately (resolution applies
       // the run's account only to steps on the run's own runner) and wrong later, when a further
