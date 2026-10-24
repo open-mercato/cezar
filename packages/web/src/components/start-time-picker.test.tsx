@@ -3,8 +3,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreateRunInput, DeferredPreview } from '@open-mercato/cezar-api-client'
 import { getDeferredStartOptions, previewDeferredStart } from '@/api/client'
+import { trackScheduleMenuOpened } from '@/lib/telemetry'
 import { defaultAtStart, startLabel, startTitle, AUTO_PREVIEW_MS, StartTimePicker, type StartChoice } from './start-time-picker'
 vi.mock('@/api/client', () => ({ getDeferredStartOptions: vi.fn(), previewDeferredStart: vi.fn() }))
+vi.mock('@/lib/telemetry', () => ({ trackScheduleMenuOpened: vi.fn(), trackStartOptionPicked: vi.fn() }))
 beforeEach(() => { vi.mocked(getDeferredStartOptions).mockResolvedValue({ timeZone: 'Europe/Warsaw', usageReset: { available: true, provider: 'claude' } }) })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 const task: CreateRunInput = { task: 'Later', workflow: 'quick-task', runner: 'claude' }
@@ -416,4 +418,33 @@ it('checks a usage reset by itself once chosen, with no manual check button', as
   expect(screen.queryByRole('button', { name: 'Check start time' })).toBeNull()
   await screen.findByText(/Earliest start:/)
   expect(previewDeferredStart).toHaveBeenCalledTimes(1)
+})
+
+it('counts a menu opened by the host, not only by the chevron', () => {
+  const view = render(<StartTimePicker task={task} value={null} onChange={() => {}} open={false} />)
+  expect(trackScheduleMenuOpened).not.toHaveBeenCalled()
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open />)
+  expect(trackScheduleMenuOpened).toHaveBeenCalledTimes(1)
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open />)
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open={false} />)
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open />)
+  expect(trackScheduleMenuOpened).toHaveBeenCalledTimes(2)
+})
+
+it.each([false, true])('redoes an early default in the server zone once it loads (edited first: %s)', async edited => {
+  let finish!: (value: Awaited<ReturnType<typeof getDeferredStartOptions>>) => void
+  vi.mocked(getDeferredStartOptions).mockReturnValue(new Promise(resolve => { finish = resolve }))
+  vi.mocked(previewDeferredStart).mockReturnValue(new Promise(() => {}))
+  render(<Harness />)
+  fireEvent.click(trigger())
+  fireEvent.click(screen.getByLabelText('Pick date & time'))
+  if (edited) fireEvent.change(screen.getByLabelText('Time (server time zone)'), { target: { value: '07:30' } })
+  // UTC+14: never the same wall clock as the test machine's zone.
+  await act(async () => finish({ timeZone: 'Pacific/Kiritimati', usageReset: { available: true, provider: 'claude' } }))
+  const expected = defaultAtStart('Pacific/Kiritimati')
+  if (edited) expect((screen.getByLabelText('Time (server time zone)') as HTMLInputElement).value).toBe('07:30')
+  else {
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(expected.date)
+    expect((screen.getByLabelText('Time (server time zone)') as HTMLInputElement).value).toBe(`${String(expected.hour).padStart(2, '0')}:00`)
+  }
 })

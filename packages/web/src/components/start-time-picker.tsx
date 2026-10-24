@@ -101,10 +101,13 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
 }) {
   const [openState, setOpenState] = useState(false)
   const open = openProp ?? openState
-  const setOpen = (next: boolean) => {
-    if (next && !open) trackScheduleMenuOpened()
-    setOpenState(next); onOpenChange?.(next)
-  }
+  const setOpen = (next: boolean) => { setOpenState(next); onOpenChange?.(next) }
+  // Counted on the transition, so a host opening the menu (the summary beside Send) counts too.
+  const wasOpen = useRef(open)
+  useEffect(() => {
+    if (open && !wasOpen.current) trackScheduleMenuOpened()
+    wasOpen.current = open
+  }, [open])
   const pick = (option: 'now' | 'at' | 'usage_reset', next: StartChoice | null) => { trackStartOptionPicked(option); onChange(next) }
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -128,6 +131,17 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
   // Eligibility depends on execution settings, never the wording of the prompt.
   const optionsKey = JSON.stringify({ ...task, task: 'Check scheduling options' })
   const currentOptions = options?.key === optionsKey ? options.data : undefined
+  // A default picked before the server zone loaded used the browser's; redo it once the zone
+  // arrives, unless the user has edited the fields since.
+  const autoDefault = useRef<AtStart | null>(null)
+  useEffect(() => {
+    const zone = currentOptions?.timeZone
+    if (!zone || value?.start.kind !== 'at' || !autoDefault.current) return
+    const untouched = JSON.stringify(value.start) === JSON.stringify(autoDefault.current)
+    const next = defaultAtStart(zone)
+    autoDefault.current = null
+    if (untouched && JSON.stringify(next) !== JSON.stringify(value.start)) onChange({ start: next })
+  }, [currentOptions?.timeZone, value?.start.kind])
   const resetReason = disabledReason ?? (optionsError || (currentOptions
     ? currentOptions.usageReset.available ? undefined : currentOptions.usageReset.message
     : 'Checking scheduling options…'))
@@ -225,7 +239,11 @@ export function StartTimePicker({ task, value, onChange, disabledReason, onBlock
       <fieldset className="space-y-3">
       <legend className="font-medium">Start task</legend>
       <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} checked={!value} onChange={() => pick('now', null)} />Now</label>
-      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} disabled={!!disabledReason} checked={value?.start.kind === 'at'} onChange={() => pick('at', { start: lastAt.current ?? defaultAtStart(currentOptions?.timeZone) })} />Pick date &amp; time</label>
+      <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={describedBy} disabled={!!disabledReason} checked={value?.start.kind === 'at'} onChange={() => {
+        const start = lastAt.current ?? defaultAtStart(currentOptions?.timeZone)
+        autoDefault.current = !lastAt.current && !currentOptions ? start : null
+        pick('at', { start })
+      }} />Pick date &amp; time</label>
       <label className="flex items-center gap-2"><input type="radio" name={groupName} aria-describedby={resetReason ? eligibilityId : describedBy} disabled={!!resetReason} checked={value?.start.kind === 'usage-reset'} onChange={() => pick('usage_reset', { start: { kind: 'usage-reset' } })} />After usage limit resets</label>
       </fieldset>
       {resetReason && !disabledReason && <p id={eligibilityId} className="text-sm text-muted-foreground">{resetReason}</p>}
