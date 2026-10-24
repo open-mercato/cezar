@@ -273,7 +273,7 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
         || line === 'logged in using access token'
         || line === 'logged in using personal access token'
         || line === 'logged in using amazon bedrock api key'
-        || /^logged in using an api key - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
+        || /^(?:logged in using an api key|api key configured) - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
       ) {
         return 'connected';
       }
