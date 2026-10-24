@@ -138,6 +138,32 @@ describe('selecting an element', () => {
   })
 })
 
+describe('the Design Mode shortcut', () => {
+  const press = (init: KeyboardEventInit) => {
+    const event = new page.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    page.document.body.dispatchEvent(event)
+    return event
+  }
+
+  it('forwards the cockpit\'s chord — picker on or off — and keeps it from the page', async () => {
+    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: false })
+    tell({ type: 'set-active', active: false })
+    const event = press({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true })
+    expect(event.defaultPrevented).toBe(true)
+    await settle()
+    expect(posted.at(-1)).toMatchObject({ type: 'toggle' })
+  })
+
+  it('leaves every other key, and every key before the cockpit named one, to the page', async () => {
+    expect(press({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false)
+    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: true })
+    // On a Mac Mod is ⌘, so Ctrl+Shift+D is a different chord.
+    expect(press({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false)
+    await settle()
+    expect(posted.some((message) => message.type === 'toggle')).toBe(false)
+  })
+})
+
 describe('sent notes and drafts that outlive the page', () => {
   it('numbers the frame of a sent note and leaves a draft\'s frame plain', async () => {
     mouse('click', page.document.querySelector('.buy')!)

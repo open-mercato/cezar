@@ -164,6 +164,9 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.
   `Esc` with no note open leaves Design Mode.
+- **Shortcut (2026-10-24).** `Mod+Shift+D` (⌘⇧D / Ctrl+Shift+D, rebindable in Settings → Keyboard
+  as `design-mode`) switches Design Mode on and off. Inside the mirrored page the picker forwards
+  the chord (`set-shortcut` → `toggle`), since a key pressed in the frame never reaches the cockpit.
 - **Drafts survive.** They are written through to the run's draft store (`design-picks`), so a
   half-written note outlives a reload of the page and of the cockpit. On a new
   document the picker frames the element again from its selector — only when that selector names
