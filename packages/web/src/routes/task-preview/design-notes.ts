@@ -141,6 +141,17 @@ export function noteMessage(note: Pick<DesignNote, 'key' | 'pick' | 'text'>): st
   return messageWithDesignPicks(note.text.trim(), [{ ...note.pick, id: note.key }])
 }
 
+/** One message for a batch of notes (2026-10-24): each note's words, then its element. */
+export function notesMessage(notes: readonly Pick<DesignNote, 'key' | 'pick' | 'text'>[]): string {
+  if (notes.length === 1) return noteMessage(notes[0]!)
+  const message = notes.map((note, index) => `## Note ${index + 1}\n\n${noteMessage(note)}`).join('\n\n')
+  if (message.length > MESSAGE_TEXT_MAX) throw new Error(`Too long with ${notes.length} notes — send fewer at once.`)
+  return message
+}
+
+/** What `POST /runs/:id/messages` accepts. */
+const MESSAGE_TEXT_MAX = 100_000
+
 /**
  * Move the sent notes along with the run. Pure, so the lifecycle is testable without a session.
  *
@@ -169,11 +180,11 @@ export function advance(
     if (out !== note) changed = true
     return out
   })
-  // One session, one turn at a time: only the note delivered last can still be in progress.
+  // One session, one turn at a time: only the notes delivered last (one batch) can still be in progress.
   const active = next.filter((note) => note.phase === 'running' || note.phase === 'asking')
-  if (active.length > 1) {
-    const latest = active.reduce((a, b) => ((b.deliveredAt ?? 0) >= (a.deliveredAt ?? 0) ? b : a))
-    next = next.map((note) => (active.includes(note) && note !== latest ? { ...note, phase: 'done' as const } : note))
+  const latestAt = Math.max(...active.map((note) => note.deliveredAt ?? 0))
+  if (active.some((note) => (note.deliveredAt ?? 0) < latestAt)) {
+    next = next.map((note) => (active.includes(note) && (note.deliveredAt ?? 0) < latestAt ? { ...note, phase: 'done' as const } : note))
     changed = true
   }
   return changed ? next : (sent as SentNote[])
@@ -191,9 +202,11 @@ export interface DesignNotes {
   setText: (key: string, text: string) => void
   /** Throw a draft away — the element is deselected. */
   discard: (key: string) => void
-  /** Send a draft to the agent. Resolves once it is delivered; rejects with the reason, leaving
-   *  the draft exactly as it was. */
-  send: (key: string) => Promise<void>
+  /** Drafts with words in them — what `sendAll` would send. */
+  ready: number
+  /** Send every written draft to the agent as one message. Resolves once it is delivered; rejects
+   *  with the reason, leaving the drafts exactly as they were. */
+  sendAll: () => Promise<void>
 }
 
 export function useDesignNotes(run: ApiRun): DesignNotes {
@@ -291,11 +304,11 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
     [persist, publish, store],
   )
 
-  const send = useCallback(
-    async (key: string) => {
-      const draft = store.drafts?.find((entry) => entry.key === key)
-      if (!draft || draft.text.trim() === '') return
-      const message = noteMessage(draft)
+  const sendAll = useCallback(
+    async () => {
+      const batch = (store.drafts ?? []).filter((entry) => entry.text.trim() !== '')
+      if (batch.length === 0) return
+      const message = notesMessage(batch)
       const deliver = (path: DeliveryPath) =>
         path === 'live' ? sendMessage(runId, { text: message }) : continueRun(runId, { text: message })
       // The same recovery as the composer's (`deliver-prompt.ts`): a 409 says the record this
@@ -310,20 +323,21 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
         })
       }
       const now = Date.now()
-      store.counter++
+      const keys = new Set(batch.map((draft) => draft.key))
       store.sent = [
         ...store.sent,
-        {
-          key,
+        ...batch.map((draft) => ({
+          key: draft.key,
           pick: draft.pick,
           text: draft.text.trim(),
-          number: store.counter,
+          number: ++store.counter,
           sawRunning: false,
           phase: 'running' as const,
           deliveredAt: now,
-        },
+        })),
       ]
-      store.drafts = (store.drafts ?? []).filter((entry) => entry.key !== key)
+      // Drafts written while the send was in flight stay; only what was sent leaves.
+      store.drafts = (store.drafts ?? []).filter((entry) => !keys.has(entry.key))
       publish()
       persist(0)
     },
@@ -345,6 +359,7 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
     [notes],
   )
   const note = useCallback((key: string) => notes.find((entry) => entry.key === key), [notes])
+  const ready = notes.filter((entry) => entry.phase === 'draft' && entry.text.trim() !== '').length
 
-  return { notes, marks, note, addDraft, setText, discard, send }
+  return { notes, marks, note, addDraft, setText, discard, ready, sendAll }
 }

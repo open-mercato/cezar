@@ -1,7 +1,6 @@
-import { MessageSquareIcon, XIcon } from 'lucide-react'
+import { MessageSquareIcon, SendIcon, XIcon } from 'lucide-react'
 import { useState } from 'react'
 
-import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -15,8 +14,8 @@ import type { DesignNote, DesignNotes, NotePhase } from './design-notes'
  * (spec `.ai/specs/2026-10-09-design-mode.md` §7).
  *
  * Two faces of one small window, picked by where the note is in its life:
- *  - a DRAFT: a field and Send. Closing it (✕ / Esc) throws the draft away and deselects the
- *    element — clicking another element instead keeps it, and that is how drafts are kept.
+ *  - a DRAFT: a field and Add note. Closing it (✕ / Esc) throws the draft away and deselects the
+ *    element — Add note or clicking another element keeps it. `DesignNotesTray` sends them all.
  *  - WITH THE AGENT (in progress, asking, done): read-only. Closing only hides it.
  */
 
@@ -26,41 +25,18 @@ const STATUS: Record<Exclude<NotePhase, 'draft'>, { label: string; tone: 'neutra
   done: { label: 'Done', tone: 'success' },
 }
 
-/** What Send will do, which depends on what the session is doing right now. */
-function sendPlan(status: ApiRun['status']): { action: string; hint: string } {
-  if (status === 'running') return { action: 'Send', hint: 'The agent is working — the note goes into its session now.' }
-  if (status === 'waiting') return { action: 'Send', hint: 'The agent is free — this starts right away.' }
-  if (status === 'queued') return { action: 'Send', hint: 'This task has not started — the note joins its first prompt.' }
-  return { action: 'Reopen & send', hint: 'The session is closed — this reopens it with the note.' }
-}
-
 export function DesignNotePopup({
   note,
-  run,
   notes,
   onClose,
 }: {
   note: DesignNote
-  run: ApiRun
-  notes: Pick<DesignNotes, 'setText' | 'discard' | 'send'>
+  notes: Pick<DesignNotes, 'setText' | 'discard'>
   /** Hide the popup. For a draft the host has already been told to discard it. */
   onClose: () => void
 }) {
-  const [busy, setBusy] = useState(false)
   const isDraft = note.phase === 'draft'
-
-  const attempt = async (action: () => Promise<void>, fallback: string): Promise<boolean> => {
-    setBusy(true)
-    try {
-      await action()
-      return true
-    } catch (error) {
-      toast(error instanceof Error && error.message ? error.message : fallback, { tone: 'danger' })
-      return false
-    } finally {
-      setBusy(false)
-    }
-  }
+  const empty = note.text.trim() === ''
 
   /** ✕ and Esc: a draft is thrown away with its element's frame; anything sent is only hidden. */
   const dismiss = () => {
@@ -68,13 +44,11 @@ export function DesignNotePopup({
     onClose()
   }
 
-  const send = async () => {
-    if (note.text.trim() === '' || busy) return
-    // On success the frame stays, numbered; the window has done its job.
-    if (await attempt(() => notes.send(note.key), 'Could not send the note.')) onClose()
+  // The draft is already kept (written through as it is typed); adding only puts the window away.
+  const add = () => {
+    if (!empty) onClose()
   }
 
-  const plan = sendPlan(run.status)
   const status = isDraft ? null : STATUS[note.phase as Exclude<NotePhase, 'draft'>]
 
   return (
@@ -124,7 +98,7 @@ export function DesignNotePopup({
               dismiss()
             } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault()
-              void send()
+              add()
             }
           }}
           placeholder="What should change here?"
@@ -141,15 +115,49 @@ export function DesignNotePopup({
       )}
 
       {isDraft ? (
-        <div className="flex items-center gap-2">
-          <p data-slot="design-note-hint" className="min-w-0 flex-1 text-soft-foreground">
-            {plan.hint}
-          </p>
-          <Button type="button" size="sm" disabled={busy || note.text.trim() === ''} onClick={() => void send()}>
-            {plan.action}
+        <div className="flex justify-end">
+          <Button type="button" size="sm" disabled={empty} title="Add note (Ctrl/⌘+Enter)" onClick={add}>
+            Add note
           </Button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * The batch's send button (2026-10-24): notes are collected like line comments on the Changes tab
+ * and go to the agent together, as one message, when the user says so.
+ */
+export function DesignNotesTray({ notes }: { notes: Pick<DesignNotes, 'ready' | 'sendAll'> }) {
+  const [busy, setBusy] = useState(false)
+  if (notes.ready === 0 && !busy) return null
+
+  const send = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await notes.sendAll()
+    } catch (error) {
+      toast(error instanceof Error && error.message ? error.message : 'Could not send the notes.', { tone: 'danger' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div
+      data-slot="design-notes-tray"
+      className="flex items-center gap-2 rounded-xl border border-border bg-background/95 py-1.5 pr-1.5 pl-3 text-xs shadow-lg"
+    >
+      <MessageSquareIcon aria-hidden="true" className="size-3.5 text-soft-foreground" />
+      <span className="text-foreground">
+        {notes.ready} {notes.ready === 1 ? 'note' : 'notes'}
+      </span>
+      <Button type="button" size="sm" disabled={busy} onClick={() => void send()}>
+        <SendIcon aria-hidden="true" />
+        {busy ? 'Sending…' : 'Send to agent'}
+      </Button>
     </div>
   )
 }

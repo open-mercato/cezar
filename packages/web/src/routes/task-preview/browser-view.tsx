@@ -61,6 +61,7 @@ export function BrowserView({
   designMarks,
   renderDesignNote,
   onDesignEscape,
+  designTray,
   renderEmpty,
 }: {
   state: BrowserState
@@ -88,6 +89,9 @@ export function BrowserView({
   /** Esc was pressed in the page while the note for `mark` was open. The view closes the popup;
    *  the host decides what else that means (a draft is discarded). */
   onDesignEscape?: (mark: string) => void
+  /** The host's batch send for its notes, floated in the frame's corner while Design Mode is on;
+   *  `null` when there is nothing to send. */
+  designTray?: React.ReactNode
   /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
    *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
   renderEmpty?: (open: (url: string) => void) => React.ReactNode
@@ -729,7 +733,10 @@ export function BrowserView({
                 ))}
               </div>
             ) : null}
-            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 ? (
+            {designAllowed && designTray ? (
+              <div className="absolute right-3 bottom-3 z-10">{designTray}</div>
+            ) : null}
+            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 && !designTray ? (
               <p
                 data-slot="browser-design-hint"
                 className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"

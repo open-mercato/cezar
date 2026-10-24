@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
-import { DesignNotePopup } from './design-note-popup'
-import { advance, noteMessage, parseDraftNotes, resetDesignNotes, useDesignNotes, type DesignNote } from './design-notes'
+import { DesignNotePopup, DesignNotesTray } from './design-note-popup'
+import { advance, noteMessage, notesMessage, parseDraftNotes, resetDesignNotes, useDesignNotes, type DesignNote } from './design-notes'
 
 /**
  * Design Mode notes (spec `.ai/specs/2026-10-09-design-mode.md` §7): one element, one prompt.
@@ -130,7 +130,7 @@ describe('a draft', () => {
 describe('sending a note', () => {
   it.each(['running', 'waiting', 'queued'] as const)('goes into a %s session as a live message: numbered, the draft gone', async (status) => {
     const { result } = notesWithDraft(run({ status }))
-    await act(() => result.current.send('abc-1'))
+    await act(() => result.current.sendAll())
     const [id, body] = api.sendMessage.mock.calls[0] as [string, { text: string }]
     expect(id).toBe('run-1')
     expect(body.text.startsWith('make it bigger\n\nElements selected in the app preview:')).toBe(true)
@@ -143,7 +143,7 @@ describe('sending a note', () => {
 
   it.each(['done', 'failed', 'cancelled', 'review'] as const)('reopens a %s session with the note', async (status) => {
     const { result } = notesWithDraft(run({ status }))
-    await act(() => result.current.send('abc-1'))
+    await act(() => result.current.sendAll())
     expect(api.continueRun).toHaveBeenCalledWith('run-1', { text: expect.stringContaining('make it bigger') })
     expect(api.sendMessage).not.toHaveBeenCalled()
     expect(result.current.note('abc-1')?.phase).toBe('running')
@@ -152,7 +152,7 @@ describe('sending a note', () => {
   it('reopens when the session closed under the live send (a stale record answers 409)', async () => {
     api.sendMessage.mockRejectedValue(new ApiError(409, 'session closed'))
     const { result } = notesWithDraft(run({ status: 'waiting' }))
-    await act(() => result.current.send('abc-1'))
+    await act(() => result.current.sendAll())
     expect(api.continueRun).toHaveBeenCalledTimes(1)
     expect(result.current.note('abc-1')?.phase).toBe('running')
   })
@@ -161,25 +161,45 @@ describe('sending a note', () => {
     api.sendMessage.mockRejectedValue(new ApiError(409, 'provider disconnected'))
     api.continueRun.mockRejectedValue(new ApiError(409, 'nothing to resume'))
     const { result } = notesWithDraft(run({ status: 'running' }))
-    await expect(act(() => result.current.send('abc-1'))).rejects.toThrow(/provider disconnected/)
+    await expect(act(() => result.current.sendAll())).rejects.toThrow(/provider disconnected/)
     expect(result.current.note('abc-1')).toMatchObject({ phase: 'draft', text: 'make it bigger' })
   })
 
   it('does not retry anything but a 409', async () => {
     api.sendMessage.mockRejectedValue(new ApiError(500, 'boom'))
     const { result } = notesWithDraft(run({ status: 'running' }))
-    await expect(act(() => result.current.send('abc-1'))).rejects.toThrow(/boom/)
+    await expect(act(() => result.current.sendAll())).rejects.toThrow(/boom/)
     expect(api.continueRun).not.toHaveBeenCalled()
+  })
+
+  it('sends every written draft as one message, numbered in the order picked; empty drafts stay', async () => {
+    const { result } = notesWithDraft(run())
+    act(() => {
+      result.current.addDraft({ ...PICK, mark: 'abc-2', selector: 'main > p.price' })
+      result.current.setText('abc-2', 'red')
+      result.current.addDraft({ ...PICK, mark: 'abc-3', selector: 'main > h1' })
+    })
+    expect(result.current.ready).toBe(2)
+    await act(() => result.current.sendAll())
+    expect(api.sendMessage).toHaveBeenCalledTimes(1)
+    const [, body] = api.sendMessage.mock.calls[0] as [string, { text: string }]
+    expect(body.text).toMatch(/^## Note 1\n\nmake it bigger\n[\s\S]*## Note 2\n\nred\n/)
+    expect(result.current.notes.map((note) => [note.key, note.phase, note.number])).toEqual([
+      ['abc-3', 'draft', undefined],
+      ['abc-1', 'running', 1],
+      ['abc-2', 'running', 2],
+    ])
+    expect(result.current.ready).toBe(0)
   })
 
   it('numbers notes in the order they were sent', async () => {
     const { result } = notesWithDraft(run())
-    await act(() => result.current.send('abc-1'))
+    await act(() => result.current.sendAll())
     act(() => {
       result.current.addDraft({ ...PICK, mark: 'abc-2', selector: 'main > p.price' })
       result.current.setText('abc-2', 'red')
     })
-    await act(() => result.current.send('abc-2'))
+    await act(() => result.current.sendAll())
     expect(result.current.notes.map((note) => [note.key, note.number])).toEqual([
       ['abc-1', 1],
       ['abc-2', 2],
@@ -190,7 +210,7 @@ describe('sending a note', () => {
 describe('a sent note', () => {
   const delivered = async () => {
     const hook = notesWithDraft(run({ status: 'running' }))
-    await act(() => hook.result.current.send('abc-1'))
+    await act(() => hook.result.current.sendAll())
     return hook
   }
 
@@ -231,6 +251,15 @@ describe('advance', () => {
     expect(note!.phase).toBe('done')
   })
 
+  it('keeps a whole batch delivered together in progress', () => {
+    const next = advance(
+      [sent({ key: 'a', deliveredAt: 40, sawRunning: true }), sent({ key: 'b', number: 2, deliveredAt: 40, sawRunning: true })],
+      at('running'),
+      50,
+    )
+    expect(next.map((note) => note.phase)).toEqual(['running', 'running'])
+  })
+
   it('keeps only the note delivered last in progress', () => {
     const next = advance(
       [sent({ key: 'a', deliveredAt: 1, sawRunning: true }), sent({ key: 'b', number: 2, deliveredAt: 40 })],
@@ -255,6 +284,14 @@ describe('parseDraftNotes', () => {
   )
 })
 
+describe('notesMessage', () => {
+  it('is the plain note for one, and numbered sections for several', () => {
+    const one = { key: 'abc-1', pick: PICK, text: 'bigger' }
+    expect(notesMessage([one])).toBe(noteMessage(one))
+    expect(notesMessage([one, { ...one, key: 'abc-2', text: 'red' }]).match(/^## Note \d$/gm)).toEqual(['## Note 1', '## Note 2'])
+  })
+})
+
 describe('noteMessage', () => {
   it('is the user\'s words first, then the one element', () => {
     const message = noteMessage({ key: 'abc-1', pick: PICK, text: '  make it bigger  ' })
@@ -264,32 +301,33 @@ describe('noteMessage', () => {
 })
 
 describe('the note popup', () => {
-  const actions = () => ({ setText: vi.fn(), discard: vi.fn(), send: vi.fn(async () => {}) })
+  const actions = () => ({ setText: vi.fn(), discard: vi.fn() })
   const note = (over: Partial<DesignNote>): DesignNote => ({ key: 'abc-1', pick: PICK, text: 'make it bigger', phase: 'draft', ...over })
 
-  it('names the element, takes the prompt, and sends on Ctrl+Enter', async () => {
+  it('names the element, takes the prompt, and adds it on Ctrl+Enter', () => {
     const notes = actions()
     const onClose = vi.fn()
-    render(<DesignNotePopup note={note({})} run={run({ status: 'waiting' })} notes={notes} onClose={onClose} />)
+    render(<DesignNotePopup note={note({})} notes={notes} onClose={onClose} />)
     expect(document.querySelector('[data-slot=design-note-element]')!.textContent).toBe('button.save')
     const field = screen.getByLabelText('Note for the agent')
     expect(document.activeElement).toBe(field)
     fireEvent.change(field, { target: { value: 'make it bigger!' } })
     expect(notes.setText).toHaveBeenCalledWith('abc-1', 'make it bigger!')
     fireEvent.keyDown(field, { key: 'Enter', ctrlKey: true })
-    await waitFor(() => expect(notes.send).toHaveBeenCalledWith('abc-1'))
-    // Sent: the frame stays, numbered; the window has done its job.
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    // Added: the draft is kept, the window put away, nothing discarded.
+    expect(onClose).toHaveBeenCalledTimes(1)
+    expect(notes.discard).not.toHaveBeenCalled()
   })
 
-  it('cannot send an empty note', () => {
-    render(<DesignNotePopup note={note({ text: '   ' })} run={run()} notes={actions()} onClose={vi.fn()} />)
-    expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true)
+  it('cannot add an empty note', () => {
+    render(<DesignNotePopup note={note({ text: '   ' })} notes={actions()} onClose={vi.fn()} />)
+    expect((screen.getByRole('button', { name: 'Add note' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('says what Send will do for a closed session', () => {
-    render(<DesignNotePopup note={note({})} run={run({ status: 'done' })} notes={actions()} onClose={vi.fn()} />)
-    expect(screen.getByRole('button', { name: 'Reopen & send' })).toBeTruthy()
+  it('says nothing about the session — no reopen wording, no hint', () => {
+    render(<DesignNotePopup note={note({})} notes={actions()} onClose={vi.fn()} />)
+    expect(screen.queryByText(/reopen/i)).toBeNull()
+    expect(document.querySelector('[data-slot=design-note-hint]')).toBeNull()
   })
 
   it.each([
@@ -298,21 +336,23 @@ describe('the note popup', () => {
   ])('throws a draft away and deselects its element on %s', (_label, dismiss) => {
     const notes = actions()
     const onClose = vi.fn()
-    render(<DesignNotePopup note={note({})} run={run()} notes={notes} onClose={onClose} />)
+    render(<DesignNotePopup note={note({})} notes={notes} onClose={onClose} />)
     dismiss()
     expect(notes.discard).toHaveBeenCalledWith('abc-1')
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the draft and says why when the send fails', async () => {
-    const notes = actions()
-    notes.send.mockRejectedValue(new Error('provider disconnected'))
-    const onClose = vi.fn()
-    render(<DesignNotePopup note={note({})} run={run()} notes={notes} onClose={onClose} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+  it('the tray sends the batch, and says why when it fails', async () => {
+    const sendAll = vi.fn(async () => {})
+    const { rerender } = render(<DesignNotesTray notes={{ ready: 2, sendAll }} />)
+    expect(document.querySelector('[data-slot=design-notes-tray]')!.textContent).toContain('2 notes')
+    fireEvent.click(screen.getByRole('button', { name: 'Send to agent' }))
+    await waitFor(() => expect(sendAll).toHaveBeenCalledTimes(1))
+    sendAll.mockRejectedValueOnce(new Error('provider disconnected'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Send to agent' }))
     await waitFor(() => expect(toast).toHaveBeenCalledWith('provider disconnected', { tone: 'danger' }))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(notes.discard).not.toHaveBeenCalled()
+    rerender(<DesignNotesTray notes={{ ready: 0, sendAll }} />)
+    expect(document.querySelector('[data-slot=design-notes-tray]')).toBeNull()
   })
 
   it.each([
@@ -322,7 +362,7 @@ describe('the note popup', () => {
   ] as const)('is read-only once the note is with the agent (%s)', (phase, label) => {
     const notes = actions()
     const onClose = vi.fn()
-    render(<DesignNotePopup note={note({ phase, number: 1 })} run={run()} notes={notes} onClose={onClose} />)
+    render(<DesignNotePopup note={note({ phase, number: 1 })} notes={notes} onClose={onClose} />)
     expect(document.querySelector('[data-slot=design-note-status]')!.textContent).toBe(label)
     expect(screen.queryByLabelText('Note for the agent')).toBeNull()
     expect(document.querySelector('[data-slot=design-note-text]')!.textContent).toBe('make it bigger')
