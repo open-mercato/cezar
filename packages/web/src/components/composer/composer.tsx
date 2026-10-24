@@ -384,6 +384,14 @@ export function Composer({
           // Upload now, while the user is still typing, so the send only names it (7054e5f2).
           void stageAttachment(attachment)
           setImages(next)
+        }, (error: unknown) => {
+          // A dropped folder, or a file gone before it was read, rejects `arrayBuffer()` with
+          // NotFoundError (WebKit: "The object can not be found here.", telemetry 159014d3).
+          const gone = error instanceof DOMException && error.name === 'NotFoundError'
+          toast(`“${file.name}” could not be read${gone ? ' — a folder, or a file that no longer exists' : ''}`, {
+            tone: 'danger',
+            expected: gone,
+          })
         })
       }
     },

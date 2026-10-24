@@ -329,6 +329,22 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     expect(screen.queryByText(/not a supported attachment/)).toBeNull()
   })
 
+  // telemetry 159014d3: a dropped folder's `arrayBuffer()` rejects with NotFoundError, which went
+  // unhandled — the attachment vanished silently and an unhandledrejection was reported.
+  it('a file that cannot be read is refused with a toast, not an unhandled rejection', async () => {
+    const { textarea } = renderComposer()
+    const folder = pngFile('Screenshots')
+    Object.defineProperty(folder, 'arrayBuffer', {
+      value: () => Promise.reject(new DOMException('The object can not be found here.', 'NotFoundError')),
+    })
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
+    paste(textarea, [folder])
+    expect(await screen.findByText('“Screenshots” could not be read — a folder, or a file that no longer exists')).toBeTruthy()
+    expect(reported).toEqual([])
+    off()
+  })
+
   it('an oversized image is refused with the 5 MB toast', async () => {
     const { textarea } = renderComposer()
     const big = pngFile('huge.png')
