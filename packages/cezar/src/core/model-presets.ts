@@ -66,6 +66,14 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<RunnerId, RegExp>> = {
   codex: /^gpt[-.]/,
 };
 
+/** Runners whose own bare catalog ids ARE other vendors' ids — Copilot routes `claude-sonnet-4`
+ *  and `gpt-5.4`, Cursor `gpt-5` — so a vendor shape is no evidence of a mis-pairing there. Not
+ *  junie (opaque `v1:…` ids) nor opencode/pi (`provider/model` only). */
+const VENDOR_ID_HOSTING_RUNNERS: readonly RunnerId[] = ['copilot', 'cursor'];
+
+const hasVendorIdShape = (model: string): boolean =>
+  Object.values(NATIVE_MODEL_ID_PREFIX).some((prefix) => prefix.test(model));
+
 /**
  * True when the `provider/` prefix on `model` names a provider cezar knows that this
  * single-provider runner does not serve — `anthropic/…` handed to codex.
@@ -93,6 +101,9 @@ export function modelConflictsWithRunner(model: string, runner: RunnerId): boole
   if (!model) return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
+  // Checked before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id. Tier
+  // aliases (`opus`) carry no vendor shape and still conflict.
+  if (VENDOR_ID_HOSTING_RUNNERS.includes(runner) && hasVendorIdShape(model)) return false;
   // Both structural halves of the guard need no vendor model knowledge, so — unlike the preset
   // lists — they keep holding for models that do not exist yet. That is what lets OpenCode's
   // entry above be empty (#794) and Claude's shrink to tier aliases (#784) without either
@@ -114,12 +125,15 @@ export function modelConflictsWithRunner(model: string, runner: RunnerId): boole
  * Stricter than {@link modelConflictsWithRunner} on purpose: it judges a pin INHERITED across a
  * runner switch, which nobody picked for the target — Claude's open gateway support otherwise
  * lets OpenCode's `openai/gpt-5.1` through to `claude --model` (telemetry 8e1173b1). Spanning
- * runners (OpenCode, pi) only take `provider/model`, so a bare pin is never theirs.
+ * runners (OpenCode, pi) only take `provider/model`, so a bare pin is never theirs. Another
+ * vendor's bare id is not provably Copilot's or Cursor's either (their spellings differ:
+ * `claude-sonnet-4.5` vs `claude-sonnet-4-5`), so an inherited one is dropped there too.
  */
 export function modelNativeToRunner(model: string, runner: RunnerId): boolean {
   if (!model || modelConflictsWithRunner(model, runner)) return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return true;
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return true;
+  if (hasVendorIdShape(model)) return false;
   const defaultProvider = BACKEND_MODEL_MAP[runner]?.defaultProvider;
   const explicit = parseModelIdentity(model);
   if (explicit) return defaultProvider === undefined || explicit.provider === defaultProvider;
