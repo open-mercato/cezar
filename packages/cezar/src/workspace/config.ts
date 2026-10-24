@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { renameSyncWithRetry } from '../fs-rename.ts';
+import { readFileWithRetry, renameSyncWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
@@ -335,18 +334,29 @@ function parseWorkspaceConfig(raw: string): WorkspaceConfig | null {
   }
 }
 
+/** The file's text, or null when it does not exist. Any other failure (a
+ *  Windows sharing violation that outlived the retries, EACCES) is thrown:
+ *  "unreadable" must never be mistaken for "absent". */
+async function readConfigText(path: string): Promise<string | null> {
+  try {
+    return await readFileWithRetry(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 /** The snapshot is only worth restoring while it still holds projects — an
  *  empty one carries no information the defaults do not already have. */
 async function loadWorkspaceConfigBackup(path: string): Promise<WorkspaceConfig | null> {
-  let raw: string;
-  try {
-    raw = await readFile(workspaceConfigBackupPath(path), 'utf8');
-  } catch {
-    return null;
-  }
+  const raw = await readConfigText(workspaceConfigBackupPath(path));
+  if (raw === null) return null;
   const parsed = parseWorkspaceConfig(raw);
   return parsed && parsed.projects.length > 0 ? parsed : null;
 }
+
+/** Thrown by a merge-write that could not read the file it was about to replace. */
+export class WorkspaceConfigUnreadableError extends Error {}
 
 /**
  * Read `~/.cezar/config.json` on demand — never cached, never throws. A
@@ -366,23 +376,45 @@ async function loadWorkspaceConfigBackup(path: string): Promise<WorkspaceConfig 
  * `mergeWriteWorkspaceConfig` for why resolving it twice is a data-loss bug.
  */
 export async function loadWorkspaceConfig(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  return readWorkspaceConfig(path, false);
+}
+
+/** `strict` (merge-writes): a file that exists but cannot be read throws
+ *  instead of degrading to defaults, which the write would then persist over
+ *  both the config and its snapshot — the Windows registry wipe this guards. */
+async function readWorkspaceConfig(path: string, strict: boolean): Promise<WorkspaceConfig> {
   let raw: string | null = null;
+  let unreadable: { path: string; error: unknown } | undefined;
   try {
-    raw = await readFile(path, 'utf8');
-  } catch {
-    // missing/unreadable — the backup below is the next chance
+    raw = await readConfigText(path);
+  } catch (error) {
+    unreadable = { path, error }; // the backup below is the next chance
   }
   if (raw !== null && raw.trim() !== '') {
     const parsed = parseWorkspaceConfig(raw);
     if (parsed) return parsed;
   }
-  const restored = await loadWorkspaceConfigBackup(path);
+  const backupPath = workspaceConfigBackupPath(path);
+  const restored = await loadWorkspaceConfigBackup(path).catch((error: unknown) => {
+    unreadable ??= { path: backupPath, error };
+    return null;
+  });
   if (restored) {
-    const cause = raw === null ? 'is missing' : 'is empty or corrupt';
+    const cause = unreadable !== undefined ? 'is unreadable' : raw === null ? 'is missing' : 'is empty or corrupt';
     console.warn(
-      `[cez] workspace config ${path} ${cause} — restored ${restored.projects.length} project(s) from ${workspaceConfigBackupPath(path)}`,
+      `[cez] workspace config ${path} ${cause} — restored ${restored.projects.length} project(s) from ${backupPath}`,
     );
     return restored;
+  }
+  if (unreadable !== undefined) {
+    const code = (unreadable.error as NodeJS.ErrnoException).code ?? 'error';
+    if (strict) {
+      throw new WorkspaceConfigUnreadableError(`[cez] cannot read ${unreadable.path} (${code}) — refusing to overwrite it`, {
+        cause: unreadable.error,
+      });
+    }
+    console.warn(`[cez] workspace config ${unreadable.path} is unreadable (${code}) — using defaults for now`);
+    return defaultWorkspaceConfig();
   }
   if (raw === null) return defaultWorkspaceConfig();
   console.warn(
@@ -451,7 +483,8 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
  * read→rename window — acceptable for a registry that self-heals on next
  * boot). The mutator may mutate its argument in place or return a replacement.
  * Returns the config that was written. Throws on write failure (e.g. a
- * read-only home) — degrading is the caller's policy, per house rules.
+ * read-only home) and on a file that exists but cannot be read
+ * (`WorkspaceConfigUnreadableError`) — degrading is the caller's policy.
  *
  * The path is resolved ONCE, before the `await`, and the same value feeds the
  * read and the write. Resolving it twice used to lose the whole registry:
@@ -466,7 +499,7 @@ export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
 ): Promise<WorkspaceConfig> {
   const path = workspaceConfigPath();
-  const current = await loadWorkspaceConfig(path);
+  const current = await readWorkspaceConfig(path, true);
   const next = mutator(current) ?? current;
   atomicWriteJsonSync(path, next);
   // Refresh the snapshot after EVERY successful write, including an emptied
