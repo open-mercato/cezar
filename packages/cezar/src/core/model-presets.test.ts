@@ -57,6 +57,20 @@ describe('modelConflictsWithRunner', () => {
     expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'claude')).toBe(false);
   });
 
+  it("accepts Copilot's and Cursor's own ids, which are other vendors' ids", () => {
+    for (const model of ['claude-sonnet-4', 'gpt-5.4', 'gpt-5.1-codex']) {
+      expect(modelConflictsWithRunner(model, 'copilot')).toBe(false);
+    }
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false);
+    expect(modelConflictsWithRunner('claude-4-sonnet', 'cursor')).toBe(false);
+    // A tier alias carries no vendor shape: it is still Claude's preset, not theirs.
+    expect(modelConflictsWithRunner('opus', 'copilot')).toBe(true);
+    expect(modelConflictsWithRunner('fable', 'cursor')).toBe(true);
+    // Junie's catalog ids are opaque `v1:…` strings, so a bare vendor id still conflicts there.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'junie')).toBe(true);
+    expect(modelConflictsWithRunner('anthropic/claude-sonnet-5', 'copilot')).toBe(true);
+  });
+
   it('keeps no dated Claude release to drift, mirroring the picker (#784)', () => {
     expect(KNOWN_PRESETS_BY_RUNNER.claude).toEqual(['fable', 'opus', 'sonnet', 'haiku']);
   });
@@ -87,6 +101,13 @@ describe('modelNativeToRunner', () => {
     expect(modelNativeToRunner('', 'claude')).toBe(false);
     expect(modelNativeToRunner('opus', 'codex')).toBe(false);
     expect(modelNativeToRunner('gpt-5.1-codex', 'claude')).toBe(false);
+  });
+
+  it("drops another vendor's inherited id on Copilot and Cursor, keeping their own", () => {
+    expect(modelNativeToRunner('claude-sonnet-4-5', 'copilot')).toBe(false);
+    expect(modelNativeToRunner('gpt-5', 'cursor')).toBe(false);
+    expect(modelNativeToRunner('auto', 'copilot')).toBe(true);
+    expect(modelNativeToRunner('composer-2.5', 'cursor')).toBe(true);
   });
 
   it('takes any provider/model on a spanning runner, never a bare id', () => {
