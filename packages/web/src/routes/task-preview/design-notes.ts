@@ -9,6 +9,7 @@ import { deliveryPath, type DeliveryPath } from '../task-thread/deliver-prompt'
 
 import {
   DESIGN_PICKS_SURFACE,
+  MESSAGE_TEXT_MAX,
   messageWithDesignPicks,
   parseDesignPick,
   pickLabel,
@@ -87,12 +88,14 @@ interface NotesStore {
   chain: Promise<unknown>
   timer: ReturnType<typeof setTimeout> | undefined
   version: number
+  /** The drafts of a batch on its way; frozen until it lands, so no edit is lost to it. */
+  inFlight: ReadonlySet<string> | null
 }
 const stores = new Map<string, NotesStore>()
 function storeFor(runId: string): NotesStore {
   let store = stores.get(runId)
   if (!store) {
-    store = { drafts: undefined, sent: [], counter: 0, listeners: new Set(), chain: Promise.resolve(), timer: undefined, version: 0 }
+    store = { drafts: undefined, sent: [], counter: 0, listeners: new Set(), chain: Promise.resolve(), timer: undefined, version: 0, inFlight: null }
     stores.set(runId, store)
   }
   return store
@@ -153,9 +156,6 @@ export function notesMessage(notes: readonly Pick<DesignNote, 'key' | 'pick' | '
   return message
 }
 
-/** What `POST /runs/:id/messages` accepts. */
-const MESSAGE_TEXT_MAX = 100_000
-
 /**
  * Move the sent notes along with the run. Pure, so the lifecycle is testable without a session.
  *
@@ -210,6 +210,8 @@ export interface DesignNotes {
   discard: (key: string) => void
   /** Drafts with words in them — what `sendAll` would send. */
   ready: number
+  /** A batch is on its way: its drafts cannot be edited or removed until it lands. */
+  sending: boolean
   /** Send every written draft to the agent as one message. Resolves once it is delivered; rejects
    *  with the reason, leaving the drafts exactly as they were. */
   sendAll: () => Promise<void>
@@ -292,7 +294,7 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
 
   const setText = useCallback(
     (key: string, text: string) => {
-      if (!store.drafts?.some((draft) => draft.key === key)) return
+      if (store.inFlight?.has(key) || !store.drafts?.some((draft) => draft.key === key)) return
       store.drafts = store.drafts.map((draft) => (draft.key === key ? { ...draft, text: text.slice(0, NOTE_TEXT_MAX) } : draft))
       publish()
       persist(500)
@@ -312,7 +314,7 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
 
   const discard = useCallback(
     (key: string) => {
-      if (!store.drafts?.some((draft) => draft.key === key)) return
+      if (store.inFlight?.has(key) || !store.drafts?.some((draft) => draft.key === key)) return
       store.drafts = store.drafts.filter((draft) => draft.key !== key)
       publish()
       persist(0)
@@ -322,9 +324,13 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
 
   const sendAll = useCallback(
     async () => {
+      if (store.inFlight !== null) return
       const batch = (store.drafts ?? []).filter((entry) => entry.text.trim() !== '')
       if (batch.length === 0) return
       const message = notesMessage(batch)
+      const keys = new Set(batch.map((draft) => draft.key))
+      store.inFlight = keys
+      publish()
       const deliver = (path: DeliveryPath) =>
         path === 'live' ? sendMessage(runId, { text: message }) : continueRun(runId, { text: message })
       // The same recovery as the composer's (`deliver-prompt.ts`): a 409 says the record this
@@ -337,9 +343,11 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
         await deliver(attempted === 'live' ? 'continue' : 'live').catch(() => {
           throw error
         })
+      } finally {
+        store.inFlight = null
+        publish()
       }
       const now = Date.now()
-      const keys = new Set(batch.map((draft) => draft.key))
       store.sent = [
         ...store.sent,
         ...batch.map((draft) => ({
@@ -377,5 +385,7 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
   const note = useCallback((key: string) => notes.find((entry) => entry.key === key), [notes])
   const ready = notes.filter((entry) => entry.phase === 'draft' && entry.text.trim() !== '').length
 
-  return { notes, marks, note, addDraft, setText, markAdded, discard, ready, sendAll }
+  const sending = store.inFlight !== null
+
+  return { notes, marks, note, addDraft, setText, markAdded, discard, ready, sending, sendAll }
 }

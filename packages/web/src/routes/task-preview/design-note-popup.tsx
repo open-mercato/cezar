@@ -1,5 +1,4 @@
 import { MessageSquareIcon, SendIcon, Trash2Icon, XIcon } from 'lucide-react'
-import { useState } from 'react'
 
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -32,7 +31,7 @@ export function DesignNotePopup({
   onClose,
 }: {
   note: DesignNote
-  notes: Pick<DesignNotes, 'setText' | 'markAdded' | 'discard'>
+  notes: Pick<DesignNotes, 'setText' | 'markAdded' | 'discard' | 'sending'>
   /** Hide the popup. For a draft the host has already been told to discard it. */
   onClose: () => void
 }) {
@@ -111,6 +110,8 @@ export function DesignNotePopup({
             }
           }}
           placeholder="What should change here?"
+          // A batch on its way carries this text; an edit now would be lost to it.
+          readOnly={notes.sending}
           aria-label="Note for the agent"
           // The window appears because the user just pointed at something to talk about.
           autoFocus
@@ -126,7 +127,7 @@ export function DesignNotePopup({
       {isDraft ? (
         <div className="flex items-center justify-between gap-2">
           {note.added ? (
-            <Button type="button" variant="ghost" size="sm" className="text-soft-foreground hover:text-danger" onClick={remove}>
+            <Button type="button" variant="ghost" size="sm" className="text-soft-foreground hover:text-danger" disabled={notes.sending} onClick={remove}>
               <Trash2Icon aria-hidden="true" />
               Delete
             </Button>
@@ -146,19 +147,17 @@ export function DesignNotePopup({
  * The batch's send button (2026-10-24): notes are collected like line comments on the Changes tab
  * and go to the agent together, as one message, when the user says so.
  */
-export function DesignNotesTray({ notes }: { notes: Pick<DesignNotes, 'ready' | 'sendAll'> }) {
-  const [busy, setBusy] = useState(false)
+export function DesignNotesTray({ notes }: { notes: Pick<DesignNotes, 'ready' | 'sending' | 'sendAll'> }) {
+  // `sending` lives in the notes' store, so a tray remounted mid-send still knows it is busy.
+  const busy = notes.sending
   if (notes.ready === 0 && !busy) return null
 
   const send = async () => {
     if (busy) return
-    setBusy(true)
     try {
       await notes.sendAll()
     } catch (error) {
       toast(error instanceof Error && error.message ? error.message : 'Could not send the notes.', { tone: 'danger' })
-    } finally {
-      setBusy(false)
     }
   }
 

@@ -161,7 +161,12 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   physical key (a Mac reports ⌥D as `∂`), and from text fields too; never with ⌘/Ctrl (Ctrl+Alt
   is AltGr off a Mac). A key pressed inside the page reaches the cockpit only through the mirror's
   picker, which forwards it (`toggle`) — a directly framed page is another origin, so before the
-  first switch-on the key works only with the focus in the cockpit.
+  first switch-on the key works only with the focus in the cockpit. A forwarded `toggle` only ever
+  switches Design Mode OFF: the page's own script can post it too, and switching on takes the
+  user's own key or click in the cockpit. The key is reserved, never offered for a command, and
+  the cockpit's dialogs (`role="dialog"`) keep it. Ready notes are frozen while a batch is on its
+  way, so no edit is lost to it. A batch is headed `## Note n` per note, so a leading `/skill` is
+  expanded only for a single note.
 - **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.

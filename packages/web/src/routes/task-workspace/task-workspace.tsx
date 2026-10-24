@@ -681,7 +681,7 @@ function WorkspaceView({
               onPickElement={addDraft}
               designMarks={designMarks}
               onDesignEscape={escapeNote}
-              designTray={designNotes.ready > 0 ? <DesignNotesTray notes={designNotes} /> : null}
+              designTray={designNotes.ready > 0 || designNotes.sending ? <DesignNotesTray notes={designNotes} /> : null}
               renderEmpty={
                 terminalAllowed
                   ? (open) => (

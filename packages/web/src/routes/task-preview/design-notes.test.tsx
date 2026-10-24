@@ -201,6 +201,28 @@ describe('sending a note', () => {
     expect(result.current.ready).toBe(0)
   })
 
+  it('freezes the batch while it is on its way, so no edit is lost to it', async () => {
+    let land!: () => void
+    api.sendMessage.mockReturnValue(new Promise<void>((resolve) => (land = resolve)))
+    const { result } = notesWithDraft(run({ status: 'running' }))
+    let sent!: Promise<void>
+    act(() => {
+      sent = result.current.sendAll()
+    })
+    expect(result.current.sending).toBe(true)
+    act(() => {
+      result.current.setText('abc-1', 'lost?')
+      result.current.discard('abc-1')
+    })
+    expect(result.current.note('abc-1')).toMatchObject({ phase: 'draft', text: 'make it bigger' })
+    await act(async () => {
+      land()
+      await sent
+    })
+    expect(result.current.sending).toBe(false)
+    expect(result.current.note('abc-1')).toMatchObject({ phase: 'running', text: 'make it bigger' })
+  })
+
   it('numbers notes in the order they were sent', async () => {
     const { result } = notesWithDraft(run())
     await act(() => result.current.sendAll())
@@ -299,6 +321,12 @@ describe('notesMessage', () => {
     expect(notesMessage([one])).toBe(noteMessage(one))
     expect(notesMessage([one, { ...one, key: 'abc-2', text: 'red' }]).match(/^## Note \d$/gm)).toEqual(['## Note 1', '## Note 2'])
   })
+
+  it('refuses a batch over what one message can carry', () => {
+    const long = { key: 'abc-1', pick: PICK, text: 'x'.repeat(20_000) }
+    const batch = Array.from({ length: 6 }, (_, index) => ({ ...long, key: `abc-${index}` }))
+    expect(() => notesMessage(batch)).toThrow(/send fewer at once/)
+  })
 })
 
 describe('noteMessage', () => {
@@ -310,7 +338,7 @@ describe('noteMessage', () => {
 })
 
 describe('the note popup', () => {
-  const actions = () => ({ setText: vi.fn(), markAdded: vi.fn(), discard: vi.fn() })
+  const actions = () => ({ setText: vi.fn(), markAdded: vi.fn(), discard: vi.fn(), sending: false })
   const note = (over: Partial<DesignNote>): DesignNote => ({ key: 'abc-1', pick: PICK, text: 'make it bigger', phase: 'draft', ...over })
 
   it('names the element, takes the prompt, and adds it on Ctrl+Enter', () => {
@@ -368,14 +396,14 @@ describe('the note popup', () => {
 
   it('the tray sends the batch, and says why when it fails', async () => {
     const sendAll = vi.fn(async () => {})
-    const { rerender } = render(<DesignNotesTray notes={{ ready: 2, sendAll }} />)
+    const { rerender } = render(<DesignNotesTray notes={{ ready: 2, sending: false, sendAll }} />)
     expect(document.querySelector('[data-slot=design-notes-tray]')!.textContent).toContain('2 notes')
     fireEvent.click(screen.getByRole('button', { name: 'Send to agent' }))
     await waitFor(() => expect(sendAll).toHaveBeenCalledTimes(1))
     sendAll.mockRejectedValueOnce(new Error('provider disconnected'))
     fireEvent.click(await screen.findByRole('button', { name: 'Send to agent' }))
     await waitFor(() => expect(toast).toHaveBeenCalledWith('provider disconnected', { tone: 'danger' }))
-    rerender(<DesignNotesTray notes={{ ready: 0, sendAll }} />)
+    rerender(<DesignNotesTray notes={{ ready: 0, sending: false, sendAll }} />)
     expect(document.querySelector('[data-slot=design-notes-tray]')).toBeNull()
   })
 

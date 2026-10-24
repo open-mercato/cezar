@@ -221,8 +221,8 @@ export function BrowserView({
     if (!designOffered) return
     const onKey = (event: KeyboardEvent) => {
       if (event.repeat || event.defaultPrevented || !isDesignKey(event)) return
-      // A modal owns the keyboard; the note popup (not modal) does not.
-      if (document.querySelector('[aria-modal="true"], [role="alertdialog"]')) return
+      // A dialog owns the keyboard (Radix sets no `aria-modal`); the note popup does not.
+      if (document.querySelector('[role="dialog"]:not([data-slot="browser-design-note"]), [role="alertdialog"]')) return
       // Swallowed only when it switched something: unavailable, ⌥D still types its `∂`.
       if (toggleDesign.current()) event.preventDefault()
     }
@@ -370,7 +370,9 @@ export function BrowserView({
       } | null
       if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
       if (data.type === 'ready') setPickerReady(true)
-      else if (data.type === 'toggle') toggleDesign.current()
+      // Only ever OFF from the page: its own script could post this too, and switching Design
+      // Mode on takes the user's own action (spec §7a).
+      else if (data.type === 'toggle') setDesign(false)
       else if (data.type === 'cancel') {
         // Esc in the page: with a note open it closes that note (the host discards a draft);
         // with none it leaves Design Mode.

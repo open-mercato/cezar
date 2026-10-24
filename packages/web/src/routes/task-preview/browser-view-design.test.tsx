@@ -146,6 +146,24 @@ describe('the Design Mode toggle', () => {
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('never switches on from the page — its own script could post the toggle', async () => {
+    renderView()
+    await enterDesignMode()
+    fireEvent.click(toggle())
+    deliver({ source: 'cezar-design', type: 'toggle' }, MIRROR, frame().contentWindow)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('leaves ⌥D to an open dialog (Radix sets no aria-modal)', () => {
+    renderView()
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    onTestFinished(() => dialog.remove())
+    expect(fireEvent.keyDown(window, { code: 'KeyD', key: '∂', altKey: true })).toBe(true)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('is disabled, with the reason, for an address that cannot be mirrored', () => {
     renderView(undefined, 'https://github.com/')
     expect((toggle() as HTMLButtonElement).disabled).toBe(true)
