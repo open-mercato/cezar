@@ -177,6 +177,31 @@ describe('runtime provider authentication failures', () => {
   ])('classifies %s as definitive: %s', (message, definitive) => {
     expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
   });
+
+  // The real telemetry messages (spec 2026-10-24 item 2), as the runners emit them.
+  it.each([
+    ['bca23063', 'Not logged in · Please run /login', false],
+    ['1e673dee', "cursor agent exited with code 1 — Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.", false],
+    ['e41761a1', 'Upstream request failed: Invalid credential', false],
+    ['75ae746c', 'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access', true],
+    ['c65a5ac5', 'API Error: 400 Identity verification is required to continue.', true],
+  ])('latches the vendor auth failure from %s', (_group, message, definitive) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(true);
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(definitive);
+  });
+
+  it.each([
+    'add a test for the not-logged-in banner',
+    'show the not logged in banner when the session expires',
+    'the page says Not logged in until the user clicks Sign in',
+    'Authentication required for the /admin route — added middleware',
+    'handle invalid credentials gracefully in the login form',
+    'returns 403 when credentials are invalid for the admin route',
+    'documented that identity verification is required for payouts',
+  ])('does not latch on agent prose about logins: %s', (message) => {
+    expect(isRuntimeProviderAuthFailure(message)).toBe(false);
+    expect(isDefinitiveProviderAuthFailure(message)).toBe(false);
+  });
 });
 
 describe('provider auth parsers', () => {
