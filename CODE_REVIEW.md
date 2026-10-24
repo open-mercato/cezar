@@ -31,6 +31,7 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 - Missing or malformed `.ai/cezar/config.json` behaves exactly like the defaults and never blocks startup (`packages/cezar/src/config.ts`).
 - git helpers in `packages/cezar/src/git-worktree.ts` never throw (except `createWorktree`); check the diff keeps that contract.
 - `CEZ_DRY_RUN=1` paths must still work after the change — that is the offline demo and the de-facto integration test.
+- A stale-while-revalidate cache needs a staleness CEILING as well as a TTL. The TTL decides when a revalidation is kicked off; it bounds nothing on its own, because that refresh is fire-and-forget and a background process has no periodic reader. Past the ceiling the read must wait for the recompute — `createHostProbeCache` takes both, and the health cache's `HEALTH_MAX_STALE_MS` is the worked example.
 
 ### Security
 
