@@ -1,0 +1,77 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect your phone — ntfy receivers mockup</title><style>:root{--background:#0d0d0d;--foreground:#fff;--card:#171717;--card-2:#1c1c1c;--muted:#262626;--muted-foreground:#a3a3a3;--soft-foreground:#7b7b7b;--border:#262626;--primary:#a8f372;--primary-foreground:#0d0d0d;--danger:#ef4444;--success:#10b981;--pending:#fbbf24;--info:#93c5fd;--violet:#8f86e8;--note-bg:#1f1b2e;--note-border:#8f86e8;--warn-bg:#2a2210;--warn-border:#fbbf24;--shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);--sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font:14px/1.55 var(--sans);padding:28px}
+code,.mono{font-family:var(--mono);font-size:12.5px}
+.tag{display:inline-block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--soft-foreground);margin-bottom:6px}
+h1{font-size:20px;margin:0 0 4px}
+.lead{color:var(--muted-foreground);margin:0 0 18px;max-width:880px}
+.frame{border:1px solid var(--border);border-radius:16px;overflow:hidden;box-shadow:var(--shadow-modal);background:var(--background)}
+.app{display:grid;grid-template-columns:200px 1fr;min-height:560px}
+.side{background:var(--card);border-right:1px solid var(--border);padding:14px 10px;font-size:13px}
+.side .grp{color:var(--soft-foreground);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin:14px 8px 6px}
+.side .it{padding:6px 10px;border-radius:8px;color:var(--muted-foreground)}
+.side .it.on{background:var(--muted);color:var(--foreground);font-weight:500}
+.overlay{background:rgba(0,0,0,.55);padding:24px;display:flex;justify-content:center;align-items:flex-start}
+.dialog{background:var(--card);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-modal);width:100%;max-width:860px}
+.dh{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.dh b{font-size:16px}.dh .x{margin-left:auto;color:var(--muted-foreground)}
+.db{padding:16px 20px;display:grid;grid-template-columns:1fr 300px;gap:22px}
+.df{padding:12px 20px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.df .hint{margin-right:auto;color:var(--muted-foreground);font-size:12.5px}
+label.l{display:block;font-weight:600;font-size:13px;margin:12px 0 6px}
+label.l:first-child{margin-top:0}
+.seg{display:flex;gap:6px;flex-wrap:wrap}
+.seg span{border:1px solid var(--border);border-radius:10px;padding:5px 11px;font-size:13px;color:var(--muted-foreground)}
+.seg span.on{border-color:var(--primary);color:var(--foreground);background:color-mix(in srgb,var(--primary) 10%,transparent)}
+.input{border:1px solid var(--border);border-radius:10px;padding:7px 10px;background:var(--card-2);font-family:var(--mono);font-size:12.5px;color:var(--foreground)}
+.small{color:var(--muted-foreground);font-size:12.5px;margin-top:5px}
+.radio{display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:13px}
+.radio i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--soft-foreground);flex:none;margin-top:3px}
+.radio i.on{border-color:var(--primary);box-shadow:inset 0 0 0 3px var(--card),inset 0 0 0 8px var(--primary)}
+.check{display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:13px}
+.check i{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--soft-foreground);flex:none;margin-top:3px}
+.check i.on{background:var(--primary);border-color:var(--primary)}
+.new{font-size:10.5px;color:var(--violet);border:1px solid var(--violet);border-radius:999px;padding:0 6px;margin-left:6px}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--border);background:var(--card);color:var(--foreground);border-radius:10px;padding:6px 12px;font-size:13px;font-weight:500;white-space:nowrap}
+.btn.primary{background:var(--primary);color:var(--primary-foreground);border-color:transparent}
+.btn.dis{opacity:.45}
+.warn{border:1px solid var(--warn-border);background:var(--warn-bg);border-radius:10px;padding:8px 11px;font-size:12.5px;margin-top:10px}
+.note{border-left:3px solid var(--note-border);background:var(--note-bg);border-radius:8px;padding:8px 11px;font-size:12.5px;margin-top:10px}
+.phone{background:#000;border:1px solid #333;border-radius:28px;padding:14px 12px 18px;min-height:260px}
+.phone .clock{text-align:center;color:#fff;font-size:34px;font-weight:300;margin:6px 0 10px}
+.ntf{background:rgba(60,60,64,.85);border-radius:14px;padding:9px 11px;margin:7px 0;color:#fff;font-size:12.5px}
+.ntf .app{display:flex;gap:6px;align-items:center;color:#c7c7cc;font-size:11px;min-height:0;grid-template-columns:none}
+.ntf .ic{width:16px;height:16px;border-radius:4px;background:#317f6f;display:inline-flex;align-items:center;justify-content:center;font-size:9px;color:#fff;font-weight:700}
+.ntf .t{font-weight:600;margin-top:2px}
+.ntf .m{color:#e5e5ea}
+.ntf .when{margin-left:auto}
+.caption{color:var(--muted-foreground);font-size:12.5px;margin:12px 2px 0;max-width:880px}
+</style></head><body><div class="tag">Proposed · phase 1</div>
+<h1>Connect your phone</h1>
+<p class="lead">Shown once after Save; the receiver stays inactive until you activate it. Closing the panel hides the code — lose it and you create a new topic.</p>
+<div class="frame"><div class="app">
+<div class="side"><div class="grp">Project · customer-api</div><div class="it">General</div><div class="it">Workflows</div><div class="it">Automations</div><div class="it on">Webhooks</div><div class="grp">Workspace</div><div class="it">Notifications</div></div>
+<div class="overlay"><div class="dialog">
+<div class="dh"><b>Connect your phone</b><span class="small" style="margin:0">My phone · ntfy.sh</span><span class="x">✕</span></div>
+<div class="db" style="grid-template-columns:240px 1fr">
+<div><div id="qr" style="background:#fff;padding:12px;border-radius:12px;width:220px;height:220px"></div>
+<div class="small" style="text-align:center">QR: <code>ntfy://ntfy.sh/cezar-7Qm2…?display=cezar · customer-api</code></div></div>
+<div>
+<label class="l">1. Install ntfy</label><div class="seg"><span>App Store</span><span>Google Play</span><span>F-Droid</span></div>
+<label class="l">2. Scan this code</label><div class="small" style="margin-top:0">With the phone's camera or the ntfy app. On Android it subscribes in one tap.</div>
+<label class="l">Or copy the topic</label><div style="display:flex;gap:8px;align-items:center"><div class="input">https://ntfy.sh/cezar-7Qm2xR8kLp0vYt3nB6wHq</div><span class="btn">Copy</span></div>
+<div class="note">Using this phone for another project? Choose <b>Use a topic you already subscribed to</b> there and paste this URL — no second scan.</div>
+<label class="l">3. Send a test, then activate</label>
+<div style="display:flex;gap:8px;align-items:center"><span class="btn">Send test</span><span class="btn primary">Activate</span><span class="small" style="margin:0">Send a test first to check your phone buzzes.</span></div>
+<div class="warn">Anyone who knows this topic, and the operators of ntfy.sh, can read these notifications.</div>
+</div></div>
+<div class="df"><span class="hint">Closing hides the code. Lost it? Edit the receiver and create a new topic.</span><span class="btn">Done</span></div>
+</div></div></div></div>
+<p class="caption">Illustrative mockup — the QR pattern is decorative, not a real code. On a phone-width cockpit the panel leads with Copy, since you cannot scan your own screen.</p>
+<script>
+(function(){var n=29,s=196/n,c=document.getElementById('qr'),svg='<svg width="196" height="196" xmlns="http://www.w3.org/2000/svg">';var seed=7;function r(){seed=(seed*16807)%2147483647;return seed/2147483647}
+function finder(x,y){svg+='<rect x="'+x*s+'" y="'+y*s+'" width="'+7*s+'" height="'+7*s+'" fill="#000"/><rect x="'+(x+1)*s+'" y="'+(y+1)*s+'" width="'+5*s+'" height="'+5*s+'" fill="#fff"/><rect x="'+(x+2)*s+'" y="'+(y+2)*s+'" width="'+3*s+'" height="'+3*s+'" fill="#000"/>'}
+for(var y=0;y<n;y++)for(var x=0;x<n;x++){var f=(x<8&&y<8)||(x>n-9&&y<8)||(x<8&&y>n-9);if(!f&&r()>.52)svg+='<rect x="'+x*s+'" y="'+y*s+'" width="'+s+'" height="'+s+'" fill="#000"/>'}
+finder(0,0);finder(n-7,0);finder(0,n-7);c.innerHTML=svg+'</svg>'})();
+</script>
+</body></html>
