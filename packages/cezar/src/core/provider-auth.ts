@@ -195,6 +195,17 @@ const INTERRUPTED_HINT = 'Authentication check was interrupted. Try again.';
 const RUNTIME_AUTH_HINT =
   'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
+ *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
+ *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
+ *  "another process is refreshing" variant is transient and deliberately not matched. An account
+ *  policy or a vendor-side verification is just as invisible to the status probe (75ae746c, c65a5ac5). */
+const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
+  /\boauth session expired and could not be refreshed\b/i,
+  /\brefresh token is no longer valid\b/i,
+  /\bhas disabled claude subscription access\b/i,
+  /\bidentity verification is required to continue\b/i,
+] as const;
 const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:failed to authenticate|authentication failed|unauthenticated|unauthorized)\b/i,
   /\bproviderautherror\b/i,
@@ -202,6 +213,13 @@ const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
   /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
   /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+  // The CLI's own sign-in instruction, not prose about a login screen: Claude's "Not logged in ·
+  // Please run /login" (bca23063), Cursor's "Authentication required. Please run 'agent login'
+  // first" (1e673dee).
+  /\b(?:not logged in|authentication required)\b[\s.,:;·—-]{1,6}please run\b[^\n]{0,30}\blogin\b/i,
+  // OpenCode's provider-key rejection as the whole line or after a label (e41761a1).
+  /(?:^|:)\s*invalid credentials?\s*[.!]?\s*$/im,
+  ...DEFINITIVE_AUTH_FAILURE_PATTERNS,
 ] as const;
 const RUNTIME_API_KEY_FAILURE_PATTERNS = [
   // Vendor-shaped errors can carry a process prefix before the actual
@@ -218,15 +236,6 @@ export function isRuntimeProviderAuthFailure(message: string): boolean {
   return [...RUNTIME_AUTH_FAILURE_PATTERNS, ...RUNTIME_API_KEY_FAILURE_PATTERNS]
     .some((pattern) => pattern.test(message));
 }
-
-/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
- *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
- *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
- *  "another process is refreshing" variant is transient and deliberately not matched. */
-const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
-  /\boauth session expired and could not be refreshed\b/i,
-  /\brefresh token is no longer valid\b/i,
-] as const;
 
 export function isDefinitiveProviderAuthFailure(message: string): boolean {
   return DEFINITIVE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));

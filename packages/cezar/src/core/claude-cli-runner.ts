@@ -17,6 +17,7 @@ import type {
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
@@ -587,8 +588,9 @@ function handleClaudeMessage(
     if (msg.is_error) {
       ctx.onEvent?.({
         type: 'error',
+        // `API Error: 400 [400]: {"error":{…}}` from a gateway reads as its type and message (eb4b12dc).
         message: typeof msg.result === 'string' && msg.result.trim() !== ''
-          ? msg.result
+          ? unwrapJsonErrorEnvelope(msg.result)
           : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
       });
     }
