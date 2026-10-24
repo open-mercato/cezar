@@ -120,11 +120,12 @@ the repo: per-project state stays exactly where it was, in that repo's
 **Your first run registers the repo you start it in** — that is the whole setup.
 After that the registry is yours to curate: starting cezar somewhere else serves
 that folder as usual (its own tasks, its own `.ai/cezar/`, reachable at
-`/p/<slug>/`) but neither adds it to the list nor shows it there — a launch
-folder is where you opened the cockpit from, not a project, so the sidebar keeps
-showing the projects you chose and a bare `/` opens the most recent of them.
-Keeping the folder is the explicit click: **Settings → Add project** (or
-`cezar projects add` from a terminal).
+`/p/<slug>/`) and opens the browser on it, but does not add it to the list. While
+you are in it the sidebar shows it marked **not saved**; switch to another project
+and it drops out, so the sidebar keeps showing the projects you chose. A bare `/`
+opens the page you were last on, or the most recent project. Keeping the folder is
+the explicit click: **Add project** in its Settings (or `cezar projects add` from
+a terminal).
 
 Project views are scoped to their repository; **Dashboard** at `/dashboard`, **All tasks**, and global settings span the workspace:
 

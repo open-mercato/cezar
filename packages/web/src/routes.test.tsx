@@ -729,6 +729,16 @@ describe('the /p/default alias', () => {
     expect(currentPathname()).toBe(`/p/${BOOT}/`)
   })
 
+  it('opens an unregistered launch folder even when this browser remembers another project (#1432)', () => {
+    // `serve` opens /p/default/: neither the remembered page nor the registry's lead row may win.
+    rememberLocation({ projectId: 'other', pathname: '/p/other/tasks/x' })
+    renderAt('/p/default/', {
+      registry: { ...REGISTRY, projects: REGISTRY.projects.filter((project) => project.id !== BOOT) },
+    })
+    expect(routeName()).toBe('tasks')
+    expect(currentPathname()).toBe(`/p/${BOOT}/`)
+  })
+
   it('a registry error still resolves the alias via health instead of loading forever', async () => {
     // `/api/v1/projects` down, `/api/v1/health` already answered (it names the same boot slug): the
     // alias must not park on the quiet resolving screen for good — health is the fallback.

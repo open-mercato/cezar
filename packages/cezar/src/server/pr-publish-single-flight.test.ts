@@ -58,7 +58,11 @@ describe('POST /runs/:id/pr is single-flight per run', () => {
 
     const first = post(run.id);
     await vi.waitFor(() => expect(createDraftPr).toHaveBeenCalledTimes(1));
+    // The handler reads the run and joins the running publish in one synchronous stretch, so once
+    // the second request has read the run it has joined. Finishing earlier races its middleware.
+    const getRun = vi.spyOn(store, 'getRun');
     const second = post(run.id);
+    await vi.waitFor(() => expect(getRun).toHaveBeenCalledWith(run.id));
     finish({ ok: true, url: 'https://github.com/acme/demo/pull/9', dryRun: false });
 
     const [a, b] = await Promise.all([first, second]);

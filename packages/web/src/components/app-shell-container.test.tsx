@@ -407,6 +407,50 @@ describe('sidebar wiring', () => {
     expect(repoChip()).toBeNull()
   })
 
+  it('lists the unregistered launch folder while it is the project on screen (#1432)', async () => {
+    // The registry leaves the launch folder out once it holds other projects (#1057); `serve`
+    // still opens the cockpit there, so the shell names it as a "not saved" group.
+    const others = [
+      { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
+      { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
+    ]
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: others, bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+    })
+    renderShell('/p/cezar/')
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(3),
+    )
+    const header = document.querySelector('[data-slot="project-group-header"][aria-current="true"]')
+    expect(header?.textContent).toContain('cezar')
+    expect(header?.querySelector('[data-slot="project-unregistered"]')?.textContent).toBe('not saved')
+    expect(header?.querySelector('[data-slot="project-branch"]')?.textContent).toBe('feat/cockpit')
+  })
+
+  it('leaves the unregistered launch folder out while another project is on screen', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [
+          { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
+          { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
+        ],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+    })
+    renderShell('/p/shop/')
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+    )
+    expect(document.querySelector('[data-slot="project-unregistered"]')).toBeNull()
+  })
+
   it('does not write a non-boot project run list into the boot cache key', async () => {
     const bootRun = run({ id: 'boot-run', titleSummary: 'Boot task' })
     const shopRun = run({ id: 'shop-run', titleSummary: 'Shop task' })
