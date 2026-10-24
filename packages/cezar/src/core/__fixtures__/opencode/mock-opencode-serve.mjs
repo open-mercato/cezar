@@ -21,7 +21,8 @@
 //   `#drop-then-die` destroy the message POST's socket AND then close the event
 //                 bus: the drop was real, and the runner has to say so.
 //   `#retry-limit` hold the POST open and report a `session.status` retry with a
-//                 spent-quota `action` and `next` hours away, as a spent free tier does.
+//                 spent-quota `action` and `next` hours away (`MOCK_RETRY_NEXT` pins it),
+//                 as a spent free tier does.
 //   `#retry-soon` report a retry due in 1 s with no `action`, then finish normally.
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
@@ -188,7 +189,7 @@ const server = createServer((req, res) => {
         retryStatus({
           message: 'Free usage exceeded, subscribe to Go',
           action: { reason: 'free_tier_limit', provider: 'opencode', title: 'Free limit reached', message: 'Subscribe', label: 'subscribe' },
-          next: Date.now() + 3 * 60 * 60_000,
+          next: Number(process.env.MOCK_RETRY_NEXT) || Date.now() + 3 * 60 * 60_000,
         });
         return; // the POST stays open, like the real server's retry loop
       }

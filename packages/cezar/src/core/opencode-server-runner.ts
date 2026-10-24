@@ -68,7 +68,8 @@ export const TURN_IDLE_GRACE_MS = 5_000;
 /**
  * A `session.status` retry scheduled further out than this ends the turn as an error. OpenCode
  * retries a refused prompt silently on its own schedule — a spent free tier until the next day —
- * and an interactive step has no wall clock, so four runs held their slots for 11 h.
+ * and an interactive step has no wall clock, so four runs held their slots for 11 h. A duration,
+ * not a clock time: `next` is an epoch instant, so the resume it books is zone-independent.
  */
 export const RETRY_GIVE_UP_MS = 10 * 60_000;
 

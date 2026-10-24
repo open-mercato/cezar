@@ -14,7 +14,6 @@ import {
   OpencodeServerRunner,
   SERVER_PORT_ATTEMPTS,
   SERVER_START_MAX_MS,
-  RETRY_GIVE_UP_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
   unsupportedServerMessage,
@@ -690,8 +689,10 @@ describe('a session.status retry the turn cannot outwait', () => {
 
   it('fails a quota retry with a message that books the usage-limit resume', async () => {
     const events: AgentEvent[] = [];
+    // `next` is an epoch instant; the resume must land on exactly it, whatever the host's zone.
+    const next = Date.now() + 3 * 60 * 60_000 + 123;
     const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
-      { userPrompt: 'do it #retry-limit', cwd: process.cwd() },
+      { userPrompt: 'do it #retry-limit', cwd: process.cwd(), env: { MOCK_RETRY_NEXT: String(next) } },
       (e) => events.push(e),
       {},
     );
@@ -699,8 +700,7 @@ describe('a session.status retry the turn cannot outwait', () => {
 
     const [error] = errors(events);
     expect(error).toMatch(/^opencode: usage limit reached: Free usage exceeded, subscribe to Go — retry at /);
-    const hit = parseUsageLimit(error);
-    expect(hit?.resetAt.getTime()).toBeGreaterThan(Date.now() + RETRY_GIVE_UP_MS);
+    expect(parseUsageLimit(error)).toEqual({ resetAt: new Date(next), evidence: 'timestamp' });
     expect(events.at(-1)?.type).toBe('done');
   }, 30_000);
 
