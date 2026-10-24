@@ -158,17 +158,8 @@ export class ScheduleRunner {
     const { store } = this.handle;
     if (!this.handle.launch) {
       store.appendReceipt({ ...receipt, status: 'launch-error', error: 'This cockpit cannot launch tasks.', updatedAt: new Date(now).toISOString() });
-<<<<<<< HEAD
       if (options.advance) this.advance(definition, Date.parse(occurrence.at), now);
-      return { result: 'detection-only', occurrenceAt: occurrence.at };
-=======
-      if (options.advance) {
-        this.advance(definition, Date.parse(occurrence.at), now);
-        // The `launch-error` receipt stays retryable from the log, as for a failed launch.
-        this.retireOnce(definition);
-      }
       return { result: 'detection-only', occurrenceAt: occurrence.at, reason: 'This cockpit cannot launch tasks.' };
->>>>>>> 9f4c132 (fix(cockpit): fix toast bugs and stop reporting expected outcomes as errors (#1662))
     }
     const started = Date.now();
     const result: AutomationLogRecord['result'] = occurrence.trigger === 'schedule' ? 'launched' : occurrence.trigger;
