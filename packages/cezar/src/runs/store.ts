@@ -332,6 +332,26 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Why the pending (or in-flight) automatic resume exists. Absent = a usage limit, the only
+   *  kind that holds its account; `transient` = a vendor/network blip being retried (spec
+   *  2026-10-24-agent-cli-error-cooperation), which holds nothing. */
+  autoResumeReason: z.enum(['transient']).optional().catch(undefined),
+  /**
+   * A Continue the engine accepted while the settled run was still tearing down (`continueOnDrop`,
+   * telemetry 77117b95), mirrored here so a restart inside that window starts it instead of losing
+   * it. Images are already persisted attachments (URLs). Cleared when the engine hands it to the
+   * ordinary Continue path — at the drop, or by `recover()`. Additive and optional.
+   */
+  pendingContinue: z
+    .object({
+      text: z.string().optional(),
+      images: z.array(z.string()).optional(),
+      runner: storedRunnerSchema.optional(),
+      model: z.string().optional(),
+      agentProfile: z.string().optional(),
+    })
+    .optional()
+    .catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -581,6 +601,13 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+  run.autoResumeReason = undefined;
+}
+
+/** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
+function isAccessDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
 }
 
 /**
@@ -1146,7 +1173,7 @@ export class RunStore extends EventEmitter {
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
-  /** `open` could not create `runs/`: events stay live-only instead of failing every run. */
+  /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */
   private eventsUnwritable = false;
 
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
@@ -1615,10 +1642,20 @@ export class RunStore extends EventEmitter {
   private persistEvent(runId: string, event: RunEvent): void {
     const line = `${JSON.stringify(event)}\n`;
     if (!this.eventsUnwritable) {
-      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      try {
+        appendFileSync(this.eventsPath(runId), line, 'utf8');
+      } catch (err) {
+        // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
+        // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
+        // else — a removed project's ENOENT (#1105) — still throws.
+        if (!isAccessDenied(err)) throw err;
+        this.eventsUnwritable = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[cez] cannot write task history (${message}); events stay live-only until it is writable again`);
+      }
       return;
     }
-    // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    // Degraded (already warned): retry, so access granted mid-session starts persisting.
     try {
       mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
       appendFileSync(this.eventsPath(runId), line, 'utf8');

@@ -299,6 +299,22 @@ async function respond(userText, imageCount) {
     return;
   }
 
+  // `mock:overloaded` → Claude Code's own give-up after its internal retries on a 529 (76aa46a9),
+  // so the transient auto-retry (spec 2026-10-24-agent-cli-error-cooperation) is reachable dry.
+  // CEZ_MOCK_ERROR_RESULT=<text> makes EVERY turn end on that error text — retries included.
+  if (userText.includes('mock:overloaded') || process.env.CEZ_MOCK_ERROR_RESULT) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: process.env.CEZ_MOCK_ERROR_RESULT
+        || 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
   // `mock:md` → answer with a markdown-rich reply (#346 QA: tables, nested
   // lists, emphasis, fences, quotes) instead of the scripted turn.
   if (userText.includes('mock:md')) {

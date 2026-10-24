@@ -117,6 +117,16 @@ describe('reportAgentError', () => {
     expect(reported()).toEqual([]);
   });
 
+  it.each([
+    'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+    'No response from API (waited 3m)',
+    'Selected model is at capacity. Please try a different model.',
+    'Failed to refresh OAuth token: another Claude Code process is refreshing it',
+  ])('skips a transient vendor error the engine retries — nothing in cezar to fix: %s', (message) => {
+    reportAgentError('claude', { type: 'session.error', message });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
   it('reports a usage limit with no readable reset under one code — a parser gap to close', () => {
     reportAgentError('codex', { type: 'error', message: 'You have hit your usage limit. Upgrade to continue.' });
     expect(reported()[0]?.message).toBe('codex: You have hit your usage limit. Upgrade to continue.');
@@ -124,7 +134,7 @@ describe('reportAgentError', () => {
   });
 
   it('gives an ordinary agent error no code, so it keeps grouping by its own message', () => {
-    reportAgentError('claude', { type: 'error', message: 'API Error: 529 Overloaded' });
+    reportAgentError('claude', { type: 'error', message: 'Request too large (max 32MB).' });
     expect(vi.mocked(reportError).mock.calls[0]?.[2]).toEqual({});
   });
 });

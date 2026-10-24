@@ -4,6 +4,7 @@ import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
+import { providersRequiredByWorkflow, recordedProfileFor } from '../server/provider-action-gate.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,6 +29,7 @@ import {
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
+import { isTransientAgentError } from '../core/transient-error.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -481,6 +483,28 @@ export function repositoryRootLockDisabled(env: NodeJS.ProcessEnv = process.env)
 const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
   'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
+const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
+
+/** `providerActionError`'s shape (server/provider-action-gate.ts): why a launch on `required`
+ *  cannot start, or null. */
+export type ProviderGate = (
+  required: readonly RunnerId[],
+  scope: { repoRoot?: string; profileFor?: (provider: RunnerId) => string | undefined },
+) => Promise<string | null>;
+
+interface ContinueRunOptions {
+  text?: string;
+  images?: PastedContent[];
+  runner?: RunnerId;
+  model?: string;
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
+   *  account the run is already on. */
+  agentProfile?: string;
+  /** Engine-internal: attachments already persisted (URLs) — a Continue made durable while the
+   *  run tore down (`RunRecord.pendingContinue`). Never re-persisted. */
+  persistedImageUrls?: string[];
+}
+
 interface ActiveRun {
   /** Identity of this async owner; stale promises must not mutate a replacement owner. */
   ownerToken: symbol;
@@ -509,6 +533,11 @@ interface ActiveRun {
   finishRequested?: boolean;
   /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
   acceptReviewOnDrop?: boolean;
+  /** The session is over and only teardown (the turn-end autosave) remains, so a record that
+   *  reads settled really is — a Continue then waits in `continueOnDrop` (telemetry 77117b95). */
+  turnSettled?: boolean;
+  /** A Continue accepted during that teardown; `dropActive` starts it once the run lets go. */
+  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean };
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -690,6 +719,18 @@ export const MAX_AUTO_RESUMES = 12;
  * note instead of fired, so the only tasks a sweep can revive are ones someone is still waiting on.
  */
 export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
+/**
+ * The waits before each automatic retry of a TRANSIENT agent failure — 529 overloaded, a stalled
+ * stream, a model at capacity (spec 2026-10-24-agent-cli-error-cooperation, Improvement 1). The
+ * CLI has already retried internally, so the first wait is minutes, not seconds. Indexed by the
+ * run's shared `autoResumeAttempts`, whose length is also the cap: retries and usage-limit resumes
+ * count against one counter, reset by the same completed or human turn, so they cannot ping-pong.
+ */
+export const TRANSIENT_RETRY_DELAYS_MS = [2 * 60_000, 6 * 60_000] as const;
+export const MAX_TRANSIENT_RETRIES = TRANSIENT_RETRY_DELAYS_MS.length;
+/** A retry promised "in two minutes" that a restart or a closed laptop missed by more than this is
+ *  stale: the user has moved on, so it is retired with a note instead of fired. */
+export const TRANSIENT_RETRY_MISSED_WINDOW_MS = 60 * 60_000;
 
 /**
  * How often the queue checks that it is not wedged.
@@ -715,7 +756,7 @@ const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
  *    it blocks fresh work but not other resumes. Blocking those deadlocked a live workspace.
  */
 function accountHeldFor(
-  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts'>,
+  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts' | 'autoResumeReason'>,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
 ): boolean {
@@ -786,6 +827,8 @@ function deferredBindingActive(run: Pick<RunRecord, 'id' | 'deferredBinding' | '
 
 const AUTO_RESUME_PROMPT =
   'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+const TRANSIENT_RETRY_PROMPT =
+  'Your previous turn stopped on a temporary provider or network error. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 /**
  * The wake instant as a human reads it — local, to the SECOND, with the zone named. The
  * transcript line is what someone scanning a stalled task actually reads, and "18:41" is not
@@ -1151,6 +1194,8 @@ interface PendingContinuation {
   /** Attachments the user pasted into the follow-up composer — images to view, files (#950) to
    *  be given the path of. Persisted when the continuation actually opens, not here. */
   images: PastedContent[];
+  /** Attachments persisted before the continuation was queued (`ContinueRunOptions.persistedImageUrls`). */
+  persistedImageUrls?: string[];
 }
 
 /** What re-reading a message's persisted attachments yields: viewable blocks for the images, and
@@ -1305,6 +1350,9 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
 
+  /** See the constructor option of the same name. */
+  private readonly providerGate: ProviderGate | undefined;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
@@ -1323,12 +1371,20 @@ export class RunManager {
       /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
        *  Tests shorten it; the default is the slow-model budget. */
       branchNameWaitMs?: number;
+      /**
+       * The pre-launch provider gate the HTTP routes apply (`providerActionError`), asked again
+       * before every engine spawn — dequeue, restart recovery, auto-resume (spec
+       * 2026-10-24-agent-cli-error-cooperation item 3, bca23063). Absent (headless `cezar run`,
+       * tests) = no gate.
+       */
+      providerGate?: ProviderGate;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
+    this.providerGate = options.providerGate;
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
@@ -2107,6 +2163,28 @@ export class RunManager {
       0,
       'left running by a settled task (found at startup)',
     );
+    // A Continue accepted while a settled run tore down, then lost with the process before the
+    // drop started it (`continueOnDrop`). Queued like the other recovered work, so caps apply —
+    // and judged BEFORE the sweep below, which can move a live record onto a continuable status.
+    for (const run of this.store.listRuns()) {
+      const pending = run.pendingContinue;
+      if (!pending) continue;
+      this.store.updateRun(run.id, { pendingContinue: undefined });
+      if (!CONTINUABLE_STATUSES.includes(run.status)) continue;
+      const resumed = this.continueRun(run.id, {
+        ...(pending.text !== undefined ? { text: pending.text } : {}),
+        ...(pending.images?.length ? { persistedImageUrls: pending.images } : {}),
+        ...(pending.runner !== undefined ? { runner: pending.runner } : {}),
+        ...(pending.model !== undefined ? { model: pending.model } : {}),
+        ...(pending.agentProfile !== undefined ? { agentProfile: pending.agentProfile } : {}),
+      }, true);
+      this.store.appendEvent(run.id, {
+        type: 'lifecycle',
+        message: resumed.ok
+          ? 'cezar restarted — starting the Continue sent while the task was finishing'
+          : `cezar restarted — the Continue sent while the task was finishing could not start (${resumed.error ?? 'unknown'})`,
+      });
+    }
     for (const run of live) {
       if (this.lifecycle.isBlocked(run.id)) {
         this.store.updateRun(run.id, {status: 'waiting', error: 'Worktree scripts need an explicit recovery action'});
@@ -2309,7 +2387,11 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
-    const acceptReview = state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
+    const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
+    // Handed to `continueRun` below, or dropped by a cancel — either way the durable copy is spent.
+    if (state?.continueOnDrop) this.store.updateRun(runId, { pendingContinue: undefined });
+    // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
+    const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
     // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
     // the tree is released below, through the same path as Finish on a settled review.
     const landOnAccept = acceptReview && this.store.getRun(runId)?.worktree === false;
@@ -2345,6 +2427,7 @@ export class RunManager {
     // left a window — measured as exactly one extra task — where the queue saw a free slot and
     // an account that looked healthy, and started work that was already doomed.
     this.scheduleAutoResumeIfLimited(runId);
+    this.scheduleTransientRetry(runId);
     // A settled CHILD owes its parent a report (spec 2026-09-10-dispatch §Engine — the settle
     // ladder). Here for the same reason the two hooks above are: every terminal transition funnels
     // through this one method, and a parent parked on `monitoring` has no other way to learn that
@@ -2366,6 +2449,13 @@ export class RunManager {
     removeAgentTmpDir(this.dataDir, runId);
     // Whatever the task started and left running (#1411) — same single terminal hook.
     this.reapLeftoverProcesses([runId], LEFTOVER_SETTLE_GRACE_MS, 'still running after the task settled');
+    // Last, so the Continue starts from exactly the state a Continue posted just after the drop would.
+    if (queuedContinue) {
+      const resumed = this.continueRun(runId, queuedContinue.opts, queuedContinue.deferForCapacity);
+      if (!resumed.ok) {
+        this.store.appendEvent(runId, { type: 'lifecycle', message: `continue could not start — ${resumed.error}` });
+      }
+    }
   }
 
   /** Is this run settled and not owned by a session again (a Continue inside the grace)? */
@@ -2986,16 +3076,47 @@ export class RunManager {
       return;
     }
     const wakeAt = new Date(limit.resetAt.getTime() + AUTO_RESUME_GRACE_MS);
-    this.armAutoResume(runId, wakeAt.getTime());
+    this.armAutoResume(runId, wakeAt.getTime(), undefined);
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: `usage limit reached — resuming automatically at ${formatWakeInstant(wakeAt)}`,
     });
   }
 
-  /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it. */
-  private armAutoResume(runId: string, deadline: number): void {
-    this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString() });
+  /**
+   * A run just failed on a transient vendor or network error: retry it after a short backoff
+   * through the same timer, record fields and exits as the usage-limit resume above. Skipped
+   * whenever that path already promised a resume, so one failure arms at most one timer.
+   */
+  private scheduleTransientRetry(runId: string): void {
+    if (this.autoResumeTimers.has(runId)) return;
+    const run = this.store.getRun(runId);
+    if (!run || run.status !== 'failed' || run.archived || run.autoResumeAt) return;
+    // An unanswered CEZ:ASK waits for its human; a retry prompt would answer it for them.
+    if (run.awaitingAnswerSince !== undefined) return;
+    if (!isTransientAgentError(run.error)) return;
+    if (!this.semaphore.autoResumeOnUsageLimit()) return;
+    if (!run.steps.some((step) => step.sessionId)) return;
+    const attempts = run.autoResumeAttempts ?? 0;
+    if (attempts >= MAX_TRANSIENT_RETRIES) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `automatic retry cap reached (${MAX_TRANSIENT_RETRIES}) — continue this task manually`,
+      });
+      return;
+    }
+    const wakeAt = new Date(Date.now() + TRANSIENT_RETRY_DELAYS_MS[attempts]!);
+    this.armAutoResume(runId, wakeAt.getTime(), 'transient');
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `temporary agent error — retrying automatically at ${formatWakeInstant(wakeAt)} (${attempts + 1}/${MAX_TRANSIENT_RETRIES})`,
+    });
+  }
+
+  /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it.
+   *  `reason` is always written, so a usage-limit arm never inherits a stale `transient`. */
+  private armAutoResume(runId: string, deadline: number, reason: RunRecord['autoResumeReason']): void {
+    this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString(), autoResumeReason: reason });
     const timer = setTimeout(() => this.fireAutoResume(runId), Math.max(0, deadline - Date.now()));
     timer.unref?.();
     this.autoResumeTimers.set(runId, timer);
@@ -3017,9 +3138,14 @@ export class RunManager {
       return;
     }
     const attempts = (run.autoResumeAttempts ?? 0) + 1;
+    const reason = run.autoResumeReason;
     // `continueRun` retires the pending resume (timer + record fields) on the way in — this is a
-    // resume, not a user turn, so the counter is put back straight after.
-    const resumed = this.continueRun(runId, { text: AUTO_RESUME_PROMPT }, true);
+    // resume, not a user turn, so the counter (and what it is counting) is put back straight after.
+    const resumed = this.continueRun(
+      runId,
+      { text: reason === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT },
+      true,
+    );
     if (!resumed.ok) {
       // Refusals happen before `continueRun` retires anything, so the deadline is still on the
       // record — and a deadline in the past is a promise the cockpit keeps displaying and the
@@ -3027,14 +3153,16 @@ export class RunManager {
       this.clearAutoResume(runId);
       this.store.appendEvent(runId, {
         type: 'note',
-        message: `automatic resume could not start — ${resumed.error ?? 'unknown'}`,
+        message: `automatic ${reason === 'transient' ? 'retry' : 'resume'} could not start — ${resumed.error ?? 'unknown'}`,
       });
       return;
     }
-    this.store.updateRun(runId, { autoResumeAttempts: attempts });
+    this.store.updateRun(runId, { autoResumeAttempts: attempts, autoResumeReason: reason });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
-      message: `usage limit reset — resuming automatically (${attempts}/${MAX_AUTO_RESUMES})`,
+      message: reason === 'transient'
+        ? `retrying after a temporary agent error (${attempts}/${MAX_TRANSIENT_RETRIES})`
+        : `usage limit reset — resuming automatically (${attempts}/${MAX_AUTO_RESUMES})`,
     });
     // A deferred continuation only ENQUEUES itself; the queue moves when something pumps it, and
     // `recover()` — the other deferring caller — pumps once after its whole bulk sweep. A timer
@@ -3084,13 +3212,14 @@ export class RunManager {
       if (run.status !== 'failed' || !run.autoResumeAt) continue;
       if (this.autoResumeTimers.has(run.id)) continue;
       const deadline = Date.parse(run.autoResumeAt);
+      const transient = run.autoResumeReason === 'transient';
       // A deadline that is unreadable, belongs to a run that has spent its cap, or belongs to a
       // task the user has archived is retired rather than re-armed: it can only mislead. One
       // that has just passed arms at zero — the window is open, which is the point.
       if (
         run.archived
         || !Number.isFinite(deadline)
-        || (run.autoResumeAttempts ?? 0) >= MAX_AUTO_RESUMES
+        || (run.autoResumeAttempts ?? 0) >= (transient ? MAX_TRANSIENT_RETRIES : MAX_AUTO_RESUMES)
       ) {
         this.store.updateRun(run.id, { autoResumeAt: undefined });
         continue;
@@ -3098,16 +3227,49 @@ export class RunManager {
       // …and one missed by more than a day is retired loudly: reviving a task from another era
       // is a surprise, not a service, and this is what keeps a sweep from resurrecting every
       // limit-stopped task a user has long since walked away from.
-      if (Date.now() - deadline > AUTO_RESUME_MISSED_WINDOW_MS) {
+      if (Date.now() - deadline > (transient ? TRANSIENT_RETRY_MISSED_WINDOW_MS : AUTO_RESUME_MISSED_WINDOW_MS)) {
         this.store.updateRun(run.id, { autoResumeAt: undefined });
         this.store.appendEvent(run.id, {
           type: 'note',
-          message: 'automatic resume expired — its window reopened over a day ago; continue this task manually',
+          message: transient
+            ? 'automatic retry expired — it was due over an hour ago; continue this task manually'
+            : 'automatic resume expired — its window reopened over a day ago; continue this task manually',
         });
         continue;
       }
-      this.armAutoResume(run.id, deadline);
+      this.armAutoResume(run.id, deadline, run.autoResumeReason);
     }
+  }
+
+  /** The injected provider gate's refusal, or null. A gate that throws lets the launch through:
+   *  a broken probe must not wedge the queue, and the runtime auth latch still sees a rejection. */
+  private async providerRefusal(
+    required: readonly RunnerId[],
+    profileFor: (provider: RunnerId) => string | undefined,
+  ): Promise<string | null> {
+    if (!this.providerGate || required.length === 0) return null;
+    try {
+      return await this.providerGate(required, { repoRoot: this.repoRoot, profileFor });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Fail a run the provider gate refused before anything spawned — what the HTTP route's 409 is
+   * for a run that already exists. Failed, not held: the message names the fix, Continue/Retry
+   * re-asks the gate, and the text is neither a usage limit nor transient, so `dropActive` arms
+   * no automatic resume and nothing loops.
+   */
+  private failBeforeSpawn(runId: string, state: ActiveRun, error: string): void {
+    this.store.updateRun(runId, {
+      status: 'failed',
+      error,
+      finishedAt: new Date().toISOString(),
+      currentStepId: undefined,
+    });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: `run not started — ${error}` });
+    this.dropActive(runId, state);
   }
 
   /**
@@ -3190,7 +3352,8 @@ export class RunManager {
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
     for (const run of this.store.listRuns()) {
-      if (run.status !== 'failed' || !run.autoResumeAt) continue;
+      // A transient retry holds no account, so it is no reason for the queue to idle.
+      if (run.status !== 'failed' || !run.autoResumeAt || run.autoResumeReason === 'transient') continue;
       const deadline = Date.parse(run.autoResumeAt);
       if (Number.isFinite(deadline) && deadline > now) return;
     }
@@ -3225,7 +3388,7 @@ export class RunManager {
    *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
   private readonly holdInputs = new Map<string, string>();
   private readonly onRunHoldInputs = (run: RunRecord) => {
-    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.runner, run.agentProfile]);
+    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.runner, run.agentProfile]);
     if (this.holdInputs.get(run.id) === inputs) return;
     this.holdInputs.set(run.id, inputs);
     this.onQueueHoldChange();
@@ -3270,6 +3433,9 @@ export class RunManager {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
       const key = () => runAccountKey(run, run.runner ?? 'claude');
+      // A transient retry is about one request, not the account's window: holding the account
+      // for it would stall every other task on it for nothing.
+      if (run.autoResumeReason === 'transient') continue;
       if (run.status === 'failed' && run.autoResumeAt) {
         const at = Date.parse(run.autoResumeAt);
         if (Number.isFinite(at) && at > now) { deadline.add(key()); deadlines.set(key(), Math.min(at, deadlines.get(key()) ?? Infinity)); }
@@ -3314,8 +3480,8 @@ export class RunManager {
     this.autoResumeTimers.delete(runId);
     const run = this.store.getRun(runId);
     if (!run) return;
-    if (run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined) {
-      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined });
+    if (run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined || run.autoResumeReason !== undefined) {
+      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined, autoResumeReason: undefined });
     }
   }
 
@@ -3681,7 +3847,7 @@ export class RunManager {
       : continuation.prompt;
     const persisted = this.readPersistedAttachments(
       runId,
-      stack.flatMap((message) => message.images ?? []),
+      [...(continuation.persistedImageUrls ?? []), ...stack.flatMap((message) => message.images ?? [])],
       'queued',
     );
     return {
@@ -4132,15 +4298,7 @@ export class RunManager {
    */
   continueRun(
     runId: string,
-    opts: {
-      text?: string;
-      images?: PastedContent[];
-      runner?: RunnerId;
-      model?: string;
-      /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
-       *  account the run is already on. */
-      agentProfile?: string;
-    } = {},
+    opts: ContinueRunOptions = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
@@ -4149,11 +4307,41 @@ export class RunManager {
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
-    if (this.active.has(runId) || this.starting.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
+    if (this.active.has(runId) || this.starting.has(runId)) {
+      // The record already reads settled, but the turn-end autosave is still unwinding: take the
+      // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
+      const unwinding = this.active.get(runId);
+      const settledTurn = unwinding?.turnSettled && !unwinding.cancelled && !unwinding.continueOnDrop
+        && !this.starting.has(runId) && run !== undefined && CONTINUABLE_STATUSES.includes(run.status)
+        && run.steps.some((s) => s.sessionId);
+      if (!settledTurn) return { ok: false, error: 'run is still active' };
+      const runner = opts.runner ?? run.runner ?? 'claude';
+      if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
+        return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
+      }
+      // Durable before answering ok: a restart before the drop must not lose it (`recover()`).
+      const { images, ...rest } = opts;
+      const persistedImageUrls = [
+        ...(rest.persistedImageUrls ?? []),
+        ...this.persistPastedAttachments(runId, images ?? []).map((saved) => saved.url),
+      ];
+      const durable: ContinueRunOptions = { ...rest, persistedImageUrls };
+      this.store.updateRun(runId, {
+        pendingContinue: {
+          ...(durable.text !== undefined ? { text: durable.text } : {}),
+          ...(persistedImageUrls.length ? { images: persistedImageUrls } : {}),
+          ...(durable.runner !== undefined ? { runner: durable.runner } : {}),
+          ...(durable.model !== undefined ? { model: durable.model } : {}),
+          ...(durable.agentProfile !== undefined ? { agentProfile: durable.agentProfile } : {}),
+        },
+      });
+      unwinding.continueOnDrop = { opts: durable, deferForCapacity };
+      return { ok: true };
+    }
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
+    if (!CONTINUABLE_STATUSES.includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
@@ -4252,6 +4440,7 @@ export class RunManager {
         backend: targetRunner,
         prompt,
         images,
+        ...(opts.persistedImageUrls?.length ? { persistedImageUrls: opts.persistedImageUrls } : {}),
       });
       this.queue.push(runId);
       this.store.updateRun(runId, {
@@ -4263,6 +4452,9 @@ export class RunManager {
       return { ok: true };
     }
     const ownerToken = Symbol('run-owner');
+    const persisted = opts.persistedImageUrls?.length
+      ? this.readPersistedAttachments(runId, opts.persistedImageUrls, 'queued')
+      : undefined;
     // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
     // registers it in `active`.
     this.starting.add(runId);
@@ -4273,8 +4465,8 @@ export class RunManager {
       targetRunner,
       prompt,
       images,
-      undefined,
-      undefined,
+      persisted?.blocks,
+      persisted?.attachments,
       ownerToken,
     ).catch(
       (err: unknown) => {
@@ -4380,6 +4572,20 @@ export class RunManager {
     this.checkArtifactSnapshots.set(runId, state.autosaveExcludedPaths);
     this.active.set(runId, state);
     this.starting.delete(runId);
+    // Restart recovery and auto-resume reach here without the HTTP gate (bca23063).
+    const refusal = await this.providerRefusal(
+      [backend],
+      (provider) => (record ? recordedProfileFor({ ...record, runner: backend }, provider) : undefined),
+    );
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
+    if (refusal) {
+      this.store.updateStep(runId, stepId, { status: 'failed', finishedAt: new Date().toISOString() });
+      this.failBeforeSpawn(runId, state, refusal);
+      return;
+    }
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
     if (state.cwd === this.repoRoot) {
@@ -4626,7 +4832,7 @@ export class RunManager {
         // 2026-08-03-auto-resume-after-usage-limit). `settleSuccess` does the same for a run that
         // finishes outright; this covers the far more common "parked for the user" ending.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined });
+          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
         }
         // A nudged turn did NOT park, so it must not report that it did: the handoff file is
         // the rolling context the agent reads back on resume (spec 007), not a log, and an
@@ -4850,6 +5056,8 @@ export class RunManager {
         });
         if (sessionError) throw new Error(sessionError);
       }
+      // Before any branch below publishes a terminal status: the finally's autosave comes after it.
+      state.turnSettled = true;
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
@@ -4891,6 +5099,7 @@ export class RunManager {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      state.turnSettled = true;
       sink.sessionEnded('error', message);
       if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
@@ -4953,6 +5162,20 @@ export class RunManager {
     // happened yet here, so the run goes back to the queue untouched (spec
     // 2026-08-03-auto-resume-after-usage-limit).
     if (this.requeueWhileHeld(runId, workflow, input, taskBackend)) return;
+    // The HTTP routes' provider gate, for runs the queue and `recover()` start too (bca23063).
+    const queuedRecord = this.store.getRun(runId);
+    const refusal = await this.providerRefusal(
+      providersRequiredByWorkflow(workflow, taskBackend),
+      (provider) => (queuedRecord ? recordedProfileFor({ ...queuedRecord, runner: taskBackend }, provider) : undefined),
+    );
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
+    if (refusal) {
+      this.failBeforeSpawn(runId, state, refusal);
+      return;
+    }
     // The project's default workspace (spec 2026-10-20-trunk-based-projects), for every caller
     // that left it open — the composer, automations, the CLI. Never for variants, dispatch or a PR head.
     const defaultable = this.store.getRun(runId);
@@ -5278,6 +5501,8 @@ export class RunManager {
     // No settlement branch below may touch that newer owner.
     if (this.active.get(runId) !== state) return;
 
+    // Same window as `runContinuation`'s: whatever settles below is final once teardown lets go.
+    state.turnSettled = true;
     const finishedAt = new Date().toISOString();
     if (state.cancelled && this.active.get(runId) === state) {
       const run = this.store.getRun(runId);
@@ -6759,7 +6984,7 @@ export class RunManager {
         }
         // The window is proven open — see the twin in `runContinuation`.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined });
+          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
         }
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
@@ -7312,6 +7537,7 @@ export class RunManager {
         finishedAt: new Date().toISOString(),
         currentStepId: undefined,
         autoResumeAttempts: undefined,
+        autoResumeReason: undefined,
       });
       this.store.appendEvent(runId, {
         type: 'lifecycle',
@@ -7338,6 +7564,7 @@ export class RunManager {
       // counter starts over — otherwise a task that legitimately met the limit once a week would
       // creep toward the cap forever and stop resuming for no reason anyone could see.
       autoResumeAttempts: undefined,
+      autoResumeReason: undefined,
     });
     this.store.appendEvent(runId, {
       type: 'lifecycle',

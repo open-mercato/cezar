@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 
-import { ApiError, continueRun, putRunDraft, sendMessage } from '@/api/client'
+import { continueRun, putRunDraft } from '@/api/client'
 import { useRunDrafts } from '@/api/queries'
 import { DRAFT_TEXT_MAX, type ApiRun } from '@open-mercato/cezar-api-client'
 import { toast } from '@/components/ui/toaster'
 
-import { deliveryPath, type DeliveryPath } from '../task-thread/deliver-prompt'
+import { useDeliverPrompt } from '../task-thread/deliver-prompt'
 
 import {
   DESIGN_PICKS_SURFACE,
@@ -260,9 +260,12 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
     [runId, store],
   )
 
-  // The latest run, for the async actions below: a send outlives the render that started it.
-  const runRef = useRef(run)
-  runRef.current = run
+  const continueWith = useCallback((text: string) => continueRun(runId, { text }), [runId])
+  // Not a `message_sent`: the closed surface set has no Design Mode label.
+  const deliverPrompt = useDeliverPrompt(run, continueWith, { surface: null })
+  // The latest run's delivery, for `send`: a send outlives the render that started it.
+  const deliverRef = useRef(deliverPrompt)
+  deliverRef.current = deliverPrompt
 
   // Sent notes follow the run.
   // Not in the contract's run type, but on the wire: the engine's own "this park is a question".
@@ -333,18 +336,10 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
       const keys = new Set(batch.map((draft) => draft.key))
       store.inFlight = keys
       publish()
-      const deliver = (path: DeliveryPath) =>
-        path === 'live' ? sendMessage(runId, { text: message }) : continueRun(runId, { text: message })
-      // The same recovery as the composer's (`deliver-prompt.ts`): a 409 says the record this
-      // window aimed by is stale — the session opened or closed meanwhile — so try the other path once.
-      const attempted = deliveryPath(runRef.current.status)
+      // The composer's seam (`deliver-prompt.ts`): a 409 from a stale record re-aims by a fresh one,
+      // and a Continue on a run still unwinding waits it out instead of failing (77117b95).
       try {
-        await deliver(attempted)
-      } catch (error) {
-        if (!(error instanceof ApiError) || error.status !== 409) throw error
-        await deliver(attempted === 'live' ? 'continue' : 'live').catch(() => {
-          throw error
-        })
+        await deliverRef.current(message, [])
       } finally {
         store.inFlight = null
         publish()
@@ -367,7 +362,7 @@ export function useDesignNotes(run: ApiRun): DesignNotes {
       publish()
       persist(0)
     },
-    [persist, publish, runId, store],
+    [persist, publish, store],
   )
 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `store.version` is the store's change signal

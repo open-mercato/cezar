@@ -7,7 +7,7 @@ import { armRepoHandle } from '../runs/arm-repo-handle.ts';
 import { reclaimWorktrees } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
-import { RunManager } from '../workflows/run.ts';
+import { RunManager, type ProviderGate } from '../workflows/run.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { getRepoInfo } from './git.ts';
 import { resolveTrackerAgentEnv } from './tracker/agent-credentials.ts';
@@ -104,8 +104,17 @@ export class ProjectContexts {
    *  private-but-shared otherwise. */
   private readonly semaphore: WorkspaceSemaphore;
 
+  /** The provider gate every built manager asks before an engine launch (bca23063). Read per
+   *  call, so the one `createApp` installs after construction applies to every context. */
+  private providerGate: ProviderGate | undefined;
+
   constructor(private readonly deps: ProjectContextDeps) {
     this.semaphore = deps.semaphore ?? new WorkspaceSemaphore();
+  }
+
+  /** Install the engine-side provider gate for every manager this map builds (or has built). */
+  setProviderGate(gate: ProviderGate): void {
+    this.providerGate = gate;
   }
 
   /** The built context for `projectId`, building it on first access.
@@ -234,7 +243,12 @@ export class ProjectContexts {
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
-    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
+    const manager = new RunManager(store, project.root, {
+      semaphore: this.semaphore,
+      projectId: project.id,
+      resolveTrackerEnv: resolveTrackerAgentEnv,
+      providerGate: (required, scope) => this.providerGate?.(required, scope) ?? Promise.resolve(null),
+    });
     try {
       const launchKey = ensureLaunchKey(dataDir);
       // Startup reconcile (spec 006) + count-based retention (#483) — the same

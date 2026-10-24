@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from '../automations/store.ts';
 import { emitUsageForTest } from '../core/process-usage.ts';
+import type { ProviderGate } from '../workflows/run.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContextSource } from './project-context.ts';
 
 /**
@@ -30,6 +31,18 @@ describe('ProjectContexts', () => {
   function makeContexts(projects: ProjectContextSource[]): ProjectContexts {
     return new ProjectContexts({ listProjects: async () => projects });
   }
+
+  it('every built manager asks the provider gate installed on the map, even one set after the build (bca23063)', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    const ctx = await contexts.context('a');
+    const gateOf = (manager: unknown) => (manager as { providerGate: ProviderGate }).providerGate;
+    expect(await gateOf(ctx.manager)(['claude'], {})).toBeNull();
+    const gate = vi.fn<ProviderGate>(async () => 'signed out');
+    contexts.setProviderGate(gate);
+    expect(await gateOf(ctx.manager)(['claude'], { repoRoot: rootA })).toBe('signed out');
+    expect(gate).toHaveBeenCalledWith(['claude'], { repoRoot: rootA });
+    await contexts.shutdownAll();
+  });
 
   it('shutdown waits for opened and still-building projects, then prevents new contexts', async () => {
     let releaseRegistry!: () => void;

@@ -1,5 +1,6 @@
 import { isOutdatedBackendError } from '../core/agent-errors.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { isTransientAgentError } from '../core/transient-error.ts';
 import { isUsageLimitMessage, parseUsageLimit } from '../core/usage-limit.ts';
 import { reportError, telemetryEnabled } from '../telemetry.ts';
 
@@ -67,6 +68,9 @@ export function reportAgentError(
   // A limit with a readable reset is the account's state, not a failure: auto-resume handles it
   // and `task_failed`'s `usage_limit` kind counts it (#1438). Only one cezar cannot schedule is.
   if (limited && parseUsageLimit(event.message) !== null) return;
+  // Likewise a vendor or network blip: the engine retries it, `task_failed`'s `transient` kind
+  // counts it, and there is nothing in cezar to fix (spec 2026-10-24-agent-cli-error-cooperation).
+  if (isTransientAgentError(event.message)) return;
   const id = (RUNNER_IDS as readonly string[]).includes(backend ?? '') ? backend! : 'unknown';
   const masked = scrubAgentErrorMessage(event.message, id);
   if (masked === '') return;

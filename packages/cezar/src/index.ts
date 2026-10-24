@@ -40,6 +40,7 @@ import { runSelfUpdateCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
 import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
+import { createProviderActionGate, providerStatusReader } from './server/provider-action-gate.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
@@ -269,7 +270,14 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
+  const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
+  const manager = new RunManager(store, repoRoot, {
+    semaphore,
+    projectId: bootProjectId,
+    resolveTrackerEnv: resolveTrackerAgentEnv,
+    // `recover()` below runs before the server exists, so the boot manager gets the routes' gate here (bca23063).
+    providerGate: createProviderActionGate(providerStatusReader(providerAuth, () => loadWorkspaceConfig()), providerAuth),
+  });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
@@ -291,7 +299,6 @@ async function serveCommand(
   };
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
-  const providerAuth = new ProviderAuthService({ cwd: repoRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
     workspaceEvents.emit('provider-status', status);
