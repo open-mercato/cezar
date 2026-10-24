@@ -15,7 +15,9 @@ import subagentTask from '../../../../cezar/src/core/__fixtures__/claude/subagen
 import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claude/thinking-edit-write-todo.expected.json'
 import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/opencode/tool-lifecycle.expected.json'
 import { groupThreadItems } from './thread-groups'
+import { ErrorHintActionsContext, type ErrorHintActions } from './error-hint-actions'
 import {
+  AgentErrorHintCard,
   AgentUpdateRequiredCard,
   ContextGroup,
   isNearBottom,
@@ -27,7 +29,7 @@ import {
   UserBubble,
   WorkingIndicator,
 } from './thread-items'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadAgentErrorHint } from './thread-state'
 import { SessionTranscript } from './session-transcript'
 
 afterEach(cleanup)
@@ -539,5 +541,76 @@ describe('WorkingIndicator — live clock', () => {
     expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy()
     expect(document.querySelector('[data-slot="working-elapsed"]')).toBeNull()
     expect(document.querySelector('[data-slot="working-last-activity"]')).toBeNull()
+  })
+})
+
+describe('AgentErrorHintCard (spec 2026-10-24-agent-cli-error-cooperation)', () => {
+  const hint = (extra: Partial<ThreadAgentErrorHint> & Pick<ThreadAgentErrorHint, 'hint'>): ThreadAgentErrorHint =>
+    ({ kind: 'agent-error-hint', id: 'v1:2:hint', provider: 'claude', ...extra })
+  const ALL: ErrorHintActions['alternatives'] = { runner: 'codex', account: { id: 'work', label: 'Work' }, defaultModel: true }
+  const renderHint = (incident: ThreadAgentErrorHint, actions: ErrorHintActions | null = null) =>
+    render(
+      <MemoryRouter initialEntries={['/p/acme/tasks/r1']}>
+        <ErrorHintActionsContext.Provider value={actions}>
+          <div data-slot="thread-dock"><div data-slot="composer"><textarea aria-label="Reply" /></div></div>
+          <AgentErrorHintCard incident={incident} />
+        </ErrorHintActionsContext.Provider>
+      </MemoryRouter>,
+    )
+  const buttons = () => screen.getByRole('alert').querySelectorAll('button').length
+
+  it.each([
+    [hint({ hint: 'model_unavailable' }), 'Claude Code could not use the selected model'],
+    [hint({ hint: 'quota_no_reset', provider: 'cursor' }), 'Cursor usage limit reached'],
+    [hint({ hint: 'billing' }), 'API credit exhausted'],
+    [hint({ hint: 'conversation_too_large' }), 'The conversation is too large to continue'],
+    [hint({ hint: 'disk_full', provider: 'codex' }), 'The disk is full'],
+    [hint({ hint: 'account_policy' }), 'Your organization blocks subscription sign-in'],
+    [hint({ hint: 'account_policy', identityVerification: true }), 'Claude Code needs identity verification'],
+  ])('renders %j as an alert with its explanation and no live buttons outside a thread', (incident, title) => {
+    renderHint(incident)
+    expect(screen.getByRole('alert').getAttribute('data-hint')).toBe(incident.hint)
+    expect(screen.getByRole('alert').textContent).toContain(title)
+    expect(buttons()).toBe(0)
+  })
+
+  it('says to start a new task with the handoff for an oversized conversation, with no engine preset', () => {
+    renderHint(hint({ hint: 'conversation_too_large' }), { activeHintId: 'v1:2:hint', alternatives: ALL, preset: vi.fn() })
+    expect(screen.getByRole('alert').textContent).toContain('Start a new task and point it at this task’s handoff notes')
+    expect(buttons()).toBe(0)
+  })
+
+  it('offers no engine preset for a full disk', () => {
+    renderHint(hint({ hint: 'disk_full' }), { activeHintId: 'v1:2:hint', alternatives: ALL, preset: vi.fn() })
+    expect(screen.getByRole('alert').textContent).toContain('archiving or deleting old tasks')
+    expect(buttons()).toBe(0)
+  })
+
+  it('presets the composer and moves focus to it', () => {
+    const preset = vi.fn()
+    renderHint(hint({ hint: 'model_unavailable' }), { activeHintId: 'v1:2:hint', alternatives: ALL, preset })
+    fireEvent.click(screen.getByRole('button', { name: 'Use the default model' }))
+    expect(preset).toHaveBeenLastCalledWith({ defaultModel: true })
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Reply' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Switch to Codex' }))
+    expect(preset).toHaveBeenLastCalledWith({ runner: 'codex' })
+    fireEvent.click(screen.getByRole('button', { name: 'Use account “Work”' }))
+    expect(preset).toHaveBeenLastCalledWith({ account: 'work' })
+  })
+
+  it('offers the default model only for a model failure', () => {
+    renderHint(hint({ hint: 'billing' }), { activeHintId: 'v1:2:hint', alternatives: ALL, preset: vi.fn() })
+    expect(screen.queryByRole('button', { name: 'Use the default model' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Switch to Codex' })).toBeTruthy()
+  })
+
+  it('links an account-policy refusal to Agent accounts', () => {
+    renderHint(hint({ hint: 'account_policy' }), { activeHintId: 'v1:2:hint', alternatives: { defaultModel: false }, preset: vi.fn() })
+    expect(screen.getByRole('link', { name: 'Open agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+  })
+
+  it('keeps an older card inert once a later hint is the live one', () => {
+    renderHint(hint({ hint: 'model_unavailable' }), { activeHintId: 'v1:9:hint', alternatives: ALL, preset: vi.fn() })
+    expect(buttons()).toBe(0)
   })
 })

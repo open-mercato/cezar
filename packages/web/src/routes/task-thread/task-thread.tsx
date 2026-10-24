@@ -37,6 +37,7 @@ import { useDiffComments } from './diff-comments'
 import { TaskComposer, TaskDock } from './task-composer'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
+import { ErrorHintActionsContext, type ErrorHintActions } from './error-hint-actions'
 import { useDeliverPrompt } from './deliver-prompt'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
@@ -58,6 +59,7 @@ import {
   type TranscriptMessageActions,
 } from './session-transcript'
 import {
+  latestErrorHintId,
   latestPlanEntries,
   reduceThread,
   threadFilePaths,
@@ -224,6 +226,25 @@ export function ThreadView({
   const continueAction = useContinueAction(run)
   const hasContinuation = !sessionOpen && !queued && continueAction.available
   const continuable = hasContinuation && continueAction.canContinue
+  // The latest hint card presets this composer's engine (spec 2026-10-24-agent-cli-error-cooperation).
+  const activeHintId = run.status === 'failed' && continuable ? latestErrorHintId(currentThread) : undefined
+  const { preset } = continueAction
+  const { runner: altRunner, account: altAccount, defaultModel: altModel } = continueAction.alternatives
+  const altAccountId = altAccount?.id
+  const altAccountLabel = altAccount?.label
+  // Built from leaves: `alternatives` is a fresh object every render, and every card reads this.
+  const hintActions = useMemo<ErrorHintActions>(
+    () => ({
+      activeHintId,
+      alternatives: {
+        runner: altRunner,
+        account: altAccountId !== undefined && altAccountLabel !== undefined ? { id: altAccountId, label: altAccountLabel } : undefined,
+        defaultModel: altModel,
+      },
+      preset,
+    }),
+    [activeHintId, altRunner, altAccountId, altAccountLabel, altModel, preset],
+  )
   // The footer's one-click Continue rides the same delivery seam as the composer's (deliver-prompt):
   // its record can be just as stale, and a `run is still active` refusal means the run is already
   // live — refetch and drop it, never the false failure a raw `continueWith` toasted (77117b95).
@@ -358,17 +379,19 @@ export function ThreadView({
             onLoad={scroll.loadOlder}
           />
         ) : null}
-        <SessionTranscript
-          runId={run.id}
-          viewId="main"
-          sections={sections}
-          mode="document"
-          renderAsk={renderAsk}
-          messageActions={messageActions}
-          scrollControls={scroll}
-          renderMode={mode}
-          rowModels={rows}
-        />
+        <ErrorHintActionsContext.Provider value={hintActions}>
+          <SessionTranscript
+            runId={run.id}
+            viewId="main"
+            sections={sections}
+            mode="document"
+            renderAsk={renderAsk}
+            messageActions={messageActions}
+            scrollControls={scroll}
+            renderMode={mode}
+            rowModels={rows}
+          />
+        </ErrorHintActionsContext.Provider>
 
         {thread.turns.length === 0 ? (
           run.status === 'queued' ? (

@@ -9,6 +9,7 @@ import {
   ContextGroup,
   ImageItem,
   NoteLine,
+  AgentErrorHintCard,
   AgentUpdateRequiredCard,
   ProviderAuthRequiredCard,
   ReasoningItem,
@@ -31,6 +32,7 @@ import type {
   ThreadEntry,
   ThreadImage,
   ThreadNote,
+  ThreadAgentErrorHint,
   ThreadAgentUpdateRequired,
   ThreadProviderAuthRequired,
   ThreadState,
@@ -456,6 +458,8 @@ function ThreadEntryRenderer({
       return <ProviderAuthRequiredCard incident={entry} />
     case 'agent-update-required':
       return <AgentUpdateRequiredCard incident={entry} />
+    case 'agent-error-hint':
+      return <AgentErrorHintCard incident={entry} />
     default:
       return assertNever(entry)
   }
@@ -540,6 +544,9 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
     case 'agent-update-required':
       return previous.kind === 'agent-update-required' &&
         sameFields(previous, next, AGENT_UPDATE_COMPARE_FIELDS)
+    case 'agent-error-hint':
+      return previous.kind === 'agent-error-hint' &&
+        sameFields(previous, next, AGENT_ERROR_HINT_COMPARE_FIELDS)
     default:
       return false
   }
@@ -597,6 +604,14 @@ const AGENT_UPDATE_COMPARE_FIELDS = {
   id: true,
   provider: true,
 } satisfies Record<keyof ThreadAgentUpdateRequired, true>
+
+const AGENT_ERROR_HINT_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  hint: true,
+  provider: true,
+  identityVerification: true,
+} satisfies Record<keyof ThreadAgentErrorHint, true>
 
 /** A new transcript item field must be added here before it can be ignored by memoization. */
 const TOOL_ITEM_COMPARE_FIELDS = {

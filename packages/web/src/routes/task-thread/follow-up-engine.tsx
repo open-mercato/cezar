@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
@@ -35,7 +35,26 @@ export interface ContinueAction {
    * cleared — nothing the user typed is lost to a 409.
    */
   continueWith: (text: string, images: AttachmentEntry[]) => Promise<ContinueResponse>
+  /** What an agent-error hint card can preset (spec 2026-10-24-agent-cli-error-cooperation, item 4):
+   *  each is absent when the host has nothing to switch to. */
+  alternatives: EngineAlternatives
+  /** Set the pills as if the user had picked them — the next Continue sends exactly this. */
+  preset: (choice: EnginePreset) => void
 }
+
+export interface EngineAlternatives {
+  /** A connected runner other than the one the run failed on. */
+  runner?: Runner
+  /** Another login of the run's own runner. */
+  account?: { id: string; label: string }
+  /** The run is pinned to a model, so "the runner's default" is a real change. */
+  defaultModel: boolean
+}
+
+export type EnginePreset =
+  | { runner: Runner }
+  | { account: string }
+  | { defaultModel: true }
 
 /**
  * The follow-up composer's Continue (#401): the same runner + model pills the /new composer
@@ -98,6 +117,28 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const account = accounts.some((choice) => choice.provider === runner && choice.id === pickedAccount)
     ? pickedAccount
     : null
+
+  const otherAccount = accounts.find((choice) => choice.provider === currentRunner && choice.id !== runAccount)
+  const alternatives: EngineAlternatives = {
+    runner: runners.find((id) => id !== currentRunner),
+    account: otherAccount ? { id: otherAccount.id, label: otherAccount.label } : undefined,
+    defaultModel: !modelsLocked && !!run.model,
+  }
+  // Stable: the thread's hint context depends on it (the setters never change).
+  const preset = useCallback((choice: EnginePreset) => {
+    // The same transitions the pills make: a runner switch drops the model and login picks.
+    if ('runner' in choice) {
+      setPickedRunner(choice.runner)
+      setPickedModel(null)
+      setPickedAccount(null)
+    } else if ('account' in choice) {
+      setPickedRunner(null)
+      setPickedAccount(choice.account)
+    } else {
+      setPickedRunner(null)
+      setPickedModel('')
+    }
+  }, [])
 
   const mutation = useMutation({
     mutationFn: ({ text, images }: { text: string; images: AttachmentEntry[] }) => {
@@ -167,5 +208,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       </div>
     ),
     continueWith: (text, images) => mutation.mutateAsync({ text, images }),
+    alternatives,
+    preset,
   }
 }

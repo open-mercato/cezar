@@ -9,6 +9,7 @@ import textTurn from '../../../../cezar/src/core/__fixtures__/claude/text-turn.e
 import thinkingEditWriteTodo from '../../../../cezar/src/core/__fixtures__/claude/thinking-edit-write-todo.expected.json'
 import {
   latestPlanEntries,
+  latestErrorHintId,
   reduceThread,
   threadFilePaths,
   threadFooter,
@@ -676,6 +677,48 @@ describe('reduceThread — outdated agent CLI', () => {
   it('names the run\'s runner when the error comes before any session started (OpenCode bootstrap)', () => {
     const { turns } = reduceThread([line(1, 'error', { message: `opencode: ${OUTDATED}` })], { runner: 'opencode' })
     expect(turns[0]?.items).toContainEqual({ kind: 'agent-update-required', id: 'v1:1:update', provider: 'opencode' })
+  })
+})
+
+describe('reduceThread — agent-error hints (spec 2026-10-24-agent-cli-error-cooperation)', () => {
+  const LIMIT = "You've hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more."
+
+  it('offers one hint per turn after the error, naming the session backend', () => {
+    const { turns } = reduceThread([
+      line(1, 'session.started', { sessionId: 's', backend: 'cursor' }),
+      line(2, 'session.error', { message: LIMIT, fatal: true }),
+      line(3, 'error', { message: `cursor: ${LIMIT}` }),
+    ])
+    expect(turns[0]?.items).toEqual([
+      { kind: 'note', id: 'v2:2', text: LIMIT, tone: 'danger' },
+      { kind: 'agent-error-hint', id: 'v2:2:hint', hint: 'quota_no_reset', provider: 'cursor' },
+      { kind: 'note', id: 'v1:3', text: `cursor: ${LIMIT}`, tone: 'danger' },
+    ])
+  })
+
+  it('carries the identity-verification flavour and works before any session started', () => {
+    const { turns } = reduceThread(
+      [line(1, 'error', { message: 'claude: API Error: 400 Identity verification is required to continue.' })],
+      { runner: 'claude' },
+    )
+    expect(turns[0]?.items).toContainEqual({
+      kind: 'agent-error-hint', id: 'v1:1:hint', hint: 'account_policy', provider: 'claude', identityVerification: true,
+    })
+  })
+
+  it('offers nothing for an unrecognized error', () => {
+    const { turns } = reduceThread([line(1, 'error', { message: 'claude: API Error: 529 Overloaded' })], { runner: 'claude' })
+    expect(turns.flatMap((turn) => turn.items).some((item) => item.kind === 'agent-error-hint')).toBe(false)
+  })
+
+  it('keeps only the latest turn\'s hint live', () => {
+    const failed = [
+      line(1, 'session.started', { sessionId: 's', backend: 'claude' }),
+      line(2, 'error', { message: 'Credit balance is too low' }),
+    ]
+    expect(latestErrorHintId(reduceThread(failed))).toBe('v1:2:hint')
+    // The user continued past it: a new turn opened, so the old card's buttons go inert.
+    expect(latestErrorHintId(reduceThread([...failed, line(3, 'user-message', { text: 'Continue.' })]))).toBeUndefined()
   })
 })
 

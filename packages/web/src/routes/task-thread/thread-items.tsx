@@ -32,6 +32,8 @@ import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } 
 import { cn } from '@/lib/utils'
 
 import { parseReviewMessage } from './diff-comments'
+import { focusThreadComposer, useErrorHintActions } from './error-hint-actions'
+import type { EnginePreset } from './follow-up-engine'
 import { Markdown } from './markdown'
 import { ReviewCommentsBlock } from './review-comments-block'
 import { useDraft } from './thread-draft'
@@ -40,6 +42,7 @@ import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
 import { MessageTime, clockLabel, elapsedSince, exactLabel, useNow } from './thread-time'
 import type {
+  ThreadAgentErrorHint,
   ThreadAgentUpdateRequired,
   ThreadEntry,
   ThreadImage,
@@ -491,6 +494,122 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
                 Copy
               </Button>
             </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** Copy per hint kind; `{agent}` is the failing backend's label. */
+function errorHintCopy(incident: ThreadAgentErrorHint): { title: string; body: string } {
+  const agent = incident.provider ? PROVIDER_LABEL[incident.provider] : 'The agent'
+  switch (incident.hint) {
+    case 'model_unavailable':
+      return {
+        title: `${agent} could not use the selected model`,
+        body: 'The model is unavailable, at capacity, or not on this account. Continue on the default model or another agent.',
+      }
+    case 'quota_no_reset':
+      return {
+        title: `${agent} usage limit reached`,
+        body: 'This plan names no reset time to wait for. Upgrade the plan, or continue on another agent or account.',
+      }
+    case 'billing':
+      return {
+        title: 'API credit exhausted',
+        body: 'The API key this run was billed to has no credit left. Add credit, or continue on another account or agent. An ANTHROPIC_API_KEY in your environment overrides a subscription login.',
+      }
+    case 'account_policy':
+      return incident.identityVerification
+        ? {
+            title: `${agent} needs identity verification`,
+            body: 'Verify your identity at claude.ai, then Continue — or continue on another account or agent.',
+          }
+        : {
+            title: 'Your organization blocks subscription sign-in',
+            body: 'Add an account that uses an Anthropic API key, or ask your admin to enable access.',
+          }
+    case 'conversation_too_large':
+      return {
+        title: 'The conversation is too large to continue',
+        body: 'Earlier images and tool screenshots pushed the request over the vendor’s limit, and Continue resends the same conversation. Start a new task and point it at this task’s handoff notes.',
+      }
+    case 'disk_full':
+      return {
+        title: 'The disk is full',
+        body: 'Free some space — archiving or deleting old tasks removes their worktrees — then Continue.',
+      }
+  }
+}
+
+/** One-click recovery for an agent error with a known fix (spec 2026-10-24-agent-cli-error-cooperation,
+ *  item 4). The buttons preset the follow-up composer's runner / model / account (#401); they are
+ *  live on the run's latest hint only, so an old card cannot rewrite today's Continue. */
+export function AgentErrorHintCard({ incident }: { incident: ThreadAgentErrorHint }) {
+  const actions = useErrorHintActions()
+  const live = actions !== null && actions.activeHintId === incident.id ? actions : null
+  const { title, body } = errorHintCopy(incident)
+  const offersEngine = incident.hint !== 'conversation_too_large' && incident.hint !== 'disk_full'
+  const model = live && offersEngine && incident.hint === 'model_unavailable' && live.alternatives.defaultModel
+  const runner = live && offersEngine ? live.alternatives.runner : undefined
+  const account = live && offersEngine ? live.alternatives.account : undefined
+  const apply = (choice: EnginePreset, message: string) => {
+    live?.preset(choice)
+    toast(message)
+    focusThreadComposer()
+  }
+  return (
+    <div
+      role="alert"
+      data-slot="agent-error-hint"
+      data-hint={incident.hint}
+      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
+    >
+      <p className="text-[13px] font-semibold text-foreground">{title}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{body}</p>
+      {model || runner || account || (live && incident.hint === 'account_policy') ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {model ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-slot="agent-error-hint-model"
+              onClick={() => apply({ defaultModel: true }, 'The next Continue uses the default model.')}
+            >
+              Use the default model
+            </Button>
+          ) : null}
+          {runner ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-slot="agent-error-hint-runner"
+              onClick={() => apply({ runner }, `The next Continue runs on ${PROVIDER_LABEL[runner]}.`)}
+            >
+              Switch to {PROVIDER_LABEL[runner]}
+            </Button>
+          ) : null}
+          {account ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-slot="agent-error-hint-account"
+              onClick={() => apply({ account: account.id }, `The next Continue uses account “${account.label}”.`)}
+            >
+              Use account “{account.label}”
+            </Button>
+          ) : null}
+          {incident.hint === 'account_policy' ? (
+            <GlobalLink
+              to="/settings/global/accounts"
+              className="inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
+            >
+              Open agent accounts
+            </GlobalLink>
           ) : null}
         </div>
       ) : null}
