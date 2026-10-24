@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { opendirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
@@ -390,7 +391,8 @@ function copilotAcpProbeStdin(): ProviderStdin {
 /** The `session/new` response (id 1) has arrived, as a result or an error. */
 export function copilotAcpAnswered(stdout: string): boolean {
   return /"id"\s*:\s*1\s*,\s*"(?:result|error)"\s*:/.test(stdout)
-    || /"Authentication required"/i.test(stdout);
+    || /"Authentication required"/i.test(stdout)
+    || /"sessionId"\s*:\s*"/.test(stdout);
 }
 
 function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionState | null {
@@ -561,6 +563,20 @@ function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefin
     + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
+/**
+ * Where a probe runs when cezar's own working directory is unusable — deleted, or a folder the
+ * macOS app may not read — and `undefined` (inherit, as always) otherwise. Every CLI then failed
+ * before answering, `claude --version` included (telemetry 35838a52, b82b92cf).
+ */
+export function probeCwdFallback(): string | undefined {
+  try {
+    opendirSync(process.cwd()).closeSync();
+    return undefined;
+  } catch {
+    return homedir();
+  }
+}
+
 export function defaultRunProviderCommand(
   executable: string,
   args: readonly string[],
@@ -570,8 +586,10 @@ export function defaultRunProviderCommand(
 ): Promise<ProviderCommandResult> {
   // A Windows `.cmd` shim runs as `node <script>`: execFile throws EINVAL on the shim (a330744e).
   const [file, argv] = spawnableCommand(executable, args);
+  const cwd = probeCwdFallback();
   return new Promise((resolve) => {
     let closeTimer: NodeJS.Timeout | undefined;
+    let closedUnanswered = false;
     const child = execFile(
       file,
       argv,
@@ -579,6 +597,7 @@ export function defaultRunProviderCommand(
         timeout: timeoutMs,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        ...(cwd ? { cwd } : {}),
         // Inherit, then override: an auth probe is a short read-only CLI call, not a spawned
         // agent, so it does not go through `buildChildEnv`'s allowlist — the CLI still needs the
         // host's PATH and HOME to run at all. `env` is only ever a profile's config-dir variable.
@@ -591,8 +610,11 @@ export function defaultRunProviderCommand(
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
+        // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
+        // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
         const timedOut = commandError?.code === 'ETIMEDOUT'
-          || (commandError?.killed === true && commandError.signal === 'SIGTERM');
+          || (commandError?.killed === true && commandError.signal === 'SIGTERM')
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout)));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
@@ -624,7 +646,10 @@ export function defaultRunProviderCommand(
       if (closeWhen(seen)) close();
     };
     output.on('data', onData);
-    closeTimer = setTimeout(close, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
+    closeTimer = setTimeout(() => {
+      closedUnanswered = true;
+      close();
+    }, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
     input.write(stdin.payload);
   });
 }
@@ -1309,6 +1334,17 @@ export class ProviderAuthService {
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    // A launcher whose shell could not find (127) or run (126) what it wraps: nothing ran, so the
+    // install is broken, not the auth check inconclusive (telemetry a5c13018).
+    if (result.exitCode === 127 || result.exitCode === 126) {
+      const said = result.stderr.replace(ANSI_SEQUENCE, '').trim().split(/\r?\n/)[0]?.trim().slice(0, 160);
+      return {
+        provider: descriptor.id,
+        status: 'not-installed',
+        hint: `\`${executable}\` could not start (exit ${result.exitCode}${said ? `: "${said}"` : ''}). `
+          + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
+      };
+    }
     // OpenCode 1.x can fail before producing an auth-list answer (for example, while starting its
     // local service). That is an operational failure, not a new stdout format to fix.
     if (descriptor.id === 'opencode' && result.exitCode === 1 && !result.stdout.trim() && result.stderr.trim()) {
