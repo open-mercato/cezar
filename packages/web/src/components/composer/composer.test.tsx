@@ -5,7 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
-import { resetToasts, Toaster } from '@/components/ui/toaster'
+import { onDangerToast, resetToasts, Toaster } from '@/components/ui/toaster'
 
 import {
   MAX_ATTACHMENT_BYTES,
@@ -333,9 +333,14 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     const { textarea } = renderComposer()
     const big = pngFile('huge.png')
     Object.defineProperty(big, 'size', { value: MAX_ATTACHMENT_BYTES + 1 })
+    // A limit the user can act on, not a failure: never an error report (telemetry eab86832).
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
     paste(textarea, [big])
     expect(await screen.findByText('“huge.png” is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
+    expect(reported).toEqual([])
+    off()
   })
 })
 

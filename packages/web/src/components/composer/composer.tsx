@@ -375,7 +375,8 @@ export function Composer({
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
       const intake = screenFiles(files, imagesRef.current.length, attachedImageBytes(imagesRef.current))
-      for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
+      // A size or count limit the user can act on, not a failure (telemetry eab86832, 08cc6528).
+      for (const reason of intake.rejected) toast(reason, { tone: 'danger', expected: true })
       for (const file of intake.accepted) {
         void fileToPendingAttachment(file, source).then((attachment) => {
           const next = appendAttachment(imagesRef.current, attachment)

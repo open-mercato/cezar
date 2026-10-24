@@ -68,7 +68,9 @@ comes from a closed set the server enforces.
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,
 plus technical context: build, uptime, memory, route shape, browser engine, enabled feature flags.
-Every red error toast the cockpit shows is reported the same way, with the method, status and
+Every red error toast the cockpit shows is reported the same way — except an expected outcome the
+toast already tells you how to resolve (a file over the attachment limit, git refusing a pull or
+push, an agent CLI that is not installed), which is shown and not reported — with the method, status and
 route shape of the API call that failed just before it (e.g. `POST
 /api/v1/p/:param/runs/:param/messages`, 409). The toast's text is masked first: quoted values,
 emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project names and
