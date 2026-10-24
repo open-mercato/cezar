@@ -18,6 +18,9 @@ describe('RunManager.startNow', () => {
   let store: RunStore;
   let manager: RunManager;
   let unregister: () => void;
+  /** Accounts the stub participant reports as waiting out a usage-limit reset. */
+  let heldAccounts: Set<string>;
+  let semaphore: WorkspaceSemaphore;
   const savedDryRun = process.env.CEZ_DRY_RUN;
 
   beforeEach(async () => {
@@ -28,9 +31,15 @@ describe('RunManager.startNow', () => {
     await run('git', ['add', '-A'], { cwd: repoRoot });
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
-    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+    semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
     // Another project holding the only workspace slot for the whole test.
-    unregister = semaphore.register({ busySlots: () => 1, pump: () => {}, oldestQueuedAt: () => null });
+    heldAccounts = new Set();
+    unregister = semaphore.register({
+      busySlots: () => 1,
+      pump: () => {},
+      oldestQueuedAt: () => null,
+      accountHolds: () => ({ deadline: heldAccounts, inFlight: new Set() }),
+    });
     manager = new RunManager(store, repoRoot, { semaphore });
   });
 
@@ -58,13 +67,26 @@ describe('RunManager.startNow', () => {
     expect(store.getRun(first.id)?.status).toBe('queued');
     expect(store.getRun(second.id)?.status).toBe('queued');
 
-    expect(manager.startNow(second.id)).toBe(true);
+    expect(await manager.startNow(second.id)).toBe('started');
     await leftQueue(second.id);
 
     expect(store.getRun(first.id)?.status).toBe('queued');
   }, 30_000);
 
-  it('refuses a run that is not queued', () => {
-    expect(manager.startNow('no-such-run')).toBe(false);
+  it('refuses a run that is not queued', async () => {
+    expect(await manager.startNow('no-such-run')).toBe('not-queued');
+  });
+
+  it('refuses a run whose account is held, and leaves no mark to jump the cap once it lifts', async () => {
+    heldAccounts.add('claude:default');
+    const queued = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:done held', worktree: false });
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(await manager.startNow(queued.id)).toBe('held');
+
+    heldAccounts.clear();
+    await semaphore.release(); // a pump with the hold gone — the cap is still saturated
+    await new Promise((r) => setTimeout(r, 300));
+    expect(store.getRun(queued.id)?.status).toBe('queued');
   });
 });

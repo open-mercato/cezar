@@ -730,7 +730,8 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
           size="sm"
           variant="outline"
           className="mt-2"
-          disabled={startNow.isPending}
+          // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
+          disabled={startNow.isPending || startNow.isSuccess}
           onClick={() => startNow.mutate()}
           title="Start this task now, over the parallel-task limit"
         >

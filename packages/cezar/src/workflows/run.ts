@@ -1916,6 +1916,7 @@ export class RunManager {
           if (next === -1) break; // nothing queued can start right now
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          // Retired here: a run `requeueWhileHeld` sends back waits its turn again, Start now dropped.
           this.startNowRequested.delete(runId);
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
           // question and would send this run straight back to the queue.
@@ -3472,13 +3473,22 @@ export class RunManager {
   /**
    * Start a queued run now, over the workspace and project `maxParallel` caps — the queued
    * placeholder's "Start now". The run still waits out a usage-limit hold on its account (starting
-   * into a closed window only fails it). False when the run is not in this manager's queue.
+   * into a closed window only fails it), so a held run is refused rather than marked to jump the
+   * cap later, when nobody is looking.
    */
-  startNow(runId: string): boolean {
-    if (!this.queue.includes(runId)) return false;
+  async startNow(runId: string): Promise<'started' | 'not-queued' | 'held'> {
+    if (!this.queue.includes(runId)) return 'not-queued';
+    const holds = this.semaphore.accountHolds();
+    const run = this.store.getRun(runId);
+    if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
+      const { defaultRunner } = await loadConfig(this.repoRoot);
+      if (accountHeldFor(run, holds, defaultRunner ?? 'claude')) return 'held';
+    }
+    // The config read above awaited — the run may have started or been cancelled meanwhile.
+    if (!this.queue.includes(runId)) return 'not-queued';
     this.startNowRequested.add(runId);
     void this.pump();
-    return true;
+    return 'started';
   }
 
   /**

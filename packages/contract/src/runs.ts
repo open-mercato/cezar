@@ -644,7 +644,8 @@ export type DeleteRunResponse = z.infer<typeof deleteRunResponseSchema>;
 export const finishResponseSchema = z.object({ finished: z.literal(true) });
 export type FinishResponse = z.infer<typeof finishResponseSchema>;
 
-/** `POST /runs/:id/start-now` — start a queued run over the parallel cap; "not queued" is a 409. */
+/** `POST /runs/:id/start-now` — start a queued run over the parallel cap; not queued, or its account
+ *  held by a usage limit, is a 409. */
 export const startNowResponseSchema = z.object({ started: z.literal(true) });
 export type StartNowResponse = z.infer<typeof startNowResponseSchema>;
 

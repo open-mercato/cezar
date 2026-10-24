@@ -4962,11 +4962,13 @@ export function createApp(deps: ServerDeps) {
     })
 
     // "Start now": jump a queued run past the `maxParallel` cap.
-    .post('/runs/:id/start-now', (c) => {
+    .post('/runs/:id/start-now', async (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      if (!manager.startNow(id)) return c.json({ error: 'run is not queued' }, 409);
+      const outcome = await manager.startNow(id);
+      if (outcome === 'not-queued') return c.json({ error: 'run is not queued' }, 409);
+      if (outcome === 'held') return c.json({ error: 'the agent account is held by a usage limit' }, 409);
       return c.json({ started: true as const });
     })
 
