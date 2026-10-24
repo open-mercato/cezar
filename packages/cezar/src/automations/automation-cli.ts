@@ -52,7 +52,9 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
                      [--label <l>]... [--author <a>]... [--enable]
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
                                                 (weekdays), "M H * * D" (one weekday, 0 or 7 = Sunday) or "0 */N * * *"
-                                                (every N hours, N in 1,2,3,4,6,8,12); anything else needs the JSON form
+                                                (every N hours, N in 1,2,3,4,6,8,12); anything else needs the JSON form.
+                                                --at runs it once, at that wall time in the cockpit's time zone, then
+                                                pauses it
   cez automation add --kind tracker --name <name> --on issue.status_changed --to-status <status-id>
                      [--changed-label <label-id>] [--require-label <name>]... [--every 30m] --prompt <text> [--enable]
                                                 use this project's configured tracker; only advertised events are accepted

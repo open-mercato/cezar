@@ -55,7 +55,9 @@ export function NextRunsPreview({
             : <>Checks GitHub every {Math.round(intervalSeconds / 60)} min while this cockpit is open, through your <code className="text-xs">gh</code>. No webhook or public URL required.</>}
         </p>
       ) : runs.length === 0 ? (
-        <p className="m-0 px-3.5 pb-1.5 text-[12.5px] leading-[1.5] text-muted-foreground">{schedule.type === 'once' ? 'This time has already passed.' : 'Nothing in the next nine days.'}</p>
+        <p className="m-0 px-3.5 pb-1.5 text-[12.5px] leading-[1.5] text-muted-foreground">
+          {schedule.type !== 'once' ? 'Nothing in the next nine days.' : schedule.date ? 'This time has already passed.' : 'Pick a date.'}
+        </p>
       ) : (
         runs.map((ms) => (
           <div key={ms} data-slot="next-run" className="flex gap-2.5 px-3.5 py-[5px] text-[13px]">
