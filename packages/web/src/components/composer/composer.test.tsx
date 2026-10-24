@@ -814,6 +814,15 @@ describe('host seams (R4: the /new hero)', () => {
     expect(screen.queryByLabelText('Send')).toBeNull()
   })
 
+  it('names the submit chord in the send button tooltip, not on the button', async () => {
+    const { textarea } = renderComposer({ sendShortcut: '⌘↵' })
+    fireEvent.change(textarea, { target: { value: 'hi' } })
+    const send = screen.getByLabelText('Send')
+    expect(send.textContent).toBe('')
+    fireEvent.focus(send)
+    expect((await screen.findAllByText('⌘↵'))[0]!.closest('[data-slot="composer-send-shortcut"]')?.textContent).toBe('Send⌘↵')
+  })
+
   it('autoFocus puts the caret in the textarea on mount (⌘N lands ready to type)', () => {
     const { textarea } = renderComposer({ autoFocus: true })
     expect(document.activeElement).toBe(textarea)
