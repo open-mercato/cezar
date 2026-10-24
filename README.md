@@ -151,6 +151,7 @@ npx cezar-run server-install --platform ubuntu-vps
 
 This sets up HTTPS, a login and a system service, so you can open the cockpit from anywhere, including your phone.
 There are guides for [Ubuntu VPS](docs/server-install/ubuntu-vps.md) and [macOS + ngrok](docs/server-install/macosx-ngrok.md).
+Running Docker or [Dokploy](https://dokploy.com)? See the community-maintained [cezar-deploy](https://github.com/Niekes/cezar-deploy).
 
 ## How it works
 
