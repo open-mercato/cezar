@@ -1421,6 +1421,7 @@ export class RunManager {
     this.pendingJobs.clear();
     this.pendingBranchNames.clear();
     this.pendingContinuations.clear();
+    this.startNowRequested.clear();
     this.memoryPausing.clear();
     this.lastNamerKey.clear();
   }
@@ -3469,14 +3470,6 @@ export class RunManager {
   }
 
   /**
-   * Cancel a run — and, when it commands any, its whole subtree first (spec
-   * 2026-09-10-dispatch §Engine, `cancelDescendants` — the third budget brake).
-   *
-   * Depth-first and children-before-parent: a parent cancelled while its children kept working
-   * would be a cost brake that stops the one run that was only supervising. The answer is still
-   * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
-   */
-  /**
    * Start a queued run now, over the workspace and project `maxParallel` caps — the queued
    * placeholder's "Start now". The run still waits out a usage-limit hold on its account (starting
    * into a closed window only fails it). False when the run is not in this manager's queue.
@@ -3488,6 +3481,14 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * Cancel a run — and, when it commands any, its whole subtree first (spec
+   * 2026-09-10-dispatch §Engine, `cancelDescendants` — the third budget brake).
+   *
+   * Depth-first and children-before-parent: a parent cancelled while its children kept working
+   * would be a cost brake that stops the one run that was only supervising. The answer is still
+   * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
+   */
   cancel(runId: string): boolean {
     if (this.lifecycle.isBlocked(runId)) return false;
     this.cancelDescendants(runId, new Set([runId]));
