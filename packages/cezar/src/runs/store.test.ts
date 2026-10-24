@@ -867,6 +867,7 @@ describe('RunStore — referenced-PR discovery (#407, spec 2026-07-16-pr-autodis
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     const legacyStore = RunStore.open(dataDir);
     expect(legacyStore.getRun('legacy-1')?.referencedPullRequestUrl).toBeUndefined();
+    expect(legacyStore.getRun('legacy-1')?.referencedIssueCandidates).toBeUndefined();
   });
 });
 
@@ -1195,6 +1196,24 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     expect(loaded?.issueNumber).toBe(7);
   });
 
+  it('round-trips issue candidates and still loads a record written before those fields existed', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'See https://github.com/open-mercato/cezar/issues/1 and https://github.com/open-mercato/cezar/issues/2',
+    });
+    store.flush();
+    const reopened = RunStore.open(dataDir);
+    expect(reopened.getRun(run.id)?.referencedIssueCandidates).toEqual([
+      'https://github.com/open-mercato/cezar/issues/1',
+      'https://github.com/open-mercato/cezar/issues/2',
+    ]);
+
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
+    expect(RunStore.open(dataDir).getRun('legacy-1')?.referencedIssueCandidates).toBeUndefined();
+  });
+
   it('ambiguity clears the chip and takes back the number the janitor seeded', () => {
     const { store: firstStore, run } = freshRun();
     firstStore.appendEvent(run.id, {
@@ -1252,6 +1271,19 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
     const loaded = store.getRun(run.id);
     expect(loaded?.referencedIssueUrl).toBe('https://github.com/open-mercato/cezar/issues/2');
     expect(loaded?.issueNumber).toBe(2);
+  });
+
+  it('keeps the issue candidate working set capped at eight distinct links', () => {
+    const { store, run } = freshRun();
+    for (let n = 1; n <= 9; n += 1) {
+      store.appendEvent(run.id, {
+        type: 'result',
+        result: `See https://github.com/open-mercato/cezar/issues/${n}`,
+      });
+    }
+    expect(store.getRun(run.id)?.referencedIssueCandidates).toHaveLength(8);
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
   });
 
   it('never overwrites a marker-owned issueNumber from a stray link', () => {
@@ -2484,6 +2516,26 @@ describe('RunStore — janitor cost once its answer is settled (#540)', () => {
 
     expect(track).not.toHaveBeenCalled();
     expect({ ...store.getRun(run.id), lastSeq: before?.lastSeq }).toEqual(before);
+  });
+
+  it('skips the haystack once both candidate working sets are capped, even without a created PR', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    for (let n = 1; n <= 8; n += 1) {
+      store.appendEvent(run.id, {
+        type: 'note',
+        message: `see https://github.com/o/r/pull/${n} and ${issue(n)}`,
+      });
+    }
+    expect(store.getRun(run.id)?.pullRequestUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.referencedPrCandidates).toHaveLength(8);
+    const trackPrs = vi.spyOn(store as unknown as { trackReferencedPrs: () => boolean }, 'trackReferencedPrs');
+    const trackIssues = vi.spyOn(store as unknown as { trackReferencedIssues: () => boolean }, 'trackReferencedIssues');
+
+    store.appendEvent(run.id, { type: 'text', text: `new ${issue(9)} and https://github.com/o/r/pull/9` });
+
+    expect(trackPrs).not.toHaveBeenCalled();
+    expect(trackIssues).not.toHaveBeenCalled();
   });
 
   it('keeps seeding issueNumber while a resolved issue has none, even at the cap', () => {
