@@ -560,7 +560,7 @@ describe('RunManager.continueRun override', () => {
     expect(after?.model).toBeUndefined();
   });
 
-  it('a runner-only switch keeps a free-form model id — only known foreign presets are cleared', () => {
+  it("a runner-only switch drops a pin that is not provably the target's (telemetry 8e1173b1)", () => {
     const record = store.createRun({
       title: 't',
       workflow: 'quick-task',
@@ -571,8 +571,24 @@ describe('RunManager.continueRun override', () => {
     });
     store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
     store.updateStep(record.id, 's1', { sessionId: 'sess-1' });
+    // Nobody picked this gateway id for codex; the composer already shows `auto` after a switch.
     expect(manager.continueRun(record.id, { runner: 'codex' })).toEqual({ ok: true });
-    expect(store.getRun(record.id)?.model).toBe('my-org/custom-tune');
+    expect(store.getRun(record.id)?.model).toBeUndefined();
+  });
+
+  it("a runner-only switch keeps a pin native to the target, and an explicit pick always wins", () => {
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'opencode',
+      model: 'anthropic/claude-sonnet-5',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1' });
+    expect(manager.continueRun(record.id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.model).toBe('anthropic/claude-sonnet-5');
   });
 
   it('a runner-only continue on the SAME backend keeps the pin (no spurious clear)', () => {
