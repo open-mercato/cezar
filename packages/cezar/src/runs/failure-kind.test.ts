@@ -16,6 +16,11 @@ describe('failureKind — task_failed closed set (#1438)', () => {
     ['claude CLI timed out after 30m and was killed', 'timeout'],
     ['the session closed after inactivity before the task declared completion — continue to resume it', 'timeout'],
     ['session closed after 15m of inactivity', 'timeout'],
+    ['API Error: 529 Overloaded', 'transient'],
+    ['step "work" failed: No response from API (waited 3m)', 'transient'],
+    ['continue failed: Selected model is at capacity. Please try a different model.', 'transient'],
+    ['Failed to refresh OAuth token: another Claude Code process is refreshing it', 'transient'],
+    ['Credit balance is too low', 'other'],
     ['exit code 1', 'other'],
     [undefined, 'other'],
   ] as const)('%s → %s', (message, kind) => {

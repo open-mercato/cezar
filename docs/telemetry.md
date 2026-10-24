@@ -44,7 +44,7 @@ installed — never a skill name), `skill_missing_in_session` (the agent's backe
 when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (whether the fresh
 session that replaced a pruned conversation ended without a session error — `recovered` —, or
 `fresh_failed`, or was `cancelled`), `task_failed` (the agent's backend and a kind —
-`missing_session`, `usage_limit`, `auth`, `timeout` or `other` — never the error text; once per
+`missing_session`, `usage_limit`, `auth`, `transient`, `timeout` or `other` — never the error text; once per
 transition into failed, not for runs a restart interrupted nor for an auto-resume failing again),
 `skills_update_apply_dropped` (a skills update whose request lost its connection, and whether
 following the server then found it `recovered`, `not_applied`, `unreachable` or `timed_out`),

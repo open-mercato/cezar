@@ -305,6 +305,22 @@ describe('ThreadView', () => {
     )
   })
 
+  it('failed by a transient agent error → the dock says it retries, not that a limit was hit', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: API Error: 529 Overloaded',
+          autoResumeAt: '2026-10-24T12:02:00.000Z',
+          autoResumeReason: 'transient',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Temporary agent error — this task retries automatically at')
+    expect(hint?.textContent).not.toContain('Usage limit')
+  })
+
   it('offers a per-task opt-out that hits DELETE /auto-resume for THIS run only', async () => {
     const calls: Array<{ url: string; method: string }> = []
     vi.stubGlobal(

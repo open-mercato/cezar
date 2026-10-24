@@ -332,6 +332,10 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Why the pending (or in-flight) automatic resume exists. Absent = a usage limit, the only
+   *  kind that holds its account; `transient` = a vendor/network blip being retried (spec
+   *  2026-10-24-agent-cli-error-cooperation), which holds nothing. */
+  autoResumeReason: z.enum(['transient']).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -581,6 +585,7 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+  run.autoResumeReason = undefined;
 }
 
 /**

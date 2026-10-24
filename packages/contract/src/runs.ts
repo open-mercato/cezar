@@ -266,6 +266,9 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** `transient` when the pending resume retries a vendor/network blip rather than waiting out a
+   *  usage limit (spec 2026-10-24-agent-cli-error-cooperation). Absent = a usage limit. */
+  autoResumeReason: z.enum(['transient']).optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */

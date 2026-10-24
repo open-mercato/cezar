@@ -28,6 +28,7 @@ import {
 } from '../core/private-mcp.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
+import { isTransientAgentError } from '../core/transient-error.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -690,6 +691,18 @@ export const MAX_AUTO_RESUMES = 12;
  * note instead of fired, so the only tasks a sweep can revive are ones someone is still waiting on.
  */
 export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
+/**
+ * The waits before each automatic retry of a TRANSIENT agent failure — 529 overloaded, a stalled
+ * stream, a model at capacity (spec 2026-10-24-agent-cli-error-cooperation, Improvement 1). The
+ * CLI has already retried internally, so the first wait is minutes, not seconds. Indexed by the
+ * run's shared `autoResumeAttempts`, whose length is also the cap: retries and usage-limit resumes
+ * count against one counter, reset by the same completed or human turn, so they cannot ping-pong.
+ */
+export const TRANSIENT_RETRY_DELAYS_MS = [2 * 60_000, 6 * 60_000] as const;
+export const MAX_TRANSIENT_RETRIES = TRANSIENT_RETRY_DELAYS_MS.length;
+/** A retry promised "in two minutes" that a restart or a closed laptop missed by more than this is
+ *  stale: the user has moved on, so it is retired with a note instead of fired. */
+export const TRANSIENT_RETRY_MISSED_WINDOW_MS = 60 * 60_000;
 
 /**
  * How often the queue checks that it is not wedged.
@@ -715,7 +728,7 @@ const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
  *    it blocks fresh work but not other resumes. Blocking those deadlocked a live workspace.
  */
 function accountHeldFor(
-  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts'>,
+  run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts' | 'autoResumeReason'>,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
 ): boolean {
@@ -786,6 +799,8 @@ function deferredBindingActive(run: Pick<RunRecord, 'id' | 'deferredBinding' | '
 
 const AUTO_RESUME_PROMPT =
   'The provider usage limit that interrupted this task has reset. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
+const TRANSIENT_RETRY_PROMPT =
+  'Your previous turn stopped on a temporary provider or network error. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 /**
  * The wake instant as a human reads it — local, to the SECOND, with the zone named. The
  * transcript line is what someone scanning a stalled task actually reads, and "18:41" is not
@@ -2345,6 +2360,7 @@ export class RunManager {
     // left a window — measured as exactly one extra task — where the queue saw a free slot and
     // an account that looked healthy, and started work that was already doomed.
     this.scheduleAutoResumeIfLimited(runId);
+    this.scheduleTransientRetry(runId);
     // A settled CHILD owes its parent a report (spec 2026-09-10-dispatch §Engine — the settle
     // ladder). Here for the same reason the two hooks above are: every terminal transition funnels
     // through this one method, and a parent parked on `monitoring` has no other way to learn that
@@ -2986,16 +3002,47 @@ export class RunManager {
       return;
     }
     const wakeAt = new Date(limit.resetAt.getTime() + AUTO_RESUME_GRACE_MS);
-    this.armAutoResume(runId, wakeAt.getTime());
+    this.armAutoResume(runId, wakeAt.getTime(), undefined);
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: `usage limit reached — resuming automatically at ${formatWakeInstant(wakeAt)}`,
     });
   }
 
-  /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it. */
-  private armAutoResume(runId: string, deadline: number): void {
-    this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString() });
+  /**
+   * A run just failed on a transient vendor or network error: retry it after a short backoff
+   * through the same timer, record fields and exits as the usage-limit resume above. Skipped
+   * whenever that path already promised a resume, so one failure arms at most one timer.
+   */
+  private scheduleTransientRetry(runId: string): void {
+    if (this.autoResumeTimers.has(runId)) return;
+    const run = this.store.getRun(runId);
+    if (!run || run.status !== 'failed' || run.archived || run.autoResumeAt) return;
+    // An unanswered CEZ:ASK waits for its human; a retry prompt would answer it for them.
+    if (run.awaitingAnswerSince !== undefined) return;
+    if (!isTransientAgentError(run.error)) return;
+    if (!this.semaphore.autoResumeOnUsageLimit()) return;
+    if (!run.steps.some((step) => step.sessionId)) return;
+    const attempts = run.autoResumeAttempts ?? 0;
+    if (attempts >= MAX_TRANSIENT_RETRIES) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: `automatic retry cap reached (${MAX_TRANSIENT_RETRIES}) — continue this task manually`,
+      });
+      return;
+    }
+    const wakeAt = new Date(Date.now() + TRANSIENT_RETRY_DELAYS_MS[attempts]!);
+    this.armAutoResume(runId, wakeAt.getTime(), 'transient');
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `temporary agent error — retrying automatically at ${formatWakeInstant(wakeAt)} (${attempts + 1}/${MAX_TRANSIENT_RETRIES})`,
+    });
+  }
+
+  /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it.
+   *  `reason` is always written, so a usage-limit arm never inherits a stale `transient`. */
+  private armAutoResume(runId: string, deadline: number, reason: RunRecord['autoResumeReason']): void {
+    this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString(), autoResumeReason: reason });
     const timer = setTimeout(() => this.fireAutoResume(runId), Math.max(0, deadline - Date.now()));
     timer.unref?.();
     this.autoResumeTimers.set(runId, timer);
@@ -3017,9 +3064,14 @@ export class RunManager {
       return;
     }
     const attempts = (run.autoResumeAttempts ?? 0) + 1;
+    const reason = run.autoResumeReason;
     // `continueRun` retires the pending resume (timer + record fields) on the way in — this is a
-    // resume, not a user turn, so the counter is put back straight after.
-    const resumed = this.continueRun(runId, { text: AUTO_RESUME_PROMPT }, true);
+    // resume, not a user turn, so the counter (and what it is counting) is put back straight after.
+    const resumed = this.continueRun(
+      runId,
+      { text: reason === 'transient' ? TRANSIENT_RETRY_PROMPT : AUTO_RESUME_PROMPT },
+      true,
+    );
     if (!resumed.ok) {
       // Refusals happen before `continueRun` retires anything, so the deadline is still on the
       // record — and a deadline in the past is a promise the cockpit keeps displaying and the
@@ -3027,14 +3079,16 @@ export class RunManager {
       this.clearAutoResume(runId);
       this.store.appendEvent(runId, {
         type: 'note',
-        message: `automatic resume could not start — ${resumed.error ?? 'unknown'}`,
+        message: `automatic ${reason === 'transient' ? 'retry' : 'resume'} could not start — ${resumed.error ?? 'unknown'}`,
       });
       return;
     }
-    this.store.updateRun(runId, { autoResumeAttempts: attempts });
+    this.store.updateRun(runId, { autoResumeAttempts: attempts, autoResumeReason: reason });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
-      message: `usage limit reset — resuming automatically (${attempts}/${MAX_AUTO_RESUMES})`,
+      message: reason === 'transient'
+        ? `retrying after a temporary agent error (${attempts}/${MAX_TRANSIENT_RETRIES})`
+        : `usage limit reset — resuming automatically (${attempts}/${MAX_AUTO_RESUMES})`,
     });
     // A deferred continuation only ENQUEUES itself; the queue moves when something pumps it, and
     // `recover()` — the other deferring caller — pumps once after its whole bulk sweep. A timer
@@ -3084,13 +3138,14 @@ export class RunManager {
       if (run.status !== 'failed' || !run.autoResumeAt) continue;
       if (this.autoResumeTimers.has(run.id)) continue;
       const deadline = Date.parse(run.autoResumeAt);
+      const transient = run.autoResumeReason === 'transient';
       // A deadline that is unreadable, belongs to a run that has spent its cap, or belongs to a
       // task the user has archived is retired rather than re-armed: it can only mislead. One
       // that has just passed arms at zero — the window is open, which is the point.
       if (
         run.archived
         || !Number.isFinite(deadline)
-        || (run.autoResumeAttempts ?? 0) >= MAX_AUTO_RESUMES
+        || (run.autoResumeAttempts ?? 0) >= (transient ? MAX_TRANSIENT_RETRIES : MAX_AUTO_RESUMES)
       ) {
         this.store.updateRun(run.id, { autoResumeAt: undefined });
         continue;
@@ -3098,15 +3153,17 @@ export class RunManager {
       // …and one missed by more than a day is retired loudly: reviving a task from another era
       // is a surprise, not a service, and this is what keeps a sweep from resurrecting every
       // limit-stopped task a user has long since walked away from.
-      if (Date.now() - deadline > AUTO_RESUME_MISSED_WINDOW_MS) {
+      if (Date.now() - deadline > (transient ? TRANSIENT_RETRY_MISSED_WINDOW_MS : AUTO_RESUME_MISSED_WINDOW_MS)) {
         this.store.updateRun(run.id, { autoResumeAt: undefined });
         this.store.appendEvent(run.id, {
           type: 'note',
-          message: 'automatic resume expired — its window reopened over a day ago; continue this task manually',
+          message: transient
+            ? 'automatic retry expired — it was due over an hour ago; continue this task manually'
+            : 'automatic resume expired — its window reopened over a day ago; continue this task manually',
         });
         continue;
       }
-      this.armAutoResume(run.id, deadline);
+      this.armAutoResume(run.id, deadline, run.autoResumeReason);
     }
   }
 
@@ -3190,7 +3247,8 @@ export class RunManager {
     if (this.semaphore.busy() > 0) return;
     // A future deadline is a real reason to sit still: that timer will fire and pump.
     for (const run of this.store.listRuns()) {
-      if (run.status !== 'failed' || !run.autoResumeAt) continue;
+      // A transient retry holds no account, so it is no reason for the queue to idle.
+      if (run.status !== 'failed' || !run.autoResumeAt || run.autoResumeReason === 'transient') continue;
       const deadline = Date.parse(run.autoResumeAt);
       if (Number.isFinite(deadline) && deadline > now) return;
     }
@@ -3225,7 +3283,7 @@ export class RunManager {
    *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
   private readonly holdInputs = new Map<string, string>();
   private readonly onRunHoldInputs = (run: RunRecord) => {
-    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.runner, run.agentProfile]);
+    const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.runner, run.agentProfile]);
     if (this.holdInputs.get(run.id) === inputs) return;
     this.holdInputs.set(run.id, inputs);
     this.onQueueHoldChange();
@@ -3270,6 +3328,9 @@ export class RunManager {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
       const key = () => runAccountKey(run, run.runner ?? 'claude');
+      // A transient retry is about one request, not the account's window: holding the account
+      // for it would stall every other task on it for nothing.
+      if (run.autoResumeReason === 'transient') continue;
       if (run.status === 'failed' && run.autoResumeAt) {
         const at = Date.parse(run.autoResumeAt);
         if (Number.isFinite(at) && at > now) { deadline.add(key()); deadlines.set(key(), Math.min(at, deadlines.get(key()) ?? Infinity)); }
@@ -3314,8 +3375,8 @@ export class RunManager {
     this.autoResumeTimers.delete(runId);
     const run = this.store.getRun(runId);
     if (!run) return;
-    if (run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined) {
-      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined });
+    if (run.autoResumeAt !== undefined || run.autoResumeAttempts !== undefined || run.autoResumeReason !== undefined) {
+      this.store.updateRun(runId, { autoResumeAt: undefined, autoResumeAttempts: undefined, autoResumeReason: undefined });
     }
   }
 
@@ -4626,7 +4687,7 @@ export class RunManager {
         // 2026-08-03-auto-resume-after-usage-limit). `settleSuccess` does the same for a run that
         // finishes outright; this covers the far more common "parked for the user" ending.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined });
+          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
         }
         // A nudged turn did NOT park, so it must not report that it did: the handoff file is
         // the rolling context the agent reads back on resume (spec 007), not a log, and an
@@ -6759,7 +6820,7 @@ export class RunManager {
         }
         // The window is proven open — see the twin in `runContinuation`.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
-          this.store.updateRun(runId, { autoResumeAttempts: undefined });
+          this.store.updateRun(runId, { autoResumeAttempts: undefined, autoResumeReason: undefined });
         }
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
@@ -7312,6 +7373,7 @@ export class RunManager {
         finishedAt: new Date().toISOString(),
         currentStepId: undefined,
         autoResumeAttempts: undefined,
+        autoResumeReason: undefined,
       });
       this.store.appendEvent(runId, {
         type: 'lifecycle',
@@ -7338,6 +7400,7 @@ export class RunManager {
       // counter starts over — otherwise a task that legitimately met the limit once a week would
       // creep toward the cap forever and stop resuming for no reason anyone could see.
       autoResumeAttempts: undefined,
+      autoResumeReason: undefined,
     });
     this.store.appendEvent(runId, {
       type: 'lifecycle',
