@@ -2162,9 +2162,6 @@ mod tests {
         url::Url::parse(raw).unwrap()
     }
 
-    /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
-    /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
-    /// onto the brand row (shell 0.1.1).
     /// The boot project rides `--repo`, never the cwd: a cwd the app may not read made cezar
     /// exit 1 before answering (telemetry 5af5aec6).
     #[test]
@@ -2229,6 +2226,9 @@ mod tests {
         assert!(INIT_SCRIPT.contains("microphone: true"));
     }
 
+    /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
+    /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
+    /// onto the brand row (shell 0.1.1).
     #[test]
     fn the_legacy_inset_spares_what_the_shell_adds() {
         let rule = INIT_SCRIPT.split("padding-top:28px!important").next().unwrap();
