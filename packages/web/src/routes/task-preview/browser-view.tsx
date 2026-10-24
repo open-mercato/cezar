@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
-import { chordFromEvent, formatChord, isApplePlatform } from '@/lib/keybindings'
+import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { cn } from '@/lib/utils'
 
 import {
@@ -63,7 +63,6 @@ export function BrowserView({
   renderDesignNote,
   onDesignEscape,
   designTray,
-  designShortcut,
   renderEmpty,
 }: {
   state: BrowserState
@@ -94,8 +93,6 @@ export function BrowserView({
   /** The host's batch send for its notes, floated in the frame's corner while Design Mode is on;
    *  `null` when there is nothing to send. */
   designTray?: React.ReactNode
-  /** The chord that switches Design Mode on and off (`keybindings.ts` spelling), if any. */
-  designShortcut?: string
   /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
    *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
   renderEmpty?: (open: (url: string) => void) => React.ReactNode
@@ -211,22 +208,23 @@ export function BrowserView({
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
-  // Heard here, and forwarded by the picker when the key is pressed inside the mirrored page.
-  const designChord = designOffered ? designShortcut : undefined
+  // `D` switches it, like the workspace's other bare keys (`F`, `[`, `]`): heard here, and
+  // forwarded by the picker when pressed inside the mirrored page.
   const toggleDesign = useRef(() => {})
   toggleDesign.current = () => {
     if (designAllowed && targetOrigin !== null) setDesign((on) => !on)
   }
   useEffect(() => {
-    if (!designChord) return
+    if (!designOffered) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.repeat || event.defaultPrevented || chordFromEvent(event) !== designChord) return
+      if (event.repeat || event.defaultPrevented || !isDesignKey(event) || isEditableTarget(event.target)) return
+      if (document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
       event.preventDefault()
       toggleDesign.current()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [designChord])
+  }, [designOffered])
   const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
   // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
   // be loaded again a moment later through the mirror.
@@ -348,13 +346,6 @@ export function BrowserView({
   useEffect(() => {
     if (pickerReady) sendMarks()
   }, [pickerReady, sendMarks])
-  useEffect(() => {
-    if (!pickerReady || mirror === null) return
-    frameRef.current?.contentWindow?.postMessage(
-      { source: 'cezar-design-host', type: 'set-shortcut', chord: designChord ?? null, apple: isApplePlatform() },
-      mirror,
-    )
-  }, [designChord, mirror, pickerReady])
 
   // What Esc in the page means depends on state the listener below must read fresh.
   const openNote = useRef<string | null>(null)
@@ -699,14 +690,21 @@ export function BrowserView({
             disabled={designUnavailable !== null || targetOrigin === null}
             title={
               designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? `Stop selecting elements (Esc${designChord ? ` or ${formatChord(designChord)}` : ''})`
-              : `Click an element of the page to send it to the agent${designChord ? ` (${formatChord(designChord)})` : ''}`)
+              : designActive ? 'Stop selecting elements (D or Esc)'
+              : 'Click an element of the page to send it to the agent (D)')
             }
             onClick={() => setDesign((on) => !on)}
             className="ml-1 disabled:opacity-40"
           >
             <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
             Design Mode
+            <kbd
+              data-slot="browser-design-key"
+              aria-hidden="true"
+              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-[10px] leading-4 opacity-70"
+            >
+              D
+            </kbd>
           </Button>
         ) : null}
       </div>
@@ -820,6 +818,11 @@ export function BrowserView({
       </div>
     </div>
   )
+}
+
+/** The Design Mode key: a bare `D` — no modifier, so it never collides with a browser chord. */
+function isDesignKey(event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'ctrlKey' | 'altKey'>): boolean {
+  return (event.key === 'd' || event.key === 'D') && !event.metaKey && !event.ctrlKey && !event.altKey
 }
 
 function ToolbarButton({

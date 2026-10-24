@@ -157,16 +157,13 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   message, when the user decides. The send names no session state — no "reopen" wording.
   An ADDED note is removed only deliberately: reopened, ✕ / `Esc` just close it, and its window
   offers **Delete**. `Esc`/✕ still throw away a draft that was never added.
-- **Shortcut.** `Mod+Shift+D` (⌘⇧D / Ctrl+Shift+D, rebindable in Settings → Keyboard as
-  `design-mode`) switches Design Mode on and off. A key pressed inside the mirrored page never
-  reaches the cockpit, so the picker forwards that one chord (`set-shortcut` → `toggle`).
+- **Key.** A bare `D` switches Design Mode on and off — shown on the button, like the workspace's
+  other bare keys (`F`, `[`, `]`); not while typing, not with a modifier. A key pressed inside the
+  mirrored page never reaches the cockpit, so the picker forwards that one key (`toggle`).
 - **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.
   `Esc` with no note open leaves Design Mode.
-- **Shortcut (2026-10-24).** `Mod+Shift+D` (⌘⇧D / Ctrl+Shift+D, rebindable in Settings → Keyboard
-  as `design-mode`) switches Design Mode on and off. Inside the mirrored page the picker forwards
-  the chord (`set-shortcut` → `toggle`), since a key pressed in the frame never reaches the cockpit.
 - **Drafts survive.** They are written through to the run's draft store (`design-picks`), so a
   half-written note outlives a reload of the page and of the cockpit. On a new
   document the picker frames the element again from its selector — only when that selector names

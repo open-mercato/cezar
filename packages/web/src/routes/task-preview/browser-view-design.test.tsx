@@ -109,18 +109,24 @@ describe('the Design Mode toggle', () => {
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('switches on and off from its keyboard shortcut, and names it on the button', async () => {
-    render(<BrowserView state={{ tabs: [APP], active: 0 }} onChange={vi.fn()} onPickElement={vi.fn(() => true)} designShortcut="Mod+Shift+D" />)
-    expect(toggle().getAttribute('title')).toMatch(/\((⌘⇧D|Ctrl\+Shift\+D)\)$/)
-    const chord = { code: 'KeyD', key: 'D', shiftKey: true, metaKey: true, ctrlKey: true }
-    fireEvent.keyDown(window, chord)
+  it('switches on and off with D, and shows that key on the button', async () => {
+    renderView()
+    expect(document.querySelector('[data-slot=browser-design-key]')!.textContent).toBe('D')
+    fireEvent.keyDown(window, { key: 'd' })
     expect(toggle().getAttribute('aria-pressed')).toBe('true')
     await waitFor(() => expect(openDesignProxy).toHaveBeenCalledTimes(1))
-    fireEvent.keyDown(window, chord)
+    fireEvent.keyDown(window, { key: 'd' })
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
-  it('switches off when the shortcut is pressed inside the page (the picker forwards it)', async () => {
+  it('leaves D alone while the user types, and with a modifier', () => {
+    renderView()
+    fireEvent.keyDown(screen.getByLabelText('Address'), { key: 'd' })
+    fireEvent.keyDown(window, { key: 'd', metaKey: true })
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('switches off when D is pressed inside the page (the picker forwards it)', async () => {
     renderView()
     await enterDesignMode()
     deliver({ source: 'cezar-design', type: 'toggle' }, MIRROR, frame().contentWindow)
@@ -131,17 +137,6 @@ describe('the Design Mode toggle', () => {
     renderView(undefined, 'https://github.com/')
     expect((toggle() as HTMLButtonElement).disabled).toBe(true)
     expect(toggle().getAttribute('title')).toMatch(/works on local http:\/\/ addresses/)
-  })
-
-  it('switches on and off with its shortcut, from the cockpit or from inside the page', async () => {
-    render(<BrowserView state={{ tabs: [APP], active: 0 }} onChange={vi.fn()} onPickElement={vi.fn(() => true)} designShortcut="Mod+Shift+D" />)
-    expect(toggle().getAttribute('title')).toContain('Ctrl+Shift+D')
-    fireEvent.keyDown(window, { code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true })
-    expect(toggle().getAttribute('aria-pressed')).toBe('true')
-    await waitFor(() => expect(frame().getAttribute('src')).toBe(`${MIRROR}/settings?tab=1`))
-    await act(async () => {})
-    deliver({ source: 'cezar-design', type: 'toggle' }, MIRROR, frame().contentWindow)
-    expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
   it('frames the app directly until it is switched on', () => {

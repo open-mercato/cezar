@@ -154,8 +154,6 @@ export function chordProblem(chord: string, apple = isApplePlatform()): string |
 export const DEFAULT_KEYBINDINGS: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`tab:${index + 1}`, `Mod+${index + 1}`])),
   'terminal-column': 'Mod+/',
-  // Run by the Preview itself, not the palette (spec 2026-10-09-design-mode §7a).
-  'design-mode': 'Mod+Shift+D',
 }
 
 const MAX_STORED_BINDINGS = 200
@@ -253,7 +251,6 @@ export const BINDABLE_COMMANDS: readonly { id: string; label: string; group: str
   { id: 'split', label: 'Split view', group: 'Layout' },
   { id: 'terminal', label: 'Show / hide terminal', group: 'Layout' },
   { id: 'terminal-column', label: 'Terminal in a column', group: 'Layout' },
-  { id: 'design-mode', label: 'Design Mode on / off', group: 'Preview' },
   { id: 'open:terminal-resume', label: 'Terminal (resume session)', group: 'Open in' },
   { id: 'copy:link', label: 'Copy task link', group: 'Copy' },
   { id: 'copy:branch', label: 'Copy branch name', group: 'Copy' },

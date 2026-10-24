@@ -138,32 +138,6 @@ describe('selecting an element', () => {
   })
 })
 
-describe('the Design Mode shortcut', () => {
-  const press = (init: KeyboardEventInit) => {
-    const event = new page.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
-    page.document.body.dispatchEvent(event)
-    return event
-  }
-
-  it('forwards the cockpit\'s chord — picker on or off — and keeps it from the page', async () => {
-    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: false })
-    tell({ type: 'set-active', active: false })
-    const event = press({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true })
-    expect(event.defaultPrevented).toBe(true)
-    await settle()
-    expect(posted.at(-1)).toMatchObject({ type: 'toggle' })
-  })
-
-  it('leaves every other key, and every key before the cockpit named one, to the page', async () => {
-    expect(press({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false)
-    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: true })
-    // On a Mac Mod is ⌘, so Ctrl+Shift+D is a different chord.
-    expect(press({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false)
-    await settle()
-    expect(posted.some((message) => message.type === 'toggle')).toBe(false)
-  })
-})
-
 describe('sent notes and drafts that outlive the page', () => {
   it('numbers the frame of a sent note and leaves a draft\'s frame plain', async () => {
     mouse('click', page.document.querySelector('.buy')!)
@@ -245,27 +219,27 @@ describe('the cockpit is the authority on what is selected', () => {
   })
 })
 
-describe('the Design Mode shortcut', () => {
-  const key = (init: KeyboardEventInit) => {
+describe('the Design Mode key', () => {
+  const press = (init: KeyboardEventInit, target: Element = page.document.body) => {
     const event = new page.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
-    page.document.body.dispatchEvent(event)
+    target.dispatchEvent(event)
     return event
   }
 
-  it('is forwarded to the cockpit from inside the page — a key here never reaches it otherwise', async () => {
-    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: false })
-    expect(key({ code: 'KeyD', key: 'D', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(true)
-    // Another chord stays the page's.
-    expect(key({ code: 'KeyD', key: 'd', ctrlKey: true }).defaultPrevented).toBe(false)
+  it('forwards a bare D to the cockpit — picker on or off — and keeps it from the page', async () => {
+    tell({ type: 'set-active', active: false })
+    expect(press({ key: 'd' }).defaultPrevented).toBe(true)
     await settle()
     expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(1)
   })
 
-  it('works with the picker switched off — that is how Design Mode is switched back on', async () => {
-    tell({ type: 'set-shortcut', chord: 'Mod+Shift+D', apple: true })
-    tell({ type: 'set-active', active: false })
-    key({ code: 'KeyD', key: 'D', metaKey: true, shiftKey: true })
+  it('leaves D with a modifier, and D typed into the page\'s own field, to the page', async () => {
+    const field = page.document.createElement('input')
+    page.document.body.appendChild(field)
+    expect(press({ key: 'd', metaKey: true }).defaultPrevented).toBe(false)
+    expect(press({ key: 'd', ctrlKey: true }).defaultPrevented).toBe(false)
+    expect(press({ key: 'd' }, field).defaultPrevented).toBe(false)
     await settle()
-    expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(1)
+    expect(posted.some((message) => message.type === 'toggle')).toBe(false)
   })
 })

@@ -39,7 +39,6 @@ import { GitTabLoading } from '../task-git/git-tab-loading'
 import { BrowserView } from '../task-preview/browser-view'
 import { RunAppPanel } from '../task-preview/run-app'
 import { DesignNotePopup, DesignNotesTray } from '../task-preview/design-note-popup'
-import { useKeybindings } from '@/lib/use-keybindings'
 import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
@@ -608,7 +607,6 @@ function WorkspaceView({
 
   // Design Mode notes (spec 2026-10-09-design-mode) are the task's, shared by every Preview column.
   const designNotes = useDesignNotes(run)
-  const keybindings = useKeybindings()
   const { addDraft, discard: discardNote, note: noteFor, marks: designMarks } = designNotes
   const escapeNote = useCallback(
     (mark: string) => {
@@ -683,7 +681,6 @@ function WorkspaceView({
               onPickElement={addDraft}
               designMarks={designMarks}
               onDesignEscape={escapeNote}
-              designShortcut={keybindings.bindings.get('design-mode')}
               designTray={designNotes.ready > 0 ? <DesignNotesTray notes={designNotes} /> : null}
               renderEmpty={
                 terminalAllowed
@@ -711,7 +708,6 @@ function WorkspaceView({
       designMarks,
       designNotes,
       escapeNote,
-      keybindings.bindings,
       noteFor,
       onMarkedUnread,
       openInBrowser,

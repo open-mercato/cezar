@@ -63,9 +63,6 @@ const PICKER_SOURCE = String.raw`(function () {
   var docId = Math.random().toString(36).slice(2, 8);
   var nextKey = 1;
   var markTimer = null;
-  // The cockpit's Design Mode shortcut, in keybindings.ts's spelling — forwarded from here because
-  // a key pressed inside this frame never reaches the cockpit's own listener.
-  var toggle = null;
 
   function post(message) {
     message.source = 'cezar-design';
@@ -444,25 +441,13 @@ const PICKER_SOURCE = String.raw`(function () {
     post({ type: 'cancel' });
   }
 
-  var CODE_KEYS = { Slash: '/', Backslash: '\\', Period: '.', Comma: ',', Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Minus: '-', Equal: '=', Backquote: '\x60' };
-
-  function chordOf(event, apple) {
-    var code = event.code || '';
-    var key = /^Key[A-Z]$/.test(code) ? code.slice(3)
-      : /^Digit[0-9]$/.test(code) ? code.slice(5)
-      : CODE_KEYS[code] || (event.key && event.key.length === 1 ? event.key.toUpperCase() : null);
-    if (!key) return null;
-    var parts = [];
-    if (apple ? event.metaKey : event.ctrlKey) parts.push('Mod');
-    if (apple && event.ctrlKey) parts.push('Ctrl');
-    if (event.altKey) parts.push('Alt');
-    if (event.shiftKey) parts.push('Shift');
-    parts.push(key);
-    return parts.join('+');
-  }
-
+  // The cockpit's Design Mode key (a bare D) — forwarded from here because a key pressed inside
+  // this frame never reaches the cockpit. Typing in the page's own fields keeps it.
   function onToggleKey(event) {
-    if (!toggle || event.repeat || chordOf(event, toggle.apple) !== toggle.chord) return;
+    if (event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key !== 'd' && event.key !== 'D') return;
+    var target = event.target;
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ''))) return;
     swallow(event);
     post({ type: 'toggle' });
   }
@@ -497,9 +482,6 @@ const PICKER_SOURCE = String.raw`(function () {
     if (!data || data.source !== 'cezar-design-host') return;
     if (data.type === 'set-active') setActive(!!data.active);
     else if (data.type === 'set-marks' && Array.isArray(data.marks)) setMarks(data.marks.slice(0, 50));
-    else if (data.type === 'set-shortcut') {
-      toggle = typeof data.chord === 'string' && data.chord.length <= 40 ? { chord: data.chord, apple: !!data.apple } : null;
-    }
   });
   window.addEventListener('keydown', onToggleKey, true);
 
