@@ -587,6 +587,12 @@ const automationLogQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+/** A by-hand schedule launch that started no run, in words that say why (telemetry 411fac74:
+ *  "see the execution log" alone sent the user elsewhere for the one line that mattered). */
+function launchFailedMessage(outcome: { reason?: string }): string {
+  return outcome.reason ? `the launch failed: ${outcome.reason}` : 'the launch failed — see the execution log';
+}
+
 function editableAutomation(definition: AutomationDefinition) {
   return {
     name: definition.name,
@@ -4358,7 +4364,16 @@ export function createApp(deps: ServerDeps) {
       const outcome = await runner.runNow(automation);
       if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
       if (outcome.result === 'duplicate') return c.json({ error: 'this instant was already launched' }, 409);
+<<<<<<< HEAD
       if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+=======
+      if (!('runId' in outcome)) {
+        automationsChanged();
+        return c.json({ error: automation.deferredStart
+          ? store.get(automation.id)?.deferredStart?.error ?? 'The task could not start. Refresh its details in Tasks.'
+          : launchFailedMessage(outcome) }, 409);
+      }
+>>>>>>> 9f4c132 (fix(cockpit): fix toast bugs and stop reporting expected outcomes as errors (#1662))
       automationsChanged();
       return c.json({ runId: outcome.runId }, 202);
     })
@@ -4384,7 +4399,7 @@ export function createApp(deps: ServerDeps) {
       if (isScheduleAutomation(definition)) {
         const outcome = await new ScheduleRunner(scheduleHandle(project)).retry(definition, receipt);
         if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
-        if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+        if (!('runId' in outcome)) return c.json({ error: launchFailedMessage(outcome) }, 409);
         return c.json({ receiptId: receipt.receiptId, runId: outcome.runId }, 202);
       }
       if (isTrackerAutomation(definition)) {

@@ -522,6 +522,11 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
               </span>
             ) : null}
           </div>
+          {status?.status === 'not-installed' && status.hint ? (
+            <p data-slot="account-install-hint" className="mt-1 text-xs text-soft-foreground">
+              {status.hint}
+            </p>
+          ) : null}
         </div>
 
         {/* The collapsed row is a READING surface — which account, where, is it signed in. Every
@@ -531,7 +536,9 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             copy points at Connect. Burying the only sign-in path behind "Show details" is what left
             an added account with no way to log in. */}
         <div className="flex shrink-0 items-center gap-2">
-          {status?.status !== 'connected' ? (
+          {/* No Connect for a CLI that is not installed: the login it opens cannot run, and the
+              server only answers its install hint (telemetry 23976d8d) — the row shows that. */}
+          {status?.status !== 'connected' && status?.status !== 'not-installed' ? (
             <Button
               type="button"
               size="sm"
@@ -548,10 +555,12 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
                     // The server answers a copyable command when it cannot open a terminal (hosted
                     // mode, no emulator, a folder it refuses to embed). Showing it is the whole
                     // point of failing closed rather than running the bare login.
+                    // A 409 with a command is a login cezar could not open — not installed, hosted —
+                    // which the server already counts (`trackLoginNotOpened`); not an error report.
                     onError: (error: Error) =>
-                      toast(error instanceof ApiError && error.command
-                        ? `${error.message} — run: ${error.command}`
-                        : error.message, { tone: 'danger' }),
+                      error instanceof ApiError && error.command
+                        ? toast(`${error.message} — run: ${error.command}`, { tone: 'danger', expected: true })
+                        : toast(error.message, { tone: 'danger' }),
                   },
                 )
               }

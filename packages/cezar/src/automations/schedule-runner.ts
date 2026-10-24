@@ -50,7 +50,7 @@ export interface ScheduleRunnerHandle {
 
 export type ScheduleFireOutcome =
   | { result: 'launched' | 'catch-up' | 'manual'; runId: string; occurrenceAt: string }
-  | { result: 'skipped' | 'duplicate' | 'lease-held' | 'failed' | 'detection-only'; occurrenceAt?: string };
+  | { result: 'skipped' | 'duplicate' | 'lease-held' | 'failed' | 'detection-only'; occurrenceAt?: string; reason?: string };
 
 export class ScheduleRunner {
   constructor(private readonly handle: ScheduleRunnerHandle) {}
@@ -158,8 +158,17 @@ export class ScheduleRunner {
     const { store } = this.handle;
     if (!this.handle.launch) {
       store.appendReceipt({ ...receipt, status: 'launch-error', error: 'This cockpit cannot launch tasks.', updatedAt: new Date(now).toISOString() });
+<<<<<<< HEAD
       if (options.advance) this.advance(definition, Date.parse(occurrence.at), now);
       return { result: 'detection-only', occurrenceAt: occurrence.at };
+=======
+      if (options.advance) {
+        this.advance(definition, Date.parse(occurrence.at), now);
+        // The `launch-error` receipt stays retryable from the log, as for a failed launch.
+        this.retireOnce(definition);
+      }
+      return { result: 'detection-only', occurrenceAt: occurrence.at, reason: 'This cockpit cannot launch tasks.' };
+>>>>>>> 9f4c132 (fix(cockpit): fix toast bugs and stop reporting expected outcomes as errors (#1662))
     }
     const started = Date.now();
     const result: AutomationLogRecord['result'] = occurrence.trigger === 'schedule' ? 'launched' : occurrence.trigger;
@@ -193,7 +202,7 @@ export class ScheduleRunner {
       store.appendReceipt({ ...receipt, status: 'launch-error', error: message, updatedAt: new Date(this.now()).toISOString() });
       store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'failed', reason: message, receiptId: receipt.receiptId, durationMs: Date.now() - started });
       this.recordFailure(definition, occurrence, now, options.advance);
-      return { result: 'failed', occurrenceAt: occurrence.at };
+      return { result: 'failed', occurrenceAt: occurrence.at, reason: message };
     }
   }
 

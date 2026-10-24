@@ -52,6 +52,22 @@ function gitReason(res: GitResult, fallback: string): string {
   return text || fallback;
 }
 
+/** A failed fetch/pull/push in words for the person reading the toast, with the way out
+ *  (telemetry 9202a06a: a raw `error: …` line). Known outcomes get a sentence; anything else is
+ *  git's own `fatal:`/`error:` line — not its first line, which for a push is `To <remote>`. */
+export function syncFailureReason(res: GitResult, fallback: string): string {
+  const text = res.stderr.trim() || res.stdout.trim();
+  if (/\[rejected\]|failed to push some refs/.test(text)) return 'the remote has commits this branch does not — pull first';
+  if (/would be overwritten by (merge|checkout)/.test(text)) return 'uncommitted changes would be overwritten — commit or stash them first';
+  if (/Authentication failed|could not read Username|Permission denied \(publickey\)/i.test(text)) {
+    return 'git could not sign in to the remote — check your credentials';
+  }
+  if (/Could not resolve host/i.test(text)) return 'the remote could not be reached — check your connection';
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const line = lines.find((l) => /^(fatal|error):/.test(l)) ?? lines[0];
+  return line ? line.replace(/^(fatal|error):\s*/, '') : fallback;
+}
+
 // ---- structured changes -----------------------------------------------------
 
 /** Per-file patch cap — the GUI shows a "truncated" note past this. */
@@ -863,6 +879,6 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   const push = await git(dir, args);
-  if (!push.ok) return { ok: false, error: gitReason(push, 'git push failed') };
+  if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
   return { ok: true, branch, remote, upstreamSet: !upstream.ok };
 }

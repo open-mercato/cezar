@@ -318,6 +318,16 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect((await apiRequest(server, `/api/v1/automations/${pollDef.id}/run`, { method: 'POST' })).status).toBe(409);
   });
 
+  // telemetry 411fac74: the 409 named only "see the execution log", never why the launch failed.
+  it('says why a by-hand schedule launch failed', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, task: { ...schedule.task, workflow: 'no-such-workflow' } }))).json()) as any).automation;
+    const ran = await apiRequest(server, `/api/v1/automations/${created.id}/run`, { method: 'POST' });
+    expect(ran.status).toBe(409);
+    const { error } = (await ran.json()) as { error: string };
+    expect(error).toMatch(/^the launch failed: .*no-such-workflow/);
+  });
+
   it('lists the other registered projects\' automations as templates', async () => {
     const server = app();
     await apiRequest(server, '/api/v1/automations', json(schedule));
