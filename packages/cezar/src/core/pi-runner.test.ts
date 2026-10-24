@@ -1,7 +1,10 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 
 import type { AgentEvent } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
@@ -186,4 +189,59 @@ describe('pi spawns under pi credentials, not another runner', () => {
   it('keeps the seam identity pi-specific', () => {
     expect(new PiRunner().backend).toBe('pi');
   });
+});
+
+const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+  };
+});
+
+describe('pi session input after child exit', () => {
+  it.each([false, true])(
+    'stops accepting messages after spontaneous child exit (stdout held open: %s)',
+    async (holdStdoutOpen) => {
+      const child = Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+        exitCode: null as number | null, signalCode: null, pid: 4244,
+        kill: vi.fn(() => true),
+      }) as unknown as ChildProcessWithoutNullStreams;
+      const stdout = child.stdout as PassThrough;
+      spawnHook.override = () => child;
+      const session = new PiRunner({ bin: 'pi', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it', cwd: process.cwd(),
+      });
+      let resultSettled = false;
+      void session.result.then(() => { resultSettled = true; }, () => { resultSettled = true; });
+      try {
+        expect(session.open).toBe(true);
+        expect(child.stdin.writable).toBe(true);
+        Object.assign(child, { exitCode: 0 });
+        child.emit('exit', 0, null);
+        if (!holdStdoutOpen) stdout.end();
+
+        expect(session.open).toBe(false);
+        expect(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+        if (holdStdoutOpen) {
+          // A grandchild can inherit stdout and keep the result loop waiting after exit.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          expect(stdout.readableEnded).toBe(false);
+          expect(resultSettled).toBe(false);
+          expect(session.open).toBe(false);
+          expect(session.sendMessage([{ type: 'text', text: 'x' }])).toBe(false);
+        }
+      } finally {
+        stdout.end();
+        await session.result;
+        child.stdin.destroy();
+        child.stderr.destroy();
+        spawnHook.override = null;
+      }
+    },
+  );
 });

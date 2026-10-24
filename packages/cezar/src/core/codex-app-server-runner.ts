@@ -174,6 +174,9 @@ class CodexSession implements AgentSession {
     }
 
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.stdinOpen = false;
+    });
     this.child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = codexSpawnError(err, bin);
     });
