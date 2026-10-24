@@ -2401,6 +2401,8 @@ it('puts the start-time menu beside Send, not on the pill row, and summarizes a 
   expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
   expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
   expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
+  // The submit chord is printed inside the button it triggers.
+  expect(screen.getByRole('button', { name: 'Start task' }).querySelector('[data-slot="composer-send-shortcut"]')).not.toBeNull()
   fireEvent.change(textarea(), { target: { value: 'Later' } })
   fireEvent.click(menu)
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))

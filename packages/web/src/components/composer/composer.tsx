@@ -88,13 +88,15 @@ export interface ComposerProps {
   draftItems?: ReactNode
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
   footerStart?: ReactNode
-  /** Rendered between Dictation and the send button — the /new mode segment + kbd hint. */
+  /** Rendered between Dictation and the send button — the /new schedule summary and status. */
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
   sendLabel?: string
   /** Joined to the send button's right edge as a split button — the /new start-time menu. */
   sendMenu?: ReactNode
+  /** The submit chord (`submitShortcutHint()`), printed inside the send button it triggers. */
+  sendShortcut?: string
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
    * the only button (an empty box over a working agent offers to stop it); once there is something
@@ -171,6 +173,7 @@ export function Composer({
   sendAriaLabel = 'Send',
   sendLabel,
   sendMenu,
+  sendShortcut,
   stop,
   disabled = false,
   submitDisabled = false,
@@ -554,18 +557,27 @@ export function Composer({
   }
 
   const recording = dictation.recording
+  const sendDisabled =
+    disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
   const sendButton = (
     <Button
       type="button"
-      size={sendLabel ? "sm" : "icon-sm"}
+      size={sendLabel || sendShortcut ? "sm" : "icon-sm"}
       aria-label={sendAriaLabel}
-      disabled={
-        disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-      }
-      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
+      disabled={sendDisabled}
+      className={cn(sendLabel || sendShortcut ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
       onClick={submitDraft}
     >
       <ArrowUpIcon aria-hidden="true" />{sendLabel}
+      {sendShortcut ? (
+        <kbd
+          aria-hidden="true"
+          data-slot="composer-send-shortcut"
+          className="rounded-[4px] bg-primary-foreground/15 px-1 py-px font-mono text-[10.5px] font-medium"
+        >
+          {sendShortcut}
+        </kbd>
+      ) : null}
     </Button>
   )
 
@@ -725,7 +737,10 @@ export function Composer({
                   sendMenu ? (
                     <div data-slot="composer-send" className="flex items-center">
                       {sendButton}
-                      {sendMenu}
+                      {/* Stays usable while Send is disabled, but dimmed to match it. */}
+                      <div data-slot="composer-send-menu" className={cn("flex transition-opacity", sendDisabled && "opacity-50 hover:opacity-100 focus-within:opacity-100")}>
+                        {sendMenu}
+                      </div>
                     </div>
                   ) : sendButton
                 ) : null}

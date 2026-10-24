@@ -741,6 +741,7 @@ export function NewTaskRoute() {
                 : 'Connect an agent provider before starting a task.'
           }
           autocompleteSkills
+          sendShortcut={submitShortcutHint()}
           sendMenu={
             <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
               disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}
@@ -936,12 +937,6 @@ export function NewTaskRoute() {
                   Configure providers
                 </Link>
               ) : null}
-              <kbd
-                aria-hidden="true"
-                className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-              >
-                {submitShortcutHint()}
-              </kbd>
             </>
           }
         />
