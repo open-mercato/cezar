@@ -13,7 +13,7 @@ import { createApp, type ServerDeps } from './server.ts';
  * (c) actually launch the OS opener only for a real in-worktree file — `openFileInDefaultApp`
  * is mocked so the suite never actually spawns a real GUI app.
  */
-vi.mock('./open-in-app.js', async (importOriginal) => {
+vi.mock('./open-in-app.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./open-in-app.ts')>();
   return { ...actual, openFileInDefaultApp: vi.fn().mockResolvedValue(true) };
 });

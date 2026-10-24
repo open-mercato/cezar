@@ -2,10 +2,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import { parseAskMarkerResult } from './ask.js';
-import type { AgentEvent, AgentSession } from './agent-runner.js';
-import { PiRunner } from './pi-runner.js';
+import { RunStore } from '../runs/store.ts';
+import { parseAskMarkerResult } from './ask.ts';
+import type { AgentEvent, AgentSession } from './agent-runner.ts';
+import { PiRunner } from './pi-runner.ts';
 
 // Synthetic RPC peer: exercise the actual subprocess, mapper, runner and persistence
 // boundaries without needing a provider account. Shapes match mock-pi-rpc.mjs.
