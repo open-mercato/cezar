@@ -1,0 +1,25 @@
+---
+title: "Reclaim space after tasks"
+description: "Check worktree sizes and remove old directories after work is finished."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/worktrees-panel.tsx
+    line: 143
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The worktree list shows linked tasks, directory sizes, and ages. Reclaim now removes directories past the retention limit. After confirming, check the cleanup script results.
+
+## Where to find it
+
+Project settings → Worktrees → Reclaim now
+
+## How to use it
+
+1. Check the tasks, sizes, and directory ages.
+2. Use Reclaim now for directories past the retention limit.
+3. Confirm and check the cleanup result.
+
+> **Good to know**: Reclaim keeps branches. Delete removes both the directory and its branch.

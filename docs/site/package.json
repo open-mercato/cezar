@@ -1,0 +1,39 @@
+{
+  "name": "@open-mercato/cezar-docs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Cezar documentation site: MDX pages in content/docs, served by Next.js and Fumadocs. Not an npm workspace, so the repository's own install never pulls Next.js.",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --port 4322",
+    "build": "npm run check && next build",
+    "start": "serve out --listen 4322",
+    "check": "node scripts/check.mjs",
+    "typecheck": "next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "cn": "^0.5.0",
+    "fumadocs-core": "16.17.8",
+    "fumadocs-mdx": "15.4.10",
+    "fumadocs-ui": "npm:@fumadocs/base-ui@16.17.8",
+    "lucide-react": "^1.61.0",
+    "mermaid": "^12.2.0",
+    "next": "16.4.2",
+    "next-themes": "^0.4.6",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "postcss": "^8.5.31",
+    "serve": "^14.2.6",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "yaml": "^2.9.1"
+  }
+}

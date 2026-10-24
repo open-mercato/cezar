@@ -201,6 +201,8 @@ its children share that budget. Nothing auto-merges.
 
 ## Documentation
 
+The [documentation site](docs/site/README.md) has searchable feature pages, step-by-step guides, and architecture diagrams. Run it locally with `npm run docs:dev`.
+
 The [reference](docs/reference.md) covers everything else:
 [configuration](docs/reference.md#configuration-optional),
 [environment variables](docs/reference.md#how-it-runs-agents),

@@ -1,0 +1,25 @@
+---
+title: "Task command palette"
+description: "Find a command, file, or task without searching through tabs."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/task-palette/task-palette.tsx
+    line: 794
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The palette contains task actions, Git operations, views, saved layouts, and commands to open things in other applications. Use @ to search tasks, > for commands, or # for files. You can also assign keyboard shortcuts to commands.
+
+## Where to find it
+
+Task → Task palette
+
+## How to use it
+
+1. Open the task palette.
+2. Type a command name or use @, >, or #.
+3. Run the selected item. Use Shift+Enter to assign a shortcut.
+
+> **Good to know**: Available actions depend on the task state and host capabilities.
