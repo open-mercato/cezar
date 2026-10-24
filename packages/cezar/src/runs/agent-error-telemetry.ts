@@ -1,4 +1,4 @@
-import { isOutdatedBackendError } from '../core/agent-errors.ts';
+import { isOutdatedBackendError, unwrapJsonErrorEnvelope } from '../core/agent-errors.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { isUsageLimitMessage, parseUsageLimit } from '../core/usage-limit.ts';
 import { reportError, telemetryEnabled } from '../telemetry.ts';
@@ -39,7 +39,9 @@ const DELAY_RE = /\b\d{1,7}(\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days
  *  vary per occurrence. Unlike the toast scrubber the text after `: ` stays — in a vendor's message
  *  that is usually the part worth reading. */
 export function scrubAgentErrorMessage(message: string, backend: string): string {
-  return message
+  // A JSON envelope's keys are quoted strings the masker would turn into `{<value>:<value>…}`
+  // (36b68a95, eb4b12dc): read it as `<type>: <message>` first.
+  return unwrapJsonErrorEnvelope(message)
     .slice(0, MAX_SCRUB_INPUT)
     .replace(PREFIX_RE, '')
     .replace(new RegExp(`^${backend}: `, 'i'), '')

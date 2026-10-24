@@ -265,6 +265,102 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
+  it('telemetry 77117b95: a Continue refused while a settled run still unwinds waits for it to let go', async () => {
+    const waits: number[] = []
+    // The record already says `review` — the engine settles it BEFORE the turn-end autosave drops
+    // the run — so the fresh record agrees with the Continue path while the server still refuses it.
+    const { sent, deliver } = await renderDeliver(
+      run('review'),
+      {
+        'POST /api/v1/runs/r1/continue': sequence(
+          () => jsonResponse({ error: 'run is still active' }, 409),
+          () => jsonResponse({ error: 'run is still active' }, 409),
+          () => jsonResponse({ continued: true }),
+        ),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('one more fix')).resolves.toBeTruthy()
+    expect(waits).toEqual([SESSION_GAP_RETRY_DELAYS_MS[0], SESSION_GAP_RETRY_DELAYS_MS[1]])
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(3)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
+  it('the unwinding wait is bounded too: a run that never lets go reports the refusal', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('review'),
+      {
+        'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('one more fix')).rejects.toThrow('run is still active')
+    expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
+  })
+
+  /** What `fetch` throws when the request got no answer — WebKit's `Load failed`. */
+  const unreachable = () => {
+    throw new TypeError('Load failed')
+  }
+
+  it('telemetry 7adbfbd7: a Continue that got no answer is re-posted once when the record proves it never landed', async () => {
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': sequence(unreachable, () => jsonResponse({ continued: true })),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+    })
+
+    await expect(deliver('one more fix')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(2)
+  })
+
+  it('a lost Continue the record shows as landed is never re-posted', async () => {
+    const landed = run('review', {
+      steps: [
+        ...run('review').steps,
+        { id: 'continue-1', name: 'Continue', kind: 'agent', status: 'pending', iterations: 0, tokensUsed: 0 },
+      ] as ApiRun['steps'],
+    })
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': unreachable,
+      'GET /api/v1/runs/r1': () => jsonResponse(landed),
+    })
+
+    await expect(deliver('one more fix')).rejects.toThrow('cannot reach the cezar server')
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
+  it('a lost Continue is not re-posted when the server cannot answer the refetch either', async () => {
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': unreachable,
+      'GET /api/v1/runs/r1': unreachable,
+    })
+
+    await expect(deliver('one more fix')).rejects.toThrow('cannot reach the cezar server')
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
+  })
+
+  it('a lost live message is never re-posted — nothing proves it did not land', async () => {
+    const { sent, deliver } = await renderDeliver(run('waiting'), {
+      'POST /api/v1/runs/r1/messages': unreachable,
+      'GET /api/v1/runs/r1': () => jsonResponse(run('waiting')),
+    })
+
+    await expect(deliver('hello')).rejects.toThrow('cannot reach the cezar server')
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
+    expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(0)
+  })
+
   it('a different live 409 the fresh record agrees with is not retried', async () => {
     const { sent, deliver } = await renderDeliver(run('running'), {
       'POST /api/v1/runs/r1/messages': () =>

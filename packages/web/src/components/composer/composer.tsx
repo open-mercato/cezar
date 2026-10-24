@@ -375,7 +375,8 @@ export function Composer({
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
       const intake = screenFiles(files, imagesRef.current.length, attachedImageBytes(imagesRef.current))
-      for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
+      // A size or count limit the user can act on, not a failure (telemetry eab86832, 08cc6528).
+      for (const reason of intake.rejected) toast(reason, { tone: 'danger', expected: true })
       for (const file of intake.accepted) {
         void fileToPendingAttachment(file, source).then((attachment) => {
           const next = appendAttachment(imagesRef.current, attachment)
@@ -383,6 +384,14 @@ export function Composer({
           // Upload now, while the user is still typing, so the send only names it (7054e5f2).
           void stageAttachment(attachment)
           setImages(next)
+        }, (error: unknown) => {
+          // A dropped folder, or a file gone before it was read, rejects `arrayBuffer()` with
+          // NotFoundError (WebKit: "The object can not be found here.", telemetry 159014d3).
+          const gone = error instanceof DOMException && error.name === 'NotFoundError'
+          toast(`“${file.name}” could not be read${gone ? ' — a folder, or a file that no longer exists' : ''}`, {
+            tone: 'danger',
+            expected: gone,
+          })
         })
       }
     },

@@ -313,6 +313,25 @@ export function isBenignError(message: string): boolean {
   return BENIGN_MESSAGES.some((re) => re.test(message))
 }
 
+/** A `window.error` cezar's code cannot have thrown, matched on signatures only: the browser's
+ *  masked "Script error." of a cross-origin script (the bundle is same-origin, e3f14c69), a wallet
+ *  extension's injected `window.ethereum` (62a6f399), and React losing a DOM node that page
+ *  translation replaced (f09eb833, 07d1d922, 1ee275a9) — only while the page IS translated. */
+export function isForeignError(
+  event: { message?: string; filename?: string; error?: unknown },
+  root: Element = document.documentElement,
+): boolean {
+  const message = event.message ?? ''
+  if (message === 'Script error.' && !event.filename && !event.error) return true
+  // The thrown error's own words where there is one; the event's message adds an engine prefix.
+  const text = event.error instanceof Error ? `${event.error.name}: ${event.error.message}` : message
+  if (/\bwindow\.ethereum\b/.test(text)) return true
+  return (
+    /\btranslated-(ltr|rtl)\b/.test(root.className) &&
+    /NotFoundError: (Failed to execute '(removeChild|insertBefore)' on 'Node'|Node\.(removeChild|insertBefore):)/.test(text)
+  )
+}
+
 /** An asset URL as the bundle file alone (`index-<hash>.js`) — never the origin or a query. */
 function assetFile(url: string | undefined): string | null {
   if (!url) return null
@@ -542,7 +561,7 @@ export function Telemetry() {
     if (handlersInstalled) return
     handlersInstalled = true
     window.addEventListener('error', (e) => {
-      if (isBenignError(e.message ?? '')) return
+      if (isBenignError(e.message ?? '') || isForeignError(e)) return
       // Where the browser says it came from — the only location a stackless error has.
       reportClientError(e.error ?? e.message, 'window.error', {
         context: {

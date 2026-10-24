@@ -481,6 +481,18 @@ export function repositoryRootLockDisabled(env: NodeJS.ProcessEnv = process.env)
 const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
   'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
+const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
+
+interface ContinueRunOptions {
+  text?: string;
+  images?: PastedContent[];
+  runner?: RunnerId;
+  model?: string;
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
+   *  account the run is already on. */
+  agentProfile?: string;
+}
+
 interface ActiveRun {
   /** Identity of this async owner; stale promises must not mutate a replacement owner. */
   ownerToken: symbol;
@@ -509,6 +521,11 @@ interface ActiveRun {
   finishRequested?: boolean;
   /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
   acceptReviewOnDrop?: boolean;
+  /** The session is over and only teardown (the turn-end autosave) remains, so a record that
+   *  reads settled really is — a Continue then waits in `continueOnDrop` (telemetry 77117b95). */
+  turnSettled?: boolean;
+  /** A Continue accepted during that teardown; `dropActive` starts it once the run lets go. */
+  continueOnDrop?: { opts: ContinueRunOptions; deferForCapacity: boolean };
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -2309,7 +2326,9 @@ export class RunManager {
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
     if (expectedState !== undefined && state !== expectedState) return;
-    const acceptReview = state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
+    const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
+    // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
+    const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
     // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
     // the tree is released below, through the same path as Finish on a settled review.
     const landOnAccept = acceptReview && this.store.getRun(runId)?.worktree === false;
@@ -2366,6 +2385,13 @@ export class RunManager {
     removeAgentTmpDir(this.dataDir, runId);
     // Whatever the task started and left running (#1411) — same single terminal hook.
     this.reapLeftoverProcesses([runId], LEFTOVER_SETTLE_GRACE_MS, 'still running after the task settled');
+    // Last, so the Continue starts from exactly the state a Continue posted just after the drop would.
+    if (queuedContinue) {
+      const resumed = this.continueRun(runId, queuedContinue.opts, queuedContinue.deferForCapacity);
+      if (!resumed.ok) {
+        this.store.appendEvent(runId, { type: 'lifecycle', message: `continue could not start — ${resumed.error}` });
+      }
+    }
   }
 
   /** Is this run settled and not owned by a session again (a Continue inside the grace)? */
@@ -4132,15 +4158,7 @@ export class RunManager {
    */
   continueRun(
     runId: string,
-    opts: {
-      text?: string;
-      images?: PastedContent[];
-      runner?: RunnerId;
-      model?: string;
-      /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
-       *  account the run is already on. */
-      agentProfile?: string;
-    } = {},
+    opts: ContinueRunOptions = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
@@ -4149,11 +4167,25 @@ export class RunManager {
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
-    if (this.active.has(runId) || this.starting.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
+    if (this.active.has(runId) || this.starting.has(runId)) {
+      // The record already reads settled, but the turn-end autosave is still unwinding: take the
+      // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
+      const unwinding = this.active.get(runId);
+      const settledTurn = unwinding?.turnSettled && !unwinding.cancelled && !unwinding.continueOnDrop
+        && !this.starting.has(runId) && run !== undefined && CONTINUABLE_STATUSES.includes(run.status)
+        && run.steps.some((s) => s.sessionId);
+      if (!settledTurn) return { ok: false, error: 'run is still active' };
+      const runner = opts.runner ?? run.runner ?? 'claude';
+      if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
+        return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
+      }
+      unwinding.continueOnDrop = { opts, deferForCapacity };
+      return { ok: true };
+    }
     if (!run) return { ok: false, error: 'not found' };
     // `review` is continuable too — that's the "Send back" path (spec 009).
-    if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
+    if (!CONTINUABLE_STATUSES.includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
@@ -4850,6 +4882,8 @@ export class RunManager {
         });
         if (sessionError) throw new Error(sessionError);
       }
+      // Before any branch below publishes a terminal status: the finally's autosave comes after it.
+      state.turnSettled = true;
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
       if (state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
@@ -4891,6 +4925,7 @@ export class RunManager {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      state.turnSettled = true;
       sink.sessionEnded('error', message);
       if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
@@ -5278,6 +5313,8 @@ export class RunManager {
     // No settlement branch below may touch that newer owner.
     if (this.active.get(runId) !== state) return;
 
+    // Same window as `runContinuation`'s: whatever settles below is final once teardown lets go.
+    state.turnSettled = true;
     const finishedAt = new Date().toISOString();
     if (state.cancelled && this.active.get(runId) === state) {
       const run = this.store.getRun(runId);
