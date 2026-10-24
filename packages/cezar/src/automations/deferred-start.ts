@@ -51,11 +51,17 @@ async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['tas
   function visit(def: WorkflowDef, context: Context, ancestors: string[], prefix = ''): void {
     if (ancestors.includes(def.name)) throw new DeferredResolutionError(`Workflow reference cycle: ${[...ancestors, def.name].join(' → ')}.`);
     if (ancestors.length >= 32) throw new DeferredResolutionError('Workflow reference depth limit (32) exceeded.');
-    const childContext = (node: { runner?: typeof runner; model?: string }): Context => ({
-      runner: node.runner ?? task.dispatch?.runner ?? context.runner,
-      model: locked ? undefined : ((node.model || undefined) ?? task.dispatch?.model ?? context.model) || undefined,
-      // dispatch() does not carry the parent's composer account override into startRun().
-    });
+    const childContext = (node: { runner?: typeof runner; model?: string }): Context => {
+      const childRunner = node.runner ?? task.dispatch?.runner ?? context.runner;
+      // Mirrors dispatch() in run.ts: an inherited model only follows its own runner (43bdda11).
+      const inherited = (model: string | undefined, owner: typeof runner) => owner === childRunner ? model : undefined;
+      return {
+        runner: childRunner,
+        model: locked ? undefined : (node.model || (inherited(task.dispatch?.model, task.dispatch?.runner ?? context.runner)
+          ?? inherited(context.model, context.runner))) || undefined,
+        // dispatch() does not carry the parent's composer account override into startRun().
+      };
+    };
     for (const node of def.graph?.nodes ?? def.steps) {
       if (++visits > 4096) throw new DeferredResolutionError('Workflow expansion limit (4096 nodes) exceeded.');
       const step = `${prefix}${node.id}`;
