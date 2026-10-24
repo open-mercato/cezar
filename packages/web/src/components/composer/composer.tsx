@@ -95,7 +95,7 @@ export interface ComposerProps {
   sendLabel?: string
   /** Joined to the send button's right edge as a split button — the /new start-time menu. */
   sendMenu?: ReactNode
-  /** The submit chord (`submitShortcutHint()`), printed inside the send button it triggers. */
+  /** The submit chord (`submitShortcutHint()`), shown in the send button's tooltip. */
   sendShortcut?: string
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
@@ -559,27 +559,32 @@ export function Composer({
   const recording = dictation.recording
   const sendDisabled =
     disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-  const sendButton = (
+  const sendButtonElement = (
     <Button
       type="button"
-      size={sendLabel || sendShortcut ? "sm" : "icon-sm"}
+      size={sendLabel ? "sm" : "icon-sm"}
       aria-label={sendAriaLabel}
       disabled={sendDisabled}
-      className={cn(sendLabel || sendShortcut ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
+      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
       onClick={submitDraft}
     >
       <ArrowUpIcon aria-hidden="true" />{sendLabel}
-      {sendShortcut ? (
-        <kbd
-          aria-hidden="true"
-          data-slot="composer-send-shortcut"
-          className="-ml-0.5 inline-flex items-center font-sans text-xs leading-none font-medium opacity-60"
-        >
-          {sendShortcut}
-        </kbd>
-      ) : null}
     </Button>
   )
+  // The chord goes in the tooltip, not on the button — the way GitHub and Linear show it.
+  const sendButton = sendShortcut ? (
+    <IconTooltip
+      side="top"
+      label={
+        <span data-slot="composer-send-shortcut" className="flex items-center gap-2">
+          {sendLabel ?? sendAriaLabel}
+          <kbd className="font-sans opacity-70">{sendShortcut}</kbd>
+        </span>
+      }
+    >
+      {sendButtonElement}
+    </IconTooltip>
+  ) : sendButtonElement
 
   return (
     <Popover open={menuOpen} onOpenChange={(open) => (open ? undefined : closeMenu())}>

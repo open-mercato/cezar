@@ -2379,9 +2379,8 @@ it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedu
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
   const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
-  await waitFor(() => expect(send().disabled).toBe(false))
+  await waitFor(() => expect(send().disabled).toBe(false), { timeout: 3000 })
   fireEvent.click(send())
   await waitFor(() => expect(requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))).toBeTruthy())
   const created = requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))!
@@ -2401,14 +2400,13 @@ it('puts the start-time menu beside Send, not on the pill row, and summarizes a 
   expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
   expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
   expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
-  // The submit chord is printed inside the button it triggers.
-  expect(screen.getByRole('button', { name: 'Start task' }).querySelector('[data-slot="composer-send-shortcut"]')).not.toBeNull()
+  // The submit chord lives in Send's tooltip, not on the button.
+  expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('')
   fireEvent.change(textarea(), { target: { value: 'Later' } })
   fireEvent.click(menu)
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
-  await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'))
+  await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'), { timeout: 3000 })
 })
 
 it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {
@@ -2424,28 +2422,29 @@ it('gates scheduling while unchecked, checking, unavailable and changed, includi
   expect(send().disabled).toBe(true)
   expect(textarea().disabled).toBe(false)
   const why = () => document.querySelector('[data-slot="schedule-blocked"]')?.textContent
-  expect(why()).toBe('Check the start time to schedule this task.')
+  expect(why()).toBe('Finding when your usage limit resets…')
   fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
   expect(textarea().value).toBe('Later')
   expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/options'))).toBe(false)
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
+  const previews = () => requests.filter(r => r.url.endsWith('/deferred-start/preview')).length
+  await waitFor(() => expect(previews()).toBe(1), { timeout: 3000 })
   expect(send().disabled).toBe(true)
   await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }))
   await waitFor(() => expect(send().disabled).toBe(false))
   expect(why()).toBeUndefined()
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
   expect(send().disabled).toBe(true)
-  await act(async () => delayed.release({ available: false, reason: 'no-data', message: 'No reset available' }))
+  await act(async () => delayed.release({ available: false, reason: 'account-unverifiable', message: 'No reset available' }))
   await screen.findByRole('alert')
   expect(send().disabled).toBe(true)
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r2' }))
   await waitFor(() => expect(send().disabled).toBe(false))
   fireEvent.change(textarea(), { target: { value: 'Changed' } })
   expect(send().disabled).toBe(true)
   fireEvent.change(textarea(), { target: { value: 'Later' } })
   expect(send().disabled).toBe(true)
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
+  await waitFor(() => expect(previews()).toBe(4), { timeout: 3000 })
   await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r3' }))
   await waitFor(() => expect(send().disabled).toBe(false))
   const toggle = document.querySelector('[data-slot="autonomous-toggle"]')!
@@ -2495,8 +2494,7 @@ describe('lost schedule response recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
     await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
     fireEvent.click(screen.getByLabelText('After usage limit resets'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
-    await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 })
     fireEvent.click(screen.getByRole('button', { name: 'Schedule task' }))
     await screen.findByRole('button', { name: 'Recover original schedule' })
     await waitFor(() => expect(textarea().value).toBe('Original task'))
@@ -2516,8 +2514,8 @@ describe('lost schedule response recovery', () => {
     }
     if (change === 'now') fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
     else {
-      fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
-      await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2))
+      // Restoring the draft invalidates the old preview, so the choice re-checks by itself.
+      await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2), { timeout: 3000 })
     }
     expect((screen.getByRole('button', { name: change === 'now' ? 'Start task' : 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
