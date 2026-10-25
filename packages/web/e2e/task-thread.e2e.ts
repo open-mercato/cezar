@@ -28,6 +28,12 @@ const sessionId = `e2e-thread-${process.pid}`
  *  with the one legitimate user edit a run can carry: a PATCHed title summary — so the header
  *  assertions cover the edited-title path rather than echoing the raw auto-summary. */
 const RUN = { ...record, titleSummary: 'Explain what cezar does' }
+const LOCAL_LINK_RUN = {
+  ...RUN,
+  id: 'abec1200-0000-4000-8000-000000000002',
+  titleSummary: 'Local file link regression',
+  task: 'Prepare a report in temp/report.txt',
+}
 const RUN_ID: string = RUN.id
 const OVERFLOW_TOKEN = 'X'.repeat(180) + '_END'
 const OVERFLOW_RUN = {
@@ -73,12 +79,16 @@ const scoped = (path: string) => `/p/${bootProject}${path}`
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
-  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN, OVERFLOW_RUN], null, 2), 'utf8')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN, OVERFLOW_RUN, LOCAL_LINK_RUN], null, 2), 'utf8')
   copyFileSync(
     resolve(import.meta.dirname, 'fixtures/thread-run.ndjson'),
     join(dataRoot, '.ai/cezar/runs', `${RUN_ID}.ndjson`),
   )
   writeFileSync(join(dataRoot, '.ai/cezar/runs', `${OVERFLOW_RUN.id}.ndjson`), '')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${LOCAL_LINK_RUN.id}.ndjson`), JSON.stringify({
+    type: 'text', stepId: 'task', seq: 1, ts: RUN.createdAt,
+    text: 'Done: [report and validation plan](temp/report.txt).',
+  }) + '\n')
   // The agent screenshot the transcript's `image` line points at (served by the run itself).
   cpSync(
     resolve(import.meta.dirname, 'fixtures/thread-run-images'),
@@ -567,4 +577,23 @@ describe('task thread', () => {
     }
   })
 
+})
+
+describe('relative file links', () => {
+  it('renders a completed reply with a local file explanation, without a blocked badge', () => {
+    browser.setViewport(1440, 900)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${LOCAL_LINK_RUN.id}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-local-only-link]') !== null`)
+    const link = browser.evaluate(`(() => {
+      const el = document.querySelector('[data-local-only-link]')
+      el.scrollIntoView({ block: 'center' })
+      return { text: el.textContent, title: el.title, tag: el.tagName, message: el.closest('[data-slot="assistant-message"]').textContent }
+    })()`) as { text: string; title: string; tag: string; message: string }
+    expect(link.text).toBe('report and validation plan')
+    expect(link.title).toContain('temp/report.txt')
+    expect(link.title).toContain('Files tab')
+    expect(link.tag).toBe('SPAN')
+    expect(link.message).not.toContain('[blocked]')
+    browser.screenshot(`${artifactsDir}/thread-local-file-link.png`, { viewport: true })
+  })
 })

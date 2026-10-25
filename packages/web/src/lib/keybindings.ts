@@ -113,6 +113,7 @@ const RESERVED = new Set([
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
   'Mod+B', // fold the sidebar
+  'Alt+D', // Design Mode in the Preview
   'Mod+Shift+`', // new terminal tab
   'Mod+A',
   'Mod+C',

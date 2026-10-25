@@ -31,6 +31,7 @@ export const TASK_ORIGIN_STORAGE_KEY = 'cez-task-origin'
  *  launch records, the slim cross-project `RunIndexEntry` has them folded into `automationId`. */
 export interface OriginInput {
   id: string
+  deferredBinding?: unknown
   automationId?: string
   automation?: { automationId: string }
   automationTrigger?: { automationId: string }
@@ -40,6 +41,7 @@ export interface OriginInput {
 
 /** The automation that launched THIS run, read off its own record only. */
 export function ownAutomationId(run: OriginInput): string | undefined {
+  if (run.deferredBinding) return undefined
   return (
     run.automationId ??
     run.automation?.automationId ??

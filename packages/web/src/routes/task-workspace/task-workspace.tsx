@@ -38,7 +38,7 @@ import { rememberViewState } from '@/lib/view-memory'
 import { GitTabLoading } from '../task-git/git-tab-loading'
 import { BrowserView } from '../task-preview/browser-view'
 import { RunAppPanel } from '../task-preview/run-app'
-import { DesignNotePopup } from '../task-preview/design-note-popup'
+import { DesignNotePopup, DesignNotesTray } from '../task-preview/design-note-popup'
 import { useDesignNotes } from '../task-preview/design-notes'
 import { ChangesView } from '../task-git/task-changes'
 import { CommitsView } from '../task-git/task-commits'
@@ -610,7 +610,9 @@ function WorkspaceView({
   const { addDraft, discard: discardNote, note: noteFor, marks: designMarks } = designNotes
   const escapeNote = useCallback(
     (mark: string) => {
-      if (noteFor(mark)?.phase === 'draft') discardNote(mark)
+      const note = noteFor(mark)
+      // An added note is removed only by its Delete button.
+      if (note?.phase === 'draft' && !note.added) discardNote(mark)
     },
     [discardNote, noteFor],
   )
@@ -679,6 +681,7 @@ function WorkspaceView({
               onPickElement={addDraft}
               designMarks={designMarks}
               onDesignEscape={escapeNote}
+              designTray={designNotes.ready > 0 || designNotes.sending ? <DesignNotesTray notes={designNotes} /> : null}
               renderEmpty={
                 terminalAllowed
                   ? (open) => (
@@ -694,7 +697,7 @@ function WorkspaceView({
               }
               renderDesignNote={({ mark, close }) => {
                 const note = noteFor(mark)
-                return note ? <DesignNotePopup note={note} run={run} notes={designNotes} onClose={close} /> : null
+                return note ? <DesignNotePopup note={note} notes={designNotes} onClose={close} /> : null
               }}
             />
           )

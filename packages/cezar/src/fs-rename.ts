@@ -56,6 +56,29 @@ export function renameSyncWithRetry(from: string, to: string, options: RenameRet
   }
 }
 
+export interface ReadRetryOptions {
+  platform?: NodeJS.Platform;
+  readFile?: (path: string) => Promise<string>;
+  sleep?: (ms: number) => Promise<unknown>;
+}
+
+/** UTF-8 `readFile` under the same policy: the scanner handle that blocks a rename blocks an
+ *  open too, and a caller that reads "unreadable" as "absent" then overwrites real state. */
+export async function readFileWithRetry(path: string, options: ReadRetryOptions = {}): Promise<string> {
+  const read = options.readFile ?? ((p: string) => fsp.readFile(p, 'utf8'));
+  if ((options.platform ?? process.platform) !== 'win32') return read(path);
+  const sleep = options.sleep ?? delay;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await read(path);
+    } catch (error) {
+      const ms = retryDelay(error, attempt);
+      if (ms === undefined) throw error;
+      await sleep(ms);
+    }
+  }
+}
+
 /** Async twin of `renameSyncWithRetry`: same policy, but it awaits a timer instead of blocking the event loop. */
 export async function renameWithRetry(from: string, to: string, options: AsyncRenameRetryOptions = {}): Promise<void> {
   // Looked up per call so a test's spy on `fs.promises.rename` still sees the write.

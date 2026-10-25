@@ -1,3 +1,4 @@
+import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
@@ -198,6 +199,9 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
+  deferredBinding: deferredBindingSchema.optional(),
+  queueWaitReason: queueWaitReasonSchema.optional(),
   /**
    * Provenance for a task a SCHEDULED automation launched (spec 2026-09-14-automations-redesign
    * § Data Model). A separate optional key rather than a loosened `automation`: `runs.json` is
@@ -525,6 +529,36 @@ export const runIndexEntrySchema = z.object({
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
 
+const workspaceRunEventOmitted = {
+  task: true,
+  systemPrompt: true,
+  queuedMessages: true,
+  steps: true,
+  workflowDef: true,
+} as const;
+
+/**
+ * The record keys the workspace stream's `run` frame leaves out: the prompt text and the step
+ * and workflow structure. Only the task thread reads them, and it receives the whole record on
+ * its own per-run stream (`GET /runs/:id/events` → `run`). A consumer patching a cached record
+ * from this frame keeps its own copies of these keys rather than dropping them.
+ */
+export const WORKSPACE_RUN_EVENT_OMITTED_KEYS = Object.keys(workspaceRunEventOmitted) as Array<
+  keyof typeof workspaceRunEventOmitted
+>;
+
+/**
+ * The `run` frame on `GET /api/v1/workspace/events`: the stored record minus
+ * `WORKSPACE_RUN_EVENT_OMITTED_KEYS`, stamped with the owning `project`. Every other record key
+ * rides it, so a list row patched from it answers as a `GET /runs` row does. It is not a strict
+ * superset of `runIndexEntrySchema`: that row also carries the live `usage` sample, which this
+ * frame never has (`withUsage` attaches it to route answers only).
+ */
+export const workspaceRunEventSchema = runRecordSchema.omit(workspaceRunEventOmitted).extend({
+  project: z.string(),
+});
+export type WorkspaceRunEvent = z.infer<typeof workspaceRunEventSchema>;
+
 /**
  * `GET /workspace/runs-index`.
  *
@@ -609,6 +643,11 @@ export type DeleteRunResponse = z.infer<typeof deleteRunResponseSchema>;
 /** `POST /runs/:id/finish` — "no open session" is a 409. */
 export const finishResponseSchema = z.object({ finished: z.literal(true) });
 export type FinishResponse = z.infer<typeof finishResponseSchema>;
+
+/** `POST /runs/:id/start-now` — start a queued run over the parallel cap; not queued, or its account
+ *  held by a usage limit, is a 409. */
+export const startNowResponseSchema = z.object({ started: z.literal(true) });
+export type StartNowResponse = z.infer<typeof startNowResponseSchema>;
 
 /** `POST /runs/:id/land` — an in-place task's Commit to the base branch (spec
  *  2026-10-20-trunk-based-projects). Every outcome is a 200 carrying a human `message`. */

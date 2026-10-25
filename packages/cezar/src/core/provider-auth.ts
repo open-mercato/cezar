@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { opendirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
@@ -195,6 +196,17 @@ const INTERRUPTED_HINT = 'Authentication check was interrupted. Try again.';
 const RUNTIME_AUTH_HINT =
   'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
+ *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
+ *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
+ *  "another process is refreshing" variant is transient and deliberately not matched. An account
+ *  policy or a vendor-side verification is just as invisible to the status probe (75ae746c, c65a5ac5). */
+const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
+  /\boauth session expired and could not be refreshed\b/i,
+  /\brefresh token is no longer valid\b/i,
+  /\bhas disabled claude subscription access\b/i,
+  /\bidentity verification is required to continue\b/i,
+] as const;
 const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:failed to authenticate|authentication failed|unauthenticated|unauthorized)\b/i,
   /\bproviderautherror\b/i,
@@ -202,6 +214,13 @@ const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
   /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
   /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+  // The CLI's own sign-in instruction, not prose about a login screen: Claude's "Not logged in ·
+  // Please run /login" (bca23063), Cursor's "Authentication required. Please run 'agent login'
+  // first" (1e673dee).
+  /\b(?:not logged in|authentication required)\b[\s.,:;·—-]{1,6}please run\b[^\n]{0,30}\blogin\b/i,
+  // OpenCode's provider-key rejection as the whole line or after a label (e41761a1).
+  /(?:^|:)\s*invalid credentials?\s*[.!]?\s*$/im,
+  ...DEFINITIVE_AUTH_FAILURE_PATTERNS,
 ] as const;
 const RUNTIME_API_KEY_FAILURE_PATTERNS = [
   // Vendor-shaped errors can carry a process prefix before the actual
@@ -218,15 +237,6 @@ export function isRuntimeProviderAuthFailure(message: string): boolean {
   return [...RUNTIME_AUTH_FAILURE_PATTERNS, ...RUNTIME_API_KEY_FAILURE_PATTERNS]
     .some((pattern) => pattern.test(message));
 }
-
-/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
- *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
- *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
- *  "another process is refreshing" variant is transient and deliberately not matched. */
-const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
-  /\boauth session expired and could not be refreshed\b/i,
-  /\brefresh token is no longer valid\b/i,
-] as const;
 
 export function isDefinitiveProviderAuthFailure(message: string): boolean {
   return DEFINITIVE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
@@ -263,7 +273,7 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
         || line === 'logged in using access token'
         || line === 'logged in using personal access token'
         || line === 'logged in using amazon bedrock api key'
-        || /^logged in using an api key - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
+        || /^(?:logged in using an api key|api key configured) - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
       ) {
         return 'connected';
       }
@@ -390,7 +400,8 @@ function copilotAcpProbeStdin(): ProviderStdin {
 /** The `session/new` response (id 1) has arrived, as a result or an error. */
 export function copilotAcpAnswered(stdout: string): boolean {
   return /"id"\s*:\s*1\s*,\s*"(?:result|error)"\s*:/.test(stdout)
-    || /"Authentication required"/i.test(stdout);
+    || /"Authentication required"/i.test(stdout)
+    || /"sessionId"\s*:\s*"/.test(stdout);
 }
 
 function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionState | null {
@@ -561,6 +572,20 @@ function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefin
     + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
+/**
+ * Where a probe runs when cezar's own working directory is unusable — deleted, or a folder the
+ * macOS app may not read — and `undefined` (inherit, as always) otherwise. Every CLI then failed
+ * before answering, `claude --version` included (telemetry 35838a52, b82b92cf).
+ */
+export function probeCwdFallback(): string | undefined {
+  try {
+    opendirSync(process.cwd()).closeSync();
+    return undefined;
+  } catch {
+    return homedir();
+  }
+}
+
 export function defaultRunProviderCommand(
   executable: string,
   args: readonly string[],
@@ -570,8 +595,10 @@ export function defaultRunProviderCommand(
 ): Promise<ProviderCommandResult> {
   // A Windows `.cmd` shim runs as `node <script>`: execFile throws EINVAL on the shim (a330744e).
   const [file, argv] = spawnableCommand(executable, args);
+  const cwd = probeCwdFallback();
   return new Promise((resolve) => {
     let closeTimer: NodeJS.Timeout | undefined;
+    let closedUnanswered = false;
     const child = execFile(
       file,
       argv,
@@ -579,6 +606,7 @@ export function defaultRunProviderCommand(
         timeout: timeoutMs,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        ...(cwd ? { cwd } : {}),
         // Inherit, then override: an auth probe is a short read-only CLI call, not a spawned
         // agent, so it does not go through `buildChildEnv`'s allowlist — the CLI still needs the
         // host's PATH and HOME to run at all. `env` is only ever a profile's config-dir variable.
@@ -591,8 +619,11 @@ export function defaultRunProviderCommand(
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
+        // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
+        // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
         const timedOut = commandError?.code === 'ETIMEDOUT'
-          || (commandError?.killed === true && commandError.signal === 'SIGTERM');
+          || (commandError?.killed === true && commandError.signal === 'SIGTERM')
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout)));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
@@ -624,7 +655,10 @@ export function defaultRunProviderCommand(
       if (closeWhen(seen)) close();
     };
     output.on('data', onData);
-    closeTimer = setTimeout(close, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
+    closeTimer = setTimeout(() => {
+      closedUnanswered = true;
+      close();
+    }, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
     input.write(stdin.payload);
   });
 }
@@ -1309,6 +1343,17 @@ export class ProviderAuthService {
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    // A launcher whose shell could not find (127) or run (126) what it wraps: nothing ran, so the
+    // install is broken, not the auth check inconclusive (telemetry a5c13018).
+    if (result.exitCode === 127 || result.exitCode === 126) {
+      const said = result.stderr.replace(ANSI_SEQUENCE, '').trim().split(/\r?\n/)[0]?.trim().slice(0, 160);
+      return {
+        provider: descriptor.id,
+        status: 'not-installed',
+        hint: `\`${executable}\` could not start (exit ${result.exitCode}${said ? `: "${said}"` : ''}). `
+          + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
+      };
+    }
     // OpenCode 1.x can fail before producing an auth-list answer (for example, while starting its
     // local service). That is an operational failure, not a new stdout format to fix.
     if (descriptor.id === 'opencode' && result.exitCode === 1 && !result.stdout.trim() && result.stderr.trim()) {

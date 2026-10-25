@@ -34,6 +34,10 @@
  * `create-cezar-automation` skill and the composer's "Create an automation"
  * template all hang off this one capability.
  *
+ * `agentAccountsEnabled` keeps account folders local by default. An operator may explicitly set
+ * `CEZ_REMOTE_AGENT_ACCOUNTS=1` for an authenticated remote deployment; this does not change
+ * `localHandoff`, so desktop-only actions remain unavailable.
+ *
  * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
  * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
  * AGENTS.md § Zero config, recorded there: the brakes live in the engine — four children in
@@ -174,12 +178,31 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
 }
 
 /**
+ * Whether the agent-account store may cross the HTTP boundary.
+ *
+ * Local cockpits retain the zero-config behaviour. A remote cockpit can opt in when its operator
+ * has put the server behind an authenticated perimeter; the exact-value flag is deliberately
+ * separate from `localHandoff`, since opening a desktop app still makes no sense on a VPS.
+ */
+export function agentAccountsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  bindHost?: string,
+): boolean {
+  return localHandoffEnabled(env, bindHost) || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+}
+
+/** One spelling of the local-machine boundary, shared by every capability derived from it. */
+function localHandoffEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
+/**
  * Whether the Preview tab may offer Design Mode (spec `2026-10-09-design-mode`). Only on a local
  * cockpit: the picker proxy listens on loopback, which a hosted cockpit's viewer cannot reach.
  * `CEZ_DESIGN_MODE=0` is the off switch; there is deliberately no `=1` for hosted mode.
  */
 function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
-  return env.CEZ_DESIGN_MODE !== '0' && env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+  return env.CEZ_DESIGN_MODE !== '0' && localHandoffEnabled(env, bindHost);
 }
 
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
@@ -205,7 +228,7 @@ function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
 function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   if (env.CEZ_TERMINAL === '1') return true;
   if (env.CEZ_TERMINAL === '0') return false;
-  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+  return localHandoffEnabled(env, bindHost);
 }
 
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
@@ -213,7 +236,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
-    localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    localHandoff: localHandoffEnabled(env, bindHost),
     terminal: terminalEnabled(env, bindHost),
     designMode: designModeEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
