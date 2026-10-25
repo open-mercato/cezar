@@ -2199,7 +2199,8 @@ export class RunStore extends EventEmitter {
       baseline: this.persisted.get(id),
     }));
     const deleted = [...this.forgotten.entries()];
-    const workerScript = new URL(import.meta.url.endsWith('.ts') ? './store-index-writer.ts' : './store-index-writer.js', import.meta.url);
+    const sourceTypeScript = import.meta.url.endsWith('.ts');
+    const workerScript = new URL(sourceTypeScript ? './store-index-writer.ts' : './store-index-writer.js', import.meta.url);
     const write = new Promise<boolean>((resolve) => {
       let settled = false;
       const finish = (saved: boolean) => {
@@ -2209,6 +2210,7 @@ export class RunStore extends EventEmitter {
       };
       try {
         const worker = new Worker(workerScript, {
+          execArgv: sourceTypeScript ? [...process.execArgv, '--import', 'tsx'] : undefined,
           workerData: {
             dataDir: this.dataDir,
             runs: runs.map(({ run, baseline }) => ({ run, baseline })),
