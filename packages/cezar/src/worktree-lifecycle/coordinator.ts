@@ -164,7 +164,7 @@ export class WorktreeLifecycleCoordinator {
   /** Caller already holds normal task admission. No second slot is acquired for setup. */
   async prepare(runId: string, base: string, pendingLaunch: LifecyclePendingLaunch, signal?: AbortSignal, choice: LifecycleBranchChoice = {}): Promise<{ready: boolean; path: string; branch: string; baseBranch: string; operationId?: string; seeded?: string[]}> {
     const initialBranch = choice.branch ?? branchFor(runId);
-    this.runs.flush();
+    await this.runs.flushAsync();
     const prior = await this.readRecord(runId);
     let configured: Awaited<ReturnType<typeof readLifecycleConfig>>;
     try { configured = prior ? await readLifecycleConfig(this.root) : await readLifecycleConfigOrDefault(this.root); }
@@ -808,7 +808,7 @@ export class WorktreeLifecycleCoordinator {
   async shutdown(): Promise<void> {
     this.dispose();
     await Promise.all([...this.completions.values()]);
-    this.runs.flush({throwOnError: true});
+    await this.runs.flushAsync({throwOnError: true});
   }
   dispose(): void { this.disposed = true; this.offSemaphore(); this.queue.clear(); for (const controller of this.controllers.values()) controller.abort(); }
 }

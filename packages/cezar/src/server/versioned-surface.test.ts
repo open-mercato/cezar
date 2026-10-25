@@ -54,8 +54,8 @@ describe('the versioned API surface', () => {
     });
   });
 
-  afterEach(() => {
-    contexts.disposeAll();
+  afterEach(async () => {
+    await contexts.disposeAll();
     store.flush();
     rmSync(home, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });

@@ -3042,7 +3042,7 @@ export function createApp(deps: ServerDeps) {
       trackerWatches.invalidateProject(entry.root);
       // Its terminals live in the app-level registry, which no project route reaches once it is gone.
       for (const run of contexts.peek(id)?.store.listRuns() ?? []) stopTaskProcesses(run.id);
-      contexts.dispose(id);
+      await contexts.dispose(id);
       workspaceEvents.emit('project-removed', { id });
       const body: RemoveProjectResponse = { removed: true, id };
       return c.json(body);
@@ -8179,7 +8179,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       shutdownPromise = (async () => {
         const results = await Promise.allSettled([deps.manager.lifecycle.shutdown(), sharedContexts.shutdownAll()]);
         deps.manager.dispose();
-        deps.store.flush({throwOnError: true});
+        await deps.store.flushAsync({throwOnError: true});
         const failure = results.find(result => result.status === 'rejected');
         if (failure?.status === 'rejected') throw failure.reason;
       })();

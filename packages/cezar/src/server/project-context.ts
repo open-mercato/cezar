@@ -190,17 +190,17 @@ export class ProjectContexts {
    * flushed to disk, every event-bus subscriber detached. Returns false when
    * nothing was built for `projectId`.
    */
-  dispose(projectId: string): boolean {
+  async dispose(projectId: string): Promise<boolean> {
     const ctx = this.contexts.get(projectId);
     if (!ctx) return false;
     this.contexts.delete(projectId);
-    teardown(ctx);
+    await teardown(ctx);
     return true;
   }
 
   /** Tear down every built context (process shutdown). */
-  disposeAll(): void {
-    for (const id of this.ids()) this.dispose(id);
+  async disposeAll(): Promise<void> {
+    await Promise.all(this.ids().map(id => this.dispose(id)));
   }
 
   /** Drain every opened project, including builds already in flight, before disposal. */
@@ -213,7 +213,7 @@ export class ProjectContexts {
       await Promise.allSettled([...this.building.values()]);
       const newlyBuilt = [...this.contexts.values()].filter(ctx => !opened.has(ctx));
       const results = [...await existing, ...await Promise.allSettled(newlyBuilt.map(ctx => ctx.manager.lifecycle.shutdown()))];
-      this.disposeAll();
+      await this.disposeAll();
       const failure = results.find(result => result.status === 'rejected');
       if (failure?.status === 'rejected') throw failure.reason;
     })();
@@ -263,15 +263,15 @@ export class ProjectContexts {
       return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.
-      teardown({ store, manager });
+      await teardown({ store, manager });
       throw err;
     }
   }
 }
 
 /** Shared teardown for built and half-built contexts. */
-function teardown(ctx: { store: RunStore; manager: RunManager }): void {
+async function teardown(ctx: { store: RunStore; manager: RunManager }): Promise<void> {
   ctx.manager.dispose();
-  ctx.store.flush({ pretty: true });
+  await ctx.store.flushAsync({ pretty: true });
   ctx.store.removeAllListeners();
 }

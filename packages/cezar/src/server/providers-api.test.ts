@@ -509,7 +509,7 @@ describe('workspace provider API', () => {
         });
     } finally {
       recover.mockRestore();
-      contexts.disposeAll();
+      await contexts.disposeAll();
       rmSync(lazyRoot, { recursive: true, force: true });
     }
   });

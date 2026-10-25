@@ -1,7 +1,7 @@
 import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { threadId } from 'node:worker_threads';
+import { Worker, threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
 import {
   appendFileSync,
@@ -1049,7 +1049,7 @@ const runIndexTicketSchema = z.object({
  * not acknowledge before the index is durable.
  * All participants must use this protocol on a coherent local filesystem.
  */
-function lockRunIndex(dataDir: string): () => void {
+export function lockRunIndex(dataDir: string): () => void {
   retryIndexCleanup();
   const directory = join(dataDir, 'runs', '.index-writers');
   mkdirSync(directory, { recursive: true });
@@ -1145,9 +1145,13 @@ export class RunStore extends EventEmitter {
   private sessionBackends = new Map<string, string>();
   /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
   private persisted = new Map<string, string>();
+  /** Only records touched since the last durable write cross the worker boundary. */
+  private dirtyRuns = new Map<string, { run: RunRecord; version: number }>();
+  private saveVersion = 0;
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
-  private forgotten = new Set<string>();
+  private forgotten = new Map<string, number>();
   private saveTimer: NodeJS.Timeout | null = null;
+  private saveInFlight: Promise<boolean> | null = null;
   // Preserve failed-load evidence even after a later save rewrites the index. A workspace
   // summary must not call an owner that silently dropped records a complete empty project.
   private indexReadHealth: { state: 'complete' | 'unavailable'; omittedRuns: number; reason?: string } = { state: 'complete', omittedRuns: 0 };
@@ -1987,6 +1991,22 @@ export class RunStore extends EventEmitter {
     this.saveNow(options.throwOnError, options.pretty ?? false);
   }
 
+  /** Persist changed records on a worker so a large history cannot block the request/event loop. */
+  async flushAsync(options: { throwOnError?: boolean; pretty?: boolean } = {}): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    const pretty = options.pretty ?? false;
+    do {
+      const saved = await this.saveAsync(options.throwOnError ?? false, pretty);
+      if (!saved) {
+        if (options.throwOnError) throw new Error('Could not persist run history.');
+        return;
+      }
+    } while (this.dirtyRuns.size > 0 || this.forgotten.size > 0);
+  }
+
   /** Commit a newly created run before queue admission. On a failed write, discard only
    *  our unpublished copy: no deletion tombstone or file removal, since another cockpit
    *  may subsequently retry the same reserved id. Call synchronously after creation. */
@@ -1999,6 +2019,24 @@ export class RunStore extends EventEmitter {
     } catch (error) {
       if (this.runs.get(run.id) === run) {
         this.runs.delete(run.id);
+        this.seqs.delete(run.id);
+        this.emit('deleted', run.id);
+      }
+      throw error;
+    }
+  }
+
+  /** Creation barrier for asynchronous launch paths. */
+  async flushCreatedRunAsync(run: RunRecord): Promise<void> {
+    try {
+      await this.flushAsync({ throwOnError: true });
+      if (this.runs.get(run.id) !== run) {
+        throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
+      }
+    } catch (error) {
+      if (this.runs.get(run.id) === run) {
+        this.runs.delete(run.id);
+        this.dirtyRuns.delete(run.id);
         this.seqs.delete(run.id);
         this.emit('deleted', run.id);
       }
@@ -2085,6 +2123,7 @@ export class RunStore extends EventEmitter {
   }
 
   private touch(run: RunRecord): void {
+    this.dirtyRuns.set(run.id, { run, version: ++this.saveVersion });
     this.scheduleSave();
     this.emit('run', run);
   }
@@ -2095,7 +2134,8 @@ export class RunStore extends EventEmitter {
    *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
-    this.forgotten.add(id);
+    this.dirtyRuns.delete(id);
+    this.forgotten.set(id, ++this.saveVersion);
     this.sessionBackends.delete(id);
     this.persisted.delete(id);
     return this.runs.delete(id);
@@ -2136,9 +2176,88 @@ export class RunStore extends EventEmitter {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.saveNow();
+      void this.saveAsync();
     }, SAVE_DEBOUNCE_MS);
     this.saveTimer.unref?.();
+  }
+
+  private async saveAsync(throwOnError = false, pretty = false): Promise<boolean> {
+    if (this.saveInFlight) {
+      const inFlight = this.saveInFlight;
+      const saved = await inFlight;
+      if (this.saveInFlight === inFlight) this.saveInFlight = null;
+      if (!saved && throwOnError) throw new Error('Could not persist run history.');
+      if (saved && pretty) return this.saveAsync(throwOnError, true);
+      return saved;
+    }
+    if (!pretty && this.dirtyRuns.size === 0 && this.forgotten.size === 0) return true;
+
+    const runs = [...this.dirtyRuns].map(([id, entry]) => ({
+      id,
+      version: entry.version,
+      run: entry.run,
+      baseline: this.persisted.get(id),
+    }));
+    const deleted = [...this.forgotten.entries()];
+    const workerScript = new URL(import.meta.url.endsWith('.ts') ? './store-index-writer.ts' : './store-index-writer.js', import.meta.url);
+    const write = new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (saved: boolean) => {
+        if (settled) return;
+        settled = true;
+        resolve(saved);
+      };
+      try {
+        const worker = new Worker(workerScript, {
+          workerData: {
+            dataDir: this.dataDir,
+            runs: runs.map(({ run, baseline }) => ({ run, baseline })),
+            deleted: deleted.map(([id]) => id),
+            pretty,
+          },
+        });
+        worker.once('message', (message: { ok: boolean; error?: string; baselines?: Array<[string, string]> }) => {
+          if (!message.ok) {
+            console.error(`[cez] failed to save runs.json: ${message.error ?? 'index writer failed'}`);
+            finish(false);
+            return;
+          }
+          const baselines = new Map(message.baselines ?? []);
+          for (const { id, version } of runs) {
+            const baseline = baselines.get(id);
+            if (baseline !== undefined) this.persisted.set(id, baseline);
+            if (this.dirtyRuns.get(id)?.version === version) this.dirtyRuns.delete(id);
+          }
+          for (const [id, version] of deleted) {
+            if (this.forgotten.get(id) === version) this.forgotten.delete(id);
+          }
+          finish(true);
+        });
+        worker.once('error', (error) => {
+          console.error(`[cez] failed to save runs.json: ${error.message}`);
+          finish(false);
+        });
+        worker.once('exit', (code) => {
+          if (!settled) {
+            console.error(`[cez] run-index writer exited before acknowledging (code ${code})`);
+            finish(false);
+          }
+        });
+      } catch (error) {
+        console.error(`[cez] failed to save runs.json: ${error instanceof Error ? error.message : String(error)}`);
+        finish(false);
+      }
+    });
+    this.saveInFlight = write;
+    let saved = false;
+    try {
+      saved = await write;
+    } finally {
+      if (this.saveInFlight === write) this.saveInFlight = null;
+      if (!saved || this.dirtyRuns.size > 0 || this.forgotten.size > 0) this.scheduleSave();
+    }
+    if (!saved && throwOnError) throw new Error('Could not persist run history.');
+    return saved;
   }
 
   private saveNow(throwOnError = false, pretty = false): void {
@@ -2156,6 +2275,8 @@ export class RunStore extends EventEmitter {
       // Do not reconcile/adopt foreign state into live manager-owned records. Remember our
       // local snapshot so future unchanged fields still defer to the latest persisted value.
       for (const [id, run] of this.runs) this.persisted.set(id, JSON.stringify(run));
+      this.dirtyRuns.clear();
+      this.forgotten.clear();
     } catch (err) {
       if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);

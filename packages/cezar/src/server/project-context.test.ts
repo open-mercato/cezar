@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -99,7 +99,7 @@ describe('ProjectContexts', () => {
     const context = await contexts.context('a');
     expect(context.automationStore).toBe(automationStore);
     expect(resolveAutomationStore).toHaveBeenCalledWith('a', rootA);
-    contexts.disposeAll();
+    await contexts.disposeAll();
   });
 
   it('never instantiates a missing-root project (even when the directory happens to exist)', async () => {
@@ -133,6 +133,7 @@ describe('ProjectContexts', () => {
   it('dispose(): the manager receives no further usage ticks and the index is flushed', async () => {
     const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
     const ctx = await contexts.context('a');
+    const durable = ctx.store.createRun({ title: 'shutdown checkpoint', workflow: 'test', task: 'test', steps: [] });
     // The constructor's onUsage listener calls `this.enforceMemoryLimit` —
     // spy on the instance and drive the fan-out directly, the way the shared
     // `ps` sampler would. An empty snapshot keeps the real method a sync no-op.
@@ -144,18 +145,19 @@ describe('ProjectContexts', () => {
     emitUsageForTest({});
     expect(spy).toHaveBeenCalledTimes(1);
 
-    expect(contexts.dispose('a')).toBe(true);
+    await expect(contexts.dispose('a')).resolves.toBe(true);
     emitUsageForTest({});
     expect(spy).toHaveBeenCalledTimes(1); // unsubscribed — no further ticks
     // Store closed: the index landed on disk despite the debounced save.
     expect(existsSync(join(rootA, '.ai/cezar', 'runs.json'))).toBe(true);
+    expect(JSON.parse(readFileSync(join(rootA, '.ai/cezar', 'runs.json'), 'utf8')).some((run: { id: string }) => run.id === durable.id)).toBe(true);
     expect(ctx.store.listenerCount('event')).toBe(0);
 
     // Disposed id is gone from the map; the next access builds a fresh context.
     expect(contexts.peek('a')).toBeUndefined();
     const rebuilt = await contexts.context('a');
     expect(rebuilt).not.toBe(ctx);
-    contexts.dispose('a');
+    await contexts.dispose('a');
   });
 
   it('onContextBuilt: fires once per build (not cached hits), unsubscribes cleanly, and a throwing listener never fails the build', async () => {
@@ -178,12 +180,12 @@ describe('ProjectContexts', () => {
     const b = await contexts.context('b');
     expect(b.id).toBe('b'); // built fine with only the throwing listener left
     expect(built).toEqual(['a']); // unsubscribed — not notified for b
-    contexts.disposeAll();
+    await contexts.disposeAll();
   });
 
-  it('dispose() of a never-built project is a no-op returning false', () => {
+  it('dispose() of a never-built project is a no-op returning false', async () => {
     const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
-    expect(contexts.dispose('a')).toBe(false);
+    await expect(contexts.dispose('a')).resolves.toBe(false);
   });
 
   it('disposeAll() tears down every built context', async () => {
@@ -202,7 +204,7 @@ describe('ProjectContexts', () => {
       'enforceMemoryLimit',
     );
 
-    contexts.disposeAll();
+    await contexts.disposeAll();
     expect(contexts.ids()).toEqual([]);
     emitUsageForTest({});
     expect(spyA).not.toHaveBeenCalled();

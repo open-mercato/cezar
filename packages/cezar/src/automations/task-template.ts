@@ -269,7 +269,7 @@ async function launchRuns(
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
-  options.store.flush({ throwOnError: true });
+  await options.store.flushAsync({ throwOnError: true });
   return { runId: first.id, runIds: runs.map((run) => run.id) };
 }
 
@@ -330,7 +330,7 @@ export async function launchScheduledRun(options: {
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
-  options.store.flush({ throwOnError: true });
+  await options.store.flushAsync({ throwOnError: true });
   return { runId: first.id };
 }
 
@@ -369,7 +369,7 @@ export async function launchTrackerAutomationRun(options: {
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
-  options.store.flush({ throwOnError: true });
+  await options.store.flushAsync({ throwOnError: true });
   return { runId: first.id };
 }
 

@@ -1250,6 +1250,8 @@ export class RunManager {
    */
   private readonly unitParents = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
+  /** Scheduled launches wait for their creation record to reach disk before queue admission. */
+  private readonly pendingDurability = new Map<string, Promise<void>>();
   /** The creation-time namer's branch answer per queued run (spec
    *  2026-10-11-branch-naming-instructions) — `execute` awaits it, bounded, before the fork. */
   private readonly pendingBranchNames = new Map<string, Promise<string | undefined>>();
@@ -1738,6 +1740,7 @@ export class RunManager {
       });
     }
     const binding = input.scheduledLaunch?.binding ?? input.deferredBinding;
+    let durableStart: Promise<void> | undefined;
     if (binding) {
       this.store.updateRun(run.id, {
         ...(input.scheduledLaunch ? { automationTrigger: input.scheduledLaunch.provenance } : {}),
@@ -1745,7 +1748,7 @@ export class RunManager {
       });
       // Children need the same durable guard before naming or queue admission, but retain
       // their own fresh id and never masquerade as the scheduler's idempotent launch.
-      this.store.flushCreatedRun(run);
+      durableStart = this.store.flushCreatedRunAsync(run);
     }
     // Fire-and-forget LLM naming (task auto-naming spec): the heuristic title
     // above shows instantly; the namer's short title replaces it when (and if)
@@ -1772,6 +1775,22 @@ export class RunManager {
     if (input.dispatchIntent && !group) track('dispatch_tree_started', { label: 'toggle' }, { sid: input.deviceSid });
     this.pendingJobs.set(run.id, { workflow, input: effectiveInput });
     this.queue.push(run.id);
+    if (durableStart) {
+      this.pendingDurability.set(run.id, durableStart);
+      void durableStart.then(() => {
+        if (this.pendingDurability.get(run.id) !== durableStart) return;
+        this.pendingDurability.delete(run.id);
+        void this.pump();
+      }, (error: unknown) => {
+        if (this.pendingDurability.get(run.id) !== durableStart) return;
+        this.pendingDurability.delete(run.id);
+        this.pendingJobs.delete(run.id);
+        this.startNowRequested.delete(run.id);
+        const index = this.queue.indexOf(run.id);
+        if (index >= 0) this.queue.splice(index, 1);
+        console.error(`[cez] task ${run.id} was not admitted because its creation record could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    }
     void this.pump();
     return run;
   }
@@ -1932,6 +1951,7 @@ export class RunManager {
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
+          if (this.pendingDurability.has(id)) return false;
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
@@ -4851,7 +4871,7 @@ export class RunManager {
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
     if (state.cancelled) return;
     state.currentStepId = stepId;
-    this.beginUsageInvocation(runId, state, stepId);
+    await this.beginUsageInvocation(runId, state, stepId);
     // A continuation's opening message becomes the session's `userPrompt` and never passes
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
@@ -5542,7 +5562,7 @@ export class RunManager {
           });
         }
       }
-      if (initializedRetryBudget) this.store.flush();
+      if (initializedRetryBudget) await this.store.flushAsync();
     }
     let checkFailure: string | null = null;
     /** The last agent failure, for the run error when its `failed` port is unwired (v1 wording). */
@@ -5558,7 +5578,7 @@ export class RunManager {
         },
       });
 
-    const record = (transitions: GraphTransition[]) => {
+    const record = async (transitions: GraphTransition[]) => {
       for (const t of transitions) {
         taken.push(`${t.from}.${t.port}->${t.to ?? ''}`);
         const loop = graph.nodes.find((n) => n.id === t.from && n.type === 'loop');
@@ -5568,7 +5588,7 @@ export class RunManager {
           if (check && t.port === 'repeat') {
             // #1300: commit the consumed retry before another agent can start, even after a crash.
             this.store.updateStep(runId, check, { retriesUsed: iteration });
-            this.store.flush();
+            await this.store.flushAsync();
           }
           outputs.set(loop.id, { iteration, max: loop.max });
           emit({
@@ -5603,7 +5623,7 @@ export class RunManager {
       const why = ctx.usageLimitResume?.id === resumeNode.id ? 'a usage limit' : 'a restart';
       emit({ type: 'note', message: `resuming the workflow at "${resumeNode.name ?? resumeNode.id}" after ${why}` });
     }
-    else record(step.transitions);
+    else await record(step.transitions);
     while (step.kind === 'node') {
       if (state.cancelled) return null;
       const node = step.node;
@@ -5640,7 +5660,7 @@ export class RunManager {
           port = 'failed';
         } else {
           this.finishStep(runId, node.id, 'done', undefined, emit);
-          record(outcome.transitions);
+          await record(outcome.transitions);
           leaveFrom = outcome.join;
           port = outcome.port;
         }
@@ -5815,7 +5835,7 @@ export class RunManager {
       }
 
       step = advance(graph, leaveFrom, port, loopCounts);
-      record(step.transitions);
+      await record(step.transitions);
       // Nodes about to run again go back to pending so the rail reads truthfully.
       if (step.kind === 'node') this.store.updateStep(runId, step.node.id, { status: 'pending' });
     }
@@ -7022,7 +7042,7 @@ export class RunManager {
     const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
     let session: AgentSession;
     state.currentStepId = step.id;
-    this.beginUsageInvocation(runId, state, step.id);
+    await this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
       runner.startSession(
@@ -7175,30 +7195,34 @@ export class RunManager {
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
-    this.recordUsageUiEvent(runId, state, event);
-    if (event.type === 'session.started') state.sessionBackend = event.backend;
-    if (!state.skillMissingReported && isUnknownSkillFailure(event)) {
-      state.skillMissingReported = true;
-      track('skill_missing_in_session', { label: state.sessionBackend ?? 'unknown' });
-    }
-    sink.handle(event);
-    if (event.type !== 'ask.requested' || state.cancelled) return;
-    this.clearIdleTimer(state);
-    this.leaveMonitoring(runId);
-    this.clearMonitoringWakeTimer(state, runId);
-    this.waiting.add(runId);
-    this.store.updateRun(runId, { status: 'waiting', activity: undefined });
-    if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
-    this.releaseSlot();
+    void this.recordUsageUiEvent(runId, state, event).then(() => {
+      if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
+      if (event.type === 'session.started') state.sessionBackend = event.backend;
+      if (!state.skillMissingReported && isUnknownSkillFailure(event)) {
+        state.skillMissingReported = true;
+        track('skill_missing_in_session', { label: state.sessionBackend ?? 'unknown' });
+      }
+      sink.handle(event);
+      if (event.type !== 'ask.requested' || state.cancelled) return;
+      this.clearIdleTimer(state);
+      this.leaveMonitoring(runId);
+      this.clearMonitoringWakeTimer(state, runId);
+      this.waiting.add(runId);
+      this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+      if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
+      this.releaseSlot();
+    }, (error) => {
+      console.error(`[cezar] usage checkpoint failed for ${runId}; UI event was not persisted:`, error);
+    });
   }
 
   /** Persist the invocation checkpoint before launching a runner. A throw or
    * process exit before `turn.started` therefore leaves a durable mismatch. */
-  private beginUsageInvocation(runId: string, state: ActiveRun, stepId: string): void {
+  private async beginUsageInvocation(runId: string, state: ActiveRun, stepId: string): Promise<void> {
     const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === stepId);
     if (!step) return;
     const epoch = (step.usageInvocationEpoch ?? 0) + 1;
-    this.persistUsageCheckpoint(runId, stepId, {
+    await this.persistUsageCheckpoint(runId, stepId, {
       usageInvocationEpoch: epoch,
       usageInvocationsStarted: (step.usageInvocationsStarted ?? 0) + 1,
     });
@@ -7214,7 +7238,7 @@ export class RunManager {
   /** Fold backend-neutral completed-turn usage into the current step exactly
    * once. Invocation/turn counters are written before the event reaches the
    * NDJSON sink so crashes cannot preserve a falsely complete subtotal. */
-  private recordUsageUiEvent(runId: string, state: ActiveRun, event: UiEvent): void {
+  private async recordUsageUiEvent(runId: string, state: ActiveRun, event: UiEvent): Promise<void> {
     const invocation = state.usageInvocation;
     if (!invocation) return;
     const step = this.store.getRun(runId)?.steps.find((candidate) => candidate.id === invocation.stepId);
@@ -7225,7 +7249,7 @@ export class RunManager {
       invocation.startedTurns.add(event.turnId);
       const firstObservedTurn = !invocation.observed;
       invocation.observed = true;
-      this.persistUsageCheckpoint(runId, invocation.stepId, {
+      await this.persistUsageCheckpoint(runId, invocation.stepId, {
         usageTurnsStarted: (step.usageTurnsStarted ?? 0) + 1,
         ...(firstObservedTurn
           ? { usageInvocationsObserved: (step.usageInvocationsObserved ?? 0) + 1 }
@@ -7249,7 +7273,7 @@ export class RunManager {
       return;
     }
     invocation.recordedTurns.add(event.turnId);
-    this.persistUsageCheckpoint(runId, invocation.stepId, {
+    await this.persistUsageCheckpoint(runId, invocation.stepId, {
       inputTokens: (step.inputTokens ?? 0) + input,
       outputTokens: (step.outputTokens ?? 0) + output,
       usageTurnsRecorded: (step.usageTurnsRecorded ?? 0) + 1,
@@ -7259,13 +7283,13 @@ export class RunManager {
   /** Usage completeness is a crash boundary, unlike high-frequency token
    * snapshots: the checkpoint must reach `runs.json` before the runner starts
    * or the matching UI event is persisted and forwarded. */
-  private persistUsageCheckpoint(
+  private async persistUsageCheckpoint(
     runId: string,
     stepId: string,
     patch: Partial<Omit<StepState, 'id'>>,
-  ): void {
+  ): Promise<void> {
     this.store.updateStep(runId, stepId, patch);
-    this.store.flush();
+    await this.store.flushAsync({ throwOnError: true });
   }
 
   /**

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +45,32 @@ function setup() {
 }
 const signal = (dir: string, name: string) => writeFileSync(join(dir, name), '');
 const result = (dir: string, id: string) => JSON.parse(readFileSync(join(dir, `${id}-result.json`), 'utf8'));
+
+it('flushes an update made while the index worker is writing before resolving', async () => {
+  const dir = setup();
+  const store = RunStore.open(dir, { keepLive: true });
+  const run = store.createRun({ title: 'first', workflow: 'test', task: 'test', steps: [] });
+  const pending = store.flushAsync({ throwOnError: true });
+  store.updateRun(run.id, { title: 'updated during write' });
+  await pending;
+  expect(JSON.parse(readFileSync(join(dir, 'runs.json'), 'utf8'))[0].title).toBe('updated during write');
+});
+
+it('reopens the worker-written index and retries after a worker write failure', async () => {
+  const dir = setup();
+  const store = RunStore.open(dir, { keepLive: true });
+  const run = store.createRun({ title: 'durable', workflow: 'test', task: 'test', steps: [] });
+  await store.flushAsync({ throwOnError: true });
+  expect(RunStore.open(dir, { keepLive: true }).getRun(run.id)?.title).toBe('durable');
+
+  rmSync(join(dir, 'runs.json'));
+  mkdirSync(join(dir, 'runs.json'));
+  store.updateRun(run.id, { title: 'retry me' });
+  await expect(store.flushAsync({ throwOnError: true })).rejects.toThrow('Could not persist run history');
+  rmSync(join(dir, 'runs.json'), { recursive: true });
+  await store.flushAsync({ throwOnError: true });
+  expect(RunStore.open(dir, { keepLive: true }).getRun(run.id)?.title).toBe('retry me');
+});
 
 for (const barrier of ['rename', 'read']) {
   for (const operation of ['strict', 'ordinary']) {

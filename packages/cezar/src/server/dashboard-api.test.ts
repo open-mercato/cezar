@@ -28,9 +28,9 @@ beforeEach(() => {
   dirs.push(home);
   process.env.CEZ_HOME = home;
 });
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  for (const cleanup of cleanups.splice(0)) await cleanup();
   for (const s of stores.splice(0)) s.flush();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   if (savedHome === undefined) delete process.env.CEZ_HOME;

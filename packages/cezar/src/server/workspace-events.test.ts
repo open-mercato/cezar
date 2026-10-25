@@ -79,7 +79,7 @@ describe('GET /api/v1/workspace/events', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     for (const close of closers.splice(0)) await close().catch(() => undefined);
-    contexts.disposeAll();
+    await contexts.disposeAll();
     store.flush();
     for (const dir of [home, repoRoot, otherRoot]) rmSync(dir, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.CEZ_HOME;
