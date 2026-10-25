@@ -15,7 +15,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronDownIcon, GripVerticalIcon } from 'lucide-react'
+import { ChevronDownIcon, FolderPlusIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
@@ -27,8 +27,10 @@ import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { QuickListBuckets, RepoBaseContext } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
+import { ProjectFolderDialog } from '@/components/project-folder-dialog'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
+import { readProjectFolders, writeProjectFolders, type ProjectFolder } from '@/lib/project-folders'
 import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
 import { filterRunsByOrigin } from '@/lib/task-filters'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
@@ -145,6 +147,16 @@ export function ProjectGroups({
   // must not fold the whole sidebar shut.
   const collapseAnchorId = scopedProjectId ?? bootProjectId
   const { collapsed, toggle, expand } = useSidebarCollapse(collapseAnchorId)
+  const [folders, setFolders] = React.useState(readProjectFolders)
+  const [editingFolder, setEditingFolder] = React.useState<ProjectFolder | null | undefined>(undefined)
+  const saveFolder = React.useCallback((folder: ProjectFolder | null, previousId?: string) => {
+    let next = folders.filter((item) => item.id !== previousId && item.id !== folder?.id)
+    if (folder) next = next.map((item) => ({ ...item, projectIds: item.projectIds.filter((id) => !folder.projectIds.includes(id)) }))
+    if (folder) next.push(folder)
+    setFolders(next)
+    writeProjectFolders(next)
+    setEditingFolder(undefined)
+  }, [folders])
 
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
@@ -254,9 +266,20 @@ export function ProjectGroups({
       total={orderedIds.length}
     />
   ))
+  const groupsById = new Map(ordered.map((project, index) => [project.id, groups[index]]))
+
+  const folderSections = [
+    ...folders.map((folder) => ({ folder, projects: ordered.filter((project) => folder.projectIds.includes(project.id)) })),
+    { folder: null, projects: ordered.filter((project) => !folders.some((folder) => folder.projectIds.includes(project.id))) },
+  ].filter(({ folder, projects }) => folder ? projects.length > 0 : projects.length > 0 || folders.length === 0)
 
   return (
     <div data-slot="project-group-list">
+      <div className="mb-1 flex justify-end">
+        <button type="button" data-slot="project-folder-create" onClick={() => setEditingFolder(null)} className="flex h-7 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+          <FolderPlusIcon className="size-3.5" aria-hidden="true" /> New folder
+        </button>
+      </div>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -271,9 +294,25 @@ export function ProjectGroups({
             of place mid-drag. The rect strategy measures each item and moves it to where it will
             actually land. */}
         <SortableContext items={orderedIds} strategy={rectSortingStrategy}>
-          {groups}
+          {folderSections.map(({ folder, projects: sectionProjects }) => (
+            <React.Fragment key={folder?.id ?? 'ungrouped'}>
+              {folder ? (
+                <div data-slot="project-folder" data-folder={folder.id} className="mb-1">
+                  <div className="flex items-center">
+                    <button type="button" aria-expanded={!isProjectCollapsed(collapsed, `folder:${folder.id}`, collapseAnchorId)} onClick={() => toggle(`folder:${folder.id}`)} className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted">
+                      <ChevronDownIcon className={cn('size-3 transition-transform', isProjectCollapsed(collapsed, `folder:${folder.id}`, collapseAnchorId) && '-rotate-90')} aria-hidden="true" />
+                      <span className="truncate">{folder.name}</span><span className="ml-auto">{sectionProjects.length}</span>
+                    </button>
+                    <button type="button" aria-label={`Edit ${folder.name}`} onClick={() => setEditingFolder(folder)} className="size-8 rounded text-xs text-muted-foreground hover:bg-muted">…</button>
+                  </div>
+                  {isProjectCollapsed(collapsed, `folder:${folder.id}`, collapseAnchorId) ? null : <div className="ml-2 border-l border-border pl-1">{sectionProjects.map((project) => groupsById.get(project.id))}</div>}
+                </div>
+              ) : sectionProjects.map((project) => groupsById.get(project.id))}
+            </React.Fragment>
+          ))}
         </SortableContext>
       </DndContext>
+      {editingFolder !== undefined && <ProjectFolderDialog projects={projects} folder={editingFolder} onClose={() => setEditingFolder(undefined)} onSave={saveFolder} />}
     </div>
   )
 }
