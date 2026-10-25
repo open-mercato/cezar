@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -13,6 +13,7 @@ import {
   CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
+  claudeExitMessage,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
@@ -279,6 +280,22 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
   });
 });
 
+describe('claudeExitMessage', () => {
+  it('names a hangup the CLI exited on, which cezar never sends (telemetry 046a0525)', () => {
+    expect(claudeExitMessage(129, '')).toBe(
+      'claude CLI exited with code 129 (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)',
+    );
+  });
+
+  it('names any other signal exit, and keeps the stderr tail', () => {
+    expect(claudeExitMessage(137, 'a\nb')).toBe('claude CLI exited with code 137 (SIGKILL: a signal cezar did not send) — a | b');
+  });
+
+  it('leaves an ordinary failure code alone', () => {
+    expect(claudeExitMessage(1, 'boom\n')).toBe('claude CLI exited with code 1 — boom');
+  });
+});
+
 describe('prependSystemPrompt (codex/opencode delivery)', () => {
   it('prepends the prompt as a leading block of the first user message', () => {
     expect(prependSystemPrompt('Extra rules.', 'do it')).toBe('Extra rules.\n\n---\n\ndo it');
@@ -346,5 +363,22 @@ describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', ()
     } finally {
       rmSync(cwd, { force: true, recursive: true });
     }
+  });
+});
+
+// Spec 2026-10-24 item 9 (eb4b12dc): a gateway's OpenAI-shaped envelope read as its type and message.
+describe('claude result error with a JSON envelope', () => {
+  it('shows the vendor error type and message, not the raw JSON', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-envelope-'));
+    const bin = join(root, 'claude.mjs');
+    const result = 'API Error: 400 [400]: {"error":{"type":"invalid_request_error","message":"model gpt-5 is not available","param":null,"code":null}}';
+    writeFileSync(bin, `#!/usr/bin/env node\nconsole.log(${JSON.stringify(JSON.stringify({ type: 'result', is_error: true, result }))});\nprocess.exit(1);\n`, { mode: 0o755 });
+    try {
+      const errors: string[] = [];
+      await new ClaudeCliRunner({ bin, timeoutMs: 5000 })
+        .run({ cwd: root, userPrompt: 'work' }, (event) => { if (event.type === 'error') errors.push(event.message); })
+        .catch(() => undefined);
+      expect(errors).toContain('API Error: 400 [400]: invalid_request_error: model gpt-5 is not available');
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

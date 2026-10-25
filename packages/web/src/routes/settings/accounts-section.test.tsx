@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { AgentProfile, AgentProfilesResponse } from '@open-mercato/cezar-api-client'
-import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { Toaster, onDangerToast, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 import { ThemeProvider } from '@/components/theme-provider'
 
@@ -68,6 +68,7 @@ function serve(
     openError?: string
     targets?: unknown
     status?: unknown
+    connect?: { status: number; body: unknown }
   } = {},
 ) {
   requests = []
@@ -127,6 +128,9 @@ function serve(
         statusReads.push(url)
         return json({ status: options.status ?? { provider: 'claude', status: 'connected' } })
       }
+      if (url === '/api/v1/providers/connect' && options.connect) {
+        return json(options.connect.body, options.connect.status)
+      }
       if (url.endsWith('/open-targets') && method === 'GET') {
         return json({ targets: options.targets ?? [
           { id: 'finder', label: 'Finder', icon: 'folder' },
@@ -165,10 +169,14 @@ function AgentParamProbe() {
   )
 }
 
-function renderAccounts(entry = '/settings/global/accounts', extra: ReactNode = null) {
+function renderAccounts(
+  entry = '/settings/global/accounts',
+  extra: ReactNode = null,
+  localHandoff: boolean | null = true,
+) {
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } })
-  client.setQueryData(queryKeys.health, {
+  if (localHandoff !== null) client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
     // The install/version rows come from the health probe — the one place a version can honestly
     // come from. Codex is present but UNAVAILABLE, which is "not installed"; an agent missing
@@ -177,6 +185,7 @@ function renderAccounts(entry = '/settings/global/accounts', extra: ReactNode = 
       { name: 'claude', available: true, version: '2.1.220' },
       { name: 'codex', available: false, hint: 'optional: install the Codex CLI' },
     ],
+    capabilities: { localHandoff },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
@@ -395,6 +404,57 @@ describe('the agent accounts section', () => {
       expect(requests.find((r) => r.url === '/api/v1/providers/connect')?.body).toEqual({
         provider: 'claude',
       })
+    })
+
+    // telemetry 23976d8d / 77825860 / d655679e: Connect on a CLI that is not installed could only
+    // ever 409 with the install hint, and that expected answer was reported as an error.
+    it('shows the install hint instead of Connect when the CLI is not installed', async () => {
+      serve({
+        editable: true,
+        profileCapableProviders: ['claude', 'codex'],
+        selections: {},
+        defaults: {},
+        profiles: [...DEFAULTS, profile({
+          id: 'klaudiusz',
+          status: { provider: 'claude', status: 'not-installed', hint: 'Install Claude Code, then run `claude auth login`.' },
+        })],
+      })
+      renderAccounts()
+
+      const row = await waitFor(() => {
+        const found = rowFor('klaudiusz')
+        expect(found?.querySelector('[data-slot="account-install-hint"]')).toBeTruthy()
+        return found!
+      })
+      expect(row.querySelector('[data-slot="account-install-hint"]')?.textContent).toContain('Install Claude Code')
+      expect(row.querySelector('[data-action="account-connect"]')).toBeNull()
+    })
+
+    it('shows a login it could not open, with its command, without reporting it as an error', async () => {
+      serve(
+        {
+          editable: true,
+          profileCapableProviders: ['claude', 'codex'],
+          selections: {},
+          defaults: {},
+          profiles: [...DEFAULTS, profile({ id: 'klaudiusz', status: { provider: 'claude', status: 'disconnected' } })],
+        },
+        { connect: { status: 409, body: { error: 'Run this command on the machine hosting cezar.', command: 'claude auth login' } } },
+      )
+      const reported: string[] = []
+      const off = onDangerToast((message) => reported.push(message))
+      try {
+        renderAccounts()
+        const row = await waitFor(() => {
+          expect(rowFor('klaudiusz')).not.toBeNull()
+          return rowFor('klaudiusz')!
+        })
+        fireEvent.click(row.querySelector('[data-action="account-connect"]')!)
+        await screen.findByText(/Run this command on the machine hosting cezar\. — run: claude auth login/)
+        expect(reported).toEqual([])
+      } finally {
+        off()
+      }
     })
 
     it('hides Connect once the account IS signed in, but keeps Check again', async () => {
@@ -782,11 +842,26 @@ describe('the agent accounts section', () => {
 
     await waitFor(() =>
       expect(document.querySelector('[data-slot="accounts-hosted"]')?.textContent).toContain(
-        'hosted mode',
+        'CEZ_REMOTE_AGENT_ACCOUNTS=1',
       ),
     )
     expect(rows()).toHaveLength(0)
     expect(document.querySelector('[data-action="accounts-add"]')).toBeNull()
+  })
+
+  it.each([false, null])('hides desktop-open actions with localHandoff=%s', async (localHandoff) => {
+    const work = profile({
+      id: 'work',
+      files: [{ id: 'settings', label: 'settings.json', path: '/home/u/.claude-work/settings.json', exists: true }],
+    })
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
+      defaults: {}, selections: {}, profiles: [DEFAULTS[0]!, work] })
+    renderAccounts(undefined, null, localHandoff)
+
+    await openDetails(work.id)
+    expect(document.querySelector('[data-slot="account-open-file"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-open-folder"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-manage"]')).not.toBeNull()
   })
 
   it('gives every agent a tab, including one that cannot carry a second account', async () => {

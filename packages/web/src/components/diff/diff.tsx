@@ -82,7 +82,7 @@ export function Diff(props: DiffProps) {
  * the engine chunk can. Split mode degrades to unified and Markdown `preview` to the plain
  * patch; that is documented degradation, not a bug.
  */
-export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewRef, className }: DiffProps) {
+export function DiffFallback({ files, wrap = false, imageSrc, oldImageSrc, onOpenInApp, viewRef, className }: DiffProps) {
   const stat: DiffStat = {
     adds: files.reduce((sum, file) => sum + file.adds, 0),
     dels: files.reduce((sum, file) => sum + file.dels, 0),
@@ -121,6 +121,7 @@ export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewR
           wrap={wrap}
           imageSrc={imageSrc}
           onOpenInApp={onOpenInApp}
+          oldImageSrc={oldImageSrc}
         />
       ))}
     </div>
@@ -132,11 +133,13 @@ function FallbackFile({
   wrap,
   imageSrc,
   onOpenInApp,
+  oldImageSrc,
 }: {
   file: DiffFileChange
   wrap: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
+  oldImageSrc?: (path: string) => string
 }) {
   return (
     <section
@@ -153,7 +156,7 @@ function FallbackFile({
         </span>
       </header>
       {shouldPreviewImage(file) ? (
-        <ImagePreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
+        <ImagePreview file={file} imageSrc={imageSrc} oldImageSrc={oldImageSrc} onOpenInApp={onOpenInApp} />
       ) : file.binary ? (
         <p className="px-4 py-2.5 text-xs text-soft-foreground">Binary file — no text diff.</p>
       ) : file.patch === '' ? (

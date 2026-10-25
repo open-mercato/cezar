@@ -23,6 +23,7 @@ import { cn } from '@/lib/utils'
 import { useRememberedState } from '@/lib/view-memory'
 import { RunHeader } from '../task-thread/run-header'
 import { ChangesTree } from './changes-tree'
+import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from './tree-pane-resize'
 import { buildFileTree } from './file-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { GitToolbar } from './git-toolbar'
@@ -81,6 +82,9 @@ export function ChangesView({
   const [preview, setPreview] = useState(false)
   const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
   const diffRef = useRef<DiffHandle | null>(null)
+  const treePaneRef = useRef<HTMLElement | null>(null)
+  const [treeWidth, setTreeWidth] = useTreePaneWidth()
+  const treeWidthProps = treePaneWidthProps(treeWidth)
   // Line comments for the agent (self-review): drafted here, and sent from the SAME composer the
   // Session tab docks — floated here while there is something to send, so the review can be given
   // a message (or a skill) without leaving the diff. This route is the one host of both drafts.
@@ -144,6 +148,7 @@ export function ChangesView({
   const changesRefused = changes.isError && changes.error instanceof ApiError && changes.error.status === 409
 
   const files = changes.data?.files ?? NO_FILES
+  const baseSha = changes.data?.baseSha
   // The toolbar, totals and tree are cheap and paint at once; the diff renders in the background
   // as a deferred value, which React interrupts for anything urgent — a click on Chat never waits
   // for a big diff to finish rendering. Until its first pass lands the pane says so.
@@ -276,14 +281,23 @@ export function ChangesView({
               always reachable without moving the diff; `overscroll-contain` keeps a wheel that
               bottoms out in it from chaining into anything else. */}
           <aside
+            ref={treePaneRef}
             data-slot="changes-tree-pane"
+            style={treeWidthProps.style}
             className={cn(
-              'hidden w-60 shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))]',
+              'hidden w-60 max-w-[60%] shrink-0 overflow-y-auto overscroll-contain pt-4 pb-[calc(1rem_+_var(--changes-dock,0px))]',
               embedded ? 'md:@xl:block @4xl:w-72' : 'md:block lg:w-72',
+              treeWidthProps.className,
             )}
           >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} commentCounts={commentCounts} />
           </aside>
+          <TreePaneResizeHandle
+            paneRef={treePaneRef}
+            width={treeWidth}
+            onWidthChange={setTreeWidth}
+            className={cn('hidden', embedded ? 'md:@xl:block' : 'md:block')}
+          />
           {/* The diff's own scroller from md up; its file headers stick to ITS top, so the
               header above never covers them. Its vertical padding lives on the Diff inside, not on
               the scroller: sticky offsets count from the scroller's padding edge, so padding here
@@ -311,6 +325,7 @@ export function ChangesView({
                 preview={desktop && hasMarkdown && preview}
                 loadFileText={(path) => loadWorktreeText(run.id, path)}
                 imageSrc={(path) => runFileRawUrl(run.id, path)}
+                oldImageSrc={baseSha ? (path) => runFileRawUrl(run.id, path, baseSha) : undefined}
                 onOpenInApp={
                   health.data?.capabilities.localHandoff ? (path) => openImage.mutate(path) : undefined
                 }

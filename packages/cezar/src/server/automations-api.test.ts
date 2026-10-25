@@ -283,6 +283,30 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect(switched.status).toBe(409);
   });
 
+  it('arms a one-time schedule at its instant and refuses to enable one that has passed (#771)', async () => {
+    const server = app();
+    const future = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    const once = (date?: string) => ({ ...schedule, schedule: { type: 'once', hour: 23, minute: 0, ...(date ? { date } : {}) } });
+
+    const undated = await apiRequest(server, '/api/v1/automations', json(once()));
+    expect(undated.status).toBe(400);
+    expect(((await undated.json()) as any).error).toContain('needs a date');
+    const pastEnabled = await apiRequest(server, '/api/v1/automations', json({ ...once('2020-01-01'), enable: true }));
+    expect(pastEnabled.status).toBe(400);
+    expect(((await pastEnabled.json()) as any).error).toContain('not in the future');
+
+    // Saved paused, a past one is a draft: accepted, but it cannot be enabled until its date moves.
+    const draft = ((await (await apiRequest(server, '/api/v1/automations', json(once('2020-01-01')))).json()) as any).automation;
+    expect((await apiRequest(server, `/api/v1/automations/${draft.id}/enable`, { method: 'POST' })).status).toBe(409);
+    const moved = await apiRequest(server, `/api/v1/automations/${draft.id}`, json({ ...once(future), enabled: true, expectedRevision: draft.revision }, 'PUT'));
+    expect(moved.status).toBe(200);
+
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...once(future), enable: true }))).json()) as any).automation;
+    expect(created).toMatchObject({ enabled: true, schedule: { type: 'once', date: future, hour: 23, minute: 0 } });
+    const state = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(Date.parse(state.nextRunAt)).toBeGreaterThan(Date.now() + 28 * 86_400_000);
+  });
+
   it('clears the next occurrence when the schedule changes, so the timer recomputes', async () => {
     const server = app();
     const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, enable: true }))).json()) as any).automation;
@@ -316,6 +340,16 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect((await apiRequest(server, `/api/v1/automations/${created.id}/check`, json({ mode: 'preview' }))).status).toBe(409);
     const pollDef = ((await (await apiRequest(server, '/api/v1/automations', json(poll))).json()) as any).automation;
     expect((await apiRequest(server, `/api/v1/automations/${pollDef.id}/run`, { method: 'POST' })).status).toBe(409);
+  });
+
+  // telemetry 411fac74: the 409 named only "see the execution log", never why the launch failed.
+  it('says why a by-hand schedule launch failed', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, task: { ...schedule.task, workflow: 'no-such-workflow' } }))).json()) as any).automation;
+    const ran = await apiRequest(server, `/api/v1/automations/${created.id}/run`, { method: 'POST' });
+    expect(ran.status).toBe(409);
+    const { error } = (await ran.json()) as { error: string };
+    expect(error).toMatch(/^the launch failed: .*no-such-workflow/);
   });
 
   it('lists the other registered projects\' automations as templates', async () => {

@@ -1,3 +1,4 @@
+import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
@@ -1584,3 +1585,81 @@ describe('TasksOverview — origin and facet filters', () => {
   })
 })
 
+
+/** #1340: the overview and sidebar ask `GET /automations` only when a schedule is known. */
+describe('TasksOverviewRoute — scheduled tasks gate', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const health = {
+    version: '0', repoRoot: '/r', repo: null, checks: [], defaultRunner: 'claude', forge: null,
+    capabilities: { localHandoff: true, followups: true, singleProject: false, automations: true, dispatch: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true },
+    projects: [{ id: 'boot', name: 'r' }], bootProject: 'boot',
+  }
+  const scheduled = {
+    id: 'later', name: 'Later', kind: 'schedule', enabled: true, revision: 1, task: { prompt: 'Later' },
+    deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [], binding: { accounts: [] } },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  function renderApp(automations: unknown[] = [scheduled], loseCancel = false) {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (loseCancel && init?.method === 'DELETE' && url.includes('/automations/later')) {
+        automations = []
+        return new Response(JSON.stringify({ error: 'This scheduled task already started.', runIds: ['started-run'] }), { status: 409 })
+      }
+      const body = url === '/api/v1/health' ? health
+        : url.endsWith('/automations') ? { automations }
+          : url === '/api/v1/runs' ? [run({ id: 'mine', title: 'My task', status: 'running' })] : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ListViewProvider>
+            <TaskQuickListContainer />
+            <TasksOverviewRoute />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+  const asked = () => fetchMock.mock.calls.some((call) => String(call[0]).endsWith('/automations'))
+
+  it('asks once per session for a project with no automation runs and no schedule', async () => {
+    resetScheduledTasksGate()
+    renderApp([])
+    await screen.findAllByText('My task')
+    await waitFor(() => expect(asked()).toBe(true))
+    const count = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length).toBe(count)
+    expect(screen.queryByRole('region', { name: 'Scheduled tasks' })).toBeNull()
+  })
+
+  it('shows the Scheduled group in both lists when the project has a schedule', async () => {
+    resetScheduledTasksGate()
+    renderApp()
+    await waitFor(() => expect(screen.getAllByRole('region', { name: 'Scheduled tasks' })).toHaveLength(2))
+  })
+  it('keeps completed-run links after the last scheduled row disappears during cancellation', async () => {
+    resetScheduledTasksGate()
+    renderApp([scheduled], true)
+    await waitFor(() => expect(screen.getAllByRole('region', { name: 'Scheduled tasks' })).toHaveLength(2))
+    fireEvent.click(screen.getByText('Later', { selector: 'span.font-medium' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByText('Later', { selector: 'span.font-medium' })).toBeNull())
+    expect(screen.getByRole('link', { name: 'View run 1' }).getAttribute('href')).toBe('/tasks/started-run')
+  })
+
+})

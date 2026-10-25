@@ -540,3 +540,64 @@ breaking change requiring the documented deprecation path.
 - `BACKWARD_COMPATIBILITY.md` — §7 (this protocol) and §2/§3 (SSE names, NDJSON).
 - `.ai/analysis/cockpit-ui-redesign/agent-event-protocols.md` — the deep design record (§7, §7.1).
 - `.ai/specs/2026-07-14-cockpit-ui-redesign.md` — the spec (protocol v2, parity requirement).
+
+## Optional account usage metadata (#1340 component)
+
+`AgentRunSpec.onUsageWindows?: (observation: UsageWindowsObservation) => void`
+receives backend-neutral metadata during **both** `run` and `startSession`.
+Claude maps `rate_limit_event`, including `allowed` and `unifiedWindows`, and
+canonical `Claude AI usage limit reached|<epoch>` markers in errored terminal
+`result` frames, either in the string `result` or string entries of `errors[]`.
+Multiple canonical markers in one frame produce one observation with the latest
+trusted future reset. Terminal markers reuse the auto-resume parser and its seven-day
+bound, require a strictly future reset, and emit one account-wide blocked
+`terminal-limit` window (`kind: other`, unknown duration) through the same
+account-bound callback. No window cadence is inferred; expired markers are ignored.
+This metadata is retained independently of whether auto-resume is enabled;
+Codex maps `account/rateLimits/updated`. No model turn is created to refresh this
+channel. Missing events are normal. Callback failures cannot fail an agent run.
+The integration caller captures the **resolved account of that specific step**
+in its callback closure; a runner must not guess a workspace account.
+
+The Zod contract is `packages/contract/src/usage-windows.ts`. All times are epoch
+milliseconds. An observation carries provider, source, observation time and
+windows. Each window carries an id, kind, optional limit id, applicability,
+model list, nullable reset/duration/percentage, status and observation time.
+Percentages may exceed 100. Unknown applicability must make selection unavailable,
+not fall back to a different model's window. For `rate_limit_event`, Claude only marks the explicitly
+named rejected window blocked; a rejected overage does not override allowed main
+usage. Unknown Claude/model-specific limit names and non-general Codex buckets
+are deliberately `applicability: unknown`; names are not model selectors.
+Codex keyed buckets take precedence over the legacy alias. Missing windows are
+partial observations; explicit null windows clear previous knowledge. A primary
+window can be weekly and secondary can be null: labels must use duration.
+
+`saveUsageWindows(binding, observation)` and `loadUsageWindows(binding)` in
+`workspace/usage-windows.ts` bind snapshots to provider, account id, resolved
+profile location and optional hashed identity. Writes use the workspace sandbox
+guard, a bounded cross-process lease and atomic 0600 replacement under CEZ_HOME.
+Corrupt/unwritable state degrades to no data with one redacted warning per file.
+Newer observations replace older windows; other windows and accounts survive.
+A verified identity change discards the old login's windows. Unidentified observations cannot overwrite identified snapshots or remove established holds, including when the profile location changes. Bind the exact same
+identity when reading; absent identity is not a wildcard.
+
+`futureUsageWindows(snapshot, now)` retains each known reset until it expires,
+with **no snapshot TTL**. `isUsageWindowBlocking(window, now)` treats an observed
+block as active until that window resets; it does not assert live allowance.
+The parent selector must enforce applicability and the seven-day upper bound; these helpers never select or schedule a task.
+
+`probeCodexUsageWindows(resolvedProfile, { force?, identityOnly? })` takes
+a trusted server-resolved Codex profile, never an HTTP-supplied path, environment
+or executable. It returns `{ binding, observation } | null` and does not persist. Usage reads run during preview and when a scheduled start checks for a newer blocking reset at its due time. Account-binding revalidation uses `identityOnly`, which skips `account/rateLimits/read`. Ordinary Codex steps start no probe and record no usage windows. Only a scheduled run bound to a Codex identity attributes streamed observations, re-verifying through the short identity cache (at most one app-server per cache window); an unanswered check skips that observation and a changed identity disables collection for the stream. `probeCodexIdentity(profile, { force? })` tells an unanswered read (`{ unavailable: true }`) from a definitive answer (`{ identity }`, `null` for an API-key login). These checks never create model turns.
+It uses the existing executable resolver and curated runner environment with the
+resolved CODEX_HOME pinned, and the profile directory as cwd. It sends only
+`initialize`, `initialized`, `account/read` (`refreshToken: false`) and
+`account/rateLimits/read`: no thread, turn or model call. Runtime (including
+profile checks) is bounded to 5 seconds, combined stdout/stderr to 256 KiB,
+concurrency to four, cache to 64 entries/15 seconds and single-flight per
+account/location. `force` bypasses the cache for a fresh identity comparison.
+API-key/no-identity accounts cannot be bound by identity; scheduled starts bind them by profile location. Identity hashes stable account metadata;
+credentials and raw protocol/error messages are never returned or persisted.
+The short-lived process is killed when the read finishes or exceeds a bound.
+Fixtures and tests live alongside `core/usage-windows*`, `core/codex-usage-probe*`
+and `workspace/usage-windows.test.ts`.

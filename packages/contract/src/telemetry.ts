@@ -165,6 +165,10 @@ export const PALETTE_MODES = ['tasks', 'commands', 'files', 'pr_number', 'automa
 /** The view a palette was closed from without choosing anything — `palette_dismissed`'s label. */
 export const PALETTE_DISMISS_VIEWS = ['command', 'actions', 'tasks', 'files'] as const;
 
+/** The new-task start options — `start_option_picked`'s label. */
+export const START_OPTIONS = ['now', 'at', 'usage_reset'] as const;
+export type StartOption = (typeof START_OPTIONS)[number];
+
 /** A batched count: high-volume events (a shortcut can fire constantly) are summed in the tab and
  *  sent once per label with `value` (docs/telemetry.md). */
 const batchedValue = z.number().int().min(1).max(1000).optional();
@@ -206,5 +210,13 @@ export const telemetryEventInputSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('palette_dismissed'), label: z.enum(PALETTE_DISMISS_VIEWS) }),
   /** A task command got a new shortcut (or lost one) — which defaults people change. */
   z.object({ event: z.literal('shortcut_rebound'), label: taskCommandLabelSchema }),
+  /** The new-task composer's start-time menu (the arrow beside Send) was opened. */
+  z.object({ event: z.literal('schedule_menu_opened'), label: z.enum(['new_task']) }),
+  /** A start option was picked in that menu. */
+  z.object({ event: z.literal('start_option_picked'), label: z.enum(START_OPTIONS) }),
+  /** A task was scheduled from the composer, by the kind of start it waits for. */
+  z.object({ event: z.literal('task_scheduled'), label: z.enum(['at', 'usage_reset']) }),
+  /** Design Mode was switched on in a task's Preview — by its button or by ⌥D. */
+  z.object({ event: z.literal('design_mode_enabled'), label: z.enum(['button', 'shortcut']) }),
 ]);
 export type TelemetryEventInput = z.infer<typeof telemetryEventInputSchema>;

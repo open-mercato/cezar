@@ -19,7 +19,15 @@ import type { ThreadAsk } from './thread-state'
  * picks would seed the new one and resolving either would wipe the other.
  */
 
-export type AskSelections = Record<number, string[]>
+/** One question's answer: the agent's options picked, the user's own text ("Other…", open
+ *  when defined), or a request for more context instead of an answer. */
+export interface AskQuestionAnswer {
+  labels: string[]
+  other?: string
+  moreInfo?: boolean
+}
+
+export type AskSelections = Record<number, AskQuestionAnswer>
 
 const store = new Map<string, AskSelections>()
 

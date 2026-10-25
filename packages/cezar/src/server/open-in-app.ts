@@ -85,9 +85,22 @@ export function resolveOnPath(
   wsl: boolean = isWsl(),
   searchPath: string = process.env.PATH ?? '',
 ): string | null {
+  // Native Windows never spawns an extensionless name: libuv appends `.com`/`.exe` and only tries
+  // the literal name when it HAS an extension. VS Code's bin dir holds a bare `code` (a bash shim
+  // for Git Bash) beside `code.cmd`, so offering it made every open fail (telemetry 4fda9ce5).
+  const names = platform === 'win32' ? [`${bin}.com`, `${bin}.exe`] : wsl ? [bin, `${bin}.com`, `${bin}.exe`] : [bin];
+  return findOnPath(names, platform, searchPath);
+}
+
+/** Is `bin` on PATH for a SHELL — what an agent-CLI handoff runs in, since it opens a terminal
+ *  that types the command. A bare npm shim counts there, unlike in `resolveOnPath`. */
+function onShellPath(bin: string): boolean {
+  const suffixed = process.platform === 'win32' || isWsl();
+  return findOnPath(suffixed ? [bin, `${bin}.com`, `${bin}.exe`] : [bin], process.platform, process.env.PATH ?? '') !== null;
+}
+
+function findOnPath(names: string[], platform: NodeJS.Platform, searchPath: string): string | null {
   const dirs = searchPath.split(platform === 'win32' ? ';' : ':');
-  const suffixed = platform === 'win32' || wsl;
-  const names = suffixed ? [bin, `${bin}.com`, `${bin}.exe`] : [bin];
   for (const dir of dirs) {
     if (!dir) continue;
     for (const name of names) {
@@ -183,7 +196,7 @@ export function detectOpenTargets(): OpenTarget[] {
   }
   for (const cli of AGENT_CLIS) {
     const envBin = cli.envBin();
-    if ((envBin && existsSync(envBin)) || onPath(cli.bin)) {
+    if ((envBin && existsSync(envBin)) || onShellPath(cli.bin)) {
       targets.push({ id: `cli:${cli.runner}`, label: cli.label, icon: cli.icon });
     }
   }

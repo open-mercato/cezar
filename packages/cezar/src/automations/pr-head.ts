@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { z } from 'zod';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
 import { parseRemote, resolveTaskRemotes } from '../git-remotes.ts';
@@ -65,7 +66,7 @@ export function prHeadRef(number: number): string {
 
 export const runCommand: CommandRunner = (command, args, cwd) =>
   new Promise((resolve) => {
-    execFile(command, args, { cwd, maxBuffer: 4 * 1024 * 1024, timeout: 120_000 }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd, maxBuffer: 4 * 1024 * 1024, timeout: 120_000, env: ghEnv() }, (error, stdout, stderr) => {
       resolve({ ok: !error, stdout: String(stdout), stderr: String(stderr || (error ? error.message : '')) });
     });
   });
