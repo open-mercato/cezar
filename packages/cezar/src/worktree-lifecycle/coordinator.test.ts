@@ -27,6 +27,7 @@ async function project(semaphore = new WorkspaceSemaphore({initial: {maxParallel
   const records = new Map<string, FakeRun>([[id, {id, task: 'fixture task', status: 'running'}]]);
   const runs = {
     flush: () => undefined,
+    flushAsync: async () => undefined,
     listRuns: () => [...records.values()],
     getRun: (runId: string) => records.get(runId),
     updateRun: (runId: string, patch: Record<string, unknown>) => { const run = records.get(runId); if (run) Object.assign(run, patch); },

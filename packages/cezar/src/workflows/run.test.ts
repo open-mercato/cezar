@@ -120,9 +120,9 @@ describe('RunManager directional usage accounting', () => {
     internal = manager as unknown as UsageAccountingHarness;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose(); // see DISPOSE at the top of this file
-    store.flush();
+    await store.flushAsync();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -139,9 +139,9 @@ describe('RunManager directional usage accounting', () => {
     return { run, state, sink };
   }
 
-  it('deduplicates starts and completions while summing multiple turns in one invocation', () => {
+  it('deduplicates starts and completions while summing multiple turns in one invocation', async () => {
     const { run, state, sink } = fixture();
-    internal.beginUsageInvocation(run.id, state, 'work');
+    await internal.beginUsageInvocation(run.id, state, 'work');
     const started: UiEvent = { type: 'turn.started', turnId: 'turn_1' };
     internal.handleRunnerUiEvent(run.id, state, sink, started);
     internal.handleRunnerUiEvent(run.id, state, sink, started);
@@ -160,6 +160,7 @@ describe('RunManager directional usage accounting', () => {
       stopReason: 'end_turn',
       usage: { input: 5, output: 1, total: 6 },
     });
+    await store.flushAsync();
 
     expect(store.getRun(run.id)?.steps[0]).toMatchObject({
       usageInvocationsStarted: 1,
@@ -172,11 +173,11 @@ describe('RunManager directional usage accounting', () => {
     expect(store.getRun(run.id)).toMatchObject({ inputTokens: 15, outputTokens: 3 });
   });
 
-  it('keeps the run aggregate absent after a pre-turn failure even when a later invocation is metered', () => {
+  it('keeps the run aggregate absent after a pre-turn failure even when a later invocation is metered', async () => {
     const { run, state, sink } = fixture();
-    internal.beginUsageInvocation(run.id, state, 'work');
+    await internal.beginUsageInvocation(run.id, state, 'work');
     // The first startSession attempt fails before emitting turn.started.
-    internal.beginUsageInvocation(run.id, state, 'work');
+    await internal.beginUsageInvocation(run.id, state, 'work');
     internal.handleRunnerUiEvent(run.id, state, sink, { type: 'turn.started', turnId: 'turn_1' });
     internal.handleRunnerUiEvent(run.id, state, sink, {
       type: 'turn.completed',
@@ -184,6 +185,7 @@ describe('RunManager directional usage accounting', () => {
       stopReason: 'end_turn',
       usage: { input: 8, output: 2, total: 10 },
     });
+    await store.flushAsync();
 
     expect(store.getRun(run.id)?.steps[0]).toMatchObject({
       usageInvocationsStarted: 2,
@@ -197,11 +199,11 @@ describe('RunManager directional usage accounting', () => {
     expect(store.getRun(run.id)?.outputTokens).toBeUndefined();
   });
 
-  it('writes each completeness checkpoint before launching or forwarding its boundary event', () => {
+  it('writes each completeness checkpoint before launching or forwarding its boundary event', async () => {
     const { run, state } = fixture();
-    store.flush();
+    await store.flushAsync();
 
-    internal.beginUsageInvocation(run.id, state, 'work');
+    await internal.beginUsageInvocation(run.id, state, 'work');
     expect(RunStore.open(join(repoRoot, '.ai/cezar')).getRun(run.id)?.steps[0]).toMatchObject({
       usageInvocationsStarted: 1,
     });
@@ -220,6 +222,7 @@ describe('RunManager directional usage accounting', () => {
       stopReason: 'end_turn',
       usage: { input: 8, output: 2, total: 10 },
     });
+    await store.flushAsync();
 
     expect(persistedAtSink[0]).toMatchObject({
       usageInvocationsObserved: 1,
