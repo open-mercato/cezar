@@ -70,6 +70,8 @@ describe('chords', () => {
     expect(chordProblem('Shift+P')).toBeDefined()
     expect(chordProblem('Mod+K')).toBeDefined()
     expect(chordProblem('Mod+W')).toBeDefined()
+    // The Preview's Design Mode key (spec 2026-10-09-design-mode §7a).
+    expect(chordProblem('Alt+D')).toBeDefined()
     expect(chordProblem('Mod+Shift+P')).toBeUndefined()
     expect(chordProblem('Alt+P')).toBeUndefined()
   })
@@ -129,6 +131,11 @@ describe('bindings', () => {
     expect(Object.keys(sanitizeOverrides(many))).toHaveLength(200)
     // A malformed value never reaches formatChord.
     expect(() => [...effectiveBindings(sanitizeOverrides({ pin: 5 })).values()].map((chord) => formatChord(chord))).not.toThrow()
+  })
+
+  it('drops a stored override on a chord cezar reserved later, so the default comes back', () => {
+    expect(sanitizeOverrides({ 'tab:1': 'Mod+B', pin: 'Mod+J' })).toEqual({ pin: 'Mod+J' })
+    expect(effectiveBindings(sanitizeOverrides({ 'tab:1': 'Mod+B' })).get('tab:1')).toBe('Mod+1')
   })
 
   it('a stale map that double-books a chord still runs one command — the override wins', () => {

@@ -22,6 +22,12 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('--suggestions');
   });
 
+  it('warns against leaving processes behind and against pkill -f on a generic pattern (#1411)', () => {
+    expect(DISPATCH_PROMPT).toContain('timeout 300');
+    expect(DISPATCH_PROMPT).toContain('never with pkill -f');
+    expect(DISPATCH_PROMPT).toContain('check ps');
+  });
+
   it('tells the parent how to pick a runner and model for a child, and that omitted means inherited', () => {
     expect(DISPATCH_PROMPT).toContain('--runner and --model choose who runs the child; omitted, it inherits yours');
     expect(DISPATCH_PROMPT).toContain("If the user's instructions name a runner or model, use that");

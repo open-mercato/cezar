@@ -1,18 +1,41 @@
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 import { useAskAnswer } from './ask-answer'
-import { type AskSelections, forgetAskSelections, readAskSelections, writeAskSelections } from './ask-selections'
+import {
+  type AskQuestionAnswer,
+  type AskSelections,
+  forgetAskSelections,
+  readAskSelections,
+  writeAskSelections,
+} from './ask-selections'
 import type { ThreadAsk } from './thread-state'
 import type { UiAskQuestion } from '@open-mercato/cezar-api-client'
 
+/** What "Need more info" sends; the CEZ:ASK instructions (`handoff.ts`) tell the agent to
+ *  explain the question and ask it again. */
+export const ASK_MORE_INFO_ANSWER =
+  'I need more information to answer this — please explain the context and ask again.'
+
+const EMPTY_ANSWER: AskQuestionAnswer = { labels: [] }
+
+/** The user's own text on one line: the answer is read back per `Header:` line (Codex parses
+ *  it that way too), so a newline would cut it short. */
+const ownText = (answer: AskQuestionAnswer) => answer.other?.trim().replace(/\s+/g, ' ') ?? ''
+
+const isAnswered = (answer: AskQuestionAnswer) =>
+  answer.moreInfo === true || answer.labels.length > 0 || ownText(answer) !== ''
+
 /** Format one answered question the way the agent reads it back. */
-function formatAnswer(question: UiAskQuestion, labels: string[]): string {
-  return `${question.header}: ${labels.join(', ')}`
+function formatAnswer(question: UiAskQuestion, answer: AskQuestionAnswer): string {
+  if (answer.moreInfo) return `${question.header}: ${ASK_MORE_INFO_ANSWER}`
+  const own = ownText(answer)
+  return `${question.header}: ${[...answer.labels, ...(own ? [own] : [])].join(', ')}`
 }
 
 /**
@@ -26,8 +49,10 @@ function formatAnswer(question: UiAskQuestion, labels: string[]): string {
  * allows: the live reply while the engine owns a session, and a resume once it
  * has closed — a question outlives its session, so answering one that the agent
  * asked before an idle timeout or a restart reopens the session with the answer
- * as its opening prompt. The composer below stays available for a free-form
- * "Other". Once resolved, the card collapses to a compact summary.
+ * as its opening prompt. Every question also offers the user's own text ("Other…") and
+ * "Need more info", which asks the agent for context instead of answering; the composer
+ * below stays available for a reply to the whole card. Once resolved, the card collapses
+ * to a compact summary.
  */
 export function AskCard({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   // Answered — by Send or by a free-form reply in the composer — so the held picks are spent.
@@ -67,14 +92,15 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
   // whenever it scrolls out of a virtualized viewport, and the picks must outlive that (#1247).
   const [selections, setSelections] = useState<AskSelections>(() => readAskSelections(run.id, ask))
 
-  const setQuestion = (index: number, labels: string[]) =>
+  const setQuestion = (index: number, answer: AskQuestionAnswer) =>
     setSelections((prev) => {
-      const next = { ...prev, [index]: labels }
+      const next = { ...prev, [index]: answer }
       writeAskSelections(run.id, ask, next)
       return next
     })
 
-  const answered = (index: number) => (selections[index]?.length ?? 0) > 0
+  const answerOf = (index: number) => selections[index] ?? EMPTY_ANSWER
+  const answered = (index: number) => isAnswered(answerOf(index))
   const allAnswered = questions.every((_, index) => answered(index))
   // Named only once the user has started answering: a fresh card listing every header would be
   // noise, but a half-answered one is exactly where a missed question hides off-screen.
@@ -84,7 +110,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
 
   const sendAll = () =>
     void delivery.send(
-      questions.map((q, index) => formatAnswer(q, selections[index] ?? [])).join('\n'),
+      questions.map((q, index) => formatAnswer(q, answerOf(index))).join('\n'),
     )
 
   // The session ended before the question was answered — say so, because sending the
@@ -109,11 +135,13 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
             key={question.id ?? index}
             question={question}
             disabled={delivery.isPending || blocked}
-            selected={selections[index] ?? []}
-            onSelect={(labels) => {
-              if (blocked) return
-              if (oneTap) void delivery.send(formatAnswer(question, labels))
-              else setQuestion(index, labels)
+            oneTap={oneTap}
+            answer={answerOf(index)}
+            onChange={(answer) => {
+              if (!blocked) setQuestion(index, answer)
+            }}
+            onSubmit={(answer) => {
+              if (!blocked && isAnswered(answer)) void delivery.send(formatAnswer(question, answer))
             }}
           />
         ))}
@@ -174,25 +202,56 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
 function AskQuestionBlock({
   question,
   disabled,
-  selected,
-  onSelect,
+  oneTap,
+  answer,
+  onChange,
+  onSubmit,
 }: {
   question: UiAskQuestion
   disabled: boolean
-  selected: string[]
-  onSelect: (labels: string[]) => void
+  /** The card's only question, single-select: a final pick sends at once. */
+  oneTap: boolean
+  answer: AskQuestionAnswer
+  onChange: (answer: AskQuestionAnswer) => void
+  onSubmit: (answer: AskQuestionAnswer) => void
 }) {
   const multiSelect = question.multiSelect === true
+  const otherOpen = answer.other !== undefined
+  const otherInput = useRef<HTMLTextAreaElement>(null)
+  // Focus only on the click that opens the field — never `autoFocus`, which would also fire
+  // when a virtualized row remounts on scroll and yank the viewport to it.
+  const [focusOther, setFocusOther] = useState(false)
+  useEffect(() => {
+    if (!focusOther) return
+    otherInput.current?.focus()
+    setFocusOther(false)
+  }, [focusOther])
+  // A pick that settles the question: sent at once on a one-tap card, held otherwise.
+  const settle = (next: AskQuestionAnswer) => (oneTap ? onSubmit(next) : onChange(next))
 
   const pick = (label: string) => {
     if (!multiSelect) {
-      onSelect([label])
+      settle({ labels: [label] })
       return
     }
-    onSelect(
-      selected.includes(label) ? selected.filter((l) => l !== label) : [...selected, label],
-    )
+    const labels = answer.labels.includes(label)
+      ? answer.labels.filter((l) => l !== label)
+      : [...answer.labels, label]
+    onChange({ labels, ...(otherOpen ? { other: answer.other } : {}) })
   }
+
+  // Own text sits beside the picked options on a multi-select question, and replaces them on
+  // a single-select one.
+  const toggleOther = () => {
+    if (otherOpen) {
+      onChange({ labels: answer.labels })
+      return
+    }
+    onChange({ labels: multiSelect ? answer.labels : [], other: '' })
+    setFocusOther(true)
+  }
+
+  const toggleMoreInfo = () => (answer.moreInfo ? onChange(EMPTY_ANSWER) : settle({ labels: [], moreInfo: true }))
 
   return (
     <div role="group" aria-label={question.question}>
@@ -206,46 +265,137 @@ function AskQuestionBlock({
       </div>
       <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
       <div className="flex flex-col gap-2">
-        {question.options.map((option) => {
-          const isSelected = selected.includes(option.label)
-          return (
-            <button
-              key={option.label}
-              type="button"
+        {question.options.map((option) => (
+          <AskChoice
+            key={option.label}
+            label={option.label}
+            description={option.description}
+            checkbox={multiSelect}
+            selected={answer.labels.includes(option.label)}
+            disabled={disabled}
+            onClick={() => pick(option.label)}
+          />
+        ))}
+        <div className="flex flex-wrap gap-2">
+          <AskExtraChoice slot="ask-other" selected={otherOpen} disabled={disabled} onClick={toggleOther}>
+            Other…
+          </AskExtraChoice>
+          <AskExtraChoice
+            slot="ask-more-info"
+            selected={answer.moreInfo === true}
+            disabled={disabled}
+            onClick={toggleMoreInfo}
+          >
+            Need more info
+          </AskExtraChoice>
+        </div>
+        {otherOpen ? (
+          <div data-slot="ask-other-input" className="flex flex-col gap-2">
+            <Textarea
+              ref={otherInput}
+              rows={2}
+              aria-label={`Your own answer: ${question.question}`}
+              placeholder="Type your own answer"
+              value={answer.other}
               disabled={disabled}
-              aria-pressed={isSelected}
-              onClick={() => pick(option.label)}
-              className={cn(
-                'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left transition-colors',
-                'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
-                isSelected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
-              )}
-            >
-              <span className="flex min-w-0 items-start gap-2 text-[13.5px] font-semibold text-foreground">
-                {multiSelect ? (
-                  <span
-                    aria-hidden
-                    className={cn(
-                      'flex size-4 shrink-0 items-center justify-center rounded border text-[10px]',
-                      isSelected
-                        ? 'border-primary bg-primary text-primary-foreground'
-                        : 'border-soft-foreground',
-                    )}
-                  >
-                    {isSelected ? '✓' : ''}
-                  </span>
-                ) : null}
-                <span className="min-w-0 break-words">{option.label}</span>
-              </span>
-              {option.description ? (
-                <span className="min-w-0 break-words text-xs text-muted-foreground">
-                  {option.description}
-                </span>
-              ) : null}
-            </button>
-          )
-        })}
+              onChange={(event) => onChange({ ...answer, other: event.target.value })}
+              onKeyDown={(event) => {
+                if (oneTap && event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                  event.preventDefault()
+                  onSubmit(answer)
+                }
+              }}
+            />
+            {oneTap ? (
+              <div>
+                <Button size="sm" disabled={disabled || !isAnswered(answer)} onClick={() => onSubmit(answer)}>
+                  Send answer
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
+  )
+}
+
+function AskChoice({
+  label,
+  description,
+  checkbox,
+  selected,
+  disabled,
+  onClick,
+}: {
+  label: string
+  description?: string
+  checkbox: boolean
+  selected: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        'flex w-full flex-col gap-0.5 rounded-md border px-3.5 py-2.5 text-left transition-colors',
+        'hover:border-primary/50 hover:bg-primary/[0.06] disabled:pointer-events-none disabled:opacity-50',
+        selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
+      )}
+    >
+      <span className="flex min-w-0 items-start gap-2 text-[13.5px] font-semibold text-foreground">
+        {checkbox ? (
+          <span
+            aria-hidden
+            className={cn(
+              'flex size-4 shrink-0 items-center justify-center rounded border text-[10px]',
+              selected ? 'border-primary bg-primary text-primary-foreground' : 'border-soft-foreground',
+            )}
+          >
+            {selected ? '✓' : ''}
+          </span>
+        ) : null}
+        <span className="min-w-0 break-words">{label}</span>
+      </span>
+      {description ? (
+        <span className="min-w-0 break-words text-xs text-muted-foreground">{description}</span>
+      ) : null}
+    </button>
+  )
+}
+
+/** The two answers cezar adds to every question — smaller than the agent's own options. */
+function AskExtraChoice({
+  slot,
+  selected,
+  disabled,
+  onClick,
+  children,
+}: {
+  slot: string
+  selected: boolean
+  disabled: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      data-slot={slot}
+      disabled={disabled}
+      aria-pressed={selected}
+      onClick={onClick}
+      className={cn(
+        'rounded-md border border-dashed px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors',
+        'hover:border-primary/50 hover:bg-primary/[0.06] hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
+        selected ? 'border-primary/60 bg-primary/[0.06] text-foreground' : 'border-border bg-card',
+      )}
+    >
+      {children}
+    </button>
   )
 }

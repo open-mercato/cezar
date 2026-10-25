@@ -15,7 +15,7 @@ import type {
   RepoTree,
   WorktreeEntry,
 } from '@open-mercato/cezar-api-client'
-import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { Toaster, onDangerToast, resetToasts } from '@/components/ui/toaster'
 
 import { RepoGitRoute } from './repo-git'
 
@@ -870,8 +870,26 @@ describe('the repo view sync strip', () => {
     })
     renderAt('/git')
     await waitFor(() => expect(document.querySelector('[data-action="repo-pull"]')).not.toBeNull())
+    // git's verdict, not a cezar failure: shown, never an error report (telemetry 9202a06a).
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
     fireEvent.click(document.querySelector('[data-action="repo-pull"]')!)
     await waitFor(() => expect(document.body.textContent).toContain('origin/main has diverged'))
+    expect(reported).toEqual([])
+    off()
+  })
+
+  it('a pull the server failed on is still reported', async () => {
+    stubFetch({
+      'POST /api/v1/repo/pull': () => jsonResponse({ error: 'boom' }, 500),
+    })
+    renderAt('/git')
+    await waitFor(() => expect(document.querySelector('[data-action="repo-pull"]')).not.toBeNull())
+    const reported: string[] = []
+    const off = onDangerToast((message) => reported.push(message))
+    fireEvent.click(document.querySelector('[data-action="repo-pull"]')!)
+    await waitFor(() => expect(reported).toEqual(['boom']))
+    off()
   })
 
   it('an unpublished branch offers Publish instead of Pull/Push', async () => {

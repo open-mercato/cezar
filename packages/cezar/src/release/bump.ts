@@ -1,6 +1,6 @@
 /** The rest of a version bump — the files a `chore(release)` PR used to edit by hand beside the
  *  release set: the cockpit manifest, the lockfile and the changelog. Pure; the release-line
- *  workflows (`scripts/release-line.mjs`) do the I/O. */
+ *  workflows (`scripts/release-line.mts`) do the I/O. */
 
 import { compareStableVersions, parseStableVersion } from './stable.ts';
 import { pinDependency, type ManifestLike } from './manifests.ts';

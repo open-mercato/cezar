@@ -20,6 +20,8 @@
  * The caps below are what keep one pick small enough to ride a message: every picked element
  * lives in ONE draft entry on the cockpit side, and an agent needs the element, not the page.
  */
+import { locationReporterScript } from './location-reporter.ts';
+
 export const PICKER_PATH = '/__cezar_design__/picker.js';
 
 export const PICK_HTML_MAX = 1500;
@@ -36,7 +38,8 @@ export function pickerScript(config: PickerConfig): string {
   // `<` cannot end a script here (this is served as a .js file, not inlined), but escaping it
   // costs nothing and keeps the config inert if that ever changes.
   const json = JSON.stringify({ ...config, htmlMax: PICK_HTML_MAX, textMax: PICK_TEXT_MAX }).replace(/</g, '\\u003c');
-  return PICKER_SOURCE.replace('__CEZAR_DESIGN_CONFIG__', () => json);
+  // The page's address rides along, so the Preview's bar follows in-page moves through the mirror.
+  return PICKER_SOURCE.replace('__CEZAR_DESIGN_CONFIG__', () => json) + locationReporterScript(config.parentOrigin);
 }
 
 const PICKER_SOURCE = String.raw`(function () {
@@ -438,6 +441,15 @@ const PICKER_SOURCE = String.raw`(function () {
     post({ type: 'cancel' });
   }
 
+  // The cockpit's Design Mode key (Alt+D, by physical key: a Mac reports ⌥D as a typed glyph) —
+  // forwarded from here because a key pressed inside this frame never reaches the cockpit.
+  function onToggleKey(event) {
+    if (event.repeat || !event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    if (event.code ? event.code !== 'KeyD' : event.key !== 'd' && event.key !== 'D') return;
+    swallow(event);
+    post({ type: 'toggle' });
+  }
+
   function onScroll() {
     if (hovered) highlight(hovered);
     placeMarks();
@@ -469,6 +481,7 @@ const PICKER_SOURCE = String.raw`(function () {
     if (data.type === 'set-active') setActive(!!data.active);
     else if (data.type === 'set-marks' && Array.isArray(data.marks)) setMarks(data.marks.slice(0, 50));
   });
+  window.addEventListener('keydown', onToggleKey, true);
 
   // Marks outlive the picker being switched off, so they follow the page on their own listeners.
   window.addEventListener('scroll', onScroll, true);

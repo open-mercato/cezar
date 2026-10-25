@@ -1,3 +1,4 @@
+import { deferredStartStateSchema } from '@open-mercato/cezar-contract';
 import { z } from 'zod';
 import {
   DISPATCH_MAX_SUBTASKS,
@@ -113,6 +114,7 @@ export const automationDefinitionObjectSchema = z
     trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
     task: automationTaskSchema,
+    deferredStart: deferredStartStateSchema.optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
@@ -150,9 +152,14 @@ export const automationDefinitionObjectSchema = z
         message: "allowForkHeads is meaningful only with checkout: 'pr-head'",
       });
     }
+    if (definition.deferredStart && (definition.kind !== 'schedule' || definition.schedule?.type !== 'once')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['deferredStart'], message: 'a composer start requires a one-time schedule' });
+    }
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule'], message: 'a scheduled automation needs a schedule' });
+      } else if (definition.schedule.type === 'once' && !definition.schedule.date) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule', 'date'], message: 'a one-time schedule needs a date' });
       }
       return;
     }
@@ -193,6 +200,9 @@ export const automationDefinitionsFileSchema = z
   .object({
     version: z.literal(1).default(1),
     automations: z.array(z.unknown()).default([]),
+    // Keep raw idempotency evidence, even when damaged. The store validates on access:
+    // dropping a row (or the whole file) could allow a creation key to launch twice.
+    deferredCreations: z.unknown().optional(),
     tombstones: z.record(z.string(), z.string().datetime()).optional(),
   })
   .passthrough();

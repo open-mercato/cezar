@@ -155,6 +155,7 @@ export function TaskComposer({
         // are a message on their own.
         allowEmptySubmit={continuable || hasDiffComments}
         sendAriaLabel={continuable ? 'Continue' : 'Send'}
+        sendShortcut="↵"
         stop={stoppable ? { label: 'Stop the run', onStop: stopRun.request, pending: stopRun.pending } : undefined}
         placeholder={
           queued ? 'Add to the prompt — sent when the run starts…'

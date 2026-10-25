@@ -22,7 +22,8 @@ import { trackAddProjectOpened } from '@/lib/telemetry'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
-import { chordFromEvent } from '@/lib/keybindings'
+import { shortcutsBlocked } from '@/lib/keybindings'
+import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
@@ -409,16 +410,18 @@ const Sidebar = React.memo(function Sidebar({
     setFolded(next)
   }
   // ⌘B / Ctrl+B, the editor convention for the side bar. Reserved in `lib/keybindings.ts`.
-  React.useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || chordFromEvent(event) !== 'Mod+B') return
-      event.preventDefault()
-      setToggled(true)
+  // Focus follows only when it sat in the column being swapped out (or nowhere): ⌘B from the
+  // composer must leave the caret where it is.
+  useCommandShortcut(
+    'b',
+    () => {
+      if (shortcutsBlocked()) return
+      const active = document.activeElement
+      setToggled(!active || active === document.body || active.closest('[data-slot="sidebar"], [data-slot="sidebar-rail"]') !== null)
       setFolded(!folded)
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [folded, setFolded])
+    },
+    { inEditable: true },
+  )
   if (folded) {
     return <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled} />
   }

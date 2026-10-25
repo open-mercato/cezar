@@ -167,6 +167,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   projectsDir: '~/cezar/projects',
   skillsAutoUpdate: null,
   effectiveSkillsAutoUpdate: true,
+  orgSkillsRepos: [],
   composerDefaults: {
     autonomous: null,
     worktree: null,
@@ -217,6 +218,7 @@ function serve(overrides: {
   uiState?: Record<string, unknown>
   /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
+  deferredPreview?: () => Promise<Response>
   createRun?: unknown
   /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
   createRunStatus?: number
@@ -254,6 +256,9 @@ function serve(overrides: {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
+      if (url.endsWith('/deferred-start/options')) return json({ timeZone: 'UTC', usageReset: { available: true, provider: 'claude' } })
+      if (url.endsWith('/deferred-start/preview') && data.deferredPreview) return data.deferredPreview()
+      if (url.endsWith('/deferred-start') && method === 'POST') return json({ scheduled: { id: 'd1', requestDigest: 'x', outcome: 'pending', runIds: [] } }, 201)
       if (url === '/api/v1/health') {
         return typeof data.health === 'function' ? data.health() : json(data.health)
       }
@@ -2361,4 +2366,259 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     await pillReady()
     expect(document.querySelector('[data-slot="ask-toggle"]')).toBeNull()
   })
+})
+
+it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedules a checked prompt with a %s', async (_, text) => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  renderNewTask()
+  await pillReady()
+  fireEvent.change(textarea(), { target: { value: text } })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
+  await waitFor(() => expect(send().disabled).toBe(false), { timeout: 3000 })
+  fireEvent.click(send())
+  await waitFor(() => expect(requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))).toBeTruthy())
+  const created = requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))!
+  expect((created.body as { task: { task: string } }).task.task).toBe('Later')
+  const preview = requests.find(r => r.url.endsWith('/deferred-start/preview'))!
+  expect((preview.body as { task: { task: string } }).task.task).toBe('Later')
+})
+
+it('puts the start-time menu beside Send, not on the pill row, and summarizes a chosen start', async () => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  renderNewTask()
+  await pillReady()
+  const menu = screen.getByRole('button', { name: 'Choose task start time' })
+  expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
+  expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
+  expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
+  // The submit chord lives in Send's tooltip, not on the button.
+  expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('')
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  fireEvent.click(menu)
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'), { timeout: 3000 })
+})
+
+it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {
+  const delayed = deferredJson<unknown>()
+  serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } }, deferredPreview: delayed.fetch })
+  renderNewTask()
+  await pillReady()
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
+  expect(send().disabled).toBe(true)
+  expect(textarea().disabled).toBe(false)
+  const why = () => document.querySelector('[data-slot="schedule-blocked"]')?.textContent
+  expect(why()).toBe('Finding when your usage limit resets…')
+  fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+  expect(textarea().value).toBe('Later')
+  expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/options'))).toBe(false)
+  const previews = () => requests.filter(r => r.url.endsWith('/deferred-start/preview')).length
+  await waitFor(() => expect(previews()).toBe(1), { timeout: 3000 })
+  expect(send().disabled).toBe(true)
+  await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }))
+  await waitFor(() => expect(send().disabled).toBe(false))
+  expect(why()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  expect(send().disabled).toBe(true)
+  await act(async () => delayed.release({ available: false, reason: 'account-unverifiable', message: 'No reset available' }))
+  await screen.findByRole('alert')
+  expect(send().disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r2' }))
+  await waitFor(() => expect(send().disabled).toBe(false))
+  // Rewording the prompt keeps the check: the preview binds execution settings, not wording.
+  fireEvent.change(textarea(), { target: { value: 'Later, reworded' } })
+  expect(send().disabled).toBe(false)
+  expect(why()).toBeUndefined()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)) })
+  expect(previews()).toBe(3)
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  expect(send().disabled).toBe(false)
+  const toggle = document.querySelector('[data-slot="autonomous-toggle"]')!
+  fireEvent.click(toggle)
+  expect(send().disabled).toBe(true)
+  fireEvent.click(toggle)
+  expect(send().disabled).toBe(true)
+  fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+  expect(textarea().value).toBe('Later')
+  expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/preview') && !r.url.endsWith('/options'))).toBe(false)
+  fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
+  expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+
+describe('lost schedule response recovery', () => {
+  it.each(['preview', 'settings', 'now', 'remount', 'retry-error', 'server-error', 'disabled-replay'])('replays only the frozen creation after changing %s', async (change) => {
+    let revision = 'r1'
+    serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+      deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: revision }), { status: 200 }),
+    })
+    const originalFetch = globalThis.fetch
+    const accepted = new Map<string, unknown>()
+    let loseResponse = true
+    let disabledReplay = change === 'disabled-replay'
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init)
+      if (String(input).endsWith('/deferred-start')) {
+        if (!loseResponse && disabledReplay) {
+          disabledReplay = false
+          return new Response(JSON.stringify({ error: 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0' }), { status: 409 })
+        }
+        const body = JSON.parse(String(init?.body))
+        accepted.set(body.idempotencyKey, body)
+        if (loseResponse) {
+          loseResponse = false
+          await new Promise(resolve => setTimeout(resolve, 20))
+          if (change === 'server-error') return new Response(JSON.stringify({ error: 'Failed after persistence' }), { status: 409 })
+          throw new Error('Accepted, but response lost')
+        }
+      }
+      return response
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'Original task' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+    await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+    fireEvent.click(screen.getByLabelText('After usage limit resets'))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 })
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule task' }))
+    await screen.findByRole('button', { name: 'Recover original schedule' })
+    await waitFor(() => expect(textarea().value).toBe('Original task'))
+    revision = 'r2'
+    if (change === 'remount') {
+      cleanup()
+      renderNewTask()
+      await pillReady()
+      await screen.findByRole('button', { name: 'Recover original schedule' })
+      fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+      await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+      fireEvent.click(screen.getByLabelText('After usage limit resets'))
+    }
+    if (change === 'settings') {
+      fireEvent.change(textarea(), { target: { value: 'Changed task' } })
+      fireEvent.click(document.querySelector('[data-slot="autonomous-toggle"]')!)
+    }
+    if (change === 'now') fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
+    else {
+      // Changed settings (or a fresh mount) re-check by themselves; otherwise the user refreshes.
+      if (change !== 'settings' && change !== 'remount') fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }))
+      await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2), { timeout: 3000 })
+    }
+    expect((screen.getByRole('button', { name: change === 'now' ? 'Start task' : 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+    expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
+    if (change === 'retry-error' || change === 'disabled-replay') {
+      loseResponse = change === 'retry-error'
+      fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+      await screen.findByRole('button', { name: 'Recover original schedule' })
+      expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+    await waitFor(() => expect(location()).toBe('/'))
+    const bodies = requests.filter(r => r.url.endsWith('/deferred-start')).map(r => r.body)
+    expect(bodies).toHaveLength(change === 'retry-error' || change === 'disabled-replay' ? 3 : 2)
+    for (const body of bodies) expect(body).toEqual(bodies[0])
+    if (change === 'settings') expect(readDraft().text).toBe('Changed task')
+    expect(accepted.size).toBe(1)
+    expect(postedBody()).toBeUndefined()
+  })
+})
+
+it.each([
+  [400, 'Choose a future date and time in the server time zone.'],
+  [409, 'Settings or reset time changed. Check the preview again.'],
+  [409, 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0'],
+])('preserves deferred intent after definite %s rejection: %s', async (status, error) => {
+  serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r1' }), { status: 200 }),
+  })
+  const originalFetch = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await originalFetch(input, init)
+    return String(input).endsWith('/deferred-start')
+      ? new Response(JSON.stringify({ error }), { status })
+      : response
+  })
+  renderNewTask()
+  await pillReady()
+  fireEvent.change(textarea(), { target: { value: 'Rejected task' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  fireEvent.click(screen.getByLabelText('Pick date & time'))
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2099-01-01' } })
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole('button', { name: 'Schedule task' }))
+  await waitFor(() => expect(textarea().value).toBe('Rejected task'))
+  expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.queryByText(/Earliest start:/)).toBeNull()
+  expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2099-01-01')
+  expect(screen.queryByRole('button', { name: 'Recover original schedule' })).toBeNull()
+  expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
+  fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+  expect(postedBody()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
+  fireEvent.change(textarea(), { target: { value: 'Corrected task' } })
+  await startTask()
+  expect(postedBody()).toMatchObject({ task: 'Corrected task' })
+})
+
+it('restores a frozen schedule from tab storage before a bookmarklet can start another task', async () => {
+  const frozen = {
+    task: { task: 'Original task', workflow: 'quick-task', runner: 'claude', variants: 3 },
+    start: { kind: 'usage-reset' },
+    previewRevision: 'original-revision',
+    idempotencyKey: 'b76aee2a-0067-4410-bfd1-67096e0e6a14',
+  }
+  sessionStorage.setItem('cez-pending-schedule:default', JSON.stringify(frozen))
+  serve()
+  renderNewTask('/new?skill=om-fix&ref=123&auto=1&key=k-real')
+  await screen.findByRole('button', { name: 'Recover original schedule' })
+  await pillReady('om-fix')
+  expect(postedBody()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+  await waitFor(() => expect(location()).toBe('/'))
+  expect(requests.find(r => r.url.endsWith('/deferred-start'))?.body).toEqual(frozen)
+  expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
+  expect(postedBody()).toBeUndefined()
+})
+
+it.each(['launched', 'cancelled'] as const)('recovers a terminal %s result without creating another task', async outcome => {
+  const frozen = {
+    task: { task: 'Original task', workflow: 'quick-task', runner: 'claude' },
+    start: { kind: 'usage-reset' }, previewRevision: 'original-revision',
+    idempotencyKey: 'b76aee2a-0067-4410-bfd1-67096e0e6a14',
+  }
+  sessionStorage.setItem('cez-pending-schedule:default', JSON.stringify(frozen))
+  serve()
+  const originalFetch = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await originalFetch(input, init)
+    if (String(input).endsWith('/deferred-start')) return new Response(JSON.stringify({ scheduled: {
+      id: 'original', requestDigest: 'x', outcome, runIds: outcome === 'launched' ? ['started-run'] : [],
+    } }), { status: 201 })
+    return response
+  })
+  renderNewTask()
+  await screen.findByRole('button', { name: 'Recover original schedule' })
+  fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+  await waitFor(() => expect(location()).toBe(outcome === 'launched' ? '/tasks/started-run' : '/'))
+  expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
+  expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
+  expect(postedBody()).toBeUndefined()
 })
