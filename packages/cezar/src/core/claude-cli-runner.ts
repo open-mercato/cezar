@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows } from './usage-windows.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +18,7 @@ import type {
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
@@ -133,6 +135,9 @@ export class ClaudeCliRunner implements AgentRunner {
       throw wrapSpawnError(err, this.bin);
     }
 
+    // A write racing the child's exit reports EPIPE as an async 'error', which the try/catch in
+    // sendMessage cannot see; unhandled, it kills the server (acfb01e4). Exit owns settlement.
+    child.stdin.on('error', () => {});
     let stdinOpen = true;
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
@@ -278,6 +283,8 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
 
+          emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
+
           // Claude reports `error_during_execution` while reacting to our
           // teardown signal. Once cezar has signalled the child, that frame
           // describes the intentional stop rather than an agent failure.
@@ -353,9 +360,7 @@ export class ClaudeCliRunner implements AgentRunner {
       }
 
       if (exitCode !== 0 && exitCode !== null) {
-        const stderr = stderrChunks.join('').trim();
-        const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
-        const msg = `claude CLI exited with code ${exitCode}${detail}`;
+        const msg = claudeExitMessage(exitCode, stderrChunks.join(''));
         onEvent?.({ type: 'error', message: msg });
         throw new Error(msg);
       }
@@ -587,8 +592,9 @@ function handleClaudeMessage(
     if (msg.is_error) {
       ctx.onEvent?.({
         type: 'error',
+        // `API Error: 400 [400]: {"error":{…}}` from a gateway reads as its type and message (eb4b12dc).
         message: typeof msg.result === 'string' && msg.result.trim() !== ''
-          ? msg.result
+          ? unwrapJsonErrorEnvelope(msg.result)
           : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
       });
     }
@@ -602,6 +608,21 @@ function handleClaudeMessage(
 // stringify/image helpers moved to claude-ui-mapper.ts (shared by v1 and v2).
 
 // ---- subprocess plumbing --------------------------------------------------
+
+/** The signals a `128 + n` exit names; only reached when cezar did NOT signal the child. */
+const EXIT_SIGNALS: Record<number, string> = { 1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 13: 'SIGPIPE', 15: 'SIGTERM' };
+
+/** A failed exit, naming the signal behind a `128 + n` code — a bare "code 129" (telemetry 046a0525)
+ *  read as a crash, and cezar never sends SIGHUP (Windows raises it when the console closes). */
+export function claudeExitMessage(exitCode: number, stderr: string): string {
+  const signal = exitCode > 128 ? EXIT_SIGNALS[exitCode - 128] : undefined;
+  const hint = signal === 'SIGHUP'
+    ? ' (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)'
+    : signal ? ` (${signal}: a signal cezar did not send)` : '';
+  const tail = stderr.trim();
+  const detail = tail ? ` — ${tail.split('\n').slice(-3).join(' | ')}` : '';
+  return `claude CLI exited with code ${exitCode}${hint}${detail}`;
+}
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   if (child.exitCode != null) return Promise.resolve(child.exitCode);

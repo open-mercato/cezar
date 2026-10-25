@@ -17,7 +17,7 @@ import {
   TagIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 import { Virtualizer } from 'virtua'
 
@@ -809,15 +809,7 @@ function countLabel(count: number): string {
   return String(count)
 }
 
-function GithubRow({
-  item,
-  view,
-  colors,
-  active,
-  queued,
-  checks,
-  forgeKind,
-}: {
+interface GithubRowProps {
   item: GithubItem
   view: GithubView
   colors: Record<string, string>
@@ -827,7 +819,22 @@ function GithubRow({
   checks?: GithubItem['checks']
   /** The forge the row's item lives on — the dragged prompt's wording (`githubTaskPrompt`). */
   forgeKind?: ForgeKind
-}) {
+}
+
+/**
+ * Memoized, but not virtualized: a row's height depends on whether it carries labels and how many
+ * lines they wrap to, so there is no fixed row height to window by. `colors` is rebuilt every
+ * render of the page, so only the entries for this row's own labels are compared.
+ */
+const GithubRow = memo(function GithubRow({
+  item,
+  view,
+  colors,
+  active,
+  queued,
+  checks,
+  forgeKind,
+}: GithubRowProps) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
 
@@ -899,6 +906,18 @@ function GithubRow({
         ) : null}
       </Link>
     </li>
+  )
+}, sameGithubRow)
+
+function sameGithubRow(previous: GithubRowProps, next: GithubRowProps): boolean {
+  return (
+    previous.item === next.item &&
+    previous.view === next.view &&
+    previous.active === next.active &&
+    previous.queued === next.queued &&
+    previous.checks === next.checks &&
+    previous.forgeKind === next.forgeKind &&
+    next.item.labels.every((label) => previous.colors[label] === next.colors[label])
   )
 }
 

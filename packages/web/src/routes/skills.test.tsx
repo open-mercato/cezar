@@ -299,7 +299,7 @@ describe('the catalog list and skill preview', () => {
     renderAt('/skills')
 
     await waitFor(() => expect(rowNames()).toHaveLength(5))
-    expect(rowNames()).toEqual(['om-fix', 'om-review', 'team-alpha', 'team-zeta', 'zebra-global'])
+    expect(rowNames()).toEqual(['om-fix', 'om-review', 'zebra-global', 'team-alpha', 'team-zeta']) // local group first, then team repos
     expect(document.querySelector('[data-slot="skill-row"][data-skill="team-alpha"]')?.getAttribute('data-enabled')).toBe('false')
   })
 

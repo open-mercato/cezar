@@ -49,7 +49,9 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 ### Release lines
 
 - A fix for a bug that exists on a released line carries `backport release/vX.Y.x` (`SDLC.md` § Release lines and backports); a feature or refactor does not.
-- A backport PR (into `release/v*`) changes only what the original fix changed, and that change still fits the line's code. A hand-edited version, workspace lockfile entry or released changelog entry is a blocker — the release workflows own them.
+- A PR into `release/v*` is a blocker unless the Backport workflow opened it (it carries the `backport` label) or it is the documented can't-wait hotfix labelled `backport main`.
+- A backport PR changes only what the original fix changed, and that change still fits the line's code. A hand-edited version, workspace lockfile entry or released changelog entry is a blocker — the release workflows own them.
+- Every PR carries the category label its release-note section needs (`bug`, `feature`, `security`, `refactor`, `dependencies`, `documentation`; bookkeeping `skip-changelog`). Apply or correct it yourself; report it when you cannot write labels. Never a blocking finding.
 
 ### Code quality
 

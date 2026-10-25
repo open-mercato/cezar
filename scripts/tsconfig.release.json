@@ -1,0 +1,20 @@
+{
+  // Typechecks the release tooling, which Node runs directly (type stripping, no build step):
+  // only erasable syntax, and every import spelled with its real .ts/.mts extension.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["release-line.mts", "release.mts", "lib/*.mts"]
+}

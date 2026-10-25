@@ -62,6 +62,8 @@ export class PiRunner implements AgentRunner {
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
     const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+    // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
+    child.stdin.on('error', () => {});
     let open = true;
     let settled = true;
     let timedOut = false;
