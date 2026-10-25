@@ -1,10 +1,11 @@
+import { EditorTrackerFields } from './editor-tracker-fields'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, FileTextIcon, LayoutTemplateIcon, Settings2Icon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { AutomationListEntry, AutomationsResponse } from '@open-mercato/cezar-api-client'
 import { ApiError, createAutomation, updateAutomation } from '@/api/client'
-import { useHealth, useRepo, useUiState, useWorkflows } from '@/api/queries'
+import { useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import { Chip } from '@/components/chip'
 import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useNavigate } from '@/lib/project-router'
 import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
+import { orderSkillsByUsage } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import { settingsSectionPath } from '@/routes/settings/settings-shell'
 
@@ -25,7 +27,11 @@ import {
   cliDefinitionOf,
   fromDefinition,
   newDraft,
+  pickSource,
+  sourceOf,
+  splitList,
   toBody,
+  unenforcedPromptLogins,
   type EditorDraft,
 } from './editor-draft'
 import { EditorGithubFields } from './editor-github-fields'
@@ -52,6 +58,7 @@ function sectionOf(message: string): ErrorSection {
 }
 
 const PLACEHOLDER = {
+  tracker: 'Implement {{tracker.key}} and prepare a pull request.',
   schedule: 'Describe the task the agent should do each time. Placeholders: {{date}}, {{project}}',
   github: 'Describe the task the agent should do for each match. Placeholders: {{github.url}}, {{github.title}}, {{github.number}}, {{github.labels}}',
 } as const
@@ -75,10 +82,12 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const health = useHealth()
   const uiState = useUiState()
   const workflows = useWorkflows()
+  const skills = useSkills()
   const repo = useRepo()
 
   const [draft, setDraft] = useState<EditorDraft>(() => (automation ? fromDefinition(automation) : newDraft()))
   const [showTemplates, setShowTemplates] = useState(!automation)
+  const [trackerValid, setTrackerValid] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<SaveError | null>(null)
   const [conflict, setConflict] = useState(false)
@@ -104,10 +113,17 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
     () => availablePromptTemplates(normalizePromptTemplates(uiState.data?.promptTemplates), health.data?.capabilities),
     [uiState.data?.promptTemplates, health.data?.capabilities],
   )
-  const workflowNames = workflows.data?.workflows.map((workflow) => workflow.name) ?? []
+  const workflowList = workflows.data?.workflows ?? []
+  const workflowNames = workflowList.map((workflow) => workflow.name)
+  const skillsData = skills.data
+  const skillNames = (skillsData ?? []).map((skill) => skill.name)
+  const skillUsage = uiState.data?.skillUsage
+  const skillList = useMemo(() => orderSkillsByUsage(skillsData ?? [], skillUsage), [skillsData, skillUsage])
+  const sourcesReady = skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const baseBranch = repo.data?.baseBranch ?? repo.data?.info?.branch ?? undefined
   const cli = useMemo(() => cliDefinitionOf(draft), [draft])
-  const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving
+  const unenforcedLogins = useMemo(() => unenforcedPromptLogins(draft), [draft])
+  const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving && (draft.kind !== 'tracker' || trackerValid)
 
   const insertPrompt = (snippet: string) => {
     const box = promptRef.current
@@ -149,6 +165,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const reload = () => void queryClient.invalidateQueries({ queryKey: automationsQueryKey() })
   const saveLabel = automation ? 'Save changes' : draft.enabled ? 'Save and enable' : 'Save paused'
 
+
   return (
     <div data-route="automations" data-slot="automation-editor" className="flex min-h-full flex-col">
       {/* The kit's 56px header. Below `md` it may wrap onto a second row: a phone cannot fit the
@@ -186,10 +203,11 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
             {showTemplates && !automation ? (
               <TemplatePalette
                 onPick={(template) => {
-                  // A template from another project may name a workflow this repo does not
-                  // have; only a workflow the cockpit lists survives, else the default applies.
+                  // A template from another project may name a workflow or skill this repo does
+                  // not have; only what the cockpit lists survives, else the default applies.
                   const workflow = template.workflow && workflowNames.includes(template.workflow) ? template.workflow : undefined
-                  setDraft((current) => applyTemplate(current, { ...template, workflow }))
+                  const steps = template.steps?.every((step) => !step.skill || skillNames.includes(step.skill)) ? template.steps : undefined
+                  setDraft((current) => applyTemplate(current, { ...template, workflow, steps }))
                   setShowTemplates(false)
                 }}
               />
@@ -211,10 +229,12 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 editing={!!automation}
                 githubAvailable={githubAvailable}
                 githubReason={data?.reason}
-                onChange={(kind) => patch({ kind })}
+                onChange={(kind) => patch({ kind, ...(kind === 'tracker' ? { intervalSeconds: 1800, enabled: false } : {}) })}
               />
               {draft.kind === 'schedule' ? (
                 <EditorScheduleFields schedule={draft.schedule} timeZone={timeZone} onChange={(schedule) => patch({ schedule })} />
+              ) : draft.kind === 'tracker' ? (
+                <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
               ) : (
                 <EditorGithubFields
                   events={draft.events}
@@ -239,7 +259,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                   dashed
                   className="h-6 text-[11.5px]"
                   icon={<Settings2Icon aria-hidden="true" className="size-3" />}
-                  onClick={() => navigate(settingsSectionPath('project', 'prompt-templates'))}
+                  onClick={() => navigate(`${settingsSectionPath('project', 'instructions')}#prompt-templates`)}
                 >
                   Manage…
                 </Chip>
@@ -253,12 +273,29 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 onChange={(event) => patch({ prompt: event.target.value })}
                 className="min-h-[104px] text-sm leading-[1.55] md:text-sm"
               />
+              {unenforcedLogins.length > 0 ? (
+                <div role="status" data-slot="editor-prompt-condition" className="flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px] text-foreground">
+                  <span className="min-w-0 flex-1">
+                    The prompt names {unenforcedLogins.map((login) => `@${login}`).join(', ')}, but prompt text does not decide what launches — without a filter every matching event starts a task.
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => patch({ filters: { ...draft.filters, authors: [...splitList(draft.filters.authors), ...unenforcedLogins].join(', ') } })}
+                  >
+                    Add to Authors
+                  </Button>
+                </div>
+              ) : null}
               <EditorRunAs
-                workflow={draft.workflow}
-                workflows={workflowNames}
-                onWorkflow={(workflow) => patch({ workflow })}
-                pick={{ runner: draft.runner, model: draft.model, account: null }}
-                onPick={(pick) => patch({ runner: pick.runner, model: pick.model })}
+                source={sourceOf(draft)}
+                sourcesReady={sourcesReady}
+                skills={skillList}
+                skillUsage={skillUsage}
+                workflows={workflowList}
+                onSource={(source) => patch(pickSource(source))}
+                pick={{ runner: draft.runner, model: draft.model, account: draft.account }}
+                onPick={(pick) => patch({ runner: pick.runner, model: pick.model, account: pick.account })}
                 baseBranch={baseBranch}
                 autonomous={draft.autonomous}
                 onAutonomous={(autonomous) => patch({ autonomous })}
@@ -280,7 +317,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
               <Label className="text-[13px] font-medium">
                 <Switch aria-label="Enabled" checked={draft.enabled} onCheckedChange={(enabled) => patch({ enabled })} />
                 Enabled
-                {draft.kind === 'github' ? (
+                {draft.kind !== 'schedule' ? (
                   <span className="text-xs font-normal text-muted-foreground">— from a current-time baseline; existing matches will not launch</span>
                 ) : null}
               </Label>
@@ -290,6 +327,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
           <div className="flex flex-col gap-3 lg:sticky lg:top-[76px]">
             <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
             <CopyAsCliCard definition={cli} />
+            {automation && automation.kind !== 'schedule' && actions ? <Button variant="outline" disabled={actions.busy} onClick={() => void actions.preview(automation)}>Preview saved matches</Button> : null}
             {automation?.lastRun ? (
               <LastRunCard
                 lastRun={automation.lastRun}
@@ -330,14 +368,14 @@ function InlineAlert({ children }: { children: ReactNode }) {
  * (receipts and cursors are kind-specific), so the editor says so before the round trip.
  */
 function KindSegment({ value, editing, githubAvailable, githubReason, onChange }: {
-  value: 'schedule' | 'github'
+  value: 'schedule' | 'github' | 'tracker'
   editing: boolean
   githubAvailable: boolean
   githubReason: string | undefined
-  onChange: (kind: 'schedule' | 'github') => void
+  onChange: (kind: 'schedule' | 'github' | 'tracker') => void
 }) {
   const kindLocked = 'Change the kind by creating a new automation'
-  const options: ReadonlyArray<{ value: 'schedule' | 'github'; label: string; disabled: boolean; title?: string }> = [
+  const options: ReadonlyArray<{ value: 'schedule' | 'github' | 'tracker'; label: string; disabled: boolean; title?: string }> = [
     {
       value: 'schedule',
       label: 'On a schedule',
@@ -354,9 +392,10 @@ function KindSegment({ value, editing, githubAvailable, githubReason, onChange }
           ? { title: kindLocked }
           : {}),
     },
+    { value: 'tracker', label: 'When Jira / Linear changes', disabled: editing && value !== 'tracker', ...(editing && value !== 'tracker' ? { title: kindLocked } : {}) },
   ]
   return (
-    <div data-slot="editor-kind" role="group" aria-label="Trigger" className="inline-flex gap-0.5 self-start rounded-md bg-muted p-[3px]">
+    <div data-slot="editor-kind" role="group" aria-label="Trigger" className="inline-flex flex-wrap gap-0.5 self-start rounded-md bg-muted p-[3px]">
       {options.map((option) => (
         <button
           key={option.value}

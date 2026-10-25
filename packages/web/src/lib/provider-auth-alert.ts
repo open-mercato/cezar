@@ -4,12 +4,15 @@ import type {
   WorkspaceUiState,
 } from '@open-mercato/cezar-api-client'
 
-const PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'opencode', 'pi']
-const LABELS: Record<ProviderId, string> = {
+const PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
+  junie: 'Junie',
+  copilot: 'GitHub Copilot CLI',
 }
 
 export interface ProviderAuthIncident {
@@ -50,7 +53,7 @@ export function visibleProviderAuthIncidents(
     ) return []
     return [{
       provider,
-      label: LABELS[provider],
+      label: PROVIDER_LABELS[provider],
       authFailureId: row.authFailureId,
     }]
   })

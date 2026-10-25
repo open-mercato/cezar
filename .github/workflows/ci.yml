@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - develop
+      - 'release/v*' # backports into a release line (docs/publishing.md § Release lines)
   push:
     branches:
       - main
       - develop
+      - 'release/v*'
   workflow_dispatch:
 
 permissions:
@@ -19,8 +21,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The vitest suites were ~8 of the job's ~9 minutes, so they run as parallel shards
+  # beside `verify` instead of inside it.
+  vitest:
+    name: Server and cockpit unit suites (${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run server and cockpit unit suites
+        run: npm test -- --shard=${{ matrix.shard }}/3
+
   verify:
-    name: Unit, build, E2E, and package
+    name: Typecheck, build, E2E, and package
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -47,9 +76,6 @@ jobs:
       - name: Run unit tests
         run: npm run test:unit
 
-      - name: Run server and cockpit unit suites
-        run: npm test
-
       - name: Build application
         run: npm run build
 
@@ -60,11 +86,12 @@ jobs:
       # and publishes nothing, so packing THERE just errors ("must have name and version").
       # Named explicitly rather than with `--workspaces`, which would also pack the packages
       # marked private (the cockpit SPA and, for now, the api-client) and vouch for tarballs
-      # nobody publishes. `alias-cezar` is not a workspace, so it packs from its own directory.
+      # nobody publishes. The `alias-cezar*` packages are not workspaces, so each packs from its own directory.
       - name: Verify release packages
         run: |
           npm pack --dry-run --ignore-scripts -w @open-mercato/cezar
           (cd alias-cezar && npm pack --dry-run --ignore-scripts)
+          (cd alias-cezar-run && npm pack --dry-run --ignore-scripts)
 
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
   # Publishes a snapshot of both packages after a fully green verify run:
@@ -74,7 +101,7 @@ jobs:
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: verify
+    needs: [verify, vitest]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'pull_request' &&
@@ -127,7 +154,7 @@ jobs:
           console.log('');
           console.log(`- Version: \`${r.version}\``);
           console.log(`- Dist-tag: \`${r.distTag}\``);
-          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
+          console.log(`- Packages: \`${r.runAliasName}\` / \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
           console.log('');
           console.log('```bash');
           for (const line of r.installLines) console.log(line);
@@ -155,8 +182,8 @@ jobs:
               '',
               lines,
               '',
-              `Also tagged: \`npm install -g ${r.aliasName}@${r.distTag}\` (moving tag for this PR).`,
-              `Packages: \`${r.aliasName}@${r.version}\` → \`${r.rootName}@${r.version}\` → \`${r.apiClientName}@${r.version}\`${r.dryRun ? '' : ' (provenance attested)'}.`,
+              `Also tagged: \`npm install -g ${r.runAliasName}@${r.distTag}\` (moving tag for this PR).`,
+              `Packages: \`${r.runAliasName}@${r.version}\` / \`${r.aliasName}@${r.version}\` → \`${r.rootName}@${r.version}\` → \`${r.apiClientName}@${r.version}\`${r.dryRun ? '' : ' (provenance attested)'}.`,
             ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               ...context.repo,

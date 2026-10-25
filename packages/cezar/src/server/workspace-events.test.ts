@@ -2,15 +2,25 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WORKSPACE_RUN_EVENT_OMITTED_KEYS, workspaceRunEventSchema } from '@open-mercato/cezar-contract';
 import { ProviderAuthService } from '../core/provider-auth.ts';
+import * as processUsage from '../core/process-usage.ts';
 import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.ts';
-import { RunStore } from '../runs/store.ts';
+import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { WorkspaceEventBus, createApp } from './server.ts';
+
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, the boot warm-up in this suite spawned a
+// real `junie` process — on a machine with Junie installed and logged in, that authenticates
+// against JetBrains for real (#M3 review).
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
 
 /**
  * Workspace SSE stream (spec 2026-07-20-multi-project-workspace, step 2.8):
@@ -67,6 +77,7 @@ describe('GET /api/v1/workspace/events', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const close of closers.splice(0)) await close().catch(() => undefined);
     contexts.disposeAll();
     store.flush();
@@ -117,6 +128,13 @@ describe('GET /api/v1/workspace/events', () => {
     };
   };
 
+  /** The workspace stream's `run` frame for a record, minus its `project` stamp. */
+  const slim = (run: RunRecord) => {
+    const frame = JSON.parse(JSON.stringify(run)) as Record<string, unknown>;
+    for (const key of WORKSPACE_RUN_EVENT_OMITTED_KEYS) delete frame[key];
+    return frame;
+  };
+
   /** All payloads of one SSE event name delivered so far, in arrival order. */
   const payloadsOf = <T>(body: string, event: string): T[] =>
     [...body.matchAll(new RegExp(`event: ${event}\\ndata: (.*)\\n`, 'g'))].map((m) => JSON.parse(m[1] as string) as T);
@@ -143,14 +161,44 @@ describe('GET /api/v1/workspace/events', () => {
     const body = await ws.readUntil(`"id":"${otherRun.id}"`);
     const runs = payloadsOf<{ id: string; project: string }>(body, 'run');
     expect(runs).toEqual([
-      { ...JSON.parse(JSON.stringify(bootRun)), project: bootId },
-      { ...JSON.parse(JSON.stringify(otherRun)), project: other.id },
+      { ...slim(bootRun), project: bootId },
+      { ...slim(otherRun), project: other.id },
     ]);
 
     // Deletions are stamped too.
     other.store.deleteRun(otherRun.id);
     const withDeleted = await ws.readUntil('event: run-deleted');
     expect(payloadsOf(withDeleted, 'run-deleted')).toEqual([{ id: otherRun.id, project: other.id }]);
+  });
+
+  it('keeps the thread-only keys off the run frame, and the frame inside its contract', async () => {
+    const ws = await openStream('/api/v1/workspace/events');
+    await ws.readUntil('event: ping');
+    const run = store.createRun({
+      title: 'fat-run',
+      workflow: 'quick-task',
+      task: 'a long prompt '.repeat(200),
+      steps: [{ id: 'agent', name: 'agent', kind: 'agent' }],
+    });
+    const body = await ws.readUntil(`"id":"${run.id}"`);
+    const [frame] = payloadsOf<Record<string, unknown>>(body, 'run');
+    for (const key of WORKSPACE_RUN_EVENT_OMITTED_KEYS) expect(frame).not.toHaveProperty(key);
+    expect(workspaceRunEventSchema.strict().safeParse(frame).success).toBe(true);
+    expect(frame).toMatchObject({ id: run.id, title: 'fat-run', status: run.status, project: bootId });
+  });
+
+  it('serializes a run change once per frame shape, however many streams relay it', async () => {
+    const streams = await Promise.all([1, 2, 3].map(() => openStream('/api/v1/workspace/events')));
+    for (const each of streams) await each.readUntil('event: ping');
+    const stringify = vi.spyOn(JSON, 'stringify');
+    const run = store.createRun({ title: 'counted', workflow: 'quick-task', task: 't', steps: [] });
+    for (const each of streams) await each.readUntil(`"id":"${run.id}"`);
+    const framed = stringify.mock.calls.filter(([value]) => {
+      const candidate = value as { id?: unknown; project?: unknown } | null;
+      return typeof candidate === 'object' && candidate !== null && candidate.id === run.id && 'project' in candidate;
+    });
+    stringify.mockRestore();
+    expect(framed).toHaveLength(1);
   });
 
   it('legacy /api/v1/events stays boot-filtered with the byte-identical, UN-stamped shape', async () => {
@@ -211,6 +259,11 @@ describe('GET /api/v1/workspace/events', () => {
       rssBytes: 222 * 1024,
       procCount: 5,
     };
+    store.updateRun(bootRunId, { status: 'running' });
+    other.store.updateRun(otherRunId, { status: 'running' });
+    const sampledAt = '2026-09-18T10:00:00.000Z';
+    vi.spyOn(processUsage, 'currentTimedUsage').mockImplementation((id) => id === bootRunId
+      ? { ...bootSample, sampledAt } : id === otherRunId ? { ...otherSample, sampledAt, cpuPct: null } : undefined);
     emitUsageForTest({ [bootRunId]: bootSample, [otherRunId]: otherSample });
 
     const body = await ws.readUntil(`"project":"${other.id}","usage"`);
@@ -223,10 +276,14 @@ describe('GET /api/v1/workspace/events', () => {
     expect(events).toContainEqual({
       project: bootId,
       usage: { [bootRunId]: bootSample },
+      samples: [{ projectId: bootId, runId: bootRunId, ...bootSample, sampledAt }],
+      sentAt: expect.any(String),
     });
     expect(events).toContainEqual({
       project: other.id,
       usage: { [otherRunId]: otherSample },
+      samples: [{ projectId: other.id, runId: otherRunId, ...otherSample, sampledAt, cpuPct: null }],
+      sentAt: expect.any(String),
     });
 
     // A snapshot owned entirely by one project → exactly ONE more event; the
@@ -261,7 +318,7 @@ describe('GET /api/v1/workspace/events', () => {
 
     const body = await ws.readUntil(`"id":"${run.id}"`);
     expect(payloadsOf<{ id: string; project: string }>(body, 'run')).toEqual([
-      { ...JSON.parse(JSON.stringify(run)), project: other.id },
+      { ...slim(run), project: other.id },
     ]);
   });
 
@@ -393,7 +450,7 @@ describe('GET /api/v1/workspace/events', () => {
 
     const body = await ws.readUntil(`"id":"${run.id}"`);
     expect(payloadsOf<{ id: string; project: string }>(body, 'run')).toEqual([
-      { ...JSON.parse(JSON.stringify(run)), project: readded.id },
+      { ...slim(run), project: readded.id },
     ]);
   });
 

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** The agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'pi']);
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
@@ -14,7 +14,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'pi', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
@@ -38,6 +38,16 @@ export type ForgeInfo = z.infer<typeof forgeInfoSchema>;
 /** Server-side feature switches the cockpit reads once at boot. */
 export const capabilitiesSchema = z.object({
   localHandoff: z.boolean(),
+  /** May this cockpit open an interactive terminal in a task worktree? Policy, not availability:
+   *  the terminal family's own endpoint says whether the optional PTY binding loaded. */
+  terminal: z.boolean(),
+  /**
+   * `true` means the task's Preview tab may offer Design Mode (spec
+   * `.ai/specs/2026-10-09-design-mode.md`): click an element of the task's app and send a note
+   * about it to the agent. It needs a second loopback listener that re-serves the app with a picker
+   * injected, so it exists only on a LOCAL cockpit, and `CEZ_DESIGN_MODE=0` turns it off there too.
+   */
+  designMode: z.boolean(),
   followups: z.boolean(),
   singleProject: z.boolean(),
   /**
@@ -95,5 +105,7 @@ export const healthResponseSchema = z.object({
   // optional, which was wider than the server has ever been.
   projects: z.array(z.object({ id: z.string(), name: z.string() })),
   bootProject: z.string(),
+  /** Random identity of the installed service, when server-install supplied one. */
+  instanceId: z.string().optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

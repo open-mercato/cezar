@@ -9,10 +9,13 @@ import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { AcceptCelebration, ReviewPanel } from './review-panel'
+import { createPrPrompt } from './run-actions'
 import { ThreadView } from './task-thread'
 import { reduceThread } from './thread-state'
+import { __resetGitStepFlights } from '../task-git/run-git-step'
 
 afterEach(() => {
+  __resetGitStepFlights()
   act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
@@ -80,6 +83,7 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
             { provider: 'claude', status: 'connected', enabled: true },
             { provider: 'codex', status: 'not-installed', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         })
       }
@@ -128,6 +132,12 @@ describe('the review gate on the thread', () => {
     expect(document.querySelector('[data-slot="review-panel"]')).not.toBeNull()
 
     rerenderWithProviders(<ThreadView run={run('waiting')} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="review-panel"]')).toBeNull()
+  })
+
+  it('leaves the panel out for an in-place task — the composer and the header Commit cover it', () => {
+    stubFetch()
+    renderWithProviders(<ThreadView run={{ ...run('review'), worktree: false }} thread={reduceThread([])} />)
     expect(document.querySelector('[data-slot="review-panel"]')).toBeNull()
   })
 
@@ -216,6 +226,29 @@ describe('the review gate on the thread', () => {
     await waitFor(() => expect(notes.value).toBe(''))
   })
 
+  it('telemetry 77117b95: a send-back on a record that has drifted live lands the notes on the live session', async () => {
+    // The record still says `review`; the server has the run reopened (an auto-resume, a restart recovery).
+    const sent = stubFetch({
+      'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+    renderWithProviders(<ReviewPanel run={run('review')} />)
+
+    const notes = screen.getByLabelText('Notes for the agent') as HTMLTextAreaElement
+    fireEvent.change(notes, { target: { value: 'fix the port handling' } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() => {
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/messages')).toMatchObject({
+        body: { text: 'Review feedback:\nfix the port handling' },
+      })
+    })
+    await waitFor(() => expect(notes.value).toBe(''))
+    expect(screen.queryByText('run is still active')).toBeNull()
+  })
+
   it('restores half-written review notes on return, and drops them once they go back (#939)', async () => {
     const sent = stubFetch({
       'GET /api/v1/runs/r1/drafts': () =>
@@ -272,6 +305,7 @@ describe('the review gate on the thread', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'unknown', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -298,6 +332,7 @@ describe('the review gate on the thread', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
           ],
         }),
     })
@@ -329,11 +364,28 @@ describe('the review gate on the thread', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('Notes for the agent'))
   })
 
-  it('Draft PR success: POSTs /pr and the toast carries the returned URL', async () => {
+  it('Draft PR asks the task’s agent — the same "Create draft PR" as the header', async () => {
+    const sent = stubFetch()
+    renderWithProviders(<ReviewPanel run={run('review', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1', baseBranch: 'main' })} />)
+
+    const button = screen.getByRole<HTMLButtonElement>('button', { name: /Draft PR/ })
+    await waitFor(() => expect(button.title).toContain('Ask the agent'))
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        sent.find((r) => r.method === 'POST' && (r.body as { text?: string } | undefined)?.text === 'Create draft PR against main'),
+      ).toBeDefined(),
+    )
+    expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(false)
+    await waitFor(() => expect(button.textContent).toBe('Creating draft PR…'))
+    expect(button.disabled).toBe(true)
+  })
+
+  it('no agent to ask: Draft PR falls back to cezar — POSTs /pr and the toast carries the returned URL', async () => {
     const sent = stubFetch({
       'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/x/y/pull/7', dryRun: true }, 201),
     })
-    renderWithProviders(<ReviewPanel run={run('review')} />)
+    renderWithProviders(<ReviewPanel run={run('review', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0 }] })} />)
 
     fireEvent.click(screen.getByRole('button', { name: /Draft PR/ }))
     await waitFor(() => {
@@ -344,12 +396,12 @@ describe('the review gate on the thread', () => {
     expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toHaveLength(1)
   })
 
-  it('Draft PR 409: the server message as a danger toast + the copyable manual merge line', async () => {
+  it('Draft PR 409 (no agent, cezar opens it): the server message as a danger toast + the copyable manual merge line', async () => {
     stubFetch({
       'POST /api/v1/runs/r1/pr': () =>
         jsonResponse({ error: 'gh pr create failed: not logged in', manual: 'git merge cez/r1' }, 409),
     })
-    renderWithProviders(<ReviewPanel run={run('review')} />)
+    renderWithProviders(<ReviewPanel run={run('review', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0 }] })} />)
 
     fireEvent.click(screen.getByRole('button', { name: /Draft PR/ }))
     await waitFor(() => {
@@ -382,6 +434,92 @@ describe('the review gate on the thread', () => {
     await waitFor(() => {
       expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toHaveLength(1)
     })
+  })
+})
+
+/**
+ * The review gate is the self-review moment: line comments drafted on the Changes tab must go
+ * back WITH the notes, through the thread's one comments instance (the composer shows the same
+ * chips), and be dropped only once the send-back landed.
+ */
+describe('the review gate and diff comments', () => {
+  const COMMENTS = [
+    { id: 'c1', path: 'src/server.ts', side: 'new', line: 7, body: 'port must come from env', excerpt: 'const port = 3000' },
+  ]
+  const withComments = () =>
+    stubFetch({
+      'GET /api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            'diff-comments': { text: JSON.stringify(COMMENTS), images: [], updatedAt: '2026-10-02T00:00:00.000Z' },
+          },
+        }),
+    })
+  const continued = (sent: SentRequest[]) =>
+    sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')?.body as { text: string } | undefined
+  const commentsCleared = (sent: SentRequest[]) =>
+    sent.some(
+      (r) =>
+        r.method === 'PUT' &&
+        r.path === '/api/v1/runs/r1/drafts/diff-comments' &&
+        (r.body as { text?: string } | undefined)?.text === '',
+    )
+
+  it('sends the drafted line comments back with the notes, then drops them', async () => {
+    const sent = withComments()
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+
+    // The panel says they will go, and the composer shows the same comment as a chip.
+    await screen.findByText(/1 comment on the diff — sent back with these notes/)
+    expect(screen.getByText('server.ts +7')).not.toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Notes for the agent'), { target: { value: 'also add a test' } })
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() => expect(continued(sent)).toBeDefined())
+    expect(continued(sent)!.text).toBe(
+      'Review feedback:\nalso add a test\n\nReview comments on the diff:\n\n- `src/server.ts` line 7:\n\n  ```\n  const port = 3000\n  ```\n\n  port must come from env',
+    )
+    await waitFor(() => expect(commentsCleared(sent)).toBe(true))
+    // One instance: the composer chip went with them.
+    await waitFor(() => expect(screen.queryByText('server.ts +7')).toBeNull())
+  })
+
+  it('sends drafted comments back on their own, with no notes typed', async () => {
+    const sent = withComments()
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+    await screen.findByText(/1 comment on the diff/)
+
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await waitFor(() => expect(continued(sent)?.text).toMatch(/^Review feedback:\nReview comments on the diff:/))
+    expect(screen.queryByText('Write what to change first.')).toBeNull()
+  })
+
+  it('keeps the comments when the send-back is rejected', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            'diff-comments': { text: JSON.stringify(COMMENTS), images: [], updatedAt: '2026-10-02T00:00:00.000Z' },
+          },
+        }),
+      'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'session gone' }, 500),
+    })
+    renderWithProviders(<ThreadView run={run('review')} thread={reduceThread([])} />)
+    await screen.findByText(/1 comment on the diff/)
+
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    await screen.findByText('session gone')
+    expect(screen.getByText('server.ts +7')).not.toBeNull()
+    expect(commentsCleared(sent)).toBe(false)
   })
 })
 

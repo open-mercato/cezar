@@ -4,24 +4,29 @@
  * no token-budget circuit breaker, no zod response schemas — one run is one
  * agent-CLI session streaming normalized events.
  *
- * Four interchangeable backends implement this seam, each as a persistent
+ * Five interchangeable backends implement this seam, each as a persistent
  * process so multi-turn follow-ups, `waiting`, interrupt and resume all work:
  *  - `claude`   — Claude Code CLI, stream-json over stdin/stdout;
  *  - `codex`    — `codex app-server`, JSON-RPC 2.0 (JSONL) over stdin/stdout;
  *  - `opencode` — `opencode serve`, HTTP + SSE;
+ *  - `cursor`   — Cursor Agent CLI, headless print mode (`stream-json`);
  *  - `pi`       — pi coding CLI, RPC over JSONL stdin/stdout, selecting its
- *                 model with `provider/model`.
+ *                 model with `provider/model`;
+ *  - `junie`    — JetBrains Junie CLI, real Agent Client Protocol (ACP:
+ *                 `junie --acp=true`), JSON-RPC 2.0 (JSONL) over stdin/stdout.
  */
 
+import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
+import type { PrivateMcpServer } from './private-mcp.ts';
 
 /**
  * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
  * truth for the set. Every runtime enumeration derives from this tuple (zod schemas, the
  * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
- * the literals, so adding runner #5 is a one-line change here and typecheck finds the rest.
+ * the literals, so adding runner #7 is a one-line change here and typecheck finds the rest.
  */
-export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
 
 /** The user-selectable runners (what config/GUI expose). */
 export type RunnerId = (typeof RUNNER_IDS)[number];
@@ -35,6 +40,8 @@ export function isRunnerId(value: string): value is RunnerId {
 }
 
 export interface AgentRunSpec {
+  /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
+  onUsageWindows?: (observation: UsageWindowsObservation) => void;
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;
   userPrompt: string;
@@ -55,6 +62,9 @@ export interface AgentRunSpec {
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
+  /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
+   *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
+  mcpServers?: PrivateMcpServer[];
   model?: string;
   /** Wall-clock kill switch for the run (ms). */
   timeoutMs?: number;
@@ -129,6 +139,23 @@ export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
 
+/**
+ * Why a turn ended, when the runner knows something the turn's TEXT cannot say.
+ *
+ * Additive and optional, in the shape `note.tone` already established
+ * (BACKWARD_COMPATIBILITY.md §7): every producer still emits a bare
+ * `{ type: 'turn-end' }` unless it has a reason, an old NDJSON recording that
+ * carries no `reason` replays exactly as it always did, and an unrecognized
+ * value degrades to "no reason given" rather than to an error.
+ *
+ *  - `context-compaction` — the turn's last act was the backend compacting its
+ *    OWN context window, with no assistant message or native ask after it
+ *    (#955). Internal session maintenance, never evidence that the user owns
+ *    the next action, so `RunManager` keeps the run working instead of parking
+ *    it under "Needs you".
+ */
+export type TurnEndReason = 'context-compaction';
+
 /** Normalized event stream — the GUI renders these, the store persists them. */
 export type AgentEvent =
   | { type: 'text'; text: string }
@@ -143,7 +170,7 @@ export type AgentEvent =
    *  sessions mint their own id, so the run manager persists this to enable
    *  resume ("Continue") and "open in CLI". Claude's equals `spec.sessionId`. */
   | { type: 'session'; sessionId: string }
-  | { type: 'turn-end' }
+  | { type: 'turn-end'; reason?: TurnEndReason }
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
@@ -193,6 +220,8 @@ export interface AgentSession {
   end(): void;
   /** Hard stop (used by cancel). */
   interrupt(): void;
+  /** Escalate a cancellation to a bounded process kill when graceful interrupt is ignored. */
+  hardStop?(): void;
   /** True while the session still accepts messages. */
   readonly open: boolean;
 }

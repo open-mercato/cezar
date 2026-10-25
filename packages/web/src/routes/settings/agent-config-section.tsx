@@ -25,8 +25,30 @@ import { AGENT_DESCRIPTORS, descriptorFor, type AgentDescriptor } from './agent-
  * every write regardless).
  */
 
+/**
+ * What an absent private MCP file opens on (spec 2026-10-07-private-project-mcp): the `.mcp.json`
+ * shape with placeholders that cannot run anything — the file reaches every agent launch the moment
+ * it is saved, so an example `npx -y <package>` would fetch and execute whatever owns that name.
+ */
+const PRIVATE_MCP_STARTER = `{
+  "mcpServers": {
+    "example-stdio": {
+      "command": "/absolute/path/to/your-mcp-server",
+      "args": [],
+      "env": { "API_TOKEN": "your-personal-token" }
+    },
+    "example-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer your-personal-token" }
+    }
+  }
+}
+`
+
 /** What this file actually governs for a run — the honest label the spec insists on. */
 function effectLabel(file: AgentConfigFile): string {
+  if (file.private) return 'Private to this project — added to every run at launch, takes effect on the next session. Never committed.'
   if (file.seeded) return 'Copied into each run’s worktree — takes effect on your next run.'
   if (file.tracked === 'tracked') return 'Runs read the committed copy — this edit applies after you commit it.'
   if (file.tracked === 'outside-repo') return 'Applies to every session on this machine.'
@@ -183,6 +205,11 @@ function AgentPane({
                         seeded
                       </Badge>
                     )}
+                    {file.private && (
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        private
+                      </Badge>
+                    )}
                     {!file.exists && <span className="shrink-0 text-[11px] text-soft-foreground">absent</span>}
                   </button>
                 </li>
@@ -238,7 +265,8 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
   const loadedVersion = fileQuery.data?.version ?? null
   useEffect(() => {
     if (fileQuery.data) {
-      setDraft(fileQuery.data.content)
+      // An absent private MCP file opens on a starter in the `.mcp.json` shape rather than a blank page.
+      setDraft(file.private && !fileQuery.data.exists ? PRIVATE_MCP_STARTER : fileQuery.data.content)
       setConflict(false)
       setFormatError(null)
     }

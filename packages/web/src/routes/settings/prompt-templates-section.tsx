@@ -23,6 +23,7 @@ import {
   DEFAULT_PROMPT_TEMPLATES,
   makeTemplateId,
   normalizePromptTemplates,
+  PROMPT_TEMPLATE_TEXT_LIMIT,
   type PromptTemplate,
 } from '@/lib/prompt-templates'
 import { isProjectSkill, partitionSkillsForDisplay, searchSkills, skillKeywords } from '@/lib/skills'
@@ -36,15 +37,17 @@ import { cn } from '@/lib/utils'
  *
  * Zero-config: an untouched repo shows `DEFAULT_PROMPT_TEMPLATES` with nothing persisted yet.
  * The first Save writes the full (possibly edited-in-place) list to `ui-state.json`'s additive
- * `promptTemplates` key — same "edit locally, explicit Save" shape as Settings → Agents' system
+ * `promptTemplates` key — same "edit locally, explicit Save" shape as Settings → Instructions' system
  * prompt, because a PUT on every keystroke would be a worse control, not a simpler one.
  */
-export function PromptTemplatesSection() {
+/** `embedded`: rendered inside Settings → Instructions, which already provides the page chassis
+ *  (padding, width), so the form draws no outer wrapper of its own. */
+export function PromptTemplatesSection({ embedded = false }: { embedded?: boolean } = {}) {
   const uiState = useUiState()
 
   if (uiState.isPending) {
     return (
-      <p data-slot="prompt-templates-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="prompt-templates-loading" className={embedded ? 'text-[13px] text-soft-foreground' : 'p-4 text-[13px] text-soft-foreground md:p-6'}>
         Loading prompt templates…
       </p>
     )
@@ -63,10 +66,10 @@ export function PromptTemplatesSection() {
   // Keyed on whether the server has ever written this key: an untouched repo (undefined) and an
   // explicitly-cleared one ([]) both come through `normalizePromptTemplates` correctly already,
   // so the form below never has to know the difference.
-  return <PromptTemplatesForm initial={normalizePromptTemplates(uiState.data.promptTemplates)} />
+  return <PromptTemplatesForm initial={normalizePromptTemplates(uiState.data.promptTemplates)} embedded={embedded} />
 }
 
-function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
+function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[]; embedded: boolean }) {
   const queryClient = useQueryClient()
   const skills = useSkills()
   // Already cached by the section gate above; read again here for the picker's #519 tiers.
@@ -123,7 +126,11 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
   return (
     <div
       data-slot="prompt-templates-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className={
+        embedded
+          ? 'flex w-full flex-col gap-7'
+          : 'mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+      }
     >
       <Field
         title="Prompt templates"
@@ -166,7 +173,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                   aria-label={`Text for ${template.label || 'this template'}`}
                   data-slot="prompt-template-text-input"
                   value={template.text}
-                  maxLength={2000}
+                  maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
                   onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
                   className="min-h-14 text-[13px]"
                 />
@@ -217,7 +224,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
             data-slot="prompt-template-new-text"
             placeholder="The instructions to insert…"
             value={newText}
-            maxLength={2000}
+            maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
             onChange={(event) => setNewText(event.target.value)}
             className="min-h-14 text-[13px]"
           />

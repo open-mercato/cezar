@@ -13,6 +13,8 @@ import type { AgentConfigFile, Runner } from '@open-mercato/cezar-api-client'
  * catalog names a pi-owned config file yet, so a pi entry would render three empty
  * groups. It gets a descriptor together with its catalog files. The tab list only
  * ever offers ids from this table, so `descriptorFor` cannot be reached with `pi`.
+ * `copilot` (#582) is the opposite case and IS here: the catalog names its settings,
+ * MCP and instruction files, so all three groups have something to show.
  *
  * Group membership derives from the flat `/api/agent-config` listing: a file
  * belongs to an agent when `runners` INCLUDES it (not `runners[0]` — the shared
@@ -91,6 +93,21 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
     ],
   },
   {
+    id: 'copilot',
+    label: 'GitHub Copilot',
+    note: EDITOR_PLUS_COMMIT,
+    groups: [
+      group('copilot', 'settings', 'Settings'),
+      group(
+        'copilot',
+        'mcp',
+        'MCP',
+        'A dedicated ~/.copilot/mcp-config.json. Per-run --additional-mcp-config augments it rather than replacing it.',
+      ),
+      group('copilot', 'memory', 'Memory & instructions'),
+    ],
+  },
+  {
     id: 'opencode',
     label: 'OpenCode',
     note: EDITOR_PLUS_COMMIT,
@@ -103,6 +120,20 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
         'Under the "mcp" key in opencode.json — the same file as OpenCode’s settings.',
       ),
       group('opencode', 'memory', 'Memory & instructions'),
+    ],
+  },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    note: 'Cursor Agent CLI (`agent`). Auth via `agent login` or CURSOR_API_KEY. No separate memory file — instructions live in rules/MCP elsewhere.',
+    groups: [
+      group('cursor', 'settings', 'Settings'),
+      group(
+        'cursor',
+        'mcp',
+        'MCP',
+        'User ~/.cursor/mcp.json and project .cursor/mcp.json.',
+      ),
     ],
   },
 ]

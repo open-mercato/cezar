@@ -12,6 +12,8 @@ import { Diff, type DiffMode } from '@/components/diff'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
+import { useRememberedState } from '@/lib/view-memory'
+import { cn } from '@/lib/utils'
 
 import { isRunActive } from '../task-thread/run-actions'
 import { RunHeader } from '../task-thread/run-header'
@@ -33,15 +35,40 @@ export function TaskCommitsRoute() {
   return <CommitsView run={run.data} />
 }
 
-function CommitsView({ run }: { run: ApiRun }) {
-  const { sha } = useParams<{ sha: string }>()
+export function CommitsView({
+  run,
+  embedded = false,
+  stateKey,
+}: {
+  run: ApiRun
+  /** A task-workspace column: no run header, and a commit is picked in place (`stateKey`). */
+  embedded?: boolean
+  stateKey?: string
+}) {
+  const { sha: urlSha } = useParams<{ sha: string }>()
+  const [picked, setPicked] = useRememberedState<string | null>(stateKey, null)
+  const sha = embedded ? (picked ?? undefined) : urlSha
   const commits = useRunCommits(run.id, isRunActive(run.status))
 
   return (
-    <div data-route="task-commits" className="flex min-h-full flex-col">
-      <RunHeader run={run} tab="commits" />
+    // One commit's diff fills `main` from md up so the diff scrolls in its own column (see
+    // `CommitDiffView`); the commit LIST scrolls with the page.
+    <div data-route="task-commits" className={cn('flex min-h-full flex-col', sha && 'md:h-full')}>
+      {embedded ? null : <RunHeader run={run} tab="commits" />}
       {sha ? (
-        <CommitDiffView runId={run.id} sha={sha} />
+        // Keyed on the commit: its diff column scrolls on its own, outside the shell's
+        // per-pathname reset of `main`, so another commit must start at the top.
+        <>
+          {embedded ? (
+            <div className="shrink-0 border-b border-border px-4 py-1.5 md:px-6">
+              <Button variant="ghost" size="xs" data-action="all-commits" onClick={() => setPicked(null)}>
+                <ArrowLeftIcon aria-hidden="true" />
+                All commits
+              </Button>
+            </div>
+          ) : null}
+          <CommitDiffView key={sha} runId={run.id} sha={sha} />
+        </>
       ) : commits.isPending ? (
         <p data-slot="commits-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
           Loading commits…
@@ -75,6 +102,7 @@ function CommitsView({ run }: { run: ApiRun }) {
             shaLabel: commit.sha.slice(0, 8),
             href: `/tasks/${run.id}/commits/${commit.sha}`,
           }))}
+          onSelect={embedded ? setPicked : undefined}
         />
       )}
     </div>
@@ -136,8 +164,21 @@ function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
               subtitle="This commit carries no diff of its own — a merge commit's changes live on the commits it merged."
             />
           ) : (
-            <div className="px-4 py-4 [--diff-sticky-top:10rem] md:px-6">
-              <Diff files={commit.data.files} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0" />
+            // The diff's own scroller from md up: its file headers stick to ITS top, so a run
+            // header of any height never covers them; below md the diff scrolls in `main` again,
+            // and the Diff rebinds its virtualized list across that swap itself. Vertical padding
+            // sits on the Diff, not here, so a stuck header meets the column's top edge.
+            <div
+              data-slot="diff-pane"
+              data-diff-scroller={desktop ? '' : undefined}
+              className="px-4 md:min-h-0 md:flex-1 md:overflow-y-auto md:overscroll-contain md:px-6"
+            >
+              <Diff
+                files={commit.data.files}
+                mode={effectiveMode}
+                wrap={effectiveWrap}
+                className="min-w-0 py-4"
+              />
             </div>
           )}
         </>

@@ -8,6 +8,7 @@ import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import { ListViewProvider } from '@/components/list-view'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Project settings → General (project-general.tsx): the dashboard the settings index became.
@@ -83,7 +84,7 @@ function seededClient({
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
-    capabilities: { localHandoff: true, followups: true, singleProject },
+    capabilities: { localHandoff: true, terminal: false, followups: true, singleProject },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: registry ?? [project('boot'), project('demo')],
@@ -118,9 +119,11 @@ function renderAt(entry: string, seed?: Parameters<typeof seededClient>[0]) {
       {/* The app shell normally provides it; the removal test navigates onto the tasks overview,
           which reads it. */}
       <ListViewProvider>
-        <MemoryRouter initialEntries={[entry]}>
-          <AppRoutes />
-        </MemoryRouter>
+        <ThemeProvider>
+          <MemoryRouter initialEntries={[entry]}>
+            <AppRoutes />
+          </MemoryRouter>
+        </ThemeProvider>
       </ListViewProvider>
     </QueryClientProvider>,
   )
@@ -156,9 +159,10 @@ describe('the General page', () => {
   it('carries the per-project concurrency ceiling, named against the workspace cap', async () => {
     renderAt('/p/demo/settings')
     const select = await screen.findByLabelText('Max parallel tasks for demo-project')
-    expect(select.textContent).toContain('Inherit workspace (4)')
+    expect((select as HTMLInputElement).placeholder).toBe('Inherit (4)')
 
     fireEvent.change(select, { target: { value: '3' } })
+    fireEvent.keyDown(select, { key: 'Enter' })
 
     await waitFor(() => {
       const patch = requests.find((r) => r.method === 'PATCH')
@@ -231,9 +235,9 @@ describe('the General page', () => {
   })
 
   it('is the project area only — global settings has no project to describe', async () => {
-    renderAt('/settings/global')
+    renderAt('/settings/global/notifications')
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="settings-index"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="settings-nav"][data-scope="global"]')).not.toBeNull()
     })
     expect(general()).toBeNull()
   })

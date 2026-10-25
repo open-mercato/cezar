@@ -26,7 +26,8 @@ export const githubItemSchema = z.object({
   author: z.string(),
   createdAt: z.string(),
   labels: z.array(z.string()),
-  body: z.string(),
+  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
+  body: z.string().optional(),
   url: z.string(),
   comments: z.number(),
   /** PRs only. */
@@ -54,8 +55,21 @@ export const githubDataSchema = z.object({
   prs: z.array(githubItemSchema),
   /** Repo-wide label name → 6-hex color (no `#`); lets chips tint like GitHub. Additive. */
   labelColors: z.record(z.string(), z.string()).optional(),
+  issuesTotal: z.number().int().nonnegative().optional(),
+  prsTotal: z.number().int().nonnegative().optional(),
+  issuesNextCursor: z.string().nullable().optional(),
+  prsNextCursor: z.string().nullable().optional(),
 });
 export type GithubData = z.infer<typeof githubDataSchema>;
+
+/** Query for the cursor-paged open GitHub list. Cursor values are opaque to clients. */
+export const githubListQuerySchema = z.object({
+  limit: z.string().optional(),
+  refresh: z.string().optional(),
+  issuesCursor: z.string().max(2_000).optional(),
+  prsCursor: z.string().max(2_000).optional(),
+});
+export type GithubListQuery = z.infer<typeof githubListQuerySchema>;
 
 /**
  * `GET /api/v1/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list
@@ -285,6 +299,11 @@ export const githubCommentsDataSchema = z.object({
   /** Timeline events (#525) — additive; absent when the server degraded to the legacy
    *  comments-only fetch. Capped independently of `comments`. */
   events: z.array(githubTimelineEventSchema).optional(),
+  detail: z.object({
+    body: z.string(),
+    additions: z.number().int().nonnegative().optional(),
+    deletions: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
 export type GithubCommentsData = z.infer<typeof githubCommentsDataSchema>;
 
@@ -313,6 +332,16 @@ export const githubPrMergeStateSchema = z.object({
   mergeable: z.enum(['mergeable', 'conflicting', 'unknown']),
   reviewDecision: z.enum(['approved', 'changes-requested', 'review-required', 'unknown']),
   checks: z.array(githubPrCheckSchema),
+  /**
+   * How much of the check tier the forge token could read (#969). `detailed` = one row per check;
+   * `aggregate` = only the rolled-up state was readable, collapsed into a single row (a
+   * fine-grained PAT lands here — `statusCheckRollup`'s `CheckRun` contexts need the `checks`
+   * scope, which fine-grained PATs cannot grant, while `statusCheckRollup { state }` stays
+   * readable); `none` = nothing was, so an empty `checks` means "never found out", not "no CI".
+   */
+  checksTier: z.enum(['detailed', 'aggregate', 'none']),
+  /** Why the check tier degraded. Absent when `checksTier` is `detailed`. */
+  checksReason: z.string().optional(),
   methods: z.array(githubMergeMethodSchema),
   defaultMethod: githubMergeMethodSchema.nullable(),
   eligibility: z.enum(['ready', 'blocked', 'pending', 'unauthorized', 'terminal', 'unknown']),

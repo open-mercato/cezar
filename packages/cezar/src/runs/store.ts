@@ -1,18 +1,41 @@
+import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { threadId } from 'node:worker_threads';
+import { hostname, uptime } from 'node:os';
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  readSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { StreamRedaction } from './stream-redaction.ts';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
+import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
+import { failureKind, taskFailedLabel } from './failure-kind.ts';
+import { track } from '../telemetry.ts';
+import { reportAgentError } from './agent-error-telemetry.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -40,7 +63,7 @@ export type StepStatus =
 const usageCounterSchema = z.number().finite().nonnegative();
 
 /**
- * A runner id as it may appear in a PERSISTED record, normalized to the three
+ * A runner id as it may appear in a PERSISTED record, normalized to the
  * ids the rest of cezar speaks (#547).
  *
  * `claude-cli` is the legacy spelling of `claude` — still a member of
@@ -52,11 +75,11 @@ const usageCounterSchema = z.number().finite().nonnegative();
  *
  * Parse-and-fold rather than widen: the legacy id is accepted on the way in and
  * collapsed to `claude`, so no consumer, wire type or contract schema ever sees
- * a fourth runner. The narrowing is one-way and permanent (the index is
+ * an extra runner. The narrowing is one-way and permanent (the index is
  * re-serialized from the parsed records), which is what "old run records
  * normalise identically to `claude`" in `core/model-identity.ts` has always
  * claimed. Use ONLY for read-back of stored state — request bodies, settings and
- * workflow step defs stay the three selectable ids (`RunnerId`), because nothing
+ * workflow step defs stay the selectable ids (`RunnerId`), because nothing
  * should be able to ASK for the legacy spelling.
  */
 const storedRunnerSchema = z
@@ -91,6 +114,9 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
+   *  remain readable and auto-model steps can retain an absent identity. */
+  modelIdentity: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -106,6 +132,16 @@ const queuedMessageSchema = z.object({
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
 });
+
+/** One authoritative PR association for a task. Older records project their scalar fields
+ * into this list on first append, so no migration is needed. */
+const prRefSchema = z.object({
+  number: z.number().int().positive().max(MAX_REF),
+  url: z.string().url().optional(),
+  origin: z.enum(['created', 'marker', 'legacy', 'derived']),
+  at: z.string().datetime(),
+});
+export type RunPrRef = z.infer<typeof prRefSchema>;
 
 /** Exported for `./run-index.ts`, the read-only reader of the same file. Nothing else should
  *  parse `runs.json` — see `reconcileLoadedRun` for why a second parser is a correctness risk. */
@@ -186,6 +222,9 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
+  /** Account/workflow confirmed for a composer-scheduled start (#1340); checked at launch. */
+  deferredBinding: deferredBindingSchema.optional(),
+  queueWaitReason: queueWaitReasonSchema.optional(),
   /** Provenance for a task a scheduled automation launched (spec 2026-09-14). Its own key so a
    *  pre-schedule cezar strips it instead of failing the whole index on a missing `githubUrl`. */
   automationTrigger: z
@@ -195,6 +234,26 @@ export const runRecordSchema = z.object({
       receiptId: z.string(),
       trigger: z.enum(['schedule', 'catch-up', 'manual']),
       occurrenceAt: z.string(),
+    })
+    .optional(),
+  /** Provenance for a task a tracker (Jira/Linear) automation launched. Its own key, same reason
+   *  as `automationTrigger`: a pre-tracker cezar strips it instead of failing the whole index.
+   *  The optional association binds credentials to the exact source, scope and connection
+   *  that fired the run. Legacy records without that snapshot receive no tracker credentials.
+   *  No secret is stored on this record. */
+  automationTracker: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number().int().positive(),
+      receiptId: z.string(),
+      provider: z.enum(['jira', 'linear']),
+      association: trackerAssociationSchema.optional(),
+      eventId: z.string().optional(),
+      event: trackerAutomationEventSchema.optional(),
+      timestamp: z.string().optional(),
+      change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      key: z.string(),
+      url: z.string().url(),
     })
     .optional(),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
@@ -232,6 +291,37 @@ export const runRecordSchema = z.object({
    *  `reconcileLoadedRun` retire it on any other status, so no caller has to. */
   askParked: z.boolean().optional(),
   /**
+   * When the run's session ended — the inactivity timer, a crash, a cezar restart — while a
+   * `CEZ:ASK` question was still unanswered. The run is `failed` on the record (no process, no
+   * slot), but the question is still the user's to answer, so the cockpit keeps it under
+   * "needs you" instead of filing it as an outcome; Continue (or the ask card) reopens the session
+   * with the answer. Additive and optional (BACKWARD_COMPATIBILITY §3). Invariant: only a
+   * `failed` run carries it — `updateRun` and `reconcileLoadedRun` retire it on any other status,
+   * so a Continue, a Finish or a cancel clears it without the caller's help.
+   */
+  awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
+  /**
+   * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
+   * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
+   * run's `baseBranch` — and `ref` the namespaced `refs/cezar/pr/<n>` holding it. Its presence
+   * is what refuses `POST /runs/:id/pr`: the branch would contain the whole foreign PR.
+   */
+  prHead: z
+    .object({
+      number: z.number().int().positive(),
+      repo: z.string(),
+      headRepo: z.string(),
+      headRef: z.string(),
+      headSha: z.string(),
+      baseRef: z.string(),
+      ref: z.string(),
+    })
+    .optional()
+    .catch(undefined),
+  /** The PR head came from a fork the automation admitted (`allowForkHeads`): untrusted code, so
+   *  its check steps never receive any secrets. */
+  untrustedHead: z.boolean().optional().catch(undefined),
+  /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
    * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
    * short grace. Present only while such a resume is pending: the run is `failed`, the timer is
@@ -260,6 +350,8 @@ export const runRecordSchema = z.object({
    *  regex-extracted from the task prompt, upgradable by the namer's
    *  cross-checked output. Display tier — never gates actions. */
   prNumber: z.number().optional(),
+  /** Ordered, deduplicated PR associations. Optional for pre-list runs.json records. */
+  prRefs: z.array(prRefSchema).max(8).optional().catch(undefined),
   issueNumber: z.number().optional(),
   /** Provenance for an `issueNumber` seeded by referenced-issue discovery.
    *  Persisted so ambiguity can revoke only the janitor's own value, including
@@ -292,7 +384,27 @@ export const runRecordSchema = z.object({
   worktree: z.literal(false).optional(),
   /** Task worktree (spec 006) — absent for in-place runs and after explicit cleanup. */
   worktreePath: z.string().optional(),
-  /** The task's own branch (`cez/<id8>`), created off `baseBranch`. */
+  worktreeLifecycle: worktreeLifecycleProjectionSchema.optional(),
+  /** An in-place run that switched the repo checkout to `branch` before it started. */
+  inPlaceBranch: z.literal(true).optional(),
+  /** In-place but a read-only Ask task (spec 2026-10-20-trunk-based-projects): no lease, no
+   *  writes, no landing. */
+  readOnly: z.literal(true).optional(),
+  /** The last auto-land of an in-place run (spec 2026-10-20-trunk-based-projects). */
+  landing: z
+    .object({
+      status: z.enum(['landed', 'nothing', 'failed']),
+      at: z.string(),
+      branch: z.string().optional(),
+      sha: z.string().optional(),
+      pushed: z.boolean().optional(),
+      files: z.array(z.string()).optional(),
+      stage: z.string().optional(),
+      error: z.string().optional(),
+    })
+    .optional(),
+  /** The task's own branch, created off `baseBranch`: `cez/<id8>` unless branch naming
+   *  instructions named it (spec 2026-10-11-branch-naming-instructions) — read it, never recompute it. */
   branch: z.string().optional(),
   /** Stable baseline for session git views: a worktree's fork ref, or an in-place run's starting commit. */
   baseBranch: z.string().optional(),
@@ -325,6 +437,9 @@ export const runRecordSchema = z.object({
    *  runs, on every run not yet opened, and on one `setUnread` put back to unread
    *  (#775) — the unread rule treats all three alike. */
   seenAt: z.string().optional(),
+  /** Highest `seq` handed out for this run, ephemeral frames included, so a restart resumes the
+   *  counter without parsing the transcript. Absent on older records, which fall back to that parse. */
+  lastSeq: z.number().int().nonnegative().optional(),
   currentStepId: z.string().optional(),
   error: z.string().optional(),
   steps: z.array(stepStateSchema),
@@ -349,6 +464,21 @@ export const runRecordSchema = z.object({
    *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
    *  queued runs rather than degrading them. */
   workflowDef: workflowDefSchema.optional().catch(undefined),
+  /** Where a graph workflow's walk has been (spec 2026-09-30-workflow-node-editor, phase 3):
+   *  per-loop counters and every edge taken, in order, as `<node>.<port>-><target>` (`to` empty
+   *  when an unwired port ended the run). Written by `executeGraph` for the task view's live
+   *  graph; absent on v1 runs and on every record that predates it. Capped (`GRAPH_TAKEN_CAP`). */
+  graphState: z
+    .object({
+      loops: z.record(z.string(), z.number()),
+      taken: z.array(z.string()),
+      /** The node being run — where a restart resumes the walk. Absent once the walk ended. */
+      cursor: z.string().optional(),
+      /** `{{nodes.<id>.<field>}}` values so far, restored on resume. */
+      outputs: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.number()]))).optional(),
+    })
+    .optional()
+    .catch(undefined),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -364,11 +494,18 @@ export interface RunEvent {
   [key: string]: unknown;
 }
 
+/** A layout file this young may belong to a run another process has not saved to the index yet. */
+const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
 const MAX_RUNS_KEPT = 300;
+/** Every save rewrites the whole index, and a live run touches its record at event rate. */
+const SAVE_DEBOUNCE_MS = 1_000;
 const MAX_ARCHIVED_KEPT = 500;
+/** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
+const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
-const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
-const ISSUE_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
+// Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
+const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
+const ISSUE_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
 // The transcript auto-link is convenience only (the cockpit's own `gh pr create` path sets the
 // URL authoritatively). Adopt a PR URL ONLY when the agent actually CREATED one — a task that
 // reviews or merely references an existing PR must not get mislabeled with its number (#fake-pr).
@@ -378,6 +515,8 @@ const CREATED_PR_RE =
 /** Referenced-tier working-set cap (spec 2026-07-16-pr-autodiscovery): past
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
+/** Enough for any command line or path; a longer tool input is file content, not a reference. */
+const MAX_TOOL_INPUT_HAYSTACK_CHARS = 8_192;
 
 /** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
  *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
@@ -413,6 +552,9 @@ function refUrlRepo(url: string): string | undefined {
  * Note what this does not touch: `referenced*Candidates` keep recording every URL as evidence.
  * The fix changes what is *promoted*, never what is *collected* (the #526 rule).
  */
+// Compares `owner/repo` only: `RepoHandle` carries no host, so the same slug on another GitHub
+// host (Enterprise vs github.com) reads as in-repo. Rare enough to accept; add a host to the
+// handle if it ever bites.
 function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null): boolean {
   if (!handle) return true;
   const repo = refUrlRepo(url);
@@ -441,6 +583,20 @@ function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAttempts = undefined;
 }
 
+/** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
+function isAccessDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
+}
+
+/**
+ * Archiving is resigning from a task, so it also resigns from the question the task was left
+ * waiting on — an archived run must not keep a "needs you" signal alive in the attention layer.
+ */
+function clearAwaitingAnswer(run: RunRecord): void {
+  run.awaitingAnswerSince = undefined;
+}
+
 /**
  * Archiving is resigning from a task, so it retires the pin too (#935) — a pin on a task the
  * user has filed away is stale by definition, and the archived view collapses into one bucket
@@ -455,6 +611,16 @@ function clearPendingAutoResume(run: RunRecord): void {
 function clearPin(run: RunRecord): void {
   delete run.pinned;
   delete run.pinnedAt;
+}
+
+function parseSeq(line: string): number | undefined {
+  if (line.trim() === '') return undefined;
+  try {
+    const seq = (JSON.parse(line) as { seq?: unknown }).seq;
+    return typeof seq === 'number' ? seq : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function eventTextFragments(event: Record<string, unknown>): string[] {
@@ -474,7 +640,7 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
       fragments.push(it.input);
     } else if (it.input !== undefined) {
       try {
-        fragments.push(JSON.stringify(it.input));
+        fragments.push(JSON.stringify(it.input).slice(0, MAX_TOOL_INPUT_HAYSTACK_CHARS));
       } catch {
         // circular input — skip it
       }
@@ -585,6 +751,81 @@ function refUrlNumber(url: string | undefined): number | undefined {
   return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
 }
 
+const PR_REF_CAP = 8;
+const PR_REF_RANK: Record<RunPrRef['origin'], number> = {
+  created: 0,
+  marker: 1,
+  legacy: 2,
+  derived: 3,
+};
+
+function legacyPrRefs(run: RunRecord): RunPrRef[] {
+  const at = run.createdAt;
+  const refs: RunPrRef[] = [];
+  const created = refUrlNumber(run.pullRequestUrl);
+  if (created !== undefined) refs.push({ number: created, url: run.pullRequestUrl, origin: 'created', at });
+  const declared = run.markerRefs?.pr;
+  const referenced = refUrlNumber(run.referencedPullRequestUrl);
+  if (declared !== undefined) {
+    refs.push({
+      number: declared,
+      ...(referenced === declared && run.referencedPullRequestUrl
+        ? { url: run.referencedPullRequestUrl }
+        : {}),
+      origin: 'marker',
+      at,
+    });
+  }
+  else if (referenced !== undefined && referenced !== created) refs.push({ number: referenced, url: run.referencedPullRequestUrl, origin: 'legacy', at });
+  if (run.prNumber !== undefined && !refs.some((ref) => ref.number === run.prNumber)) {
+    refs.push({ number: run.prNumber, origin: 'derived', at });
+  }
+  return refs;
+}
+
+function primaryPrRef(refs: RunPrRef[]): RunPrRef | undefined {
+  return refs.reduce<RunPrRef | undefined>((best, ref) =>
+    !best || PR_REF_RANK[ref.origin] < PR_REF_RANK[best.origin] ? ref : best,
+  undefined);
+}
+
+function appendPrRefToRun(run: RunRecord, ref: Omit<RunPrRef, 'at'> & { at?: string }): boolean {
+  const hadList = !!run.prRefs;
+  const refs = run.prRefs ?? legacyPrRefs(run);
+  const at = ref.at ?? new Date().toISOString();
+  const existing = refs.find(
+    (candidate) =>
+      candidate.number === ref.number &&
+      (!candidate.url || !ref.url || candidate.url === ref.url),
+  );
+  let changed = !hadList;
+  if (existing) {
+    if (PR_REF_RANK[ref.origin] < PR_REF_RANK[existing.origin]) {
+      existing.origin = ref.origin;
+      changed = true;
+    }
+    if (!existing.url && ref.url) {
+      existing.url = ref.url;
+      changed = true;
+    }
+  } else {
+    refs.push({ ...ref, at });
+    changed = true;
+    while (refs.length > PR_REF_CAP) {
+      const primary = primaryPrRef(refs);
+      const removable = refs.findIndex((candidate) => candidate !== primary && candidate.origin === 'derived');
+      refs.splice(removable >= 0 ? removable : primary ? refs.findIndex((candidate) => candidate !== primary) : 0, 1);
+    }
+  }
+  run.prRefs = refs;
+  const primary = primaryPrRef(refs);
+  const nextNumber = primary?.number;
+  if (run.prNumber !== nextNumber) changed = true;
+  if (nextNumber === undefined) delete run.prNumber;
+  else run.prNumber = nextNumber;
+  return changed;
+}
+
 /**
  * The PR declaration the REFERENCED tier is allowed to act on.
  *
@@ -650,9 +891,14 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
     !opts?.keepLive &&
     (run.status === 'running' || run.status === 'queued' || run.status === 'waiting')
   ) {
+    // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
+    // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
+    const askParked = run.status === 'waiting' && run.askParked === true;
     run.status = 'failed';
     run.error = 'interrupted — cezar process exited during the run';
     run.finishedAt = run.finishedAt ?? new Date().toISOString();
+    // Stamped from `finishedAt`, so every cold read of the same record agrees on the instant.
+    if (askParked) run.awaitingAnswerSince = run.finishedAt;
     for (const step of run.steps) {
       if (step.status === 'running' || step.status === 'waiting') step.status = 'failed';
     }
@@ -665,6 +911,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // hours) — `RunManager.recover()` re-arms it from this field. It can only mean
   // anything on a `failed` run, so anywhere else it is stale bookkeeping.
   if (run.status !== 'failed') run.autoResumeAt = undefined;
+  // Likewise an unanswered question only means anything on the `failed` run it stopped.
+  if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
@@ -700,6 +948,189 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   return run;
 }
 
+// Only paths whose owner has finished (or abandoned acquisition) enter this set.
+// Never infer release from age: a paused active writer still owns it (see lockRunIndex).
+const releasedIndexPaths = new Set<string>();
+let indexCleanupTimer: NodeJS.Timeout | undefined;
+
+function scheduleIndexCleanup(): void {
+  if (indexCleanupTimer) return;
+  indexCleanupTimer = setTimeout(() => {
+    indexCleanupTimer = undefined;
+    retryIndexCleanup();
+  }, 100);
+  indexCleanupTimer.unref();
+}
+
+function retryIndexCleanup(): void {
+  for (const path of releasedIndexPaths) {
+    try {
+      rmSync(path, { force: true });
+      releasedIndexPaths.delete(path);
+    } catch { /* Keep ownership knowledge until I/O recovers. */ }
+  }
+  if (releasedIndexPaths.size) {
+    // An idle owner must also unblock independent processes, without another local save.
+    scheduleIndexCleanup();
+  } else if (indexCleanupTimer) {
+    clearTimeout(indexCleanupTimer);
+    indexCleanupTimer = undefined;
+  }
+}
+
+function releaseIndexPath(path: string): void {
+  try { rmSync(path, { force: true }); } catch {
+    releasedIndexPaths.add(path);
+    // Schedule rather than retry immediately: repeated I/O failure must not hold up the
+    // successful commit acknowledgment. There is no timer or extra I/O on healthy release.
+    scheduleIndexCleanup();
+  }
+}
+
+/** Linux `/proc/<pid>/stat` start time (field 22, clock ticks since boot); undefined where
+ *  there is no procfs or the process is gone. Distinguishes a reused PID from its old owner. */
+function processStartTime(pid: number): string | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    const value = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+    return value && /^\d+$/.test(value) ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** This boot: Linux's `boot_id`, else the boot instant in seconds (`~<epoch>`, jittery). */
+function bootIdentity(): string {
+  try {
+    const id = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+    if (id) return id;
+  } catch { /* no procfs */ }
+  return `~${Math.round(Date.now() / 1000 - uptime())}`;
+}
+
+function sameBoot(a: string, b: string): boolean {
+  if (a.startsWith('~') && b.startsWith('~')) return Math.abs(Number(a.slice(1)) - Number(b.slice(1))) <= 120;
+  return a === b;
+}
+
+/** Linux PID namespace (`pid:[<inode>]`); undefined without procfs. Hostnames do not separate
+ *  namespaces: `--network host`, k8s `hostNetwork` and WSL beside Windows share one. */
+function pidNamespace(): string | undefined {
+  try { return readlinkSync('/proc/self/ns/pid'); } catch { return undefined; }
+}
+
+/** A ticket from another process view, or one left unreadable, has no PID evidence; one older
+ *  than this is a crash leftover (a writer holds its ticket for milliseconds), e.g. from before a container restart. */
+const FOREIGN_TICKET_STALE_MS = 5 * 60_000;
+
+const runIndexTicketSchema = z.object({
+  n: z.number().int().nonnegative().safe(),
+  host: z.string(),
+  ns: z.string().optional(),
+  boot: z.string().min(1),
+  start: z.string().optional(),
+}).strict();
+
+/** Synchronous Lamport bakery lock for the local index. Each contender publishes a unique
+ * ticket before choosing its number, then waits for choosing/earlier tickets. Unlike a timed
+ * lease, a paused live writer never loses ownership midway through read/merge/rename. Unique
+ * names also make dead-process cleanup safe: no successor can own the path being removed.
+ * A live PID is not proof of a live writer: a crashed writer's PID is often reused, in a
+ * container by the restarted cezar itself (#1434 review). A ticket is dead, without guessing
+ * from age, when it is from an earlier boot; when it names this PID and thread but is not the
+ * ticket this thread is taking (acquisition is synchronous); when its PID is gone; or, on
+ * Linux, when its recorded process start time no longer matches. PIDs mean nothing in another
+ * process view (hostname, PID namespace or boot-id format differs), so such a ticket is only
+ * reaped once older than FOREIGN_TICKET_STALE_MS; any other live PID waits/fails.
+ * Contention blocks the event loop for at most the 2 s cap, deliberately: writes are a
+ * millisecond read/merge/rename by a handful of local cockpits, and a strict creation must
+ * not acknowledge before the index is durable.
+ * All participants must use this protocol on a coherent local filesystem.
+ */
+function lockRunIndex(dataDir: string): () => void {
+  retryIndexCleanup();
+  const directory = join(dataDir, 'runs', '.index-writers');
+  mkdirSync(directory, { recursive: true });
+  const name = `${process.pid}-${threadId}-${randomUUID()}.ticket`;
+  const path = join(directory, name);
+  const tmp = `${path}.tmp`;
+  const deadline = performance.now() + 2_000;
+  const self = { host: hostname(), ns: pidNamespace(), boot: bootIdentity(), start: processStartTime(process.pid) };
+  const publish = (n: number) => {
+    const ticket = { n, host: self.host, ...(self.ns ? { ns: self.ns } : {}), boot: self.boot, ...(self.start ? { start: self.start } : {}) };
+    writeFileSync(tmp, JSON.stringify(ticket), { encoding: 'utf8', flag: 'wx' });
+    renameSyncWithRetry(tmp, path);
+  };
+  // Measured against our own just-published ticket: one filesystem clock, not this process's.
+  const abandoned = (other: string) => statSync(path).mtimeMs - statSync(other).mtimeMs > FOREIGN_TICKET_STALE_MS;
+  const tickets = (): Array<[string, number]> => {
+    const result: Array<[string, number]> = [];
+    for (const other of readdirSync(directory)) {
+      if (!/^\d+-[\da-f-]+\.ticket$/.test(other)) continue;
+      const otherPath = join(directory, other);
+      try {
+        let parsed: unknown;
+        try { parsed = JSON.parse(readFileSync(otherPath, 'utf8')); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw error;
+        }
+        const ticket = runIndexTicketSchema.safeParse(parsed);
+        if (!ticket.success) {
+          // Fail closed, unless power loss left it empty or torn long ago.
+          if (other !== name && abandoned(otherPath)) { rmSync(otherPath, { force: true }); continue; }
+          throw new Error(`Invalid run-index ticket ${otherPath}`);
+        }
+        const number = ticket.data.n;
+        if (other !== name) {
+          if (ticket.data.host !== self.host || ticket.data.ns !== self.ns
+            || ticket.data.boot.startsWith('~') !== self.boot.startsWith('~')) {
+            if (abandoned(otherPath)) rmSync(otherPath, { force: true });
+            else result.push([other, number]);
+            continue;
+          }
+          const [pidPart, threadPart] = other.split('-');
+          const pid = Number(pidPart);
+          let dead = !sameBoot(ticket.data.boot, self.boot) // an earlier boot
+            || (pid === process.pid && threadPart === String(threadId)); // an earlier incarnation
+          if (!dead) {
+            try { process.kill(pid, 0); } catch (error) {
+              // EPERM means alive but inaccessible. It must still exclude us.
+              dead = (error as NodeJS.ErrnoException).code === 'ESRCH';
+            }
+          }
+          if (!dead && ticket.data.start !== undefined) {
+            const current = processStartTime(pid);
+            dead = current !== undefined && current !== ticket.data.start; // the PID was reused
+          }
+          if (dead) {
+            rmSync(otherPath, { force: true });
+            continue;
+          }
+        }
+        result.push([other, number]);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return result;
+  };
+  try {
+    publish(0); // choosing; visible before reading any other contender's ticket
+    const number = Math.max(0, ...tickets().map(([, n]) => n)) + 1;
+    if (!Number.isSafeInteger(number)) throw new Error('Run-index ticket overflow');
+    publish(number);
+    while (tickets().some(([other, n]) => other !== name &&
+      (n === 0 || n < number || (n === number && other < name)))) {
+      if (performance.now() >= deadline) throw new Error(`Timed out waiting for run-index writer (tickets in ${directory}; remove one only if its cezar is not running)`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    return () => { releaseIndexPath(path); };
+  } catch (error) {
+    releaseIndexPath(path);
+    releaseIndexPath(tmp);
+    throw error;
+  }
+}
+
 /**
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
@@ -708,7 +1139,22 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  /** The backend of each run's latest session (`session.started`), naming its agent errors. */
+  private sessionBackends = new Map<string, string>();
+  /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
+  private persisted = new Map<string, string>();
+  /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
+  private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
+  // Preserve failed-load evidence even after a later save rewrites the index. A workspace
+  // summary must not call an owner that silently dropped records a complete empty project.
+  private indexReadHealth: { state: 'complete' | 'unavailable'; omittedRuns: number; reason?: string } = { state: 'complete', omittedRuns: 0 };
+
+  getIndexReadHealth() { return { ...this.indexReadHealth }; }
+
+  /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */
+  private eventsUnwritable = false;
+
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
    *  exactly the pre-#945 behavior. */
@@ -721,8 +1167,16 @@ export class RunStore extends EventEmitter {
 
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
-    mkdirSync(join(dataDir, 'runs'), { recursive: true });
     const store = new RunStore(dataDir);
+    // An uncreatable data dir (EPERM: Windows Controlled Folder Access, a read-only checkout) must
+    // not kill boot — the desktop shell relaunches into the same project every time (5af5aec6).
+    try {
+      mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    } catch (err) {
+      store.eventsUnwritable = true;
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[cez] cannot create ${join(dataDir, 'runs')} (${message}); task history in this project will not be saved`);
+    }
     const indexPath = join(dataDir, 'runs.json');
     if (existsSync(indexPath)) {
       try {
@@ -730,10 +1184,16 @@ export class RunStore extends EventEmitter {
         const parsed = z.array(runRecordSchema).safeParse(raw);
         if (parsed.success) {
           for (const run of parsed.data) {
+            store.persisted.set(run.id, JSON.stringify(run));
             store.runs.set(run.id, reconcileLoadedRun(run, opts));
           }
+          // Only behind an index that actually loaded — an unreadable one would orphan every layout.
+          pruneOrphanLayouts(dataDir, new Set(store.runs.keys()), ORPHAN_LAYOUT_GRACE_MS);
+        } else {
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
+        store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         // corrupt index — start fresh; event files stay on disk untouched
       }
     }
@@ -803,11 +1263,22 @@ export class RunStore extends EventEmitter {
     return [...this.runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  /** Fresh durable evidence for receipt reconciliation; never replaces live in-memory runs. */
+  listPersistedRuns(): RunRecord[] {
+    try {
+      return z.array(runRecordSchema).parse(JSON.parse(readFileSync(join(this.dataDir, 'runs.json'), 'utf8')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw new Error('Could not read persisted runs to verify automation delivery.');
+    }
+  }
+
   getRun(id: string): RunRecord | undefined {
     return this.runs.get(id);
   }
 
   createRun(input: {
+    id?: string;
     title: string;
     workflow: string;
     task: string;
@@ -823,7 +1294,7 @@ export class RunStore extends EventEmitter {
     steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>;
   }): RunRecord {
     const run: RunRecord = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       // Scrubbed on the way in, exactly as `updateRun` scrubs it on the way
       // through (#456 review) — a token pasted into the prompt otherwise sat
       // verbatim in `runs.json` from creation. `task` is deliberately NOT
@@ -888,7 +1359,31 @@ export class RunStore extends EventEmitter {
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
     }
-    Object.assign(run, this.redactPatch(normalized));
+    // An unanswered question belongs to the `failed` run its closed session left behind: the
+    // Continue that answers it (`running`/`queued`), and every settlement, retire it.
+    if (normalized.status && normalized.status !== 'failed') {
+      normalized.awaitingAnswerSince = undefined;
+    }
+    // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
+    // projection often provide the replacement URL/number in the same patch; seeding afterward
+    // would make the historical association unrecoverable.
+    if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
+    // Counted on the transition only (#1438); an auto-resumed attempt failing again repeats a failure already counted.
+    if (normalized.status === 'failed' && run.status !== 'failed' && run.autoResumeAttempts === undefined) {
+      const kind = failureKind(normalized.error ?? run.error);
+      if (kind) track('task_failed', { label: taskFailedLabel(run.runner, kind) });
+    }
+    Object.assign(run, this.redactPatch(normalized, id));
+    // Keep legacy writers (including workflow resume/naming paths) in sync without requiring
+    // every caller to know about the additive list. The list's provenance still decides the
+    // compatibility scalar, so an inferred number cannot displace a declared/created one.
+    if (normalized.pullRequestUrl) {
+      const number = refUrlNumber(normalized.pullRequestUrl);
+      if (number !== undefined) appendPrRefToRun(run, { number, url: normalized.pullRequestUrl, origin: 'created' });
+    }
+    if (normalized.prNumber !== undefined) {
+      appendPrRefToRun(run, { number: normalized.prNumber, origin: 'derived' });
+    }
     this.touch(run);
     return run;
   }
@@ -909,12 +1404,13 @@ export class RunStore extends EventEmitter {
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
+    runId: string,
   ): Partial<Omit<RunRecord, 'id' | 'steps'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
     const out = { ...patch };
     for (const field of ['title', 'titleSummary', 'error'] as const) {
       const value = out[field];
-      if (typeof value === 'string') out[field] = this.redactText(value);
+      if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
     return out;
   }
@@ -926,10 +1422,10 @@ export class RunStore extends EventEmitter {
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
-  private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>): Partial<Omit<StepState, 'id'>> {
+  private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
     if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error) };
+    return { ...patch, error: this.redactText(patch.error, runId) };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
@@ -940,11 +1436,25 @@ export class RunStore extends EventEmitter {
     this.touch(run);
   }
 
+  /**
+   * Replace the step list of a run that has not started any step yet (#1078): a queued run whose
+   * workflow changed on disk is re-resolved at dequeue, and the step rail must show the steps
+   * that will actually run. Refused (returns false) once any step has left `pending`, so a run
+   * with history can never have it rewritten.
+   */
+  replacePendingSteps(runId: string, steps: Array<Pick<StepState, 'id' | 'name' | 'kind'>>): boolean {
+    const run = this.runs.get(runId);
+    if (!run || run.steps.some((s) => s.status !== 'pending' || s.iterations > 0)) return false;
+    run.steps = steps.map((s) => ({ ...s, status: 'pending', iterations: 0, tokensUsed: 0 }));
+    this.touch(run);
+    return true;
+  }
+
   updateStep(runId: string, stepId: string, patch: Partial<Omit<StepState, 'id'>>): void {
     const run = this.runs.get(runId);
     const step = run?.steps.find((s) => s.id === stepId);
     if (!run || !step) return;
-    Object.assign(step, this.redactStepPatch(patch));
+    Object.assign(step, this.redactStepPatch(patch, runId));
     run.tokensUsed = run.steps.reduce((sum, s) => sum + s.tokensUsed, 0);
     const startedAgentSteps = run.steps.filter((candidate) => candidate.kind === 'agent' && candidate.iterations > 0);
     const directionalComplete =
@@ -969,7 +1479,8 @@ export class RunStore extends EventEmitter {
       ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
       : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
-    run.costUsd = cost > 0 ? cost : undefined;
+    // A reported zero is still a measurement; an unreported run is not free.
+    run.costUsd = run.steps.some((s) => s.costUsd !== undefined) ? cost : undefined;
     this.touch(run);
   }
 
@@ -980,6 +1491,7 @@ export class RunStore extends EventEmitter {
     run.archivedAt = archived ? new Date().toISOString() : undefined;
     if (archived) {
       clearPendingAutoResume(run);
+      clearAwaitingAnswer(run);
       clearPin(run);
     }
     this.touch(run);
@@ -1010,10 +1522,16 @@ export class RunStore extends EventEmitter {
   archiveFinished(): number {
     let count = 0;
     for (const run of this.runs.values()) {
-      if (!run.archived && ['done', 'failed', 'cancelled'].includes(run.status)) {
+      // An unanswered question is a gate, not an outcome — like `review`, the bulk sweep leaves it.
+      if (
+        !run.archived &&
+        ['done', 'failed', 'cancelled'].includes(run.status) &&
+        run.awaitingAnswerSince === undefined
+      ) {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
         clearPendingAutoResume(run);
+        clearAwaitingAnswer(run);
         clearPin(run);
         this.touch(run);
         count++;
@@ -1065,6 +1583,8 @@ export class RunStore extends EventEmitter {
    *   - and a `failed` run with a pending `autoResumeAt` is not a done item AT ALL
    *     (`isScheduledResume`, spec 2026-08-03-auto-resume-after-usage-limit): it has an
    *     appointment to pick the work back up, so there is no outcome to have missed.
+   *   - nor is a `failed` run still `awaitingAnswerSince` a question: it sits under
+   *     "needs you", and its signal is that, not an unread outcome.
    *
    *  Keeping the two rules identical is what makes the returned count the number the
    *  cockpit's unread badge was showing. The `autoResumeAt` clause is the one that drifted
@@ -1087,6 +1607,7 @@ export class RunStore extends EventEmitter {
         !run.archived &&
         (run.status === 'done' || run.status === 'failed') &&
         !(run.status === 'failed' && run.autoResumeAt !== undefined) &&
+        !(run.status === 'failed' && run.awaitingAnswerSince !== undefined) &&
         run.finishedAt !== undefined &&
         (run.seenAt === undefined || run.seenAt < run.finishedAt);
       if (!unread) continue;
@@ -1097,18 +1618,59 @@ export class RunStore extends EventEmitter {
     return count;
   }
 
+  private persistEvent(runId: string, event: RunEvent): void {
+    const line = `${JSON.stringify(event)}\n`;
+    if (!this.eventsUnwritable) {
+      try {
+        appendFileSync(this.eventsPath(runId), line, 'utf8');
+      } catch (err) {
+        // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
+        // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
+        // else — a removed project's ENOENT (#1105) — still throws.
+        if (!isAccessDenied(err)) throw err;
+        this.eventsUnwritable = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[cez] cannot write task history (${message}); events stay live-only until it is writable again`);
+      }
+      return;
+    }
+    // Degraded (already warned): retry, so access granted mid-session starts persisting.
+    try {
+      mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
+      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      this.eventsUnwritable = false;
+    } catch {
+      // live-only — the SSE stream still carries it
+    }
+  }
+
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run: ${runId}`);
+    this.drainStreamRedaction(runId, event);
     const seq = this.nextSeq(runId);
     // Scrub credentials before the event touches disk or the live wire (#427):
     // tool-result output is persisted verbatim and served back over the API, so
     // a secret in an agent's command output would otherwise land in `.ai/cezar/`.
-    const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() });
+    const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() }, runId);
     // Sync append keeps event order without a write queue; local NDJSON
     // appends at agent-event rates are effectively free.
-    appendFileSync(this.eventsPath(runId), `${JSON.stringify(full)}\n`, 'utf8');
+    this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
+    if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    // A new step or Continue may run another backend: the last session's no longer names it.
+    if (full.type === 'step-start') this.sessionBackends.delete(runId);
+    if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
+      // The step's backend is recorded before spawn, so it names a session that failed before
+      // `session.started` too — a per-step runner or a Continue override, not `run.runner`.
+      const stepBackend = run.steps.find((s) => s.id === full.stepId)?.backend;
+      reportAgentError(stepBackend ?? this.sessionBackends.get(runId) ?? run.runner, {
+        type: full.type,
+        message: full.message,
+        fatal: full.fatal,
+      });
+    }
+    if (this.janitorSettled(run)) return full;
 
     // The janitor trick: agents print the PR URL after `gh pr create` — the
     // first one spotted in the transcript becomes the run's PR link. Scans v1
@@ -1129,6 +1691,7 @@ export class RunStore extends EventEmitter {
         const created = CREATED_PR_RE.test(claim) ? createdPrUrl(`${claim} ${haystack}`) : undefined;
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          this.recordPrRef(runId, { number: refUrlNumber(created)!, url: created, origin: 'created' });
           // Adopting the created tier can RELEASE a declaration the referenced tier was holding
           // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
           // whether the marker arrived before the creation evidence or after it.
@@ -1158,6 +1721,19 @@ export class RunStore extends EventEmitter {
       if (changed) this.touch(run);
     }
     return full;
+  }
+
+  /**
+   * True when no event can change the janitor's answer any more: the created PR is adopted, and the
+   * issue working set is capped so `trackReferencedIssues` could only re-derive what it already
+   * stored — except seeding `issueNumber`, which stays open while that field is empty.
+   */
+  private janitorSettled(run: RunRecord): boolean {
+    return (
+      run.pullRequestUrl !== undefined &&
+      (run.referencedIssueCandidates?.length ?? 0) >= MAX_PR_CANDIDATES &&
+      !(run.markerRefs?.issue === undefined && run.referencedIssueUrl && run.issueNumber === undefined)
+    );
   }
 
   /**
@@ -1251,12 +1827,9 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
-    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
-    // task came in with, which is still the PR this task is about.
-    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
-      run.prNumber = refs.pr;
-    }
+    // `prNumber` remains a compatibility projection; the ordered list decides which association
+    // is primary, while `referencedPullRequestUrl` retains its existing marker semantics below.
+    if (refs.pr !== undefined) this.recordPrRef(runId, { number: refs.pr, origin: 'marker' });
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -1281,6 +1854,14 @@ export class RunStore extends EventEmitter {
     return run;
   }
 
+  /** Record an authoritative PR association and recompute the compatibility scalar projection. */
+  recordPrRef(runId: string, ref: Omit<RunPrRef, 'at'> & { at?: string }): RunRecord | undefined {
+    const run = this.runs.get(runId);
+    if (!run || !Number.isInteger(ref.number) || ref.number <= 0 || ref.number >= MAX_REF) return run;
+    if (appendPrRefToRun(run, ref)) this.touch(run);
+    return run;
+  }
+
   /**
    * Fan an event out to live subscribers WITHOUT writing it to the NDJSON
    * file — the channel for coalesced `item.delta` flushes (protocol-v2
@@ -1290,9 +1871,21 @@ export class RunStore extends EventEmitter {
    * (gaps are fine — dedup compares with `>`).
    */
   emitEphemeral(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
-    const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() });
+    this.drainStreamRedaction(runId, event);
+    const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() }, runId);
     this.emit('event', { runId, event: full });
     return full;
+  }
+
+  private readonly streamRedaction = new StreamRedaction();
+
+  private drainStreamRedaction(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): void {
+    for (const tail of this.streamRedaction.drain(runId, event)) {
+      // Bypass transform: a terminal proper prefix must be released, not held again.
+      const safe = process.env.CEZ_REDACT_SECRETS === '0' ? tail : redactDeep(tail, this.secretsForRun(runId));
+      const full = { ...safe, seq: this.nextSeq(runId), ts: new Date().toISOString() };
+      this.emit('event', { runId, event: full });
+    }
   }
 
   /** Lazily-collected concrete secret values from the host env (#427). */
@@ -1302,16 +1895,39 @@ export class RunStore extends EventEmitter {
    * Scrub known credential values / token shapes from an event before it is
    * persisted or fanned out. On by default; `CEZ_REDACT_SECRETS=0` opts out.
    */
-  private redact(event: RunEvent): RunEvent {
+  private redact(event: RunEvent, runId: string): RunEvent {
     if (process.env.CEZ_REDACT_SECRETS === '0') return event;
-    return redactDeep(event, this.hostSecrets());
+    const secrets = this.secretsForRun(runId);
+    return redactDeep(this.streamRedaction.transform(runId, event, secrets), secrets) as RunEvent;
   }
 
   /** Best-effort scrub of one free-text string bound for `runs.json`. Honors
    *  the `CEZ_REDACT_SECRETS=0` opt-out itself so every caller inherits it. */
-  private redactText(text: string): string {
+  private redactText(text: string, runId?: string): string {
     if (process.env.CEZ_REDACT_SECRETS === '0') return text;
-    return redactSecrets(text, this.hostSecrets());
+    return redactSecrets(text, this.secretsForRun(runId));
+  }
+
+  /** Capture safe text before asynchronous derived work can outlive this run's registry. */
+  redactRunText(runId: string, text: string): string { return this.redactText(text, runId); }
+
+  private readonly runSecrets = new Map<string, readonly string[]>();
+
+  /** Memory only: register before spawn; retain through the final event drain. */
+  registerRunSecrets(runId: string, values: readonly string[]): void {
+    if (values.length === 0) return;
+    this.runSecrets.set(runId, [...new Set([...(this.runSecrets.get(runId) ?? []), ...values.filter(Boolean)])]
+      .sort((a, b) => b.length - a.length));
+  }
+
+  clearRunSecrets(runId: string): void {
+    this.runSecrets.delete(runId);
+    this.streamRedaction.clear(runId);
+  }
+
+  private secretsForRun(runId?: string): readonly string[] {
+    return [...this.hostSecrets(), ...(runId ? this.runSecrets.get(runId) ?? [] : [])]
+      .sort((a, b) => b.length - a.length);
   }
 
   private hostSecrets(): readonly string[] {
@@ -1339,7 +1955,7 @@ export class RunStore extends EventEmitter {
   }
 
   deleteRun(id: string): boolean {
-    const existed = this.runs.delete(id);
+    const existed = this.forget(id);
     if (existed) {
       try {
         rmSync(this.eventsPath(id), { force: true });
@@ -1358,13 +1974,34 @@ export class RunStore extends EventEmitter {
     return existed;
   }
 
-  /** Write the index out now (used on shutdown). */
-  flush(): void {
+  /** Write the index out now. `flush()` is also a mid-run checkpoint (usage, automation launches),
+   *  so indentation is opt-in: only a real shutdown passes `pretty`, leaving the hand-editable file
+   *  the README promises behind a clean exit while every in-run save stays compact. */
+  flush(options: { throwOnError?: boolean; pretty?: boolean } = {}): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.saveNow();
+    this.saveNow(options.throwOnError, options.pretty ?? false);
+  }
+
+  /** Commit a newly created run before queue admission. On a failed write, discard only
+   *  our unpublished copy: no deletion tombstone or file removal, since another cockpit
+   *  may subsequently retry the same reserved id. Call synchronously after creation. */
+  flushCreatedRun(run: RunRecord): void {
+    try {
+      this.flush({ throwOnError: true });
+      if (this.runs.get(run.id) !== run) {
+        throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
+      }
+    } catch (error) {
+      if (this.runs.get(run.id) === run) {
+        this.runs.delete(run.id);
+        this.seqs.delete(run.id);
+        this.emit('deleted', run.id);
+      }
+      throw error;
+    }
   }
 
   // ---- internals -----------------------------------------------------------
@@ -1374,6 +2011,12 @@ export class RunStore extends EventEmitter {
   private nextSeq(runId: string): number {
     const next = (this.seqs.get(runId) ?? this.rehydrateSeq(runId)) + 1;
     this.seqs.set(runId, next);
+    // The high-water mark rides whatever index save happens next — a status flip, a usage update,
+    // the shutdown flush — rather than scheduling one per seq. An ephemeral `item.delta` stream
+    // touches nothing else, so scheduling here would rewrite the whole index once a second for a
+    // run whose transcript never changed; `rehydrateSeq` recovers the tail from disk on its own.
+    const run = this.runs.get(runId);
+    if (run) run.lastSeq = next;
     return next;
   }
 
@@ -1383,11 +2026,45 @@ export class RunStore extends EventEmitter {
    *  resumed event, even across a reload (the frozen-transcript symptom class
    *  of #424). One file read on the first post-restart append per run. */
   private rehydrateSeq(runId: string): number {
+    const persisted = this.runs.get(runId)?.lastSeq;
+    if (persisted !== undefined) return Math.max(persisted, this.tailSeq(runId));
     let max = 0;
     for (const event of this.readEvents(runId)) {
       if (typeof event.seq === 'number' && event.seq > max) max = event.seq;
     }
     return max;
+  }
+
+  /** The `seq` of the last parseable line. Only trusted next to a persisted `lastSeq`: files from
+   *  before it may carry a counter that restarted mid-file, so their maximum is not their tail. */
+  private tailSeq(runId: string): number {
+    let fd: number | undefined;
+    try {
+      fd = openSync(this.eventsPath(runId), 'r');
+      let position = fstatSync(fd).size;
+      let tail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      while (position > 0) {
+        const length = Math.min(64 * 1024, position);
+        position -= length;
+        const chunk = Buffer.allocUnsafe(length);
+        const bytesRead = readSync(fd, chunk, 0, length, position);
+        const combined = Buffer.concat([chunk.subarray(0, bytesRead), tail]);
+        let end = combined.length;
+        while (end > 0) {
+          const newline = combined.lastIndexOf(0x0a, end - 1);
+          if (newline === -1 && position > 0) break;
+          const seq = parseSeq(combined.subarray(newline + 1, end).toString('utf8'));
+          if (seq !== undefined) return seq;
+          end = Math.max(newline, 0);
+        }
+        tail = Buffer.from(combined.subarray(0, end));
+      }
+      return 0;
+    } catch {
+      return 0;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
   }
 
   private eventsPath(runId: string): string {
@@ -1410,19 +2087,42 @@ export class RunStore extends EventEmitter {
     this.emit('run', run);
   }
 
+  /** Forget a run, and remember that we did. Dropping it from the map is no longer enough on its
+   *  own: `saveNow` unions the on-disk index back in, and the copy it re-reads is one THIS process
+   *  wrote moments ago — so a plain `delete` would come straight back as a record whose event file
+   *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
+   *  which is exactly how long a deletion has to outlive its own index entry. */
+  private forget(id: string): boolean {
+    this.forgotten.add(id);
+    this.sessionBackends.delete(id);
+    this.persisted.delete(id);
+    return this.runs.delete(id);
+  }
+
+  /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
+   *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
+   *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
     const all = this.listRuns();
+    const pinned = new Set<string>();
+    for (const run of all) {
+      if (!LIVE_STATUSES.has(run.status)) continue;
+      pinned.add(run.id);
+      if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
+      if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
+    }
     const stalePool = [
       ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
       ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
-    ];
+    ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
-      this.runs.delete(stale.id);
+      this.forget(stale.id);
       try {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
         rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
         deleteRunDrafts(this.dataDir, stale.id);
+        deleteRunLayouts(this.dataDir, stale.id); // spec 2026-10-07-task-workspace §5.3
       } catch {
         // best effort
       }
@@ -1435,19 +2135,75 @@ export class RunStore extends EventEmitter {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
       this.saveNow();
-    }, 300);
+    }, SAVE_DEBOUNCE_MS);
     this.saveTimer.unref?.();
   }
 
-  private saveNow(): void {
+  private saveNow(throwOnError = false, pretty = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
-    const tmpPath = `${indexPath}.tmp`;
+    const tmpPath = join(this.dataDir, 'runs', `.index-${process.pid}-${randomUUID()}.tmp`);
+    let release: (() => void) | undefined;
     try {
-      writeFileSync(tmpPath, JSON.stringify(this.listRuns(), null, 2), 'utf8');
-      renameSync(tmpPath, indexPath);
+      // Every caller (debounce, shutdown, ordinary flush and strict creation) takes the same
+      // lock BEFORE reading. A unique temp protects payload identity but cannot prevent a
+      // later rename from overwriting another writer's acknowledged additions.
+      release = lockRunIndex(this.dataDir);
+      const merged = this.mergeWithIndexOnDisk(indexPath);
+      writeFileSync(tmpPath, JSON.stringify(merged, null, pretty ? 2 : undefined), 'utf8');
+      renameSyncWithRetry(tmpPath, indexPath);
+      // Do not reconcile/adopt foreign state into live manager-owned records. Remember our
+      // local snapshot so future unchanged fields still defer to the latest persisted value.
+      for (const [id, run] of this.runs) this.persisted.set(id, JSON.stringify(run));
     } catch (err) {
+      if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
+    } finally {
+      // Cleanup failure after a successful rename must not turn a durable creation into a
+      // false failure/rollback. Failed own-ticket cleanup is retained and retried;
+      // dead-process tickets are also reaped by the next writer.
+      try { rmSync(tmpPath, { force: true }); } catch { /* best effort */ }
+      try { release?.(); } catch { /* best effort */ }
     }
+  }
+
+  /** Must run under lockRunIndex. Carry unknown runs through without recovery reconciliation,
+   * and apply only locally changed fields to records we previously read. This keeps a stale
+   * cockpit's unrelated flush from reverting another process's later update. Concurrent edits
+   * to the same field use the last serialized writer; this is not execution ownership.
+   * Local deletion tombstones still veto adoption. Absence alone is NOT a deletion signal:
+   * older writers could have dropped our records. Cross-process deletion ownership requires a
+   * separate durable tombstone protocol; it is not provided here. An unreadable index retains
+   * the historical best-effort behavior of preserving our local records.
+   */
+  private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
+    let raw: unknown;
+    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { return this.listRuns(); }
+    if (!Array.isArray(raw)) return this.listRuns();
+    const merged = new Map<string, RunRecord>();
+    for (const entry of raw) {
+      const id: unknown = (entry as { id?: unknown } | null)?.id;
+      if (typeof id !== 'string' || this.forgotten.has(id)) continue;
+      const parsed = runRecordSchema.safeParse(entry);
+      if (parsed.success) merged.set(id, parsed.data);
+    }
+    for (const mine of this.runs.values()) {
+      const before = this.persisted.get(mine.id);
+      const disk = merged.get(mine.id);
+      if (!before || !disk || disk.createdAt !== mine.createdAt) {
+        merged.set(mine.id, mine);
+        continue;
+      }
+      const baseline = JSON.parse(before) as Record<string, unknown>;
+      const local = mine as unknown as Record<string, unknown>;
+      const combined = { ...disk } as unknown as Record<string, unknown>;
+      for (const key of new Set([...Object.keys(baseline), ...Object.keys(local)])) {
+        if (JSON.stringify(local[key]) === JSON.stringify(baseline[key])) continue;
+        if (key in local) combined[key] = local[key];
+        else delete combined[key];
+      }
+      merged.set(mine.id, combined as RunRecord);
+    }
+    return [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 }

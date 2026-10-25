@@ -66,15 +66,41 @@ describe('a run stopped by a usage limit resumes itself', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
   });
 
-  afterEach(() => {
-    manager?.dispose();
-    manager = undefined;
+  afterEach(async () => {
+    let teardownError: unknown;
+    if (manager) {
+      // Cancellation interrupts active provider sessions and removes queued work, but the final
+      // lifecycle writes still settle asynchronously. Drain every record before deleting the
+      // fixture: a late runs.json save can recreate a child path during rmSync (#804).
+      try {
+        for (const { id } of store.listRuns()) manager.cancel(id);
+        const deadline = Date.now() + 10_000;
+        while (store.listRuns().some(({ id }) => manager?.isActive(id))) {
+          if (Date.now() >= deadline) throw new Error('timed out waiting for auto-resume runs to stop');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      } catch (error) {
+        teardownError = error;
+      } finally {
+        // Keep teardown deterministic even when a provider refuses cancellation: the original
+        // assertion must still be reported, but this manager must not retain timers/subscriptions
+        // or leak the test's environment into the next file.
+        manager.dispose();
+        manager = undefined;
+      }
+    }
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    // If cancellation never drained, keep the fixture so a still-running provider cannot write
+    // into a removed path. The teardown error is the useful failure; leaking this temp directory
+    // is safer than recreating the ENOENT race this test guards against.
+    if (!teardownError) {
+      store.flush();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+    if (teardownError) throw teardownError;
   });
 
   it('schedules the resume for the provider\'s reset instant plus the grace', async () => {
@@ -599,7 +625,8 @@ describe('a run stopped by a usage limit resumes itself', () => {
         { timeout: 20_000 },
       )
       .toBe('done');
-    expect(['done', 'review']).toContain(store.getRun(record.id)?.status);
+    // The run settles a beat after its last step (settle-time checks are async): poll it too.
+    await expect.poll(() => store.getRun(record.id)?.status, { timeout: 5_000 }).toMatch(/^(done|review)$/);
     const events = store.readEvents(record.id);
     expect(events.some((event) => String(event.message ?? '').includes('resuming automatically (1/12)'))).toBe(true);
   }, 40_000);

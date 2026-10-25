@@ -39,11 +39,12 @@ describe('planInstall', () => {
 });
 
 describe('globalShimPaths', () => {
-  it('maps all three bins under <prefix>/bin on POSIX', () => {
+  it('maps every bin under <prefix>/bin on POSIX', () => {
     expect(globalShimPaths('/usr/local', 'linux')).toEqual([
       '/usr/local/bin/cezar',
       '/usr/local/bin/cez',
       '/usr/local/bin/cezar-cli',
+      '/usr/local/bin/cezar-run',
     ]);
   });
 
@@ -52,6 +53,7 @@ describe('globalShimPaths', () => {
       'C:\\npm-global\\cezar.cmd',
       'C:\\npm-global\\cez.cmd',
       'C:\\npm-global\\cezar-cli.cmd',
+      'C:\\npm-global\\cezar-run.cmd',
     ]);
   });
 

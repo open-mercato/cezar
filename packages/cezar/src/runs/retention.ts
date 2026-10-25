@@ -6,6 +6,7 @@
 // is pure and unit-testable; the enforcer never throws (helper discipline).
 import { existsSync } from 'node:fs';
 import { createWorktree, removeWorktree } from '../git-worktree.ts';
+import { prunePrHeadRefs } from '../automations/pr-head.ts';
 import type { RunRecord, RunStatus } from './store.ts';
 
 /** The "finished" status set — mirrors `RunStore.archiveFinished`. A run at the
@@ -73,7 +74,7 @@ export async function rematerializeReclaimedWorktree(
   const run = store.getRun(runId);
   if (!run?.worktreePath || !run.worktreeReclaimedAt || existsSync(run.worktreePath)) return false;
   try {
-    await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD');
+    await createWorktree(repoRoot, runId, run.baseBranch ?? 'HEAD', { branch: run.branch });
     store.updateRun(runId, { worktreeReclaimedAt: undefined });
     return true;
   } catch {
@@ -96,6 +97,7 @@ export async function rematerializeReclaimedWorktree(
 export interface ReclaimOptions {
   /** Timestamp source for the stamp — injectable for deterministic tests. */
   now?: () => string;
+  lifecycle?: { requiresGate(runId: string): Promise<boolean>; reclaim(runId: string): Promise<boolean> };
   /** Directory reclaimer — defaults to the real `removeWorktree` (branch kept).
    *  Injectable so tests can exercise the "removal failed" branch without brittle
    *  filesystem-permission tricks. */
@@ -117,6 +119,10 @@ export async function reclaimWorktrees(
     const run = byId.get(id);
     if (!run?.worktreePath) continue;
     try {
+      if (opts.lifecycle && await opts.lifecycle.requiresGate(id)) {
+        await opts.lifecycle.reclaim(id);
+        continue;
+      }
       await remove(repoRoot, run.worktreePath);
       if (existsSync(run.worktreePath)) continue; // reclaim failed; retry next pass
       store.updateRun(id, { worktreeReclaimedAt: now() });
@@ -125,5 +131,16 @@ export async function reclaimWorktrees(
       // best-effort: never let retention crash a terminal transition or startup.
     }
   }
+  // A reclaimed pull-request head run no longer needs its `refs/cezar/pr/<n>` (spec
+  // 2026-10-06-agentic-e2e-checks Phase 3). Swept here because this runs at startup (after the
+  // orphan prune) and after every terminal transition — the paths a worktree disappears by.
+  // Unconditional (one `for-each-ref`): a ref whose every run was deleted is found here too.
+  const needed = new Set<number>();
+  for (const run of store.listRuns()) {
+    if (run.prHead && run.worktreePath && !run.worktreeReclaimedAt && existsSync(run.worktreePath)) {
+      needed.add(run.prHead.number);
+    }
+  }
+  await prunePrHeadRefs(repoRoot, needed).catch(() => undefined);
   return reclaimed;
 }

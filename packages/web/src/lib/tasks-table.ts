@@ -1,5 +1,11 @@
-import type { ProcessUsage, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type {
+  ProcessUsage,
+  ReferenceStatus,
+  RunRecord,
+  RunStatus,
+} from '@open-mercato/cezar-api-client'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
+import { isAwaitingAnswer } from '@/lib/attention'
 
 /**
  * The pure half of the Tasks table (the `/` overview): search, the header's archive count, the
@@ -103,16 +109,18 @@ export function filterRuns(runs: readonly RunRecord[], query: string): RunRecord
 /** How many active runs "Archive finished" would sweep. The button only exists when this is
  *  nonzero — a broom over an empty floor is noise (legacy showed the same count-gated button). */
 export function finishedRunCount(runs: readonly RunRecord[]): number {
-  return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
+  // An unanswered question is a gate like `review`; the server's sweep skips it, so the count does.
+  return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status) && !isAwaitingAnswer(run)).length
 }
 
-/** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the
+/** A git remote as a GitHub web root (`https://github.com/owner/repo`, or the Enterprise host's) — the caller passes the
  *  remote `/api/v1/health` reports (`repo.remote`), via `useProjectRepoBase`. Handles the scheme forms
  *  (`https://`, `ssh://`, credentials, port) and the scp-like `git@github.com:owner/repo.git`;
- *  undefined for every non-github.com host, local path, or absent remote — the cockpit only knows
- *  how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
+ *  undefined for every non-github.com host unless `anyHost` (the server resolved the remote's forge
+ *  as GitHub, which is how an Enterprise domain is recognized), local path, or absent remote — the
+ *  cockpit only knows how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
  *  duplicated rather than imported because that module is server-only. */
-export function githubRepoBase(remote: string | undefined): string | undefined {
+export function githubRepoBase(remote: string | undefined, anyHost = false): string | undefined {
   if (!remote) return undefined
   const trimmed = remote.trim().replace(/\/+$/, '')
   const url = /^(?:https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(trimmed)
@@ -121,19 +129,60 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
   const match = url ?? scp
   if (!match) return undefined
   const [, host, path] = match
-  if (!path || host?.toLowerCase() !== 'github.com') return undefined
+  if (!path || !host || (!anyHost && host.toLowerCase() !== 'github.com')) return undefined
   const parts = path.replace(/\.git$/i, '').split('/').filter(Boolean)
   const owner = parts[parts.length - 2]
   const repo = parts[parts.length - 1]
-  return owner && repo ? `https://github.com/${owner}/${repo}` : undefined
+  return owner && repo ? `https://${host.toLowerCase()}/${owner}/${repo}` : undefined
 }
 
 /** The URL a PR *display* chip shows: the PR the task created, else the PR the conversation
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
  *  a task that reviewed PR X must still be able to open its own PR from its branch. */
+export interface TaskPrRef {
+  number: number
+  url?: string
+  origin: 'created' | 'marker' | 'legacy' | 'derived'
+}
+
+/**
+ * The PR this task OWNS — the one it created, or the one it declared as its subject (`CEZ:PR`) —
+ * and never one merely scraped from its transcript (`referencedPullRequestUrl`, the `legacy` and
+ * `derived` origins). This is the one to ACT on: the run header's git button offers Create PR,
+ * Commit, Push, Resolve conflicts or Fix errors against it, so a link the agent only read
+ * (a file, a log) must not stand in for it. A declaration known only by number (no link scraped
+ * yet) still counts — it carries `number` and no `url`.
+ */
+export function ownedTaskPr(run: TaskReferenceInput): { number?: number; url?: string } | undefined {
+  if (run.pullRequestUrl) {
+    const number = Number(prNumber(run.pullRequestUrl))
+    return { url: run.pullRequestUrl, ...(number > 0 ? { number } : {}) }
+  }
+  const owned = run.prRefs?.find((ref) => ref.origin === 'created' || ref.origin === 'marker')
+  if (owned) return { number: owned.number, ...(owned.url ? { url: owned.url } : {}) }
+  const declared = run.markerRefs?.pr
+  return declared === undefined ? undefined : { number: declared }
+}
+
 export function taskPrUrl(run: TaskReferenceInput): string | undefined {
-  return prUrls(run)[0]
+  return taskPrRefs(run)[0]?.url ?? prUrls(run)[0]
+}
+
+/** Ordered PR associations, with a compatibility projection for records written before prRefs. */
+export function taskPrRefs(run: TaskReferenceInput, repoBase?: string): TaskPrRef[] {
+  if (!run.prRefs?.length) {
+    return prUrls(run)
+      .map((url) => ({ number: Number(prNumber(url)), url, origin: 'legacy' as const }))
+      .filter((ref) => Number.isInteger(ref.number) && ref.number > 0)
+  }
+  const rank = { created: 0, marker: 1, legacy: 2, derived: 3 } as const
+  const refs = [...run.prRefs].sort((a, b) => rank[a.origin] - rank[b.origin])
+  return refs.map((ref) => ({
+    number: ref.number,
+    url: ref.url ?? synthesizeUrl('PR', ref.number, repoBase),
+    origin: ref.origin,
+  }))
 }
 
 /**
@@ -170,7 +219,32 @@ export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string
   // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
   const number = run.markerRefs?.issue ?? run.issueNumber
   if (!number || !repoBase) return undefined
+  // #819: the `?? run.issueNumber` fallback is the door #526 left open. `markerRefs.issue` is
+  // agent-declared and this project's, but `issueNumber` also arrives from the auto-namer, which
+  // scrapes the transcript — and a task working on ANOTHER repository scrapes that repo's numbers.
+  // Candidates stay evidence and never become the link (#526's rule): a candidate naming THIS
+  // number in a different repository proves the number is not ours, so synthesize nothing. The
+  // matching candidate is deliberately not promoted — a coincidental `#4143` in an unrelated repo
+  // would just be a different wrong link. No chip beats a wrong chip.
+  if (namesNumberElsewhere(run.referencedIssueCandidates, number, repoBase)) return undefined
   return `${repoBase}/issues/${number}`
+}
+
+/** True when a discovered candidate URL carries `number` under a repository other than `repoBase`
+ *  — the evidence that a synthesized `${repoBase}/issues/${number}` or `${repoBase}/pull/${number}`
+ *  would be a foreign number rebuilt locally (#819, #854). Number-and-repo generic on purpose: both
+ *  halves of the rule are the same question asked of a different candidate list. Compared
+ *  case-insensitively: GitHub repo names are case-insensitive, and a transcript that spells the
+ *  remote differently must not suppress a correct chip. */
+function namesNumberElsewhere(
+  candidates: readonly string[] | undefined,
+  number: number,
+  repoBase: string,
+): boolean {
+  const prefix = `${repoBase.toLowerCase()}/`
+  return (candidates ?? []).some(
+    (url) => url.endsWith(`/${number}`) && !url.toLowerCase().startsWith(prefix),
+  )
 }
 
 /**
@@ -181,21 +255,45 @@ export function taskIssueUrl(run: TaskReferenceInput, repoBase?: string): string
  * and the global Tasks page must resolve a PR/issue chip exactly as every other surface does.
  * Widening this means widening `runIndexEntrySchema` too, or that page silently answers
  * differently — which is the whole failure a shared rule exists to prevent.
+ *
+ * Both `referenced*Candidates` lists are in it for exactly that reason (#819, #854): they are the
+ * evidence needed to prove a number is another repository's before a link is synthesized from it.
+ * Drop either from the slim row and the global Tasks page loses that half of the proof, silently
+ * paints the 404 chip every other surface now suppresses, and the rule drifts apart across
+ * surfaces again.
  */
 export type TaskReferenceInput = Pick<
   RunRecord,
   | 'pullRequestUrl'
   | 'referencedPullRequestUrl'
+  | 'referencedPrCandidates'
   | 'prNumber'
   | 'issueNumber'
   | 'referencedIssueUrl'
+  | 'referencedIssueCandidates'
   | 'markerRefs'
->
+> & { prRefs?: readonly TaskPrRef[] }
 
 export interface TaskReference {
   kind: 'PR' | 'Issue'
   number: number
   url?: string
+}
+
+/** Keep historical associations visible, but do not let a PR authoritatively closed without a
+ * merge outrank a live or merged association. Unknown/loading statuses preserve stored order. */
+export function prioritizeTaskReferences(
+  references: readonly TaskReference[],
+  statusOf: (reference: TaskReference) => ReferenceStatus | undefined,
+): TaskReference[] {
+  return references
+    .map((reference, index) => ({ reference, index }))
+    .sort((a, b) => {
+      const aClosed = a.reference.kind === 'PR' && statusOf(a.reference) === 'closed'
+      const bClosed = b.reference.kind === 'PR' && statusOf(b.reference) === 'closed'
+      return Number(aClosed) - Number(bClosed) || a.index - b.index
+    })
+    .map(({ reference }) => reference)
 }
 
 /**
@@ -221,10 +319,14 @@ export interface TaskReference {
  * repository, and it then led every chip list on the page while the PR the task actually opened
  * sat behind it. A statement the agent made outranks a line a janitor found.
  *
- * What this deliberately does NOT read is `referencedPrCandidates` / `referencedIssueCandidates`.
- * Those are transcript scrapings that routinely name OTHER repositories (#526), so a further
- * reference has to arrive as a real field before it can be shown: the shape is ready for more,
- * the guesswork is not invited in.
+ * What this deliberately does NOT take a reference FROM is `referencedPrCandidates` /
+ * `referencedIssueCandidates`. Those are transcript scrapings that routinely name OTHER
+ * repositories (#526), so a further reference has to arrive as a real field before it can be
+ * shown: the shape is ready for more, the guesswork is not invited in.
+ *
+ * Both candidate lists are read in one direction only, and it is the opposite one: as EVIDENCE
+ * that removes a chip (#819 `chipIssueNumber`, #854 `chipPrNumber`). A scraping can prove a number
+ * is somebody else's repository's; it can never be promoted into the link itself.
  *
  * Nor does it repo-check the `referenced*Url` fields it DOES read, and that is a decision, not an
  * omission (#945). Those fields could name another repository — a task that cited one upstream PR
@@ -246,21 +348,23 @@ export interface TaskReference {
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
 export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
-  const prs = prUrls(run)
+  const prs = run.prRefs?.length
+    ? taskPrRefs(run, repoBase).map((ref) => ({ number: ref.number, url: ref.url }))
+    : prUrls(run).map((url) => ({ url, number: Number(prNumber(url)) || undefined }))
   const declared = run.markerRefs?.pr
   const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
     // The uncorroborated declaration, ahead of everything (see above). When a URL below does name
     // it, this entry is omitted entirely rather than added and deduped — that keeps the ORDER the
     // ordinary case had, with the created PR first.
-    ...(declared === undefined || prs.some((url) => prNumber(url) === String(declared))
+    ...(declared === undefined || prs.some((ref) => ref.number === declared)
       ? []
       : [{ kind: 'PR' as const, number: declared }]),
-    ...prs.map((url) => ({ kind: 'PR' as const, url })),
+    ...prs.map((ref) => ({ kind: 'PR' as const, url: ref.url, number: ref.number })),
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
-    { kind: 'PR', number: run.prNumber },
+    { kind: 'PR', number: chipPrNumber(run, repoBase) },
     { kind: 'Issue', url: taskIssueUrl(run, repoBase) },
-    { kind: 'Issue', number: run.issueNumber },
+    { kind: 'Issue', number: chipIssueNumber(run, repoBase) },
   ]
 
   const seen = new Set<string>()
@@ -268,17 +372,68 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
   for (const source of sources) {
     const number = source.url ? Number(prNumber(source.url)) : source.number
     if (!number || !Number.isInteger(number)) continue
-    const key = `${source.kind}#${number}`
-    if (seen.has(key)) continue
-    seen.add(key)
     // A number with no URL becomes one from the PROJECT's own repo — the same synthesis rule
     // `taskIssueUrl` already applies, and the same hard limit: only ever the project's repo,
     // never a URL scraped from a transcript, which routinely names another repository (#526).
     // Without a `repoBase` the chip stays inert text rather than linking somewhere invented.
     const url = source.url ?? synthesizeUrl(source.kind, number, repoBase)
+    const existingIndex = references.findIndex(
+      (reference) =>
+        reference.kind === source.kind &&
+        reference.number === number &&
+        (!reference.url || !url || reference.url === url),
+    )
+    if (existingIndex >= 0) {
+      if (!references[existingIndex]!.url && url) references[existingIndex] = { ...references[existingIndex]!, url }
+      continue
+    }
+    const key = `${source.kind}#${number}#${url ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
     references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
   return references
+}
+
+/**
+ * The bare `issueNumber` a chip may still be built from, after #819's evidence guard has had its
+ * say. `taskIssueUrl` refuses to synthesize a link for a number a candidate proves belongs to
+ * another repository — but the numeric source below reaches `synthesizeUrl` directly, so without
+ * this the list would rebuild the very link the accessor just declined and the guard would hold
+ * everywhere except the surface with the most rows.
+ *
+ * Only a KNOWN `repoBase` can suppress: with no repo to build from, the chip is inert text, and
+ * inert text carrying the number is strictly better than hiding a reference the task really has.
+ */
+function chipIssueNumber(run: TaskReferenceInput, repoBase?: string): number | undefined {
+  const number = run.issueNumber
+  if (number === undefined || !repoBase) return number
+  return namesNumberElsewhere(run.referencedIssueCandidates, number, repoBase) ? undefined : number
+}
+
+/**
+ * The PR half of the same rule (#854), and the place the two halves are reconciled.
+ *
+ * `prNumber` reaches a run exactly the two ways `issueNumber` does — declared by a `CEZ:PR` marker,
+ * or seeded by the auto-namer, which scrapes the transcript. A task driving ANOTHER repository's
+ * pull request scrapes that repository's numbers, so the auto-namer can seed a `prNumber` that is
+ * not this project's; rebuilt against the project repo by `synthesizeUrl` it is the same confident
+ * 404 #819 reported for issues, and `referencedPrCandidates` is the same evidence sitting on the
+ * same record. #840 left it out for want of a reported symptom, not because the number is safer.
+ *
+ * Same asymmetry as the issue half: only a KNOWN `repoBase` can suppress, because without one
+ * nothing is rebuilt and inert text carrying the number beats hiding a real reference.
+ *
+ * The two halves cover every synthesis path there is: this list is the only PR code that reaches
+ * `synthesizeUrl`. `taskPrUrl` returns the head of `prUrls`, which is *discovered* URLs only and
+ * never synthesizes, so it needs no guard today — but a PR twin of `taskIssueUrl` that ever starts
+ * building `${repoBase}/pull/${number}` must call this function, exactly as `taskIssueUrl` calls
+ * `namesNumberElsewhere`, or the accessor and the list would answer differently again.
+ */
+function chipPrNumber(run: TaskReferenceInput, repoBase?: string): number | undefined {
+  const number = run.prNumber
+  if (number === undefined || !repoBase) return number
+  return namesNumberElsewhere(run.referencedPrCandidates, number, repoBase) ? undefined : number
 }
 
 /** `#402` on a known repo → its forge URL. Undefined without a repo to build it from. */
@@ -294,8 +449,8 @@ function synthesizeUrl(
 /** The strongest known tracker reference — what a row with space for exactly one shows (the
  *  sidebar row, the per-project table). PRs win once one exists; issue-driven queued runs still
  *  expose their already-known issue immediately. */
-export function taskReference(run: TaskReferenceInput): TaskReference | undefined {
-  return taskReferences(run)[0]
+export function taskReference(run: TaskReferenceInput, repoBase?: string): TaskReference | undefined {
+  return taskReferences(run, repoBase)[0]
 }
 
 /** The PR chip's `#402`. Null when the URL's last segment is not a number — a forge we don't

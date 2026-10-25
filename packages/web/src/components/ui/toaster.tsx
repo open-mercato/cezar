@@ -14,10 +14,19 @@ import { cn } from '@/lib/utils'
 
 export type ToastTone = 'default' | 'danger'
 
+/** An optional trailing link. Deliberately a LINK and not a callback: a toast is transient, and
+ *  an arbitrary action that outlives its own toast is a bug waiting to be written. Everything
+ *  that needs one so far is "go here" (the star ask's repository). */
+export interface ToastAction {
+  label: string
+  href: string
+}
+
 export interface ToastItem {
   id: number
   message: string
   tone: ToastTone
+  action?: ToastAction
   /** `true` once the lifetime timer fired. The item stays in the store — and mounted — for
    *  `EXIT_MS` longer so the exit animation has something to animate; dropping it here is
    *  what made the old toast vanish with no transition. */
@@ -47,6 +56,15 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener)
 }
 
+/** Observers of `danger` toasts — telemetry reports each one (`lib/telemetry.ts`). A hook rather
+ *  than an import so this primitive stays dependency-free. */
+const dangerListeners = new Set<(message: string) => void>()
+
+export function onDangerToast(listener: (message: string) => void): () => void {
+  dangerListeners.add(listener)
+  return () => dangerListeners.delete(listener)
+}
+
 /** `setTimeout` that keeps its handle cancellable until it actually runs. */
 function schedule(fn: () => void, ms: number): void {
   const handle = setTimeout(() => {
@@ -56,17 +74,45 @@ function schedule(fn: () => void, ms: number): void {
   timers.add(handle)
 }
 
-/** Show a transient message. `danger` tone for failures — the message should be the server's
- *  own words wherever one exists (see ApiError). */
-export function toast(message: string, opts: { tone?: ToastTone } = {}): void {
-  const item: ToastItem = { id: nextId++, message, tone: opts.tone ?? 'default', exiting: false }
+/**
+ * Show a transient message. `danger` tone for failures — the message should be the server's own
+ * words wherever one exists (see ApiError).
+ *
+ * `action` appends one link; `durationMs` overrides the five-second default, for the rare toast
+ * that asks the reader to decide something rather than telling them what already happened. Both
+ * are optional and both default to exactly the previous behavior. `reported` marks a `danger`
+ * toast whose failure the caller already reported with its own fingerprint, so the observers skip it.
+ * `expected` marks one that is an expected, user-actionable outcome — a validation limit, a 409
+ * guarding a precondition, a CLI that is not installed: shown, never reported as an error.
+ */
+export function toast(
+  message: string,
+  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean; expected?: boolean } = {},
+): void {
+  const item: ToastItem = {
+    id: nextId++,
+    message,
+    tone: opts.tone ?? 'default',
+    ...(opts.action ? { action: opts.action } : {}),
+    exiting: false,
+  }
+  const lifetime = opts.durationMs ?? TOAST_MS
   publish([...items, item])
+  if (item.tone === 'danger' && !opts.reported && !opts.expected) {
+    for (const listener of dangerListeners) {
+      try {
+        listener(message)
+      } catch {
+        // an observer must never stop the toast
+      }
+    }
+  }
   // Two phases, one clock per toast: mark it exiting so the renderer can animate it out, then
   // remove it once the animation has played.
   schedule(() => {
     publish(items.map((t) => (t.id === item.id ? { ...t, exiting: true } : t)))
     schedule(() => publish(items.filter((t) => t.id !== item.id)), EXIT_MS)
-  }, TOAST_MS)
+  }, lifetime)
 }
 
 /** Test seam: clears the module-level queue *and* every pending timer, so one test's toasts
@@ -113,6 +159,22 @@ export function Toaster() {
           )}
         >
           {item.message}
+          {item.action ? (
+            <>
+              {' '}
+              <a
+                data-slot="toast-action"
+                href={item.action.href}
+                target="_blank"
+                // Same reasoning as the sidebar's ⭐ chip: a local cockpit's URL is nobody's
+                // business, least of all the site the toast is pointing at.
+                rel="noopener noreferrer"
+                className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                {item.action.label}
+              </a>
+            </>
+          ) : null}
         </div>
       ))}
     </div>

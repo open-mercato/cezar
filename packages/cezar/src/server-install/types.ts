@@ -77,6 +77,8 @@ export const serverStateSchema = z
      * host runs without re-deriving it from the filename.
      */
     instance: z.string().min(1).optional().catch(undefined),
+    /** Random identity minted for this install and passed to the service. */
+    instanceId: z.string().min(1).optional().catch(undefined),
     /** Public domain this instance answers on (drives nginx `server_name` +
      * the SSL cert). Absent for a plain HTTP / default install. */
     domain: z.string().optional().catch(undefined),

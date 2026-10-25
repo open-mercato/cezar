@@ -222,6 +222,56 @@ function loadSources(): SourceFile[] {
 
 const sources = loadSources()
 
+/**
+ * The cockpit's focus treatment for a bare native `<select>`. A select with no focus classes
+ * falls back to the browser's own `-webkit-focus-ring-color` — a BLUE ring, the one hue the
+ * token sheet reserves for `--info` ink ("waiting on a person"), against a spec that asks for
+ * focus-visible rings everywhere in ink/lime (2026-07-14-cockpit-ui-redesign § Accessibility).
+ * `ring-ring/50` is the marker: `focus-visible:border-ring` alone only tints the border, which
+ * is what Settings → Add account did while also suppressing the browser ring with `outline-none`.
+ */
+const SELECT_FOCUS_MARKER = 'focus-visible:ring-ring/50'
+
+/**
+ * The JSX opening tag starting at `from` (which points at `<`), brace- and quote-aware so an
+ * arrow function in `onChange` cannot end the tag at its own `=>`.
+ */
+function openingTag(source: string, from: number): string {
+  let depth = 0
+  let quote: string | null = null
+  for (let i = from + 1; i < source.length; i += 1) {
+    const c = source[i]!
+    if (quote) {
+      if (c === '\\') i += 1
+      else if (c === quote) quote = null
+      continue
+    }
+    if (c === '"' || c === "'" || c === '`') quote = c
+    else if (c === '{') depth += 1
+    else if (c === '}') depth -= 1
+    else if (c === '>' && depth === 0) return source.slice(from, i + 1)
+  }
+  return source.slice(from)
+}
+
+/**
+ * Whether a `<select>` opening tag carries the ring — directly, or through a `className={ident}`
+ * naming a const declared in the same file (how `components/dispatch-toggle.tsx` spells it).
+ * The declaration lookup spans its own line and the three after it, which is what a wrapped
+ * Tailwind string takes; a const spelled longer than that reports as a violation rather than
+ * passing silently, so this can only over-report.
+ */
+function carriesFocusRing(tag: string, source: string): boolean {
+  if (tag.includes(SELECT_FOCUS_MARKER)) return true
+  const ref = /className=\{\s*([A-Za-z_$][\w$]*)\s*\}/.exec(tag)
+  if (!ref) return false
+  // `$` is legal in an identifier and is an anchor in a pattern — unescaped, a `className={$x}`
+  // would match nothing and report a select that does carry the ring.
+  const name = ref[1]!.replace(/\$/g, '\\$')
+  const decl = new RegExp(`\\b(?:const|let|var)\\s+${name}\\b(?:[^\\n]*\\n?){1,4}`).exec(source)
+  return decl !== null && decl[0].includes(SELECT_FOCUS_MARKER)
+}
+
 describe('design guardian', () => {
   it('actually scans the codebase (guards against a broken walker)', () => {
     const rels = new Set(sources.map((f) => f.rel))
@@ -246,4 +296,26 @@ describe('design guardian', () => {
       expect(violations, `${rule.name} — ${rule.why}`).toEqual([])
     })
   }
+
+  // Not a RULES entry: the others are line-level forbidden-token regexes, and this one asks
+  // whether a multi-line JSX opening tag CONTAINS something.
+  it(`native-select-focus-ring: a native <select> wears ${SELECT_FOCUS_MARKER}, not the browser's blue outline`, () => {
+    const violations: string[] = []
+    let scanned = 0
+    for (const file of sources) {
+      if (!styleSources(file) || file.ext !== '.tsx') continue
+      const source = file.lines.join('\n')
+      for (const match of source.matchAll(/<select\b/g)) {
+        scanned += 1
+        if (carriesFocusRing(openingTag(source, match.index), source)) continue
+        const line = source.slice(0, match.index).split('\n').length
+        violations.push(`packages/web/${file.rel}:${line}`)
+      }
+    }
+    expect(scanned, 'the <select> scan found nothing — the walker or the matcher broke').toBeGreaterThan(10)
+    expect(
+      violations,
+      `native-select-focus-ring — add "outline-none focus-visible:border-ring focus-visible:ring-[3px] ${SELECT_FOCUS_MARKER}"`,
+    ).toEqual([])
+  })
 })

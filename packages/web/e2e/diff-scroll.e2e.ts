@@ -44,7 +44,9 @@ const sessionId = `e2e-diff-scroll-${process.pid}`
 const FIXTURE_FILES = 120
 const LINES_PER_FILE = 8
 
-const MAIN = `document.querySelector('[data-slot="main"]')`
+/** The element the diff scrolls in: its own column on desktop (the split Changes layout,
+ *  `data-diff-scroller`), else the app shell's `main` — the same lookup `diff-view.tsx` makes. */
+const SCROLLER = `(document.querySelector('[data-diff-scroller]') ?? document.querySelector('[data-slot="main"]'))`
 const domSize = () => Number(browser.evaluate(`document.querySelectorAll('*').length`))
 const lineCount = () => browser.count('[data-slot="diff-line"]')
 
@@ -193,13 +195,13 @@ describe(`diff virtualization on a generated ${FIXTURE_FILES}-file changeset`, (
 
   it('keeps the per-file header sticky while virtualized — the layout hazard virtua poses', () => {
     openChanges('virtual')
-    browser.waitForFunction(`(() => { ${MAIN}.scrollTop = 900; return true })()`)
+    browser.waitForFunction(`(() => { ${SCROLLER}.scrollTop = 900; return true })()`)
 
     // A header whose card still covers the viewport top must be pinned AT that top edge, not
     // scrolled away with its card. virtua absolutely-positions every item, which is exactly
     // the layout that could silently kill `position: sticky`.
     const pinned = browser.evaluate(`(() => {
-      const scroller = ${MAIN}
+      const scroller = ${SCROLLER}
       const top = scroller.getBoundingClientRect().top
       for (const card of document.querySelectorAll('[data-slot="diff-file"]')) {
         const box = card.getBoundingClientRect()
@@ -222,14 +224,14 @@ describe(`diff virtualization on a generated ${FIXTURE_FILES}-file changeset`, (
 
   it('mounts cards that actually cover the viewport after scrolling (startMargin is real)', () => {
     openChanges('virtual')
-    browser.waitForFunction(`(() => { ${MAIN}.scrollTop = 1200; return true })()`)
+    browser.waitForFunction(`(() => { ${SCROLLER}.scrollTop = 1200; return true })()`)
 
     // virtua positions its window from the scroll offset MINUS the distance down to the list
     // (`startMargin`). Get that wrong — measuring it before the scroller ref is attached pins
     // it at 0 — and the window is computed for a point further down the list than the reader
     // is at, leaving an uncovered band at the top of the viewport once the buffer runs out.
     const gap = browser.evaluate(`(() => {
-      const scroller = ${MAIN}
+      const scroller = ${SCROLLER}
       const fold = scroller.getBoundingClientRect().top
       const tops = [...document.querySelectorAll('[data-slot="diff-file"]')]
         .map((card) => card.getBoundingClientRect().top - fold)
@@ -254,7 +256,7 @@ describe(`diff virtualization on a generated ${FIXTURE_FILES}-file changeset`, (
     const pane = browser.evaluate(`(() => {
       const pane = document.querySelector('[data-slot="changes-tree-pane"]')
       if (!pane) return null
-      const scroller = ${MAIN}
+      const scroller = ${SCROLLER}
       return {
         rows: pane.querySelectorAll('[data-slot="tree-file"]').length,
         overflow: Math.round(pane.scrollHeight - pane.clientHeight),
@@ -282,19 +284,78 @@ describe(`diff virtualization on a generated ${FIXTURE_FILES}-file changeset`, (
 
     // The claim itself: the tree runs to its end while the diff stays exactly where it was.
     // Compared against the offset measured a moment ago, not against 0 — the specs above share
-    // this page load and leave `main` scrolled, and where it sits is not this test's business.
+    // this page load and leave the diff scrolled, and where it sits is not this test's business.
     //
     // This is a scripted scroll, so it proves the pane is its OWN scroller and that reaching the
-    // last file no longer moves `main`. It says nothing about `overscroll-contain`: a scripted
+    // last file no longer moves the diff. It says nothing about `overscroll-contain`: a scripted
     // scroll never chains to an ancestor whatever the overscroll-behavior is, and the driver's
     // input ops are pointer-based, with no wheel to send. Wheel chaining stays manual-QA territory.
     const moved = browser.evaluate(`(() => {
       const pane = document.querySelector('[data-slot="changes-tree-pane"]')
       pane.scrollTop = pane.scrollHeight
-      return { paneTop: Math.round(pane.scrollTop), mainTop: Math.round(${MAIN}.scrollTop) }
+      return { paneTop: Math.round(pane.scrollTop), mainTop: Math.round(${SCROLLER}.scrollTop) }
     })()`) as { paneTop: number; mainTop: number }
 
     expect(moved.paneTop).toBeGreaterThan(0)
     expect(moved.mainTop, 'scrolling the tree dragged the diff along').toBe(pane!.mainTop)
+  }, 120_000)
+
+  /**
+   * The same edge check with the diff at its TOP. Earlier layouts shared one scroller and sized
+   * the tree from the header (a `calc` cap): right only once the pane was stuck, so unscrolled its
+   * last rows hung below the fold (task Changes tab at 1260×830: pane 214→868). The split layout
+   * sizes nothing from the header, so the pane must fit in BOTH states.
+   */
+  it('keeps the whole tree reachable before the diff has scrolled', () => {
+    openChanges('virtual')
+    browser.evaluate(`${SCROLLER}.scrollTop = 0`)
+    browser.waitForFunction(`${SCROLLER}.scrollTop === 0`)
+
+    const edges = browser.evaluate(`(() => {
+      const pane = document.querySelector('[data-slot="changes-tree-pane"]')
+      pane.scrollTop = pane.scrollHeight
+      const rows = pane.querySelectorAll('[data-slot="tree-file"]')
+      return {
+        paneBottom: Math.round(pane.getBoundingClientRect().bottom),
+        lastRowBottom: Math.round(rows[rows.length - 1].getBoundingClientRect().bottom),
+        scrollerBottom: Math.round(${SCROLLER}.getBoundingClientRect().bottom),
+        mainTop: Math.round(${SCROLLER}.scrollTop),
+      }
+    })()`) as { paneBottom: number; lastRowBottom: number; scrollerBottom: number; mainTop: number }
+
+    expect(edges.paneBottom, 'the unscrolled tree pane hangs below the fold').toBeLessThanOrEqual(edges.scrollerBottom)
+    expect(edges.lastRowBottom, 'the last file is below the fold').toBeLessThanOrEqual(edges.scrollerBottom)
+    expect(edges.mainTop, 'reaching the last file moved the diff').toBe(0)
+  }, 120_000)
+
+  /**
+   * A stuck file header sits BELOW the page header, never under it. With one shared scroller the
+   * file headers stuck at a hard-coded offset (`10rem`), and a header taller than the guess (the
+   * task tab's "take over interactively" line) covered their top. Here the diff scrolls in its own
+   * column, so they stick to that column's top. The header is grown by 40px first to prove the
+   * offset does not depend on its height.
+   */
+  it('never tucks a stuck file header under the page header', () => {
+    openChanges('virtual')
+    browser.evaluate(`(() => {
+      const grow = document.createElement('div')
+      grow.style.height = '40px'
+      document.querySelector('[data-slot="repo-header"]').appendChild(grow);
+      ${SCROLLER}.scrollTop = 1200
+    })()`)
+    browser.waitForFunction(`document.querySelector('[data-slot="diff-file"]') !== null`)
+    const stuck = browser.evaluate(`(() => {
+      const headerBottom = document.querySelector('[data-slot="repo-header"]').getBoundingClientRect().bottom
+      const top = ${SCROLLER}.getBoundingClientRect().top
+      const tops = [...document.querySelectorAll('[data-slot="diff-file"] > header')]
+        .map((h) => h.getBoundingClientRect())
+        .filter((r) => r.bottom > top && r.top < top + 80)
+        .map((r) => Math.round(r.top))
+      return { headerBottom: Math.round(headerBottom), scrollerTop: Math.round(top), tops }
+    })()`) as { headerBottom: number; scrollerTop: number; tops: number[] }
+
+    expect(stuck.scrollerTop, 'the diff column starts under the header').toBeGreaterThanOrEqual(stuck.headerBottom)
+    expect(stuck.tops.length, 'no file header near the top of the diff column').toBeGreaterThan(0)
+    for (const top of stuck.tops) expect(top, 'a file header is under the page header').toBeGreaterThanOrEqual(stuck.headerBottom)
   }, 120_000)
 })

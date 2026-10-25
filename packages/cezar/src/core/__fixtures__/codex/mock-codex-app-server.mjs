@@ -13,6 +13,82 @@ import { createInterface } from 'node:readline';
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
 
+/**
+ * #955 — the context-compaction boundary, as a scripted app-server sequence.
+ *
+ * The shape a long Codex task hits when it crosses the model's context window:
+ * the turn's LAST act is a completed `contextCompaction` item, then
+ * `turn/completed`, with no assistant message after it. NO redacted Luna trace
+ * was obtainable while this fixture was written, so it is built from the
+ * documented wire contract (`agent-event-protocols.md` §3/§7.1 — the same source
+ * the mapper cites — the frames this mock already speaks, and the item ordering
+ * in the reporter's screenshot) — and it
+ * scripts ALL THREE post-compaction follow-up shapes #955 enumerates as open
+ * questions, so the chosen policy is pinned under every one of them rather than
+ * betting on the unverified one:
+ *
+ *   mock:compaction          turn 1 compaction-ends; turn 2 works and finishes
+ *   mock:compaction-hold     turn 1 compaction-ends; turn 2 opens and never ends
+ *   mock:compaction-repeat   EVERY turn compaction-ends (the spin the bound exists for)
+ *   mock:compaction-reject   turn 1 compaction-ends; the next `turn/start` is REFUSED
+ *   mock:compaction-done     the turn emits CEZ:DONE and THEN compacts
+ *   mock:compaction-monitor  the turn emits CEZ:MONITORING and THEN compacts
+ *   mock:compaction-monitor-ref  as above, with a CEZ:PR= line AFTER the marker (#933)
+ *   mock:compaction-badask   the turn emits a MALFORMED CEZ:ASK and THEN compacts
+ *   mock:child-compaction    a CHILD thread compacts and ends its turn; the parent works on
+ *   mock:steer-reject        the turn stays open, so a follow-up steers — and is REFUSED
+ *
+ * The continuation cezar sends after a boundary carries no `mock:` marker, so
+ * the scenario is latched from the opening turn rather than re-read per turn.
+ */
+// `monitor-ref` before `monitor`: `find` takes the first substring hit.
+const COMPACTION_SCENARIOS = ['hold', 'repeat', 'reject', 'done', 'monitor-ref', 'monitor', 'badask'];
+let scenario = '';
+let turnSeq = 0;
+
+/** The prose (if any) this scenario emits BEFORE the compaction item. */
+function compactionPrelude(kind) {
+  if (kind === 'done') return 'Everything is in place.\n\nCEZ:DONE';
+  if (kind === 'monitor') return 'Kicked the build off.\n\nCEZ:MONITORING';
+  if (kind === 'monitor-ref') return 'Kicked the build off.\n\nCEZ:MONITORING\nCEZ:PR=1010';
+  // Malformed on purpose: it raises no card, so a continuation would bury the question.
+  if (kind === 'badask') return 'Which database should I use?\n\nCEZ:ASK not-json';
+  return 'Halfway through the refactor — three files still to go.';
+}
+
+/** One turn whose last act is a completed `contextCompaction`, then `turn/completed`. */
+function emitCompactionTurn(turnId, kind) {
+  const text = compactionPrelude(kind);
+  const messageId = `item_m_${turnId}`;
+  emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: messageId, text: '' } } });
+  emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId, itemId: messageId, delta: text } });
+  emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: messageId, text } } });
+  const compactionId = `item_cc_${turnId}`;
+  emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId, item: { type: 'contextCompaction', id: compactionId, status: 'inProgress' } } });
+  emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId, item: { type: 'contextCompaction', id: compactionId, status: 'completed' } } });
+  emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
+}
+
+/** The recovered turn: real work after the boundary, ending on the completion marker. */
+function emitRecoveredTurn(turnId) {
+  const text = 'Refactor finished and the suite is green.\n\nCEZ:DONE';
+  const messageId = `item_m_${turnId}`;
+  emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: messageId, text: '' } } });
+  emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId, itemId: messageId, delta: text } });
+  emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: messageId, text } } });
+  emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
+}
+
+// `MOCK_CODEX_RESUME_LOCKED=<n>|always`: refuse the first n `thread/resume`s (or all of them)
+// with codex's active-writer error, as when a previous app-server still owns the thread.
+let lockedResumes = 0;
+function resumeLocked() {
+  const locked = process.env.MOCK_CODEX_RESUME_LOCKED;
+  if (!locked) return false;
+  lockedResumes += 1;
+  return locked === 'always' || lockedResumes <= Number(locked);
+}
+
 const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
 if (ignoreEof) {
   process.on('SIGTERM', () => process.exit(143));
@@ -35,7 +111,7 @@ rl.on('line', (line) => {
       : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
-  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
+  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
     const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
@@ -48,16 +124,91 @@ rl.on('line', (line) => {
     if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
       emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+    } else if (msg.method === 'thread/fork') {
+      emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
+    } else if (resumeLocked()) {
+      // Another live app-server still holds the thread's writer lock (codex-rs writer_lock.rs).
+      emit({ id: msg.id, error: { code: -32600, message: `thread ${msg.params?.threadId ?? ''} already has an active writer` } });
     } else if (process.env.MOCK_CODEX_REJECT_RESUME === '1') {
       emit({ id: msg.id, error: { code: -32603, message: `no rollout found for thread id ${msg.params?.threadId ?? ''}` } });
       rl.close();
     } else {
       emit({ id: msg.id, result: { thread: { id: msg.params?.threadId } } });
     }
+  } else if (msg.method === 'turn/steer') {
+    // A follow-up delivered INTO a live turn. `mock:steer-reject` refuses it after stdin
+    // already accepted the message — the second half of #955's silent-zombie shape.
+    // `mock:steer-silent` never answers at all, so the request is still in flight when
+    // cezar tears the session down and `rejectPending` settles it.
+    if (scenario === 'steer-silent') return;
+    if (scenario === 'steer-reject') {
+      emit({ id: msg.id, error: { code: -32602, message: 'expectedTurnId does not match the active turn' } });
+      return;
+    }
+    emit({ id: msg.id, result: {} });
   } else if (msg.method === 'turn/start') {
-    emit({ id: msg.id, result: { turn: { id: 'turn_mock_1' } } });
-    emit({ method: 'turn/started', params: { turn: { id: 'turn_mock_1', status: 'inProgress', items: [] } } });
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
+    turnSeq += 1;
+    if (turnSeq === 1) {
+      if (turnText.includes('mock:steer-reject')) scenario = 'steer-reject';
+      else if (turnText.includes('mock:steer-silent')) scenario = 'steer-silent';
+      else if (turnText.includes('mock:compaction')) {
+        scenario = COMPACTION_SCENARIOS.find((kind) => turnText.includes(`mock:compaction-${kind}`)) ?? 'once';
+      }
+    }
+    // The refused follow-up: the app-server takes the frame off stdin and answers with a
+    // JSON-RPC error instead of opening a turn. Nothing else is emitted — the rejection is
+    // the whole event, which is exactly why it used to vanish into a quiet note (#955).
+    if (scenario === 'reject' && turnSeq > 1) {
+      emit({ id: msg.id, error: { code: -32603, message: 'thread is busy compacting context' } });
+      return;
+    }
+    const turnId = scenario ? `turn_mock_${turnSeq}` : 'turn_mock_1';
+    emit({ id: msg.id, result: { turn: { id: turnId } } });
+    emit({ method: 'turn/started', params: { turn: { id: turnId, status: 'inProgress', items: [] } } });
+    if (scenario === 'steer-reject' || scenario === 'steer-silent') {
+      // The turn stays OPEN (no turn/completed), so the next message steers it. The message
+      // item IS completed, so the v1 `text` event fires and a test can wait on real output.
+      emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: 'item_sr', text: '' } } });
+      emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId, itemId: 'item_sr', delta: 'Working on it.' } });
+      emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: 'item_sr', text: 'Working on it.' } } });
+      return;
+    }
+    if (scenario) {
+      // `repeat` never recovers; `hold` opens turn 2 and never ends it; every other
+      // scenario compaction-ends turn 1 and then works normally.
+      if (scenario === 'repeat' || turnSeq === 1) {
+        emitCompactionTurn(turnId, scenario);
+      } else if (scenario === 'hold') {
+        emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: `item_h_${turnId}`, text: '' } } });
+        emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId, itemId: `item_h_${turnId}`, delta: 'Picking the refactor back up.' } });
+      } else {
+        emitRecoveredTurn(turnId);
+      }
+      return;
+    }
+    if (turnText.includes('mock:child-compaction')) {
+      // A sub-agent CHILD thread compacts ITS context and ends ITS turn. Neither the item
+      // nor the turn boundary may reach the parent's lifecycle (#600 + #955): the parent is
+      // still working, and a child's maintenance is not the parent's turn ending.
+      emit({ method: 'turn/started', params: { threadId: 'th_child', turn: { id: 'turn_child', status: 'inProgress', items: [] } } });
+      emit({ method: 'item/started', params: { threadId: 'th_child', turnId: 'turn_child', item: { type: 'contextCompaction', id: 'item_cc_child', status: 'inProgress' } } });
+      emit({ method: 'item/completed', params: { threadId: 'th_child', turnId: 'turn_child', item: { type: 'contextCompaction', id: 'item_cc_child', status: 'completed' } } });
+      emit({ method: 'turn/completed', params: { threadId: 'th_child', turn: { id: 'turn_child', status: 'completed' } } });
+      emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: 'item_pc1', text: '' } } });
+      emit({ method: 'item/agentMessage/delta', params: { threadId: 'th_mock_1', turnId, itemId: 'item_pc1', delta: 'Still working after the sub-agent compacted.' } });
+      emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId, item: { type: 'agentMessage', id: 'item_pc1', text: 'Still working after the sub-agent compacted.' } } });
+      emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
+      return;
+    }
+    // Current app-servers report a failure as `turn/completed` + status `failed` (run 903d6df4).
+    if (turnText.includes('mock:turn-completed-failed')) {
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: 'turn_mock_1', status: 'failed', error: { message: "The 'fable' model is not supported", codexErrorInfo: 'other' } },
+      } });
+      return;
+    }
     if (turnText.includes('mock:turn-failed')) {
       emit({ method: 'turn/failed', params: {
         turn: { id: 'turn_mock_1', status: 'failed' },

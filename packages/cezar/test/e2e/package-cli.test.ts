@@ -48,11 +48,12 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
 
     const packageRoot = join(consumerDir, 'node_modules', '@open-mercato', 'cezar');
     const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8')) as {
-      bin: { cezar: string; cez: string; 'cezar-cli': string };
+      bin: { cezar: string; cez: string; 'cezar-cli': string; 'cezar-run': string };
     };
     assert.equal(manifest.bin.cezar, 'dist/index.js');
     assert.equal(manifest.bin.cez, 'dist/index.js');
     assert.equal(manifest.bin['cezar-cli'], 'dist/index.js');
+    assert.equal(manifest.bin['cezar-run'], 'dist/index.js');
     const cliPath = join(packageRoot, manifest.bin.cezar);
 
     const help = await execFile(process.execPath, [cliPath, '--help'], {

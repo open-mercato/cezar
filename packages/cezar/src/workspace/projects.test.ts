@@ -5,11 +5,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
+import { TrackerConnections } from '../server/tracker/connections.ts';
+import { writeTrackerAssociation } from '../tracker-association.ts';
 import {
   allocateProjectSlug,
   clearProjectProbeCache,
   listProjects,
   normalizeProjectTags,
+  probeProjectStatus,
   registerProject,
   removeProject,
   shouldAutoRegisterProject,
@@ -232,6 +235,71 @@ describe('workspace projects', () => {
       // …and a cleared cache sees reality again.
       clearProjectProbeCache();
       expect((await listProjects())[0]?.status).toBe('missing');
+    });
+
+    it('hides a disconnected tracker even while its saved scope remains', async () => {
+      const root = makeDir('disconnected');
+      const store = new TrackerConnections();
+      const record = await store.write(root, { kind: 'linear', key: 'test-key' });
+      await writeTrackerAssociation(join(root, '.ai/cezar'), {
+        kind: 'linear', source: { id: 'org', webUrl: 'https://linear.app/test' },
+        externalId: 'team', externalName: 'Team', connectionId: record!.id,
+      });
+      expect((await probeProjectStatus(root)).tracker).toBe('linear');
+      await store.remove(root);
+      expect((await probeProjectStatus(root)).tracker).toBeUndefined();
+    });
+
+    it('classifies each saved tracker locally and does not cache association changes', async () => {
+      const jiraRoot = makeDir('jira-project');
+      const linearRoot = makeDir('linear-project');
+      const plainRoot = makeDir('plain-project');
+      const connections = new TrackerConnections();
+      await connections.write(jiraRoot, { kind: 'jira', origin: 'https://acme.atlassian.net', email: 'test@example.com', token: 'test-token' });
+      await connections.write(linearRoot, { kind: 'linear', key: 'test-key' });
+      await registerProject(jiraRoot);
+      await registerProject(linearRoot);
+      await registerProject(plainRoot);
+      await writeTrackerAssociation(join(jiraRoot, '.ai/cezar'), {
+        kind: 'jira',
+        source: { id: 'cloud-1', webUrl: 'https://acme.atlassian.net' },
+        externalId: '10000',
+        externalName: 'Platform',
+      });
+      await writeTrackerAssociation(join(linearRoot, '.ai/cezar'), {
+        kind: 'linear',
+        source: { id: 'org-1', webUrl: 'https://linear.app/acme' },
+        externalId: 'team-1',
+        externalName: 'Engineering',
+      });
+
+      const entries = await listProjects();
+      expect(entries.map(({ id, tracker }) => ({ id, tracker }))).toEqual([
+        { id: 'jira-project', tracker: 'jira' },
+        { id: 'linear-project', tracker: 'linear' },
+        { id: 'plain-project', tracker: undefined },
+      ]);
+
+      await writeTrackerAssociation(join(jiraRoot, '.ai/cezar'), {
+        kind: 'linear',
+        source: { id: 'org-2', webUrl: 'https://linear.app/other' },
+        externalId: 'team-2',
+        externalName: 'Other',
+      });
+      await connections.write(jiraRoot, { kind: 'linear', key: 'replacement-key' });
+      expect((await listProjects())[0]?.tracker).toBe('linear');
+    });
+
+    it('includes tracker classification in the shared one-project probe helper', async () => {
+      const root = makeDir('probed-project');
+      await new TrackerConnections().write(root, { kind: 'jira', origin: 'https://acme.atlassian.net', email: 'test@example.com', token: 'test-token' });
+      await writeTrackerAssociation(join(root, '.ai/cezar'), {
+        kind: 'jira',
+        source: { id: 'cloud-1', webUrl: 'https://acme.atlassian.net' },
+        externalId: '10000',
+        externalName: 'Platform',
+      });
+      expect(await probeProjectStatus(root)).toMatchObject({ status: 'not-git', tracker: 'jira' });
     });
   });
 

@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // below drive `gh repo view` entirely through this mock — no real `gh` on the box. Everything else
 // in this file is pure and never touches child_process, so the default passthrough is harmless.
 const execFileMock = vi.hoisted(() => vi.fn());
+/** `gh` spawns only: `gh()` also asks git for the origin host (GitHub Enterprise pin). */
+const ghSpawns = () => execFileMock.mock.calls.filter((c) => c[0] === 'gh').length;
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   execFileMock.mockImplementation((...args: unknown[]) =>
@@ -14,17 +16,23 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 import {
+  pickBranchPr,
+  AGGREGATE_CHECK_NAME,
   __clearCommentsCacheForTests,
+  __clearMergeStateCacheForTests,
   __clearRepoHandleCacheForTests,
   resolveRepoHandle,
+  createGithubDriver,
   detectGithubCached,
   fetchGithubComments,
   fetchTimelinePages,
   fetchCommentCounts,
   fetchCommitChecks,
   fetchPrChecks,
+  fetchPrMergeState,
   fetchRefStatuses,
   fetchGithubRefStatus,
+  whyLine,
   derivePrReferenceStatus,
   deriveIssueReferenceStatus,
   __clearRefStatusCacheForTests,
@@ -43,6 +51,7 @@ import {
   normalizeReviews,
   normalizeMergeState,
   parseCountsPage,
+  parseGithubListPage,
   parseOwnerName,
   rollupToChecks,
   THREAD_ENTRY_CAP,
@@ -54,6 +63,39 @@ import type { ForgeComment } from './types.ts';
 /** `rollupToChecks` collapses a `gh … --json statusCheckRollup` array — already zod-validated
  *  via `ghCheckRunSchema` at the call site — down to the single enum the GitHub tab renders,
  *  both on PR rows (#400) and in the detail pane's `ChecksBadge`. */
+
+describe('pickBranchPr — adopting the PR the agent opened', () => {
+  const pr = (number: number, login?: string, state = 'OPEN') => ({
+    url: `https://github.com/open-mercato/cezar/pull/${number}`,
+    number,
+    state,
+    ...(login ? { headRepositoryOwner: { login } } : {}),
+  });
+
+  it('a same-repo head takes the newest match', () => {
+    expect(pickBranchPr([pr(12, 'open-mercato'), pr(9, 'open-mercato')], undefined)).toMatchObject({ number: 12 });
+  });
+
+  it('a fork head only adopts a PR from that owner — never another fork with the same branch name', () => {
+    expect(pickBranchPr([pr(12, 'someone-else'), pr(9, 'Me')], 'me')).toMatchObject({ number: 9 });
+    expect(pickBranchPr([pr(12, 'someone-else')], 'me')).toBeNull();
+  });
+
+  it('a closed or merged PR on a reused branch name is never adopted — only an open one', () => {
+    expect(pickBranchPr([pr(12, 'open-mercato', 'MERGED'), pr(9, 'open-mercato', 'CLOSED')], undefined)).toBeNull();
+    expect(pickBranchPr([pr(12, 'open-mercato', 'CLOSED'), pr(14, 'open-mercato')], undefined)).toMatchObject({ number: 14 });
+  });
+
+  it('a same-repo head only adopts a PR from the base repo’s owner — never a stranger’s fork with that branch name', () => {
+    // `findBranchPr` passes the base repo's owner when the head is not owner-qualified.
+    expect(pickBranchPr([pr(31, 'stranger'), pr(30, 'open-mercato')], 'open-mercato')).toMatchObject({ number: 30 });
+    expect(pickBranchPr([pr(31, 'stranger')], 'open-mercato')).toBeNull();
+  });
+
+  it('no PRs → null', () => {
+    expect(pickBranchPr([], undefined)).toBeNull();
+  });
+});
 
 describe('ghCheckRunSchema', () => {
   it('accepts a real gh rollup entry (conclusion + status, no state)', () => {
@@ -433,6 +475,10 @@ const ghByCwd = () =>
     const who = opts?.cwd?.includes('proj-b') ? 'b' : 'a';
     let stdout = '';
     if (argv[0] === 'repo') stdout = `owner/${who}\n`;
+    else if (argv[0] === 'api' && argv[1] === 'graphql') stdout = JSON.stringify({ data: { repository: {
+      issues: { totalCount: 1, nodes: [{ number: 1, title: `${who}-issue`, author: { login: who }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: `https://github.com/owner/${who}/issues/1` }], pageInfo: { hasNextPage: false, endCursor: null } },
+      pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+    } } });
     else if (argv[0] === 'issue')
       stdout = JSON.stringify([
         {
@@ -457,7 +503,7 @@ const ghByCwd = () =>
         },
       ]);
     else if (argv[1]?.includes('/reviews')) stdout = '[]';
-    else stdout = '{}'; // graphql counts — malformed page degrades to empty maps
+    else stdout = '{}';
     cb(null, { stdout, stderr: '' });
   });
 
@@ -554,11 +600,11 @@ describe('detectGithubCached', () => {
     // Cold start: nothing cached yet → null (contract-safe "unknown"), and it fires one probe.
     expect(detectGithubCached(repoRoot)).toBeNull();
     await vi.advanceTimersByTimeAsync(0); // let the fire-and-forget probe settle
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
 
     // Warm: within the 60 s window the cached result is served with no new probe.
     expect(detectGithubCached(repoRoot)).toEqual({ available: true });
-    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ghSpawns()).toBe(1);
 
     // Cache expires. The bug returned null here (item vanishes); the fix returns the stale value.
     vi.setSystemTime(CACHE_MS + 1);
@@ -566,7 +612,38 @@ describe('detectGithubCached', () => {
 
     // …and a background revalidate was kicked off exactly once for the stale read.
     await vi.advanceTimersByTimeAsync(0);
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghSpawns()).toBe(2);
+  });
+
+  it('probes once when a cold read is followed by an awaited detect', async () => {
+    ghOk();
+    const coldRoot = '/repo/detect-inflight';
+    // What `GET /automations` does on a cold cache: the SWR read fires a revalidation and answers
+    // null, then the route awaits the real probe — which must join it rather than shell out again.
+    expect(detectGithubCached(coldRoot)).toBeNull();
+    const awaited = createGithubDriver(coldRoot, null).detect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await awaited).toEqual({ available: true });
+    expect(ghSpawns()).toBe(1);
+  });
+
+  it('keeps one project\'s cached availability when a different project is probed afterward', async () => {
+    ghOk();
+    const firstRoot = '/repo/detect-multi-a'; // distinct roots, isolated from the other cases here
+    const otherRoot = '/repo/detect-multi-b';
+
+    expect(detectGithubCached(firstRoot)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectGithubCached(firstRoot)).toEqual({ available: true });
+
+    // A second project is probed later — this used to overwrite the single shared slot and make
+    // the first project's next read come back null again, disabling its "When GitHub changes"
+    // toggle even though its GitHub was never unreachable.
+    expect(detectGithubCached(otherRoot)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectGithubCached(otherRoot)).toEqual({ available: true });
+
+    expect(detectGithubCached(firstRoot)).toEqual({ available: true });
   });
 });
 
@@ -1336,7 +1413,7 @@ describe('resolveRepoHandle (#525 Phase 2)', () => {
     expect(await resolveRepoHandle('/tmp/a')).toEqual({ owner: 'o', name: 'one' });
     ghReturns('o/two');
     expect(await resolveRepoHandle('/tmp/b')).toEqual({ owner: 'o', name: 'two' });
-    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(ghSpawns()).toBe(2);
   });
 });
 
@@ -1495,37 +1572,82 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
   });
 
   it('does not request the rollup field and leaves list PR checks null', async () => {
-    let prJsonArg = '';
+    let graphqlQuery = '';
     execFileMock.mockImplementation((...args: unknown[]) => {
       const argv = args[1] as string[];
       const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
       let stdout = '{}';
       if (argv[0] === 'repo') stdout = 'owner/n\n';
-      else if (argv[0] === 'issue') stdout = '[]';
-      else if (argv[0] === 'pr') {
-        prJsonArg = argv[argv.indexOf('--json') + 1] ?? '';
-        stdout = JSON.stringify([
-          {
-            number: 7,
-            title: 'a pr',
-            author: { login: 'x' },
-            createdAt: '2026-07-01T00:00:00Z',
-            labels: [],
-            body: 'b',
-            url: 'https://github.com/owner/n/pull/7',
-            isDraft: false,
-            additions: 1,
-            deletions: 2,
-          },
-        ]);
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        graphqlQuery = argv[argv.indexOf('-f') + 1] ?? '';
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+          pullRequests: { totalCount: 9, nodes: [{ number: 7, title: 'a pr', author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: [], url: 'https://github.com/owner/n/pull/7', comments: { totalCount: 4 }, isDraft: false, additions: 1, deletions: 2 }], pageInfo: { hasNextPage: true, endCursor: 'next-pr' } },
+        } } });
       }
       cb(null, { stdout, stderr: '' });
     });
 
     const data = await fetchGithub('/repo/no-rollup-664');
-    expect(prJsonArg).not.toContain('statusCheckRollup');
-    expect(prJsonArg).toContain('isDraft');
+    expect(graphqlQuery).not.toContain('statusCheckRollup');
+    expect(graphqlQuery).toContain('isDraft');
+    expect(graphqlQuery).toContain('comments { totalCount }');
     expect(data.prs[0]?.checks).toBeNull();
+    expect(data.prs[0]?.comments).toBe(4);
+    expect(data.prsTotal).toBe(9);
+    expect(data.prsNextCursor).toBe('next-pr');
+  });
+
+  it('sends page sizes typed and splits a limit above 100 into exact pages', async () => {
+    // `-f limit=30` reached GitHub as a String and failed the whole tab ("Could not coerce value to Int").
+    const calls: string[][] = [];
+    const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [{ name: 'bug', color: 'd73a4a' }] }, url: `https://github.com/owner/n/issues/${n}`, comments: { totalCount: 0 } });
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '{}';
+      if (argv[0] === 'repo') stdout = 'owner/n\n';
+      else if (argv[0] === 'api' && argv[1] === 'graphql') {
+        calls.push(argv);
+        const value = (key: string) => argv.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
+        const issuesSize = Number(value('issuesLimit'));
+        const start = value('issuesCursor') ? Number(value('issuesCursor')) : 0;
+        const nodes = Array.from({ length: issuesSize }, (_, i) => node(start + i + 1));
+        stdout = JSON.stringify({ data: { repository: {
+          issues: { totalCount: 500, nodes, pageInfo: { hasNextPage: true, endCursor: issuesSize ? String(start + issuesSize) : null } },
+          pullRequests: { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+        } } });
+      }
+      cb(null, { stdout, stderr: '' });
+    });
+
+    const data = await fetchGithub('/repo/typed-limit', false, 150);
+    expect(calls.length).toBe(2);
+    for (const argv of calls) {
+      for (const key of ['issuesLimit', 'prsLimit']) {
+        const at = argv.findIndex((a) => a.startsWith(`${key}=`));
+        expect(argv[at - 1]).toBe('-F');
+      }
+      expect(Number(argv.find((a) => a.startsWith('issuesLimit='))?.split('=')[1])).toBeLessThanOrEqual(100);
+    }
+    expect(data.issues.map((i) => i.number)).toEqual(Array.from({ length: 150 }, (_, i) => i + 1));
+    expect(data.issuesNextCursor).toBe('150');
+    expect(data.issuesTotal).toBe(500);
+    expect(data.issues[0]?.labels).toEqual(['bug']); // GraphQL labels arrive as a connection
+    expect(data.labelColors).toEqual({ bug: 'd73a4a' });
+  });
+
+  it('reports gh stderr, not a line of the multi-line query argv', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') return cb(null, { stdout: 'owner/n\n', stderr: '' });
+      const err = Object.assign(new Error(`Command failed: gh ${argv.join(' ')}`), { stderr: "gh: Field 'name' doesn't exist on type 'LabelConnection'\n" });
+      cb(err, null);
+    });
+    const data = await fetchGithub('/repo/stderr-reason', true);
+    expect(data.available).toBe(false);
+    expect(data.reason).toBe("gh: Field 'name' doesn't exist on type 'LabelConnection'");
   });
 });
 
@@ -1624,6 +1746,34 @@ describe('searchGithubItems (#730)', () => {
 
     const res = await searchGithubItems('/repo/search-hash', 'issue', '#4507');
     expect(res.items.map((i) => i.number)).toEqual([4507]);
+  });
+
+  it('does not misidentify a PR returned by the numeric issue lookup', async () => {
+    const argvs = ghSpy((argv) => {
+      if (argv[0] === 'issue' && argv[1] === 'view') {
+        return JSON.stringify({
+          number: 4507,
+          title: 'a pull request sharing the issue number',
+          author: { login: 'someone' },
+          createdAt: '2026-07-25T07:08:17Z',
+          labels: [],
+          body: '',
+          url: 'https://github.com/owner/n/pull/4507',
+        });
+      }
+      if (argv[0] === 'repo') return 'owner/n\n';
+      if (argv[0] === 'search') {
+        return JSON.stringify([searchHit({ title: 'a genuine issue mentioning 4507', url: 'https://github.com/owner/n/issues/12' })]);
+      }
+      return '';
+    });
+
+    const res = await searchGithubItems('/repo/search-issue-kind', 'issue', '4507');
+
+    expect(res.available).toBe(true);
+    expect(res.items[0]?.kind).toBe('issue');
+    expect(res.items[0]?.title).toBe('a genuine issue mentioning 4507');
+    expect(argvs.some((a) => a[0] === 'search' && a[1] === 'issues')).toBe(true);
   });
 
   it('searches text with NO --state flag, so closed and merged hits are included', async () => {
@@ -3041,5 +3191,281 @@ describe('refNumberFromUrl', () => {
     expect(refNumberFromUrl('https://example.com/')).toBeNull();
     expect(refNumberFromUrl('')).toBeNull();
     expect(refNumberFromUrl('https://github.com/o/r/pull/0')).toBeNull();
+  });
+});
+
+/**
+ * The merge panel's own read (#969).
+ *
+ * `statusCheckRollup` used to ride along in the one `gh pr view` call that also carried
+ * `mergeable`, `mergeStateStatus` and `reviewDecision`. Under a fine-grained PAT the rollup's
+ * `CheckRun` contexts are unreadable — `gh` exits 1 with EMPTY stdout, one GraphQL error per
+ * context — so the whole call was lost and the panel reported `available: false` for every PR,
+ * hiding three fields the same token reads fine. No permission fixes that: a check run needs the
+ * `checks` scope and fine-grained PATs have no Checks permission at all.
+ *
+ * These drive the real `gh` argv through `execFileMock`, so they assert the split itself, not a
+ * paraphrase of it.
+ */
+describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
+  const repoRef = { owner: 'acme', repo: 'demo' };
+  const CORE_FIELDS = 'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision';
+  const corePr = {
+    number: 353,
+    title: 'Ship it',
+    url: 'https://github.com/acme/demo/pull/353',
+    state: 'OPEN',
+    isDraft: false,
+    headRefName: 'feat/ship',
+    baseRefName: 'main',
+    headRefOid: 'a'.repeat(40),
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  };
+  const policy = { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true };
+
+  /** Exactly what the issue recorded: exit 1, empty stdout, the permission error on stderr. */
+  const notAccessible = (command: string) =>
+    Object.assign(
+      new Error(`Command failed: ${command}\nGraphQL: Resource not accessible by personal access token`),
+      { code: 1, stdout: '', stderr: '' },
+    );
+
+  const aggregate = (state: string | null) => ({
+    data: { repository: { p0: { commits: { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] } } } },
+  });
+
+  /** Every `gh` argv the merge-state read makes, routed by the call it actually is. A route left
+   *  out answers the way a fine-grained PAT does: unreadable. */
+  function routeGh(routes: {
+    core?: () => unknown;
+    detail?: () => unknown;
+    aggregate?: () => unknown;
+    protection?: () => unknown;
+  }) {
+    const calls: string[] = [];
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      calls.push(argv.join(' '));
+      const answer = (produce: () => unknown) => {
+        let value: unknown;
+        try {
+          value = produce();
+        } catch (err) {
+          return cb(err, { stdout: '', stderr: '' });
+        }
+        return cb(null, { stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' });
+      };
+      if (argv[0] === 'pr' && argv[1] === 'view') {
+        const fields = argv[argv.indexOf('--json') + 1] ?? '';
+        if (fields === 'statusCheckRollup') {
+          return answer(routes.detail ?? (() => { throw notAccessible(`gh pr view 353 --json statusCheckRollup`); }));
+        }
+        return answer(routes.core ?? (() => corePr));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        return answer(routes.aggregate ?? (() => { throw notAccessible('gh api graphql'); }));
+      }
+      if (argv[0] === 'api' && (argv[1] ?? '').includes('/protection/')) {
+        return answer(routes.protection ?? (() => { throw notAccessible('gh api …/protection/required_status_checks'); }));
+      }
+      if (argv[0] === 'api') return answer(() => policy);
+      return cb(new Error(`unexpected gh ${argv.join(' ')}`), null);
+    });
+    return calls;
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', ''); // dry-run short-circuits the whole gh path under test
+    execFileMock.mockReset();
+    __clearMergeStateCacheForTests();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('never asks the core call for statusCheckRollup', async () => {
+    const calls = routeGh({ detail: () => ({ statusCheckRollup: [] }) });
+
+    await fetchPrMergeState('/repo/split', repoRef, 353);
+
+    const coreCall = calls.find((c) => c.includes(CORE_FIELDS));
+    expect(coreCall).toBeDefined();
+    expect(coreCall).not.toContain('statusCheckRollup');
+    expect(calls).toContain('pr view 353 --json statusCheckRollup');
+  });
+
+  it('keeps mergeable, mergeStateStatus and reviewDecision when the rollup detail is unreadable', async () => {
+    // The fine-grained-PAT shape: detail exits 1 with empty stdout, the aggregate state is readable.
+    routeGh({ aggregate: () => aggregate('SUCCESS') });
+
+    const out = await fetchPrMergeState('/repo/fine-grained', repoRef, 353);
+
+    expect(out.available).toBe(true);
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.mergeable).toBe('mergeable');
+    expect(out.mergeState.reviewDecision).toBe('approved');
+    expect(out.mergeState.methods).toEqual(['squash', 'merge', 'rebase']);
+    expect(out.mergeState.headSha).toBe('a'.repeat(40));
+  });
+
+  it('degrades the check tier to the readable aggregate rollup rather than losing it', async () => {
+    routeGh({ aggregate: () => aggregate('SUCCESS') });
+
+    const out = await fetchPrMergeState('/repo/aggregate-ok', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('aggregate');
+    expect(out.mergeState.checks).toEqual([{ name: AGGREGATE_CHECK_NAME, state: 'passing', required: null }]);
+    expect(out.mergeState.checksReason).toContain('Resource not accessible by personal access token');
+  });
+
+  it('still blocks on a red CI it could only read in aggregate', async () => {
+    routeGh({ aggregate: () => aggregate('FAILURE'), protection: () => ['ci'] });
+
+    const out = await fetchPrMergeState('/repo/aggregate-red', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checks[0]?.state).toBe('failing');
+    // One row standing for every check, required ones included — requiredness is unknowable, and
+    // `false` would read as "not required" even with branch protection readable.
+    expect(out.mergeState.checks[0]?.required).toBeNull();
+    expect(out.mergeState.eligibility).toBe('blocked');
+    expect(out.mergeState.blockers.map((b) => b.code)).toContain('checks-failing');
+    expect(out.mergeState.canMerge).toBe(false);
+  });
+
+  it('says so, rather than "no checks", when neither tier is readable', async () => {
+    // Empty `checks` with a `detailed` tier means "this PR has no CI"; here it means "we never
+    // found out", and that must never read as ready to merge.
+    routeGh({ protection: () => ['ci'] });
+
+    const out = await fetchPrMergeState('/repo/both-dark', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('none');
+    expect(out.mergeState.checks).toEqual([]);
+    expect(out.mergeState.eligibility).toBe('unknown');
+    expect(out.mergeState.blockers.map((b) => b.code)).toContain('checks-unknown');
+    expect(out.mergeState.canMerge).toBe(false);
+    expect(out.mergeState.canOverride).toBe(true); // a human may still merge deliberately
+  });
+
+  it('reports a head with no CI as no CI, not as an unreadable tier', async () => {
+    routeGh({ aggregate: () => aggregate(null), protection: () => ['ci'] });
+
+    const out = await fetchPrMergeState('/repo/no-ci', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('aggregate');
+    expect(out.mergeState.checks).toEqual([]);
+    expect(out.mergeState.blockers.map((b) => b.code)).not.toContain('checks-unknown');
+  });
+
+  it('keeps the full per-check detail on a token that can read it', async () => {
+    // The classic-token shape — nothing about the split may cost the readable case its rows.
+    routeGh({
+      protection: () => ['lint · typecheck · build'],
+      detail: () => ({
+        statusCheckRollup: [
+          { name: 'lint · typecheck · build', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/1' },
+          { name: 'unit tests (1/3)', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/2' },
+        ],
+      }),
+    });
+
+    const out = await fetchPrMergeState('/repo/classic', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('detailed');
+    expect(out.mergeState.checksReason).toBeUndefined();
+    expect(out.mergeState.checks).toEqual([
+      { name: 'lint · typecheck · build', state: 'passing', required: true, url: 'https://github.com/acme/demo/actions/runs/1' },
+      { name: 'unit tests (1/3)', state: 'passing', required: false, url: 'https://github.com/acme/demo/actions/runs/2' },
+    ]);
+    expect(out.mergeState.eligibility).toBe('ready');
+    expect(out.mergeState.canMerge).toBe(true);
+  });
+
+  it('never queries the aggregate fallback when the detail call succeeded', async () => {
+    const calls = routeGh({ detail: () => ({ statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }] }) });
+
+    await fetchPrMergeState('/repo/no-wasted-call', repoRef, 353);
+
+    expect(calls.some((c) => c.startsWith('api graphql'))).toBe(false);
+  });
+
+  it('still reports the whole state unavailable when the CORE call fails', async () => {
+    // The split narrows what counts as fatal; it does not paper over a genuinely failed read.
+    routeGh({ core: () => { throw notAccessible('gh pr view 353'); } });
+
+    const out = await fetchPrMergeState('/repo/core-fails', repoRef, 353);
+
+    expect(out.available).toBe(false);
+    if (out.available) throw new Error('expected unavailable');
+    expect(out.reason).toContain('Resource not accessible by personal access token');
+  });
+});
+
+describe('whyLine', () => {
+  it('skips the "Command failed" preamble and reports what actually went wrong', () => {
+    expect(
+      whyLine('Command failed: gh pr view 353 --json statusCheckRollup\nGraphQL: Resource not accessible by personal access token'),
+    ).toBe('GraphQL: Resource not accessible by personal access token');
+  });
+
+  it('falls back to the preamble when the failure said nothing else', () => {
+    expect(whyLine('Command failed: gh pr view 353')).toBe('Command failed: gh pr view 353');
+  });
+
+  it('answers something for an empty message', () => {
+    expect(whyLine('')).toBe('gh failed');
+    expect(whyLine('\n  \n')).toBe('gh failed');
+  });
+});
+
+describe('GH_HOST pinning (GitHub Enterprise)', () => {
+  const answer = (origin: string) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const stdout = args[0] === 'git' ? `${origin}\n` : '{"nameWithOwner":"acme/widgets"}';
+      cb(null, { stdout, stderr: '' });
+    });
+  const ghEnv = (root: string) =>
+    execFileMock.mock.calls.find((c) => c[0] === 'gh' && (c[2] as { cwd: string }).cwd === root)?.[2] as
+      { env?: Record<string, string> };
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('pins each repo to its own origin host, with no help from the driver', async () => {
+    answer('git@acme.ghe.com:acme/widgets.git');
+    await resolveRepoHandle('/repo/ghe-pin');
+    expect(ghEnv('/repo/ghe-pin').env?.GH_HOST).toBe('acme.ghe.com');
+    answer('git@github.com:open-mercato/cezar.git');
+    await resolveRepoHandle('/repo/com-pin');
+    expect(ghEnv('/repo/com-pin').env?.GH_HOST).toBeUndefined();
+  });
+
+  it('pins the first remote\'s host when there is no origin, as getRepoInfo does', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const [bin, argv] = args as [string, string[]];
+      if (bin === 'gh') return cb(null, { stdout: 'acme/widgets', stderr: '' });
+      const cmd = argv.join(' ');
+      if (cmd === 'rev-parse --show-toplevel') return cb(null, { stdout: '/repo/no-origin\n', stderr: '' });
+      if (cmd === 'rev-parse --abbrev-ref HEAD') return cb(null, { stdout: 'main\n', stderr: '' });
+      if (cmd === 'remote get-url origin') return cb(new Error('No such remote'), { stdout: '', stderr: '' });
+      if (cmd === 'remote') return cb(null, { stdout: 'ghe\n', stderr: '' });
+      if (cmd === 'remote get-url ghe') return cb(null, { stdout: 'git@acme.ghe.com:acme/widgets.git\n', stderr: '' });
+      return cb(new Error(`unexpected git ${cmd}`), { stdout: '', stderr: '' });
+    });
+    await resolveRepoHandle('/repo/no-origin');
+    expect(ghEnv('/repo/no-origin').env?.GH_HOST).toBe('acme.ghe.com');
   });
 });

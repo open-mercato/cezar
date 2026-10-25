@@ -1,13 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { Component, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from './client'
 import { createQueryClient } from './query-client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { ProjectScopeContext } from './project-scope-context'
-import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
+import type { GithubRefStatusData, HealthResponse } from '@open-mercato/cezar-api-client'
 import {
   refStatusRecheckAfter,
   useReferenceProjectId,
@@ -18,17 +18,25 @@ import {
   useRetryProviderAuth,
   useHealth,
   useHealthSubscription,
+  healthRecheckInterval,
+  FORGE_RECHECK_MS,
   useRunnerModels,
   useMarkRunSeen,
   useMarkRunUnseen,
   usePatchRun,
   usePutAgentConfigFile,
   useRun,
+  useRepoFile,
+  useRepoTree,
   useRunChanges,
   useRuns,
   useSkills,
   useSkillsUpdate,
+  useReferenceStatuses,
+  useStarCount,
+  STAR_COUNT_REFRESH_MS,
   workspaceQueryKeys,
+  __clearRememberedStatusesForTests,
 } from './queries'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -73,7 +81,7 @@ const HEALTH = {
   repo: { root: '/home/me/cezar', branch: 'main' },
   checks: [],
   defaultRunner: 'claude',
-  capabilities: { localHandoff: true, followups: false, singleProject: false, automations: false },
+  capabilities: { localHandoff: true, terminal: false, followups: false, singleProject: false, automations: false },
 }
 
 /** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
@@ -128,12 +136,29 @@ describe('useRunnerModels', () => {
     ['codex', 'gpt-future'],
     ['claude', 'opus[1m]'],
     ['opencode', 'openai/gpt-5.4'],
+    ['junie', 'v1:model:junie:sonnet'],
   ] as const)('loads the workspace %s catalog from its own cache entry', async (runner, id) => {
     fetchMock.mockResolvedValue(json({ runner, models: [{ id, label: 'Future', description: '' }], source: 'live', stale: false }))
     const { result } = renderHook(() => useRunnerModels(runner), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.models[0]?.id).toBe(id)
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(`/api/v1/models?runner=${runner}`)
+  })
+
+  it('loads the OpenCode catalog from its own cache entry (#794)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'opencode', models: [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels('opencode'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('openai/gpt-5.4')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=opencode')
+  })
+
+  it('loads the Cursor catalog from its own cache entry (#807)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels('cursor'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('composer-2.5')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=cursor')
   })
 
   // The other half of the `enabled` guard: a caller that only MIGHT render the pills (the
@@ -144,6 +169,22 @@ describe('useRunnerModels', () => {
     expect(result.current.data).toBeUndefined()
     expect(fetchMock).not.toHaveBeenCalled()
   })
+
+  it('one runner erroring does not affect a separate hook instance for another runner (#807)', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/v1/models?runner=codex') {
+        return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false })
+      }
+      if (url === '/api/v1/models?runner=cursor') return new Response('boom', { status: 500 })
+      return new Promise<never>(() => {})
+    })
+    const { result: codex } = renderHook(() => useRunnerModels('codex'), { wrapper: wrapper() })
+    const { result: cursor } = renderHook(() => useRunnerModels('cursor'), { wrapper: wrapper() })
+    await waitFor(() => expect(cursor.current.isError).toBe(true), { timeout: 5000 })
+    await waitFor(() => expect(codex.current.isSuccess).toBe(true))
+    expect(codex.current.data?.models[0]?.id).toBe('gpt-future')
+  })
 })
 
 describe('provider status workspace query', () => {
@@ -152,7 +193,8 @@ describe('provider status workspace query', () => {
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'disconnected', enabled: true, hint: 'Run codex login.' },
       { provider: 'opencode', status: 'not-installed', enabled: true },
-    ],
+      { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
   }
 
   afterEach(() => {
@@ -228,6 +270,22 @@ describe('provider status workspace query', () => {
     expect((result.current.error as ApiError).message).toBe('provider probe failed')
   })
 
+  it('retries a transient transport failure on a background provider read', async () => {
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(json(PROVIDERS))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useProviderStatus(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 5000 })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
   it('enters the query error state for a malformed successful response', async () => {
     fetchMock.mockImplementation(async () =>
       json({ providers: [null], raw: 'do-not-render-this' }),
@@ -253,7 +311,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     fetchMock.mockResolvedValue(json(refreshed))
     const client = createQueryClient()
@@ -284,7 +343,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await act(async () => deferred.resolve(json(PROVIDERS)))
@@ -312,7 +372,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await act(async () => deferred.resolve(json(PROVIDERS)))
@@ -329,7 +390,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: false },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     fetchMock.mockResolvedValue(json(confirmed))
     const client = createQueryClient()
@@ -357,7 +419,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'retry-1', hint: 'Reconnect.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
     const { result } = renderHook(() => useRetryProviderAuth(), {
       wrapper: ({ children }: { children: ReactNode }) => (
@@ -372,7 +435,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-2', hint: 'Reconnect again.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await act(async () => deferred.resolve(json(PROVIDERS)))
@@ -389,7 +453,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: 'stale incident' }), { status: 409 }))
     const client = createQueryClient()
@@ -497,6 +562,34 @@ describe('useSkills', () => {
   })
 })
 
+describe('useStarCount', () => {
+  it('re-reads the count every ten seconds so the chip tracks the live number', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let count = 100
+      fetchMock.mockImplementation(async () =>
+        json({ available: true, count: count++, url: 'https://github.com/open-mercato/cezar' }),
+      )
+      const client = createQueryClient()
+      const { result } = renderHook(() => useStarCount(), {
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      })
+      await waitFor(() => expect(result.current.data?.count).toBe(100))
+      expect(STAR_COUNT_REFRESH_MS).toBe(10_000)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(STAR_COUNT_REFRESH_MS)
+      })
+      await waitFor(() => expect(result.current.data?.count).toBe(101))
+      expect(fetchMock.mock.calls.every(([path]) => path === '/api/v1/star-count')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('useSkillsUpdate', () => {
   it('retries a transient snapshot conservatively until the background server check converges', async () => {
     fetchMock.mockResolvedValue(json({
@@ -528,6 +621,89 @@ describe('useSkillsUpdate', () => {
 
     client.setQueryData(key, { ...result.current.data!, status: 'available' })
     expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
+  })
+
+  it('keeps asking while no check has completed, then stands down at the cap', async () => {
+    fetchMock.mockImplementation(async () => json({
+      status: 'idle',
+      available: false,
+      autoUpdateEnabled: false,
+      inherited: false,
+      checkedAt: null,
+      updatedAt: null,
+      scopes: [],
+      needsUpgradeNotes: false,
+    }))
+    const client = createQueryClient()
+    const key = workspaceQueryKeys.skillsUpdate('boot')
+    const { result } = renderHook(() => useSkillsUpdate('boot'), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(result.current.data?.status).toBe('idle'))
+
+    const query = client.getQueryCache().find({ queryKey: key })
+    const interval = query?.observers[0]?.options.refetchInterval as (current: unknown) => number | false
+    const idle = result.current.data!
+    const at = (dataUpdateCount: number, data = idle) => interval({ state: { data, dataUpdateCount } })
+
+    // One idle read is not enough: the check the first GET started can still be queued behind
+    // another project's on the server, and `idle` only means it has not finished.
+    expect(at(2)).toBe(60_000)
+    // Bounded: once idle has been answered this often, the poll stands down and the reconnect /
+    // tab-return reconcile owns the update.
+    expect(at(6)).toBe(false)
+
+    expect(at(7, { ...idle, status: 'checking' })).toBe(60_000)
+    expect(at(7, { ...idle, status: 'current' })).toBe(false)
+  })
+})
+
+describe('useReferenceStatuses', () => {
+  it('remembers nothing from a render React throws away', async () => {
+    __clearRememberedStatusesForTests()
+    fetchMock.mockImplementation(async () => json({ available: true, prs: { 7: 'draft' }, issues: {}, recheckAfterMs: null }))
+    const ref = { projectId: 'p1', kind: 'PR' as const, number: 7 }
+    function Discarded() {
+      const lookup = useReferenceStatuses([ref])
+      if (lookup(ref).state === 'ready') throw new Error('discarded render')
+      return null
+    }
+    class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+      override state = { failed: false }
+      static getDerivedStateFromError() {
+        return { failed: true }
+      }
+      override render() {
+        return this.state.failed ? <p>failed</p> : this.props.children
+      }
+    }
+    const Wrapper = wrapper()
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    render(
+      <Wrapper>
+        <Boundary>
+          <Discarded />
+        </Boundary>
+      </Wrapper>,
+    )
+    await screen.findByText('failed')
+    quiet.mockRestore()
+
+    const { result } = renderHook(() => useReferenceStatuses([ref], false), { wrapper: wrapper() })
+    expect(result.current(ref)).not.toHaveProperty('status')
+  })
+
+  it('remembers a committed answer for the next surface that has none yet', async () => {
+    __clearRememberedStatusesForTests()
+    fetchMock.mockImplementation(async () => json({ available: true, prs: { 8: 'draft' }, issues: {}, recheckAfterMs: null }))
+    const ref = { projectId: 'p1', kind: 'PR' as const, number: 8 }
+    const first = renderHook(() => useReferenceStatuses([ref]), { wrapper: wrapper() })
+    await waitFor(() => expect(first.result.current(ref).state).toBe('ready'))
+
+    const { result } = renderHook(() => useReferenceStatuses([ref], false), { wrapper: wrapper() })
+    expect(result.current(ref)).toMatchObject({ status: 'draft' })
   })
 })
 
@@ -566,6 +742,49 @@ describe('useHealth', () => {
     // The subscription lives once at the root (useHealthSubscription), NOT per useHealth reader,
     // so mounting a reader must open no socket and flap no subscribe/unsubscribe frame.
     expect(FakeHealthSocket.instances).toHaveLength(0)
+  })
+
+  // #1412: a remote cockpit has no health push, so an unresolved forge probe is re-read on a timer.
+  it.each([
+    ['local cockpit, cold forge', true, { kind: 'github' }, false],
+    ['remote, no forge remote', false, null, false],
+    ['remote, cold forge', false, { kind: 'github' }, FORGE_RECHECK_MS],
+    ['remote, failed forge', false, { kind: 'github', available: false, reason: 'x' }, FORGE_RECHECK_MS],
+    ['remote, working forge', false, { kind: 'github', available: true }, false],
+  ] as const)('healthRecheckInterval: %s', (_label, localHandoff, forge, expected) => {
+    const health = { ...HEALTH, forge, capabilities: { ...HEALTH.capabilities, localHandoff } } as unknown as HealthResponse
+    expect(healthRecheckInterval(health)).toBe(expected)
+  })
+
+  it('healthRecheckInterval never polls without an explicit remote answer', () => {
+    expect(healthRecheckInterval(undefined)).toBe(false)
+    expect(healthRecheckInterval({ forge: { kind: 'github' } } as unknown as HealthResponse)).toBe(false)
+  })
+
+  it('re-reads health on a remote cockpit until the forge probe answers, then stops', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const remote = { ...HEALTH, capabilities: { ...HEALTH.capabilities, localHandoff: false } }
+      let probed = false
+      fetchMock.mockImplementation(async () => {
+        const forge = probed ? { kind: 'github', available: true } : { kind: 'github' }
+        probed = true
+        return json({ ...remote, forge })
+      })
+      const { result } = renderHook(() => useHealth(), { wrapper: wrapper() })
+
+      await waitFor(() => expect(result.current.data?.forge).toEqual({ kind: 'github' }))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await act(() => vi.advanceTimersByTimeAsync(FORGE_RECHECK_MS))
+      await waitFor(() => expect(result.current.data?.forge).toEqual({ kind: 'github', available: true }))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+
+      await act(() => vi.advanceTimersByTimeAsync(FORGE_RECHECK_MS * 3))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // #369 moved server-side: the branch-switched-in-a-terminal case is now the `health` topic on
@@ -877,10 +1096,18 @@ describe('useMarkRunUnseen', () => {
 })
 
 describe('usePatchRun', () => {
-  it('PATCHes the title and invalidates every runs query on success', async () => {
-    fetchMock.mockResolvedValue(json({ id: 'run-1', title: 'New name', titleSummary: 'New name' }))
+  it('writes the successful title receipt into list/detail caches and invalidates the finder', async () => {
+    const current = {
+      id: 'run-1', title: 'Old name', titleSummary: 'Old name', titleOrigin: 'auto' as const,
+      workflow: 'quick-task', task: 'do it', status: 'running' as const, createdAt: '2026-01-01',
+      tokensUsed: 0, archived: false, steps: [],
+    }
+    const updated = { ...current, title: 'New name', titleSummary: 'New name', titleOrigin: 'user' as const }
+    fetchMock.mockResolvedValue(json(updated))
     const client = createQueryClient()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
+    client.setQueryData(queryKeys.runs.list(), [current])
+    client.setQueryData(queryKeys.runs.detail('run-1'), current)
     const { result } = renderHook(() => usePatchRun('run-1'), {
       wrapper: ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -894,8 +1121,11 @@ describe('usePatchRun', () => {
     expect(path).toBe('/api/v1/runs/run-1')
     expect(init.method).toBe('PATCH')
     expect(JSON.parse(init.body as string)).toEqual({ title: 'New name' })
+    expect(client.getQueryData<typeof current[]>(queryKeys.runs.list())?.[0]).toMatchObject(updated)
+    expect(client.getQueryData<typeof current>(queryKeys.runs.detail('run-1'))).toMatchObject(updated)
     // `runs.all` is a prefix of the list, detail and diff keys — one call reaches them all.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.all })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeys.runsIndex })
   })
 
   it('does not invalidate anything on failure', async () => {
@@ -1095,5 +1325,68 @@ describe('refStatusRecheckAfter', () => {
     // Still loading, or errored out — `retry` owns the immediate attempt; this is the backstop
     // that keeps the query from going silent forever.
     expect(refStatusRecheckAfter(undefined)).toBeGreaterThan(0)
+  })
+})
+
+/**
+ * The Git tab's Files sub-tab (#1279). `/repo/*` is not on the SSE stream, so these two queries
+ * deliberately opt out of the client-wide "the stream says when something changed" default — the
+ * data is a working tree an agent edits while the tab is in the background.
+ */
+describe('useRepoTree / useRepoFile', () => {
+  const TREE = { paths: ['a.ts'], truncated: false }
+
+  it('does not retry a 409 — it is the server’s answer, not an outage', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'not a git repository' }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const { result } = renderHook(() => useRepoTree(), { wrapper: wrapper() })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+    expect(result.current.error).toBeInstanceOf(ApiError)
+    expect((result.current.error as ApiError).status).toBe(409)
+    // Exactly one attempt: a retry cannot turn "not a git repository" into a repository.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-reads the index on focus, which the shared 5-minute staleTime would otherwise swallow', async () => {
+    fetchMock.mockResolvedValue(json(TREE))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useRepoTree(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const query = client.getQueryCache().find({ queryKey: queryKeys.repoTree })
+    if (!query) throw new Error('repo tree query was not created')
+    // `staleTime: 0` is the load-bearing half: without it this freshly-fetched entry would still
+    // be fresh and the focus event would do nothing.
+    expect(query.observers[0]?.options.staleTime).toBe(0)
+    expect(query.observers[0]?.options.refetchInterval).toBe(false)
+    window.dispatchEvent(new Event('visibilitychange'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not fetch a file until one is selected, and keys the cache per path', async () => {
+    fetchMock.mockResolvedValue(json({ type: 'file', path: 'a.ts', size: 1, binary: false, tooLarge: false, content: 'x' }))
+    const client = createQueryClient()
+    const wrap = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+
+    const idle = renderHook(() => useRepoFile(undefined), { wrapper: wrap })
+    expect(idle.result.current.fetchStatus).toBe('idle')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const { result } = renderHook(() => useRepoFile('a.ts'), { wrapper: wrap })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(client.getQueryCache().find({ queryKey: queryKeys.repoFile('a.ts') })).toBeDefined()
+    expect(client.getQueryCache().find({ queryKey: queryKeys.repoFile('b.ts') })).toBeUndefined()
   })
 })

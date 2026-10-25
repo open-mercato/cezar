@@ -50,6 +50,20 @@ describe('GitHub automation API', () => {
     body: JSON.stringify(body),
   });
 
+  it('reports unavailable tracker event options without exposing credentials', async () => {
+    const response = await apiRequest(app(), '/api/v1/tracker/automation-options');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ available: false, code: 'not_configured' });
+  });
+
+  it('requires an explicit tracker event and refuses an unbound association', async () => {
+    const missing = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' } }));
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: expect.stringContaining('Choose an event') });
+    const invalid = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' }, trackerTrigger: { events: ['pull_request.opened'], association: { kind: 'jira', externalId: 'P', externalName: 'Project', source: { id: 's', webUrl: 'https://example.atlassian.net' } } } }));
+    expect(invalid.status).toBe(400);
+  });
+
   it('creates paused definitions and rejects malformed bounds', async () => {
     const bad = await apiRequest(app(), '/api/v1/automations', json({ ...input, intervalSeconds: 5 }));
     expect(bad.status).toBe(400);
@@ -70,6 +84,33 @@ describe('GitHub automation API', () => {
     expect(enabled.status).toBe(200);
     const detail = await apiRequest(app(), `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state).toMatchObject({ revision: 2, baselineAt: expect.any(String) });
+  });
+
+  it('establishes a baseline when an edit switches a paused poll on, and not on a later edit', async () => {
+    const created = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, enabled: true, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(200);
+    const first = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(first).toMatchObject({ baselineAt: expect.any(String), cursor: { timestamp: first.baselineAt } });
+
+    await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, name: 'Renamed', enabled: true, expectedRevision: 2 }, 'PUT'));
+    const second = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(second.baselineAt).toBe(first.baselineAt);
+  });
+
+  it('refuses an unknown agent account on create and on update, like POST /runs does', async () => {
+    const withAccount = { ...input, task: { ...input.task, agentProfile: 'nope' } };
+    const created = await apiRequest(app(), '/api/v1/automations', json(withAccount));
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as any).error).toContain('nope');
+
+    const ok = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...withAccount, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(400);
+    // The default account is always resolvable, so it saves and round-trips.
+    const fine = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...input, task: { ...input.task, agentProfile: 'default' }, expectedRevision: 1 }, 'PUT'));
+    expect(fine.status).toBe(200);
+    expect(((await fine.json()) as any).automation.task.agentProfile).toBe('default');
   });
 
   it('runs preview checks asynchronously without writing receipts', async () => {
@@ -242,6 +283,30 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect(switched.status).toBe(409);
   });
 
+  it('arms a one-time schedule at its instant and refuses to enable one that has passed (#771)', async () => {
+    const server = app();
+    const future = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    const once = (date?: string) => ({ ...schedule, schedule: { type: 'once', hour: 23, minute: 0, ...(date ? { date } : {}) } });
+
+    const undated = await apiRequest(server, '/api/v1/automations', json(once()));
+    expect(undated.status).toBe(400);
+    expect(((await undated.json()) as any).error).toContain('needs a date');
+    const pastEnabled = await apiRequest(server, '/api/v1/automations', json({ ...once('2020-01-01'), enable: true }));
+    expect(pastEnabled.status).toBe(400);
+    expect(((await pastEnabled.json()) as any).error).toContain('not in the future');
+
+    // Saved paused, a past one is a draft: accepted, but it cannot be enabled until its date moves.
+    const draft = ((await (await apiRequest(server, '/api/v1/automations', json(once('2020-01-01')))).json()) as any).automation;
+    expect((await apiRequest(server, `/api/v1/automations/${draft.id}/enable`, { method: 'POST' })).status).toBe(409);
+    const moved = await apiRequest(server, `/api/v1/automations/${draft.id}`, json({ ...once(future), enabled: true, expectedRevision: draft.revision }, 'PUT'));
+    expect(moved.status).toBe(200);
+
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...once(future), enable: true }))).json()) as any).automation;
+    expect(created).toMatchObject({ enabled: true, schedule: { type: 'once', date: future, hour: 23, minute: 0 } });
+    const state = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(Date.parse(state.nextRunAt)).toBeGreaterThan(Date.now() + 28 * 86_400_000);
+  });
+
   it('clears the next occurrence when the schedule changes, so the timer recomputes', async () => {
     const server = app();
     const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, enable: true }))).json()) as any).automation;
@@ -275,6 +340,16 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect((await apiRequest(server, `/api/v1/automations/${created.id}/check`, json({ mode: 'preview' }))).status).toBe(409);
     const pollDef = ((await (await apiRequest(server, '/api/v1/automations', json(poll))).json()) as any).automation;
     expect((await apiRequest(server, `/api/v1/automations/${pollDef.id}/run`, { method: 'POST' })).status).toBe(409);
+  });
+
+  // telemetry 411fac74: the 409 named only "see the execution log", never why the launch failed.
+  it('says why a by-hand schedule launch failed', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, task: { ...schedule.task, workflow: 'no-such-workflow' } }))).json()) as any).automation;
+    const ran = await apiRequest(server, `/api/v1/automations/${created.id}/run`, { method: 'POST' });
+    expect(ran.status).toBe(409);
+    const { error } = (await ran.json()) as { error: string };
+    expect(error).toMatch(/^the launch failed: .*no-such-workflow/);
   });
 
   it('lists the other registered projects\' automations as templates', async () => {

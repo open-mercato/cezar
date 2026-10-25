@@ -25,6 +25,7 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id' | 'l
     tracked: 'tracked',
     seeded: false,
     holdsMcp: false,
+    private: false,
     precedence: 'Overrides user settings key by key.',
     docsUrl: 'https://code.claude.com/docs/en/settings',
     path: `/repo/${over.label}`,
@@ -216,5 +217,47 @@ describe('AgentConfigSection', () => {
     fireEvent.change(editor, { target: { value: '{"a":2}' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeTruthy())
+  })
+
+  it('an absent private MCP file opens on a starter whose placeholders cannot run anything', async () => {
+    const json = (payload: unknown) =>
+      new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
+    const listing: AgentConfigListing = {
+      editable: true,
+      files: [
+        fileOf({
+          id: 'cezar.private.mcp',
+          label: '.ai/cezar/mcp.local.json',
+          kind: 'mcp',
+          scope: 'local',
+          tracked: 'gitignored',
+          holdsMcp: true,
+          private: true,
+          exists: false,
+          size: 0,
+          version: null,
+        }),
+      ],
+      userMcp: null,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.endsWith('/api/v1/health')) return json(HEALTH)
+        if (url.endsWith('/api/v1/agent-config')) return json(listing)
+        return json({ id: 'cezar.private.mcp', path: '/repo/.ai/cezar/mcp.local.json', exists: false, content: '', version: null })
+      }),
+    )
+    renderSection()
+    fireEvent.click(await screen.findByText('.ai/cezar/mcp.local.json'))
+    const editor = (await screen.findByLabelText('.ai/cezar/mcp.local.json contents')) as HTMLTextAreaElement
+    await waitFor(() => expect(editor.value).toContain('"mcpServers"'))
+    const starter = JSON.parse(editor.value) as { mcpServers: Record<string, { command?: string; args?: string[] }> }
+    // Saved as-is it reaches every agent launch — so no example may fetch or execute a real program.
+    for (const server of Object.values(starter.mcpServers)) {
+      expect(server.command ?? '').not.toMatch(/^(npx|bunx|uvx|pnpm|yarn)$/)
+      expect(server.args ?? []).not.toContain('-y')
+    }
   })
 })

@@ -3,12 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { hostUsageSchema, setWorkspaceConfigInputSchema, type WorkspaceConfigResponse } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
-import { createApp, type WorkspaceConfigResponse } from './server.ts';
+import { createApp } from './server.ts';
 
 /**
  * The workspace settings API (multi-project spec, step 2.7):
@@ -89,10 +90,12 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as WorkspaceConfigResponse & Record<string, unknown>;
     expect(body).toEqual({
+      branding: { name: 'cezar', logoUrl: null },
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -102,6 +105,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 2,
         maxMonitoringSessions: 2,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
@@ -125,12 +129,157 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(body).toMatchObject({ browseRoot: '~/source', projectsDir: '~/clones' });
   });
 
+  it('updates and clears the instance name through the workspace config', async () => {
+    const updated = await putConfig({ branding: { name: 'Acme Studio' } });
+    expect(updated.status).toBe(200);
+    expect((await updated.json() as WorkspaceConfigResponse).branding.name).toBe('Acme Studio');
+    expect((await (await getConfig()).json() as WorkspaceConfigResponse).branding.name).toBe('Acme Studio');
+    expect(rawConfig().branding).toEqual({ name: 'Acme Studio' });
+    const cleared = await putConfig({ branding: { name: null } });
+    expect((await cleared.json() as WorkspaceConfigResponse).branding.name).toBe('cezar');
+    expect(setWorkspaceConfigInputSchema.safeParse({ branding: { name: '  ' } }).success).toBe(false);
+    expect((await putConfig({ branding: { name: '  ' } })).status).toBe(400);
+  });
+
+  it('stores, serves, and removes an uploaded workspace logo', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const form = new FormData();
+    form.set('file', new File([png], 'logo.png', { type: 'image/png' }));
+    const uploaded = await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: form });
+    expect(uploaded.status).toBe(200);
+    expect(existsSync(join(home, 'branding-logo'))).toBe(true);
+    const logoUrl = (await (await getConfig()).json() as WorkspaceConfigResponse).branding.logoUrl!;
+    expect(logoUrl).toMatch(/^\/api\/v1\/workspace\/branding-logo\?v=[a-f0-9]{12}$/);
+    const served = await apiRequest(app, logoUrl);
+    expect(served.headers.get('content-type')).toBe('image/png');
+    expect([...new Uint8Array(await served.arrayBuffer())]).toEqual([...png]);
+    expect((await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'DELETE' })).status).toBe(200);
+    expect(existsSync(join(home, 'branding-logo'))).toBe(false);
+  });
+
+  it('accepts safe vector logos and rejects SVG with active or remote content', async () => {
+    const safeSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z" fill="#000000"/></svg>'
+    const form = new FormData();
+    form.set('file', new File([safeSvg], 'logo.svg', { type: 'image/svg+xml' }));
+    const uploaded = await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: form });
+    expect(uploaded.status).toBe(200);
+    expect(existsSync(join(home, 'branding-logo'))).toBe(true);
+    const unsafe = new FormData();
+    unsafe.set('file', new File(['<svg><script>alert(1)</script></svg>'], 'bad.svg', { type: 'image/svg+xml' }));
+    expect((await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: unsafe })).status).toBe(400);
+  });
+
+  it('refuses a declared type borrowed from Object.prototype, with a 400 and no file written', async () => {
+    // `f.type in BRANDING_LOGO_TYPES` matched inherited keys, so these passed the type gate and
+    // the content sniff then read `.signature` off `Object` — undefined — and threw. A throw
+    // inside an async Zod refine is not caught by `safeParseAsync`, so the route answered 500
+    // instead of the message below, and did it for anything a client cared to declare.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    for (const declared of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const form = new FormData();
+      form.set('file', new File([png], 'logo.png', { type: declared }));
+      const answer = await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: form });
+      expect(answer.status, `declared type ${declared}`).toBe(400);
+      expect(await answer.text()).toContain('Use PNG, JPEG, WebP, GIF, AVIF, or a safe SVG image');
+      expect(existsSync(join(home, 'branding-logo'))).toBe(false);
+    }
+  });
+
+  it('keeps one valid logo when uploads in different formats race', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg>';
+    const pngForm = new FormData();
+    pngForm.set('file', new File([png], 'logo.png', { type: 'image/png' }));
+    const svgForm = new FormData();
+    svgForm.set('file', new File([svg], 'logo.svg', { type: 'image/svg+xml' }));
+
+    const results = await Promise.all([
+      apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: pngForm }),
+      apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: svgForm }),
+    ]);
+    expect(results.map((result) => result.status)).toEqual([200, 200]);
+    const stored = readFileSync(join(home, 'branding-logo'));
+    expect(stored.equals(Buffer.from(png)) || stored.toString('utf8') === svg).toBe(true);
+    const logoUrl = (await (await getConfig()).json() as WorkspaceConfigResponse).branding.logoUrl!;
+    const served = await apiRequest(app, logoUrl);
+    expect(served.status).toBe(200);
+    expect(['image/png', 'image/svg+xml']).toContain(served.headers.get('content-type'));
+    expect(Buffer.from(await served.arrayBuffer()).equals(stored)).toBe(true);
+  });
+
+  it('continues to serve logos saved by the extension-based implementation', async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h10v10H0z"/></svg>');
+    writeFileSync(join(home, 'branding-logo.svg'), svg);
+    const logoUrl = (await (await getConfig()).json() as WorkspaceConfigResponse).branding.logoUrl!;
+    const served = await apiRequest(app, logoUrl);
+    expect(served.status).toBe(200);
+    expect(served.headers.get('content-type')).toBe('image/svg+xml');
+    expect(Buffer.from(await served.arrayBuffer()).equals(svg)).toBe(true);
+  });
+
+  it('linearizes a concurrent upload and removal to either a valid logo or no logo', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const form = new FormData();
+    form.set('file', new File([png], 'logo.png', { type: 'image/png' }));
+    const [uploaded, removed] = await Promise.all([
+      apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: form }),
+      apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'DELETE' }),
+    ]);
+    expect(uploaded.status).toBe(200);
+    expect(removed.status).toBe(200);
+    const current = await apiRequest(app, '/api/v1/workspace/branding-logo');
+    if (existsSync(join(home, 'branding-logo'))) {
+      expect(current.status).toBe(200);
+      expect([...new Uint8Array(await current.arrayBuffer())]).toEqual([...png]);
+    } else {
+      expect(current.status).toBe(404);
+    }
+  });
+
+  it('rejects an oversized multipart logo request before parsing it', async () => {
+    const response = await apiRequest(app, '/api/v1/workspace/branding-logo', {
+      method: 'POST', headers: { 'content-type': 'application/octet-stream', 'content-length': String(3 * 1024 * 1024) },
+      body: 'x'.repeat(3 * 1024 * 1024),
+    });
+    expect(response.status).toBe(413);
+  });
+
+  it('rejects logo bytes whose signature does not match their declared image type', async () => {
+    const form = new FormData();
+    form.set('file', new File([new Uint8Array([1, 2, 3])], 'logo.png', { type: 'image/png' }));
+    const response = await apiRequest(app, '/api/v1/workspace/branding-logo', { method: 'POST', body: form });
+    expect(response.status).toBe(400);
+    expect(existsSync(join(home, 'branding-logo.png'))).toBe(false);
+  });
+
+  // ---- GET /api/v1/workspace/host-usage ---------------------------------------
+
+  it('GET host-usage answers a contract-valid sample from read-only OS facts', async () => {
+    const res = await apiRequest(app, '/api/v1/workspace/host-usage');
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    // The schema is the whole contract: required facts always present, optional ones absent
+    // rather than zeroed (a CI container may legitimately have no swap and no /proc load).
+    expect(hostUsageSchema.safeParse(body).success).toBe(true);
+    const sample = hostUsageSchema.parse(body);
+    expect(sample.memTotalBytes).toBeGreaterThan(0);
+    expect(sample.memUsedBytes).toBeLessThanOrEqual(sample.memTotalBytes);
+    expect(sample.cpuCount).toBeGreaterThanOrEqual(1);
+    expect(Number.isNaN(Date.parse(sample.sampledAt))).toBe(false);
+    // cpuPct is a delta: it may be absent on a cold sampler, but it is never out of range.
+    if (sample.cpuPct !== undefined) {
+      expect(sample.cpuPct).toBeGreaterThanOrEqual(0);
+      expect(sample.cpuPct).toBeLessThanOrEqual(100);
+    }
+  });
+
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
     expect(semaphore.maxParallel()).toBe(2); // the pre-PUT snapshot
     const res = await putConfig({
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
@@ -138,10 +287,12 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     expect(res.status).toBe(200);
     expect((await res.json()) as WorkspaceConfigResponse).toEqual({
+      branding: { name: 'cezar', logoUrl: null },
       browseRoot: '~/',
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -151,6 +302,7 @@ describe('the workspace settings API (step 2.7)', () => {
       resources: {
         maxParallel: 5,
         maxMonitoringSessions: 3,
+        idleTimeoutMinutes: 15,
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
@@ -174,6 +326,22 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.memoryLimitMb()).toBe(2048);
   });
 
+  it('#1232 PUT idle timeout persists, reloads, and reaches the live semaphore', async () => {
+    expect(semaphore.idleTimeoutMinutes()).toBe(15);
+
+    const res = await putConfig({ resources: { idleTimeoutMinutes: 30 } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBe(30);
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBe(30);
+    expect((rawConfig().resources as Record<string, unknown>).idleTimeoutMinutes).toBe(30);
+    expect(semaphore.idleTimeoutMinutes()).toBe(30);
+
+    const disabled = await putConfig({ resources: { idleTimeoutMinutes: null } });
+    expect(disabled.status).toBe(200);
+    expect(((await disabled.json()) as WorkspaceConfigResponse).resources.idleTimeoutMinutes).toBeNull();
+    expect(semaphore.idleTimeoutMinutes()).toBeNull();
+  });
+
   /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
    *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
    *  it to 5 would silently overrule an operator who chose "Park until resumed". */
@@ -195,6 +363,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources).toEqual({
       maxParallel: 5,
       maxMonitoringSessions: 2,
+      idleTimeoutMinutes: 15,
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
@@ -207,6 +376,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: false,
+      orgSkillsRepos: [],
     });
 
     const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;
@@ -355,6 +525,16 @@ describe('the workspace settings API (step 2.7)', () => {
     });
   const rawUiState = () => JSON.parse(readFileSync(workspaceUiStatePath(), 'utf8')) as Record<string, unknown>;
 
+  it('keeps layouts saved by name for every task, and refuses an arrangement past the column cap', async () => {
+    const review = { name: 'Review', columns: [{ view: 'session', width: 50 }, { view: 'changes', width: 50 }] };
+    expect((await putUiState({ savedLayouts: [review] })).status).toBe(200);
+    expect(rawUiState().savedLayouts).toEqual([review]);
+    const four = { name: 'Wide', columns: Array.from({ length: 4 }, () => ({ view: 'files', width: 25 })) };
+    expect((await putUiState({ savedLayouts: [four] })).status).toBe(400);
+    expect((await putUiState({ savedLayouts: [{ name: ' ', columns: review.columns }] })).status).toBe(400);
+    expect(rawUiState().savedLayouts).toEqual([review]);
+  });
+
   it('GET answers {} when no file exists yet', async () => {
     const res = await getUiState();
     expect(res.status).toBe(200);
@@ -375,6 +555,21 @@ describe('the workspace settings API (step 2.7)', () => {
     });
     // The workspace file, not the boot repo's — the per-repo twin stays empty.
     expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
+  });
+
+  it('round-trips future dashboard widget IDs and nested preferences through the file and API', async () => {
+    const dashboard = {
+      order: ['overview', 'future-widget', 'portfolio'],
+      tiles: { fleet: false, futureWidget: false },
+      futureSetting: { enabled: true },
+    };
+    expect((await putUiState({ dashboard })).status).toBe(200);
+    expect(rawUiState()).toEqual({ dashboard });
+    expect(await (await getUiState()).json()).toEqual({ dashboard });
+    expect((await putUiState({ appearance: { accent: 'violet' } })).status).toBe(200);
+    expect(rawUiState().dashboard).toEqual(dashboard);
+    expect((await putUiState({ dashboard: { order: ['overview', 'overview'] } })).status).toBe(400);
+    expect(rawUiState().dashboard).toEqual(dashboard);
   });
 
   it('round-trips the sidebar project order beside the legacy collapse map', async () => {

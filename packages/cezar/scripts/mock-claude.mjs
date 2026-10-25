@@ -9,7 +9,45 @@ import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+// The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
+// (0 = none, the vitest default). `mock:slow`/`mock:pause` are test contracts and never scale.
+const paceEnv = Number(process.env.CEZ_MOCK_PACE);
+const PACE = process.env.CEZ_MOCK_PACE && paceEnv >= 0 ? paceEnv : 1;
+const pace = (ms) => sleep(ms * PACE);
+const write = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+
+// `--include-partial-messages` → every text/thinking block of an assistant
+// frame is streamed first as `stream_event` deltas, the way the real CLI does:
+// block start, deltas, the whole-block assistant frame, block stop.
+const partialMessages = process.argv.includes('--include-partial-messages');
+
+function streamedBlocks(obj) {
+  if (!partialMessages || obj?.type !== 'assistant' || !Array.isArray(obj.message?.content)) return [];
+  return obj.message.content.flatMap((block, index) => {
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
+      return [{ index, start: { type: 'text', text: '' }, deltaType: 'text_delta', key: 'text', text: block.text }];
+    }
+    if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim() !== '') {
+      return [{ index, start: { type: 'thinking', thinking: '', signature: '' }, deltaType: 'thinking_delta', key: 'thinking', text: block.thinking }];
+    }
+    return [];
+  });
+}
+
+function emit(obj) {
+  const blocks = streamedBlocks(obj);
+  const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
+  for (const block of blocks) {
+    write({ type: 'stream_event', event: { type: 'content_block_start', index: block.index, content_block: block.start }, ...envelope });
+    for (const piece of block.text.match(/\S+\s*|\s+/g) ?? [block.text]) {
+      write({ type: 'stream_event', event: { type: 'content_block_delta', index: block.index, delta: { type: block.deltaType, [block.key]: piece } }, ...envelope });
+    }
+  }
+  write(obj);
+  for (const block of blocks) {
+    write({ type: 'stream_event', event: { type: 'content_block_stop', index: block.index }, ...envelope });
+  }
+}
 
 // Testability hook: CEZ_MOCK_ARGS_FILE=<path> appends the argv this mock was
 // spawned with (one JSON array per line), so tests and dry-run proofs can
@@ -20,6 +58,19 @@ if (process.env.CEZ_MOCK_ARGS_FILE) {
   } catch {
     // best effort — never break the mock over the hook
   }
+}
+
+// Testability hook: CEZ_MOCK_MISSING_SESSIONS=<id,id|*> makes `--resume <id>` fail the way the
+// real CLI does once it has pruned that transcript (cleanupPeriodDays).
+const resumeAt = process.argv.indexOf('--resume');
+const resumedId = resumeAt >= 0 ? process.argv[resumeAt + 1] : undefined;
+const missingSessions = (process.env.CEZ_MOCK_MISSING_SESSIONS ?? '').split(',').filter(Boolean);
+if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resumedId))) {
+  // Flushed before exiting: a pipe write is asynchronous on macOS, and exit would drop it.
+  const result = { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: resumedId };
+  await new Promise((resolve) => process.stdout.write(`${JSON.stringify(result)}\n`, resolve));
+  await new Promise((resolve) => process.stderr.write(`No conversation found with session ID: ${resumedId}\n`, resolve));
+  process.exit(1);
 }
 
 emit({ type: 'system', subtype: 'init' });
@@ -89,7 +140,7 @@ function writeHandoffAndTodo() {
 
 async function respond(userText, imageCount) {
   turn += 1;
-  await sleep(250);
+  await pace(250);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
@@ -110,7 +161,15 @@ async function respond(userText, imageCount) {
       : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
   // on downstream work" marker (#490), so the monitoring-status path is testable dry.
-  const monitoringMarker = userText.includes('mock:monitoring') ? '\n\nCEZ:MONITORING' : '';
+  // `mock:monitoring-refs` → the same marker, but with task-reference marker lines AFTER it
+  // (#933): the handoff contract asks for those "as soon as you know", so an agent that opens
+  // its PR in the same turn it parks on its sub-agents emits exactly this shape. It used to
+  // bury the marker and park the run as `waiting` ("needs you").
+  const monitoringMarker = userText.includes('mock:monitoring')
+    ? userText.includes('mock:monitoring-refs')
+      ? '\n\nCEZ:MONITORING\nCEZ:PR=4242\nCEZ:TITLE=waiting on dispatched sub-agents'
+      : '\n\nCEZ:MONITORING'
+    : '';
   // `mock:ask` → the reply ends with a valid CEZ:ASK marker (#473), so the
   // AskUser card path (park `waiting` + emit `ask.requested`) is testable dry.
   // `mock:ask-bad` → a MALFORMED marker (invalid JSON), to prove graceful
@@ -123,7 +182,27 @@ async function respond(userText, imageCount) {
   // `mock:ask-truncated` → a complete payload one closing brace short (#936):
   // the closer repair should still produce one card, note the recovery, and
   // strip the raw marker (which ends on `]`, not `}`).
-  const askMarker = userText.includes('mock:ask-bad')
+  // `mock:ask-refs` → the same valid marker, but with task-reference marker lines AFTER it
+  // (#997, the ASK twin of `mock:monitoring-refs`): the handoff contract asks for those "as
+  // soon as you know" and names only DONE/MONITORING as coming last, so an agent that declares
+  // its issue in the turn it asks emits exactly this shape. It used to bury the marker — no
+  // card, and in a dispatched task an inbox message could answer the Guard instead of the human.
+  // `mock:ask-many` → six distinct questions, one of them with six options:
+  // over the old 4/4 caps, which refused the whole payload and showed the user
+  // raw JSON. It must now render as exactly one card, and a dispatched child
+  // parking on it must still write a run record its index parser can read.
+  const askMarker = userText.includes('mock:ask-many')
+    ? '\n\nCEZ:ASK ' +
+      JSON.stringify({
+        questions: Array.from({ length: 6 }, (_, index) => ({
+          header: `Area ${index}`,
+          question: `Decision ${index} — which way?`,
+          options: Array.from({ length: index === 0 ? 6 : 2 }, (_, option) => ({
+            label: `Option ${index}.${option}`,
+          })),
+        })),
+      })
+    : userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
       ? '\n\nCEZ:ASK {"questions":[]}'
@@ -158,7 +237,21 @@ async function respond(userText, imageCount) {
               ],
             },
           ],
-        })
+        }) +
+        (userText.includes('mock:ask-refs') ? '\nCEZ:ISSUE=997\nCEZ:TITLE=asking before declaring' : '')
+      : '';
+  // `mock:verdict=<name>` → the reply ends with `CEZ:VERDICT <name>`, a graph agent node's
+  // branch choice (spec 2026-09-30-workflow-node-editor). cezar's one-shot verdict nudge carries
+  // no `mock:` marker, so it is answered with the FIRST verdict it lists — which makes the nudge
+  // path testable dry: omit the marker on the first turn, get the verdict on the nudge.
+  const verdictMatch = /mock:verdict=([A-Za-z0-9_-]+)/.exec(userText);
+  const nudgeMatch = userText.includes('You did not end with a verdict.')
+    ? /CEZ:VERDICT ([A-Za-z0-9_-]+)/.exec(userText)
+    : null;
+  const verdictMarker = verdictMatch
+    ? `\n\nCEZ:VERDICT ${verdictMatch[1]}`
+    : nudgeMatch
+      ? `\n\nCEZ:VERDICT ${nudgeMatch[1]}`
       : '';
   // `mock:refs` → the reply carries the in-band task-reference markers
   // (spec 2026-07-18-task-ref-markers), so the declaration path is testable dry.
@@ -236,7 +329,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'text', text: md }], usage: { input_tokens: 100, output_tokens: 200 } },
     });
-    await sleep(100);
+    await pace(100);
     emit({ type: 'result', subtype: 'success', result: md, usage: { input_tokens: 100, output_tokens: 200 }, total_cost_usd: 0.001 });
     return;
   }
@@ -291,7 +384,7 @@ async function respond(userText, imageCount) {
         },
         parent_tool_use_id: null,
       });
-      await sleep(200);
+      await pace(200);
     }
 
     // Children, interleaved across agents so the activity lines visibly race.
@@ -316,14 +409,14 @@ async function respond(userText, imageCount) {
             },
             parent_tool_use_id: agent.id,
           });
-          await sleep(250);
+          await pace(250);
           emit({
             type: 'user',
             message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: step.id, content: step.result }] },
             parent_tool_use_id: agent.id,
           });
         }
-        await sleep(250);
+        await pace(250);
       }
     }
 
@@ -334,7 +427,7 @@ async function respond(userText, imageCount) {
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: agent.id, content: agent.result }] },
         parent_tool_use_id: null,
       });
-      await sleep(200);
+      await pace(200);
     }
 
     const summary = 'Both sub-agents reported back: the redirect drops the cookie in src/middleware.ts:12, and the store layer is clean. (dry-run mock)';
@@ -343,7 +436,7 @@ async function respond(userText, imageCount) {
       message: { role: 'assistant', content: [{ type: 'text', text: summary }], usage: { input_tokens: 400, output_tokens: 60 } },
       parent_tool_use_id: null,
     });
-    await sleep(150);
+    await pace(150);
     emit({
       type: 'result',
       subtype: 'success',
@@ -359,9 +452,13 @@ async function respond(userText, imageCount) {
   // dry-run tests can assert the full apply pipeline.
   if (userText.includes('[cez-namer]')) {
     const numbered = /(?:^|\D)(\d{1,7})(?:\D|$)/.exec(userText);
+    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions): a canned branch
+    // so dry-run tests can assert the fork used it. Only when the prompt carried instructions.
+    const named = userText.includes('Branch naming instructions:');
     const name = JSON.stringify({
       title: 'implementing cr fixes',
       ...(numbered ? { pr: Number(numbered[1]) } : {}),
+      ...(named ? { branch: 'feature/implementing cr fixes' } : {}),
     });
     emit({
       type: 'assistant',
@@ -371,7 +468,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 200, output_tokens: 30 },
       },
     });
-    await sleep(50);
+    await pace(50);
     emit({
       type: 'result',
       subtype: 'success',
@@ -404,7 +501,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 500, output_tokens: 120 },
       },
     });
-    await sleep(100);
+    await pace(100);
     emit({
       type: 'result',
       subtype: 'success',
@@ -435,7 +532,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 850, output_tokens: 40 },
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'assistant',
       message: {
@@ -444,7 +541,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 120, output_tokens: 55 },
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'user',
       message: {
@@ -452,7 +549,7 @@ async function respond(userText, imageCount) {
         content: [{ type: 'tool_result', tool_use_id: `toolu_mock_${turn}`, content: ' M src/example.ts' }],
       },
     });
-    await sleep(200);
+    await pace(200);
     // Agent screenshot in a tool result — exercises the image pipeline
     // (persist to <id>-images/, serve via /api/runs/:id/images/, zoomable
     // card + lightbox in the transcript).
@@ -464,7 +561,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 80, output_tokens: 30 },
       },
     });
-    await sleep(200);
+    await pace(200);
     emit({
       type: 'user',
       message: {
@@ -481,16 +578,16 @@ async function respond(userText, imageCount) {
         ],
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'assistant',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
+        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
-    await sleep(150);
+    await pace(150);
     emit({
       type: 'result',
       subtype: 'success',
@@ -506,11 +603,11 @@ async function respond(userText, imageCount) {
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
+      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });
-  await sleep(150);
+  await pace(150);
   emit({
     type: 'result',
     subtype: 'success',

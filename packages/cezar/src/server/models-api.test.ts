@@ -24,9 +24,7 @@ describe('workspace model catalog API', () => {
 
   type Discover = () => Promise<Array<{ id: string; label: string; description: string }>>;
 
-  /** Claude and Codex share one adapter here — the route contract is what is under test, and each
-   *  adapter's own wire handling lives in its `*-model-catalog.test.ts`. OpenCode takes its own so
-   *  a per-runner assertion can tell the two answers apart. */
+  /** The route contract is what is under test; each adapter's wire handling lives in its own test. */
   const app = (discover: Discover, opencodeDiscover: Discover = discover) =>
     createApp({
       repoRoot: root,
@@ -38,6 +36,7 @@ describe('workspace model catalog API', () => {
           claude: { discover },
           codex: { discover },
           opencode: { discover: opencodeDiscover },
+          junie: { discover },
         },
       }),
     });
@@ -45,6 +44,7 @@ describe('workspace model catalog API', () => {
   it.each([
     ['codex', 'gpt-future'],
     ['claude', 'opus[1m]'],
+    ['junie', 'v1:model:junie:sonnet'],
   ])('returns %s\'s discovered catalog and reuses its cache', async (runner, id) => {
     let calls = 0;
     const server = app(async () => {
@@ -88,6 +88,7 @@ describe('workspace model catalog API', () => {
   it.each([
     ['codex', 'Codex model discovery is temporarily unavailable'],
     ['claude', 'Claude model discovery is temporarily unavailable'],
+    ['junie', 'Junie model discovery is temporarily unavailable'],
   ])('degrades %s discovery failures to an unavailable 200 response', async (runner, reason) => {
     const response = await apiRequest(
       app(async () => { throw new Error('secret detail'); }),
@@ -127,7 +128,30 @@ describe('workspace model catalog API', () => {
   it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be claude, codex or opencode' });
+    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, or junie' });
+  });
+
+  it('returns a Cursor catalog when that adapter is registered', async () => {
+    const server = createApp({
+      repoRoot: root,
+      store,
+      manager: {} as RunManager,
+      version: 'test',
+      modelCatalog: new RunnerModelCatalog({
+        adapters: {
+          cursor: {
+            discover: async () => [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+          },
+        },
+      }),
+    });
+    const response = await apiRequest(server, '/api/v1/models?runner=cursor');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'cursor',
+      models: [{ id: 'composer-2.5' }],
+      source: 'live',
+    });
   });
 
   it('is workspace-level rather than project-scoped', async () => {

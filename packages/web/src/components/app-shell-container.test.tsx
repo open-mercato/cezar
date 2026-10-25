@@ -1,10 +1,11 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import type {
   HealthResponse,
   ProviderStatusResponse,
@@ -24,6 +25,8 @@ beforeEach(() => {
     'matchMedia',
     () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
   )
+  vi.stubGlobal('ResizeObserver', class { observe() {}; unobserve() {}; disconnect() {} })
+  Element.prototype.scrollIntoView = vi.fn()
 })
 
 afterEach(() => {
@@ -41,7 +44,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -66,6 +69,7 @@ const PROVIDERS: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -98,6 +102,29 @@ function renderShell(entry = '/', client: QueryClient = createQueryClient()) {
         <MemoryRouter initialEntries={[entry]}>
           <AppShellContainer>
             <p>route content</p>
+          </AppShellContainer>
+        </MemoryRouter>
+      </ThemeProvider>
+    </QueryClientProvider>,
+    ),
+  }
+}
+
+function renderScopedShell(
+  entry: string,
+  projectId: string,
+  client: QueryClient = createQueryClient(),
+) {
+  return {
+    client,
+    ...render(
+    <QueryClientProvider client={client}>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppShellContainer>
+            <ProjectScopeProvider projectId={projectId}>
+              <p>route content</p>
+            </ProjectScopeProvider>
           </AppShellContainer>
         </MemoryRouter>
       </ThemeProvider>
@@ -162,6 +189,29 @@ describe('skillsUpdateMarkerOf', () => {
 })
 
 describe('sidebar wiring', () => {
+  // The global Tasks page is the one non-project page WITH a sidebar: settings pages render no
+  // sidebar at all (chromeless, spec 2026-10-13-unified-settings), so there is no tracker row
+  // there to keep. Both workspace shapes, since single-project mode changes the nav.
+  it.each([
+    ['/tasks', false],
+    ['/tasks', true],
+  ] as const)('keeps the boot tracker on the global Tasks page %s (singleProject=%s)', async (entry, singleProject) => {
+    serve({
+      '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject, followups: false } },
+      '/api/v1/projects': { projects: [{ ...PROJECT, tracker: 'linear' }], bootProject: PROJECT.id, projectsDir: '/repos' },
+    })
+    renderShell(entry)
+
+    expect(await screen.findByRole('link', { name: 'Linear' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
+    expect(within(drawer).getByRole('link', { name: 'Linear' })).toBeTruthy()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close menu' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Navigation' })).toBeNull())
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    await waitFor(() => expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear'))
+  })
+
   it('renders the repo and version chips from /api/v1/health', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
@@ -184,7 +234,7 @@ describe('sidebar wiring', () => {
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
   it('drops the Inbox nav item and its badge when the server has follow-ups off', async () => {
     serve({
-      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
     })
     renderShell()
@@ -199,7 +249,7 @@ describe('sidebar wiring', () => {
 
   it('never asks for todos on a server with the inbox off', async () => {
     serve({
-      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
+      '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, terminal: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
     })
     renderShell()
@@ -235,6 +285,27 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
+  })
+
+  // #1412 — a recognized remote keeps its GitHub tab while the probe is cold or failing: remote
+  // mode has no health push, so a tab hidden on that answer stayed hidden until a reload.
+  it.each([
+    ['a cold probe', { kind: 'github' as const }],
+    ['a failed probe', { kind: 'github' as const, available: false, reason: 'gh timed out' }],
+  ])('keeps the GitHub nav item for a recognized remote with %s', async (_label, forge) => {
+    serve({ '/api/v1/health': { ...HEALTH, forge }, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+  })
+
+  it('drops the GitHub nav item when no forge remote is recognized', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
   })
 
   it('renders no badge for an empty inbox', async () => {
@@ -336,6 +407,31 @@ describe('sidebar wiring', () => {
     expect(repoChip()).toBeNull()
   })
 
+  it('does not write a non-boot project run list into the boot cache key', async () => {
+    const bootRun = run({ id: 'boot-run', titleSummary: 'Boot task' })
+    const shopRun = run({ id: 'shop-run', titleSummary: 'Shop task' })
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-21T00:00:00.000Z' }],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+      '/api/v1/p/cezar/runs': [bootRun],
+      '/api/v1/p/shop/runs': [shopRun],
+      '/api/v1/workspace/ui-state': {},
+    })
+    const { client } = renderScopedShell('/p/shop/', 'shop')
+
+    await waitFor(() =>
+      expect(client.getQueryData<RunRecord[]>(['shop', 'runs', 'list'])?.map((row) => row.id)).toEqual([
+        'shop-run',
+      ]),
+    )
+    expect(client.getQueryData(['default', 'runs', 'list'])).toBeUndefined()
+  })
+
   it('shows the version chip even outside a git repo', async () => {
     serve({ '/api/v1/health': { ...HEALTH, repo: null }, '/api/v1/todos': [] })
     renderShell()
@@ -356,6 +452,7 @@ describe('sidebar wiring', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'not-installed', enabled: true },
           { provider: 'opencode', status: 'disconnected', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -375,6 +472,7 @@ describe('sidebar wiring', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })

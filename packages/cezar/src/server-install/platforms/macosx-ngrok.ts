@@ -194,6 +194,13 @@ const CEZAR_PLIST_LABEL = 'ai.cezar.cockpit';
 const OFFICIAL_CLI_PKG = 'cezar-cli';
 const cezarPlistPath = (): string => join(homedir(), 'Library', 'LaunchAgents', `${CEZAR_PLIST_LABEL}.plist`);
 
+/** Read the PID launchd currently associates with an agent, when available. */
+async function launchdPid(ctx: InstallContext, uid: number, label: string): Promise<string | undefined> {
+  const result = await ctx.runner.capture('launchctl', ['print', `gui/${uid}/${label}`]);
+  if (result.code !== 0) return undefined;
+  return /^\s*pid\s*=\s*(\d+)\s*$/m.exec(result.stdout)?.[1];
+}
+
 /** Resolve the argv array for the cezar launchd agent, mirroring how the CLI was launched. */
 async function resolveCezarArgv(ctx: InstallContext): Promise<string[]> {
   const node = process.execPath;
@@ -217,7 +224,7 @@ async function resolveCezarArgv(ctx: InstallContext): Promise<string[]> {
 }
 
 /** launchd agent that keeps the cezar cockpit running on the given port. */
-export function cezarLaunchdPlist(repoRoot: string, port: number, argv: string[]): string {
+export function cezarLaunchdPlist(repoRoot: string, port: number, argv: string[], instanceId?: string): string {
   // Give the agent the operator's PATH so cezar can spawn claude/gh/codex.
   const pathDirs = [dirname(process.execPath), ...(process.env.PATH ?? '').split(':'), '/usr/local/bin', '/usr/bin', '/bin']
     .filter((d, i, a) => d && d !== '.' && a.indexOf(d) === i);
@@ -240,7 +247,7 @@ ${argXml}
     <dict>
       <key>CEZ_REMOTE</key>
       <string>1</string>
-      <key>PATH</key>
+${instanceId ? `      <key>CEZ_INSTANCE_ID</key>\n      <string>${escapeXml(instanceId)}</string>\n` : ''}      <key>PATH</key>
       <string>${escapeXml(pathDirs.join(':'))}</string>
     </dict>
     <key>RunAtLoad</key>
@@ -266,7 +273,7 @@ const autostartStep: InstallStep = {
       ctx.ui.info(`DRY RUN — would write ${path} and launchctl bootstrap it.`);
     } else {
       mkdirSync(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
-      writeFileSync(path, cezarLaunchdPlist(ctx.repoRoot, ctx.state.primaryPort, argv), { encoding: 'utf8', mode: 0o600 });
+      writeFileSync(path, cezarLaunchdPlist(ctx.repoRoot, ctx.state.primaryPort, argv, ctx.state.instanceId), { encoding: 'utf8', mode: 0o600 });
       chmodSync(path, 0o600);
       const uid = process.getuid ? process.getuid() : 0;
       await ctx.runner.capture('launchctl', ['bootout', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);
@@ -287,7 +294,7 @@ const autostartStep: InstallStep = {
   },
 };
 
-const identityStep: InstallStep = {
+export const macosxNgrokIdentityStep: InstallStep = {
   id: 'identity',
   title: 'Identity check (ngrok basic-auth active)',
   async check() {
@@ -305,8 +312,38 @@ const identityStep: InstallStep = {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
       up = await verifyCommand(ctx, 'curl', ['-s', 'http://localhost:4040/api/tunnels'], (r) => r.stdout.includes('public_url'));
     }
-    if (up) ctx.ui.success('ngrok tunnel is up (basic-auth enforced at the ngrok edge).');
-    else ctx.ui.warn('Could not reach the ngrok local API (localhost:4040) — check the tunnel started.');
+    if (!up) {
+      ctx.ui.warn('Could not reach the ngrok local API (localhost:4040) — check the tunnel started.');
+      return { artifacts: [] };
+    }
+
+    // Probe the local cockpit directly as well: ngrok proves the public edge,
+    // while the health identity proves this launchd agent did not reach another
+    // cezar process occupying the configured port.
+    let identity: 'match' | 'mismatch' | 'inconclusive' = 'inconclusive';
+    if (ctx.state.instanceId) {
+      const response = await ctx.runner.capture('curl', [
+        '-s', `http://127.0.0.1:${ctx.state.primaryPort}/api/v1/health`, '-w', '\n%{http_code}',
+      ]);
+      const lines = response.stdout.split('\n');
+      const code = lines.pop()?.trim() ?? '000';
+      if (/^[23]\d\d$/.test(code)) {
+        try {
+          const payload = JSON.parse(lines.join('\n')) as { instanceId?: unknown };
+          if (typeof payload.instanceId === 'string') identity = payload.instanceId === ctx.state.instanceId ? 'match' : 'mismatch';
+        } catch {
+          // Older or non-cezar responders make identity inconclusive.
+        }
+      }
+    }
+    if (identity === 'mismatch') {
+      throw new StepAborted(`the cockpit on 127.0.0.1:${ctx.state.primaryPort} is serving another install, not this one`);
+    }
+    if (identity === 'inconclusive') {
+      ctx.ui.warn('ngrok is up, but the cockpit instance identity check could not run (older or invalid health payload).');
+    } else {
+      ctx.ui.success('ngrok tunnel is up (basic-auth enforced at the ngrok edge) and the cockpit identity matches.');
+    }
     return { artifacts: [] };
   },
   async undo() {
@@ -331,7 +368,7 @@ export const macosxNgrok: PlatformStrategy = {
       depCheckStep({ installTool: brewInstallTool, removeHint: brewRemoveHint }),
       autostartStep,
       ngrokStep,
-      identityStep,
+      macosxNgrokIdentityStep,
     ];
   },
   async redeploy(ctx: InstallContext) {
@@ -342,11 +379,29 @@ export const macosxNgrok: PlatformStrategy = {
     }
     const uid = process.getuid ? process.getuid() : 0;
     ctx.ui.info('Redeploying — restarting the cezar cockpit.');
+    const previousPid = await launchdPid(ctx, uid, CEZAR_PLIST_LABEL);
     const cezarCode = await ctx.runner.interactive('launchctl', ['kickstart', '-k', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);
-    if (cezarCode !== 0) ctx.ui.warn(`launchctl kickstart returned non-zero — check \`launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}\`.`);
+    if (cezarCode !== 0) {
+      throw new StepAborted(
+        `launchctl could not restart the cezar cockpit (kickstart exit ${cezarCode}) — ` +
+          `inspect it with: launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}`,
+      );
+    }
+    const currentPid = await launchdPid(ctx, uid, CEZAR_PLIST_LABEL);
+    if (previousPid && currentPid && previousPid === currentPid) {
+      throw new StepAborted(
+        `the cezar cockpit did not actually restart (PID stayed ${currentPid}) — ` +
+          `inspect it with: launchctl print gui/${uid}/${CEZAR_PLIST_LABEL}`,
+      );
+    }
     ctx.ui.info('Redeploying — restarting the ngrok tunnel.');
     const code = await ctx.runner.interactive('launchctl', ['kickstart', '-k', `gui/${uid}/${PLIST_LABEL}`]);
-    if (code !== 0) ctx.ui.warn(`launchctl kickstart returned non-zero — check \`launchctl print gui/${uid}/${PLIST_LABEL}\`.`);
-    await identityStep.run(ctx);
+    if (code !== 0) {
+      throw new StepAborted(
+        `launchctl could not restart the ngrok tunnel (kickstart exit ${code}) — ` +
+          `inspect it with: launchctl print gui/${uid}/${PLIST_LABEL}`,
+      );
+    }
+    await macosxNgrokIdentityStep.run(ctx);
   },
 };

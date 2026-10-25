@@ -1,7 +1,7 @@
 import type { ProjectsResponse, WorkspaceLastLocation } from '@open-mercato/cezar-api-client'
 import { describe, expect, it } from 'vitest'
 
-import { locationToRestore, locationToSave, sameLastLocation } from './last-location'
+import { bareRootLanding, locationToRestore, locationToSave, sameLastLocation } from './last-location'
 
 const REGISTRY: ProjectsResponse = {
   bootProject: 'boot',
@@ -37,8 +37,9 @@ const REGISTRY: ProjectsResponse = {
   ],
 }
 
-/** What the server answers when cezar was started outside every saved project:
- *  the served folder leads the list, flagged, and `bootProject` names it. */
+/** What the server answers when cezar was started somewhere with an EMPTY registry: the served
+ *  folder is the whole list, flagged, and `bootProject` names it. (With projects registered the
+ *  row is not listed at all — `bareRootLanding` below is what that case needs.) */
 const UNREGISTERED_BOOT: ProjectsResponse = {
   bootProject: 'scratch',
   projectsDir: '/work',
@@ -53,7 +54,6 @@ const UNREGISTERED_BOOT: ProjectsResponse = {
       status: 'ok',
       unregistered: true,
     },
-    ...REGISTRY.projects,
   ],
 }
 
@@ -96,6 +96,10 @@ describe('locationToSave', () => {
     ['a missing project', { pathname: '/p/gone/', search: '', hash: '' }],
     ['an overlong path', { pathname: `/p/boot/${'x'.repeat(2041)}`, search: '', hash: '' }],
     ['a malformed encoded project', { pathname: '/p/%/', search: '', hash: '' }],
+    // Settings is full-screen with no app chrome: a launch restored into it had nowhere for
+    // Back to go but `/`, which restored it again (spec 2026-10-13-unified-settings).
+    ['a project settings index', { pathname: '/p/boot/settings', search: '', hash: '' }],
+    ['a project settings section', { pathname: '/p/other/settings/agents', search: '', hash: '' }],
   ])('rejects %s', (_case, location) => {
     expect(locationToSave(location, REGISTRY)).toBeNull()
   })
@@ -104,11 +108,10 @@ describe('locationToSave', () => {
     expect(locationToSave({ pathname: '/p/boot/', search: '', hash: '' }, undefined)).toBeNull()
   })
 
-  // Since boot registration became seed-once, the folder cezar was started in is
-  // routinely absent from the registry — `GET /api/v1/projects` lists it with
-  // `unregistered: true` so it stays a usable project everywhere, this included.
-  // Without that row it could never be the restore target, and reopening the bare
-  // root would drop the user into some other project.
+  // A first launch registers nothing (seed-once) — `GET /api/v1/projects` answers the served
+  // folder with `unregistered: true`, and it has to be a usable project everywhere, this
+  // included. Without that row it could never be the restore target, and the user's only
+  // project would not survive reopening the bare root.
   it('saves an unregistered boot project like any other', () => {
     expect(locationToSave({ pathname: '/p/scratch/tasks', search: '', hash: '' }, UNREGISTERED_BOOT)).toEqual({
       projectId: 'scratch',
@@ -143,6 +146,8 @@ describe('locationToRestore', () => {
     ['a missing project', { projectId: 'gone', pathname: '/p/gone/' }],
     ['a search without ?', { projectId: 'boot', pathname: '/p/boot/', search: 'tab=runs' }],
     ['a hash without #', { projectId: 'boot', pathname: '/p/boot/', hash: 'L2' }],
+    // Stored by a build that still saved settings pages — never restored into.
+    ['a stored settings page', { projectId: 'other', pathname: '/p/other/settings/agents' }],
   ])('rejects %s', (_case, value) => {
     expect(locationToRestore(value, REGISTRY, 'boot')).toBeNull()
   })
@@ -178,5 +183,46 @@ describe('sameLastLocation', () => {
     expect(sameLastLocation(current, { ...current, pathname: '/p/boot/git' })).toBe(false)
     expect(sameLastLocation(current, { ...current, search: '?tab=git' })).toBe(false)
     expect(sameLastLocation(current, { ...current, hash: '#L2' })).toBe(false)
+  })
+})
+
+describe('bareRootLanding', () => {
+  it('lands on the boot project when the registry lists it', () => {
+    expect(bareRootLanding(REGISTRY, 'boot')).toBe('boot')
+  })
+
+  it('lands on the boot project when it is the whole list (empty registry)', () => {
+    expect(bareRootLanding(UNREGISTERED_BOOT, 'scratch')).toBe('scratch')
+  })
+
+  it('lands on the most recently opened project when the boot folder is not listed', () => {
+    const registry: ProjectsResponse = {
+      ...REGISTRY,
+      bootProject: 'scratch',
+      projects: [
+        { ...REGISTRY.projects[0]!, lastOpenedAt: '2026-07-01T10:00:00.000Z' },
+        { ...REGISTRY.projects[1]!, lastOpenedAt: '2026-07-29T10:00:00.000Z' },
+      ],
+    }
+
+    expect(bareRootLanding(registry, 'scratch')).toBe('other')
+  })
+
+  it('skips a missing root, and keeps the boot project when every row is missing', () => {
+    const projects = REGISTRY.projects.map((project) => ({ ...project, status: 'missing' as const }))
+    const usable: ProjectsResponse = {
+      ...REGISTRY,
+      bootProject: 'scratch',
+      projects: [projects[0]!, { ...REGISTRY.projects[2]!, status: 'ok' as const }],
+    }
+
+    expect(bareRootLanding(usable, 'scratch')).toBe('gone')
+    expect(bareRootLanding({ ...REGISTRY, bootProject: 'scratch', projects }, 'scratch')).toBe(
+      'scratch',
+    )
+  })
+
+  it('keeps the boot project when the registry is unavailable', () => {
+    expect(bareRootLanding(undefined, 'scratch')).toBe('scratch')
   })
 })

@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  PROVIDER_IDS,
   ProviderAuthService,
   type ProviderConnectionState,
   type ProviderId,
@@ -15,6 +16,28 @@ import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { WorkspaceEventBus, createApp } from './server.ts';
 
+// `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
+// executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
+// env-only resolution so the suite reads the same on every host; `claude-bin.test.ts` tests
+// discovery for real.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/claude-bin.ts')>()),
+  resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+}));
+
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, every status probe in this suite spawned a
+// real `junie` process — authenticating against JetBrains for real on a machine that has it
+// installed and logged in (#M3 review). Every test here expects junie 'connected', so a constant
+// stub matches every case.
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
+
+/** One status command per provider — the size of a full probe round. Junie is probed through
+ *  `probeJunieAuthentication` (mocked above), never `runCommand`, so it is not counted. */
+const PROBE_ROUND = PROVIDER_IDS.filter((provider) => provider !== 'junie').length;
+
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
   codex: 'Logged in using ChatGPT',
@@ -23,7 +46,19 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     '●  Anthropic oauth',
     '└  1 credential',
   ].join('\n'),
+  cursor: JSON.stringify({
+    status: 'authenticated',
+    isAuthenticated: true,
+    userInfo: { email: 'dev@example.com' },
+  }),
   pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
+  // junie never reaches `runCommand`/`parse` at all — `probe()` special-cases it onto
+  // `probeJunieAuthentication` (mocked above), so this value is only here to satisfy
+  // `Record<ProviderId, string>` and is never read.
+  junie: 'Junie version: 26.9.22 (3419.7)',
+  // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
+  // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
+  copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -33,11 +68,20 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
     '┌  Credentials ~/.local/share/opencode/auth.json',
     '└  0 credentials',
   ].join('\n'),
+  cursor: JSON.stringify({
+    status: 'unauthenticated',
+    isAuthenticated: false,
+  }),
   pi: 'No models available. Use /login to authenticate.',
+  junie: 'Junie version: 26.9.22 (3419.7)',
+  copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
+  // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
+  // Cursor installed (#1503), so match it too or the suite fails only on such machines.
+  if (executable === 'agent' || basename(executable) === 'cursor-agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
@@ -112,6 +156,7 @@ describe('workspace provider API', () => {
     workspaceEvents?: WorkspaceEventBus;
     workspaceConfig?: ReturnType<typeof memoryWorkspaceConfig>;
     contexts?: ProjectContexts;
+    loginWatchOffsetsMs?: readonly number[];
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -123,6 +168,7 @@ describe('workspace provider API', () => {
     workspaceEvents: options.workspaceEvents,
     workspaceConfig: options.workspaceConfig,
     contexts: options.contexts,
+    loginWatchOffsetsMs: options.loginWatchOffsetsMs ?? [],
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -163,7 +209,10 @@ describe('workspace provider API', () => {
           hint: 'Install OpenCode, then run `opencode auth login`.',
           enabled: true,
         },
+        { provider: 'cursor', status: 'connected', enabled: true },
         { provider: 'pi', status: 'connected', enabled: true },
+        { provider: 'junie', status: 'connected', enabled: true },
+        { provider: 'copilot', status: 'connected', enabled: true },
       ],
     });
   });
@@ -171,7 +220,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'pi']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -183,7 +232,10 @@ describe('workspace provider API', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+        { provider: 'cursor', status: 'connected', enabled: true },
         { provider: 'pi', status: 'connected', enabled: true },
+        { provider: 'junie', status: 'connected', enabled: true },
+        { provider: 'copilot', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -286,7 +338,7 @@ describe('workspace provider API', () => {
     await apiRequest(server, '/api/v1/providers/status');
     await apiRequest(server, '/api/v1/providers/status?refresh=1');
 
-    expect(runCommand).toHaveBeenCalledTimes(8);
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND * 2);
   });
 
   it('GET without refresh reuses the completed provider cache', async () => {
@@ -300,7 +352,7 @@ describe('workspace provider API', () => {
     await apiRequest(server, '/api/v1/providers/status');
     await apiRequest(server, '/api/v1/providers/status');
 
-    expect(runCommand).toHaveBeenCalledTimes(4);
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
   });
 
   it('POST /api/v1/providers/:provider/retry clears only the current incident without enabling a disabled provider', async () => {
@@ -373,7 +425,9 @@ describe('workspace provider API', () => {
   });
 
   it('changes API truth immediately after a runtime auth rejection', async () => {
-    const providerAuth = service({}, undefined, () => 'auth-incident-1');
+    // A CLI that agrees the credentials are gone, so the latch's self-check confirms the rejection
+    // and this case stays about its own subject: the API tells the truth the moment one is raised.
+    const providerAuth = service({ claude: 'disconnected' }, undefined, () => 'auth-incident-1');
     const bus = new WorkspaceEventBus();
     const seen: unknown[] = [];
     bus.on((event, data) => {
@@ -429,7 +483,9 @@ describe('workspace provider API', () => {
     const contexts = new ProjectContexts({
       listProjects: async () => [{ id: 'lazy', root: lazyRoot, status: 'not-git' }],
     });
-    const providerAuth = service();
+    // As above: the subject is that a lazily built project's store is observed at all, so the CLI
+    // must confirm the rejection rather than let the self-check clear it.
+    const providerAuth = service({ claude: 'disconnected' });
     const recover = vi.spyOn(RunManager.prototype, 'recover').mockImplementationOnce(
       async function recoveryFailure(this: RunManager) {
         const recoveringStore = (
@@ -485,7 +541,7 @@ describe('workspace provider API', () => {
     const openTerminal = vi.fn(async () => true);
     const pending = connect(app({ providerAuth, openTerminal }), 'claude');
 
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND));
     providerAuth.reportRuntimeAuthFailure('claude');
     release();
 
@@ -593,16 +649,52 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
-  it('POST returns 409 plus retry guidance when status is unknown', async () => {
+  it('POST opens the login command when status is unknown, so an unreadable probe is not a dead end', async () => {
     const openTerminal = vi.fn(async () => true);
     const response = await connect(app({
       providerAuth: service({ claude: 'unknown' }),
       openTerminal,
     }), 'claude');
 
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
+    expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
+  });
+
+  it('POST re-checks the login it opened and tells the cockpit once it is connected', async () => {
+    const states: Partial<Record<ProviderId, ProviderConnectionState>> = { codex: 'disconnected' };
+    const workspaceEvents = new WorkspaceEventBus();
+    const events: unknown[] = [];
+    workspaceEvents.on((event, data) => {
+      if (event === 'provider-status') events.push(data);
+    });
+    const server = app({
+      providerAuth: service(states),
+      openTerminal: async () => {
+        states.codex = 'connected';
+        return true;
+      },
+      workspaceEvents,
+      loginWatchOffsetsMs: [0],
+    });
+
+    expect((await connect(server, 'codex')).status).toBe(200);
+    await vi.waitFor(() => expect(events).toEqual([
+      expect.objectContaining({ provider: 'codex', status: 'connected' }),
+    ]));
+  });
+
+  it('POST returns 409 plus command for an unknown status when localHandoff is false', async () => {
+    const openTerminal = vi.fn(async () => true);
+    const response = await connect(app({
+      providerAuth: service({ claude: 'unknown' }),
+      openTerminal,
+      bindHost: '0.0.0.0',
+    }), 'claude');
+
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Authentication could not be verified. Try again.',
+      error: 'Run this command on the machine hosting cezar.',
       command: "'claude' auth login",
     });
     expect(openTerminal).not.toHaveBeenCalled();
@@ -645,6 +737,57 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
+  describe('POST /api/v1/providers/:provider/update', () => {
+    const update = (server: ReturnType<typeof app>, provider: string) =>
+      apiRequest(server, `/api/v1/providers/${provider}/update`, { method: 'POST' });
+
+    it('opens a terminal running the CLI\'s own update', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal }), 'opencode');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command: "'opencode' upgrade" });
+      expect(openTerminal).toHaveBeenCalledWith(root, "'opencode' upgrade");
+    });
+
+    it('answers 409 without a command for a CLI that cannot update itself', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal }), 'codex');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'This agent has no update command of its own. Update it the way you installed it.',
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 plus command when localHandoff is false', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal, bindHost: '0.0.0.0' }), 'opencode');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'Run this command on the machine hosting cezar.',
+        command: "'opencode' upgrade",
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 plus command when no terminal opens', async () => {
+      const response = await update(app({ openTerminal: async () => false }), 'claude');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'No terminal emulator could be opened. Run this command manually.',
+        command: "'claude' update",
+      });
+    });
+
+    it('rejects an unknown provider', async () => {
+      expect((await update(app(), 'nope')).status).toBe(400);
+    });
+  });
+
   it('POST returns 409 plus command when the terminal launcher returns false', async () => {
     const openTerminal = vi.fn(async () => false);
     const response = await connect(app({
@@ -685,7 +828,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, or pi' });
+    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, or copilot' });
   });
 
   it('never places request-controlled text in the opened command', async () => {

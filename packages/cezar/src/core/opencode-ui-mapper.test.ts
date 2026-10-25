@@ -587,8 +587,7 @@ describe('OpencodeServerRunner v2 wiring (against the bundled mock server)', () 
     );
     await session.result;
 
-    // v1 stays intact (old NDJSON recordings must keep replaying) — including its
-    // HTTP-response-synthesized turn-end.
+    // v1 stays intact (old NDJSON recordings must keep replaying).
     const v1Types = v1.map((e) => e.type);
     expect(v1Types).toContain('session');
     expect(v1Types).toContain('text');
@@ -626,9 +625,10 @@ describe('OpencodeServerRunner v2 wiring (against the bundled mock server)', () 
     });
 
     // The ordering proof: the mock resolves the HTTP prompt response BEFORE
-    // streaming the final text part and session.idle. v1's turn-end is
-    // synthesized from that response; v2's turn.completed must come from
-    // session.idle — i.e. AFTER the late "Done." delta.
+    // streaming the final text part and session.idle, so a turn.completed taken
+    // from that response would land before the late "Done." delta. It must come
+    // from session.idle, i.e. after it. (v1's turn-end reads the same signal
+    // since #897; `opencode-server-runner.test.ts` pins that half.)
     const lateDelta = v2.findIndex((e) => e.type === 'item.delta' && e.itemId === 'prt_mock_t2');
     const turnDone = v2.findIndex((e) => e.type === 'turn.completed');
     expect(lateDelta).toBeGreaterThan(-1);

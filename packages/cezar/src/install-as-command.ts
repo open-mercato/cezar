@@ -1,7 +1,7 @@
 /** The pure half of `scripts/install-as-command.mjs` (spec 013).
  *
  *  `npm run install-as-command` builds this checkout and puts a global
- *  `cezar`/`cez`/`cezar-cli` command on PATH pointing at THIS working tree —
+ *  `cezar`/`cez`/`cezar-cli`/`cezar-run` command on PATH pointing at THIS working tree —
  *  the local-dev equivalent of `npx cezar-cli`, with no publish. This module
  *  owns the *decisions* (which npm command runs, where the shims land) so they
  *  are unit-testable; the `.mjs` script owns the spawning and exit codes.
@@ -14,9 +14,10 @@ import path from 'node:path';
  *  uninstall is a single `npm rm --global` of this name regardless of flavor. */
 export const PACKAGE_NAME = '@open-mercato/cezar';
 
-/** Every bin the main package installs. `cezar-cli` is added (spec 013) so a
- *  single link / global-install exposes the same name as `npx cezar-cli`. */
-export const BIN_NAMES = ['cezar', 'cez', 'cezar-cli'] as const;
+/** Every bin the main package installs. `cezar-cli` (spec 013) and `cezar-run` are added
+ *  so a single link / global-install exposes the same names as `npx cezar-cli` and
+ *  `npx cezar-run`. */
+export const BIN_NAMES = ['cezar', 'cez', 'cezar-cli', 'cezar-run'] as const;
 
 export type InstallMode = 'link' | 'global' | 'uninstall';
 

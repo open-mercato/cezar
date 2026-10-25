@@ -6,6 +6,7 @@ import {
   type DispatchIntent,
   type Runner,
 } from '@open-mercato/cezar-api-client'
+import { useRunnerModels } from '@/api/queries'
 import { chipClass } from '@/components/picker-pill'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -15,7 +16,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useIsDesktop } from '@/lib/use-desktop'
 import { useLongPress } from '@/lib/use-long-press'
 import { cn } from '@/lib/utils'
-import { RUNNERS, type ModelPreset } from '@/routes/new-task-form'
+import { RUNNERS, modelsForRunner, type ModelPreset } from '@/routes/new-task-form'
 
 /**
  * The composer's Dispatch toggle (spec 2026-09-10-dispatch; mockup "option 3"): an icon-only
@@ -47,7 +48,7 @@ export function DispatchToggle({
   onSettingsOpenChange,
   runners,
   parentRunner,
-  modelsFor,
+  parentModels,
 }: {
   available: boolean
   value: DispatchIntent | null
@@ -58,15 +59,33 @@ export function DispatchToggle({
   runners: readonly Runner[]
   /** What the parent task runs as: "same as parent" resolves against it for the model list. */
   parentRunner: Runner
-  /** The composer's model catalog for a runner (its live catalog for the parent's runner, the
-   *  static presets for the others). */
-  modelsFor: (runner: Runner) => readonly ModelPreset[]
+  /** The composer's own model catalog — already fetched for the parent's runner, and carrying
+   *  the draft/configured ids the composer keeps representable. Used as-is while the subtasks
+   *  inherit the runner. */
+  parentModels: readonly ModelPreset[]
 }) {
   const [open, setOpenState] = useState(false)
   const desktop = useIsDesktop()
   // The limits last seen while on — what a re-enable restores.
   const remembered = useRef<DispatchIntent>({})
   if (value !== null) remembered.current = value
+
+  // The settings edit this intent whether the toggle is on or off (editing a field turns it on),
+  // so the model list is resolved from the same object the form below renders.
+  const intent = value ?? remembered.current
+  const subtaskRunner = intent.runner ?? parentRunner
+  // The catalog belongs to the runner the SUBTASKS will use, not the parent's (#794 — the rule
+  // the thread's Continue and the engine pills already follow). Without it a subtask runner that
+  // DISCOVERS its models — codex, opencode, cursor, junie — showed its static presets, which are
+  // `auto` alone since #784/#794, and the select folds `auto` into its own "same as parent": the
+  // picker collapsed to one option for exactly the runners whose models are worth picking.
+  // Fetched only when that runner differs from the parent's; `parentModels` already covers the
+  // inherited case, so the common path still makes one request for the whole composer.
+  const subtaskCatalog = useRunnerModels(subtaskRunner, available && subtaskRunner !== parentRunner)
+  const models =
+    subtaskRunner === parentRunner
+      ? parentModels
+      : modelsForRunner(subtaskRunner, subtaskCatalog.data)
 
   const setOpen = (next: boolean) => {
     setOpenState(next)
@@ -108,8 +127,7 @@ export function DispatchToggle({
       remembered={remembered.current}
       onChange={onChange}
       runners={runners}
-      parentRunner={parentRunner}
-      modelsFor={modelsFor}
+      models={models}
     />
   )
 
@@ -173,7 +191,10 @@ export function DispatchToggle({
           <SheetContent
             side="bottom"
             data-slot="dispatch-settings"
-            className="rounded-t-xl p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+            // This sheet has no SheetHeader, so nothing else clears the sheet's close button and
+            // it lands on the settings header's own switch — half-covering it before the button
+            // grew to a 44px target, entirely after. Reserve the strip it occupies (`top-4` + 44px).
+            className="rounded-t-xl p-4 pt-16 pb-[max(1rem,env(safe-area-inset-bottom))]"
           >
             {/* Radix wants a title on every dialog; the form's own header is the visible one. */}
             <SheetTitle className="sr-only">Dispatch</SheetTitle>
@@ -243,15 +264,16 @@ function DispatchSettings({
   remembered,
   onChange,
   runners,
-  parentRunner,
-  modelsFor,
+  models: catalog,
 }: {
   value: DispatchIntent | null
   remembered: DispatchIntent
   onChange: (next: DispatchIntent | null) => void
   runners: readonly Runner[]
-  parentRunner: Runner
-  modelsFor: (runner: Runner) => readonly ModelPreset[]
+  /** The model catalog of the runner the SUBTASKS will use — the parent's own while the runner
+   *  select sits on "same as parent", that runner's otherwise. Resolved by `DispatchToggle`,
+   *  which owns the fetch. */
+  models: readonly ModelPreset[]
 }) {
   const id = useId()
   const on = value !== null
@@ -259,8 +281,8 @@ function DispatchSettings({
   // Editing any field turns it on: a limit is a statement about a dispatch that will happen.
   const set = (patch: Partial<DispatchIntent>) => onChange(compact({ ...intent, ...patch }))
 
-  const subtaskRunner = intent.runner ?? parentRunner
-  const models = modelsFor(subtaskRunner).filter((preset) => preset.id !== '')
+  // `auto` (`id: ''`) is dropped because the select's own empty option already says it.
+  const models = catalog.filter((preset) => preset.id !== '')
   const runnerOptions = RUNNERS.filter((runner) => runners.includes(runner.id))
   const maxChoices: number[] =
     intent.maxSubtasks !== undefined && !MAX_SUBTASKS_CHOICES.some((n) => n === intent.maxSubtasks)

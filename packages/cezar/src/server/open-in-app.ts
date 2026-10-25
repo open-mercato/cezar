@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { RunnerId } from '../core/agent-runner.ts';
+import { claudeShellCommand, isExecutable } from '../core/claude-bin.ts';
+import { isShellEmbeddable, quoteExecutable } from '../core/shell-env.ts';
 import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
 
@@ -83,18 +85,26 @@ export function resolveOnPath(
   wsl: boolean = isWsl(),
   searchPath: string = process.env.PATH ?? '',
 ): string | null {
+  // Native Windows never spawns an extensionless name: libuv appends `.com`/`.exe` and only tries
+  // the literal name when it HAS an extension. VS Code's bin dir holds a bare `code` (a bash shim
+  // for Git Bash) beside `code.cmd`, so offering it made every open fail (telemetry 4fda9ce5).
+  const names = platform === 'win32' ? [`${bin}.com`, `${bin}.exe`] : wsl ? [bin, `${bin}.com`, `${bin}.exe`] : [bin];
+  return findOnPath(names, platform, searchPath);
+}
+
+/** Is `bin` on PATH for a SHELL — what an agent-CLI handoff runs in, since it opens a terminal
+ *  that types the command. A bare npm shim counts there, unlike in `resolveOnPath`. */
+function onShellPath(bin: string): boolean {
+  const suffixed = process.platform === 'win32' || isWsl();
+  return findOnPath(suffixed ? [bin, `${bin}.com`, `${bin}.exe`] : [bin], process.platform, process.env.PATH ?? '') !== null;
+}
+
+function findOnPath(names: string[], platform: NodeJS.Platform, searchPath: string): string | null {
   const dirs = searchPath.split(platform === 'win32' ? ';' : ':');
-  const suffixed = platform === 'win32' || wsl;
-  const names = suffixed ? [bin, `${bin}.com`, `${bin}.exe`] : [bin];
   for (const dir of dirs) {
     if (!dir) continue;
     for (const name of names) {
-      try {
-        accessSync(join(dir, name), constants.X_OK);
-        return name;
-      } catch {
-        // keep looking
-      }
+      if (isExecutable(join(dir, name))) return name;
     }
   }
   return null;
@@ -126,12 +136,47 @@ function editorAvailable(editor: EditorDef): boolean {
 /** Coding-agent CLIs a session can be handed off to (#cli-handoff). Selecting one opens a
  *  terminal that resumes THIS run's session when the runner matches, or launches a fresh CLI in
  *  the worktree otherwise. The actual command is built server-side (needs the run's session). */
-const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: string; envBin?: string }> = [
-  { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: process.env.CEZ_CLAUDE_BIN },
-  { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: process.env.CEZ_CODEX_BIN },
-  { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: process.env.CEZ_OPENCODE_BIN },
-  { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: process.env.CEZ_PI_BIN },
+const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: string; envBin: () => string | undefined }> = [
+  // `claudeShellCommand` also finds a native-installer `~/.local/bin/claude` that is off PATH;
+  // null back means "not found beyond PATH", which `onPath` already covers. Whatever it finds
+  // must also reach the LAUNCH — see `withResolvedClaudeBin`.
+  { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: () => claudeShellCommand() ?? undefined },
+  { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: () => process.env.CEZ_CODEX_BIN },
+  { runner: 'junie', label: 'Junie CLI', icon: 'junie', bin: 'junie', envBin: () => process.env.CEZ_JUNIE_BIN },
+  { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: () => process.env.CEZ_OPENCODE_BIN },
+  { runner: 'cursor', label: 'Cursor Agent', icon: 'cursor', bin: 'agent', envBin: () => process.env.CEZ_CURSOR_AGENT_BIN },
+  { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: () => process.env.CEZ_PI_BIN },
+  { runner: 'copilot', label: 'Copilot CLI', icon: 'copilot', bin: 'copilot', envBin: () => process.env.CEZ_COPILOT_BIN },
 ];
+
+/**
+ * Rewrite a CLI-handoff command so it names the claude binary by PATH when detection found one
+ * off this process's PATH.
+ *
+ * Detection and launch run in DIFFERENT environments, and only detection sees the resolution:
+ * the terminal we open is a fresh non-interactive bash on Linux (`createLaunchScript` — it never
+ * sources the rc the native installer appended `~/.local/bin` to) or a `cmd` inheriting our own
+ * PATH-less environment on Windows. Offering "Claude CLI" in the menu and then opening a window
+ * that says `command not found` is exactly the broken-affordance case #469 forbids, so the
+ * absolute path has to travel with the command.
+ *
+ * macOS needs none of this — `osascript … do script` starts an interactive login shell — but
+ * substituting there too keeps one code path, and an absolute path is correct in every shell.
+ */
+export function withResolvedClaudeBin(
+  command: string,
+  runner: RunnerId,
+  platform: NodeJS.Platform = process.platform,
+  resolved: string | null = claudeShellCommand(),
+): string {
+  if (runner !== 'claude' || resolved === null) return command;
+  // `command` is `claude` or `claude --resume <id>` (`resumeCommand`); leave anything else alone.
+  if (command !== 'claude' && !command.startsWith('claude ')) return command;
+  // A path this shell cannot be given without mangling (see `quoteExecutable`'s win32 caveat):
+  // keep the bare `claude`, which still works wherever the opened terminal finds one itself.
+  if (!isShellEmbeddable(resolved, platform)) return command;
+  return quoteExecutable(resolved, platform) + command.slice('claude'.length);
+}
 
 /** The runner behind a `cli:<runner>` open target, or null when the id isn't a CLI handoff. */
 export function agentCliRunner(targetId: string): RunnerId | null {
@@ -150,7 +195,8 @@ export function detectOpenTargets(): OpenTarget[] {
     if (editorAvailable(editor)) targets.push({ id: editor.id, label: editor.label, icon: editor.icon });
   }
   for (const cli of AGENT_CLIS) {
-    if ((cli.envBin && existsSync(cli.envBin)) || onPath(cli.bin)) {
+    const envBin = cli.envBin();
+    if ((envBin && existsSync(envBin)) || onShellPath(cli.bin)) {
       targets.push({ id: `cli:${cli.runner}`, label: cli.label, icon: cli.icon });
     }
   }

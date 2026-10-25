@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ExternalLinkIcon, IdCardIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
+import { useSearchParams } from 'react-router'
 
 import { ApiError, putWorkspaceConfig } from '@/api/client'
 
@@ -44,6 +45,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
+import { RUNNER_ORDER } from '@/lib/provider-status'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
@@ -69,8 +71,9 @@ import { AddAccountDialog } from './add-account-dialog'
  * identity, and raw CLI output never cross this boundary" — so it is built to stay narrow: the data
  * is NOT a field on the accounts listing, it comes from its own on-demand route
  * (`useAgentAccountDetails`, `enabled` only once the row is expanded), and it is refused in hosted
- * mode. Nothing fetches it until a person asks, which is what makes "hidden by default" mean the
- * data is absent from the page rather than merely unrendered.
+ * mode unless remote account management is explicitly enabled. Nothing fetches it until a person
+ * asks, which is what makes "hidden by default" mean the data is absent from the page rather than
+ * merely unrendered.
  *
  * Rename and Remove live in that same panel rather than on the collapsed row. A row is a reading
  * surface — which account, where, signed in or not — and Remove sitting on it put a destructive
@@ -91,16 +94,22 @@ import { AddAccountDialog } from './add-account-dialog'
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
+  copilot: 'GitHub Copilot CLI',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
 const PROVIDER_INSTALL: Record<ProviderId, string> = {
-  claude: 'npm i -g @anthropic-ai/claude-code',
+  claude: 'curl -fsSL https://claude.ai/install.sh | bash',
   codex: 'npm i -g @openai/codex',
+  junie: 'https://www.jetbrains.com/junie/',
   opencode: 'https://opencode.ai',
+  cursor: 'curl https://cursor.com/install -fsS | bash',
   pi: 'https://github.com/badlogic/pi-mono',
+  copilot: 'npm i -g @github/copilot',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */
@@ -143,8 +152,14 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
 
   // Every agent gets a tab, including one that cannot carry a second login: the tab is where its
   // install state and config folder live, and hiding OpenCode would just move the question
-  // "is OpenCode set up?" somewhere else.
-  const providers: ProviderId[] = ['claude', 'codex', 'opencode', 'pi']
+  // "is OpenCode set up?" somewhere else. Derived, not written out: as a literal this list went
+  // stale the moment a fifth runner existed, and "every agent" quietly became "four of them".
+  const providers: readonly ProviderId[] = RUNNER_ORDER
+  // `?agent=<id>` opens that agent's tab — the Tools menu's "Set up →" deep link for a missing
+  // CLI. Anything else (absent, unknown) keeps the first tab, as before.
+  const [searchParams] = useSearchParams()
+  const requested = searchParams.get('agent')
+  const initialTab = providers.find((provider) => provider === requested) ?? 'claude'
 
   if (!data.editable) {
     return (
@@ -154,8 +169,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
       >
         <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
         <p data-slot="accounts-hosted" className="text-[13px] text-soft-foreground">
-          Agent accounts are managed from the machine that owns the checkout — this cockpit runs in
-          hosted mode.
+          Agent accounts are disabled for remote access. On a trusted, authenticated self-hosted
+          deployment, set CEZ_REMOTE_AGENT_ACCOUNTS=1 and restart cezar.
         </p>
       </div>
     )
@@ -177,7 +192,9 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
 
       <DefaultsForNewProjects profiles={data} />
 
-      <Tabs defaultValue="claude">
+      {/* Keyed so a changed `?agent=` on an already-mounted pane (back/forward, a second deep
+          link) switches the tab — `defaultValue` alone is read once. */}
+      <Tabs key={initialTab} defaultValue={initialTab}>
         <TabsList variant="line" data-slot="accounts-tabs">
           {providers.map((provider) => (
             <TabsTrigger key={provider} value={provider} data-provider={provider}>
@@ -506,6 +523,11 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
               </span>
             ) : null}
           </div>
+          {status?.status === 'not-installed' && status.hint ? (
+            <p data-slot="account-install-hint" className="mt-1 text-xs text-soft-foreground">
+              {status.hint}
+            </p>
+          ) : null}
         </div>
 
         {/* The collapsed row is a READING surface — which account, where, is it signed in. Every
@@ -515,7 +537,9 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
             copy points at Connect. Burying the only sign-in path behind "Show details" is what left
             an added account with no way to log in. */}
         <div className="flex shrink-0 items-center gap-2">
-          {status?.status !== 'connected' ? (
+          {/* No Connect for a CLI that is not installed: the login it opens cannot run, and the
+              server only answers its install hint (telemetry 23976d8d) — the row shows that. */}
+          {status?.status !== 'connected' && status?.status !== 'not-installed' ? (
             <Button
               type="button"
               size="sm"
@@ -532,10 +556,12 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
                     // The server answers a copyable command when it cannot open a terminal (hosted
                     // mode, no emulator, a folder it refuses to embed). Showing it is the whole
                     // point of failing closed rather than running the bare login.
+                    // A 409 with a command is a login cezar could not open — not installed, hosted —
+                    // which the server already counts (`trackLoginNotOpened`); not an error report.
                     onError: (error: Error) =>
-                      toast(error instanceof ApiError && error.command
-                        ? `${error.message} — run: ${error.command}`
-                        : error.message, { tone: 'danger' }),
+                      error instanceof ApiError && error.command
+                        ? toast(`${error.message} — run: ${error.command}`, { tone: 'danger', expected: true })
+                        : toast(error.message, { tone: 'danger' }),
                   },
                 )
               }
@@ -590,12 +616,16 @@ function AccountDetails({
   routeId: string
   onRemove: () => void
 }) {
+  const health = useHealth()
   const details = useAgentAccountDetails(routeId, true)
   const open = useOpenAgentAccountFile()
   const targets = useOpenTargets()
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(account.label)
   const rename = useUpdateAgentProfile()
+  // Wait for health before offering desktop actions. Once loaded, preserve the older-server
+  // fallback for responses that predate capabilities.
+  const localHandoff = health.data ? (health.data.capabilities?.localHandoff ?? true) : false
 
   // Which detected apps can actually act on each thing — the same rule the route enforces, so the
   // menu never offers something that would come back a 400. A `cli:<runner>` handoff opens a task
@@ -644,46 +674,48 @@ function AccountDetails({
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
-        <span className="mr-1 text-xs text-muted-foreground">Config files</span>
-        {account.files.map((file) => (
+      {localHandoff ? (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
+          <span className="mr-1 text-xs text-muted-foreground">Config files</span>
+          {account.files.map((file) => (
+            <OpenInMenu
+              key={file.id}
+              slot="account-open-file"
+              label={file.label}
+              triggerVariant="outline"
+              disabled={open.isPending}
+              // A file the agent has not written yet is offered but says so, because "Connect then
+              // it appears" is the normal path and a hidden button would look like a missing feature.
+              title={file.exists ? file.path : `${file.path} — not created yet`}
+              choices={fileChoices}
+              onPick={(target) => openPath(file.id, file.label, target)}
+              leading={
+                <DropdownMenuItem
+                  data-target="system"
+                  onSelect={() => openPath(file.id, file.label)}
+                >
+                  <ExternalLinkIcon aria-hidden="true" />
+                  System default
+                </DropdownMenuItem>
+              }
+            />
+          ))}
           <OpenInMenu
-            key={file.id}
-            slot="account-open-file"
-            label={file.label}
-            triggerVariant="outline"
+            slot="account-open-folder"
+            label="Folder"
             disabled={open.isPending}
-            // A file the agent has not written yet is offered but says so, because "Connect then
-            // it appears" is the normal path and a hidden button would look like a missing feature.
-            title={file.exists ? file.path : `${file.path} — not created yet`}
-            choices={fileChoices}
-            onPick={(target) => openPath(file.id, file.label, target)}
+            title={account.path}
+            choices={folderChoices}
+            onPick={(target) => openPath('folder', 'folder', target)}
             leading={
-              <DropdownMenuItem
-                data-target="system"
-                onSelect={() => openPath(file.id, file.label)}
-              >
+              <DropdownMenuItem data-target="system" onSelect={() => openPath('folder', 'folder')}>
                 <ExternalLinkIcon aria-hidden="true" />
                 System default
               </DropdownMenuItem>
             }
           />
-        ))}
-        <OpenInMenu
-          slot="account-open-folder"
-          label="Folder"
-          disabled={open.isPending}
-          title={account.path}
-          choices={folderChoices}
-          onPick={(target) => openPath('folder', 'folder', target)}
-          leading={
-            <DropdownMenuItem data-target="system" onSelect={() => openPath('folder', 'folder')}>
-              <ExternalLinkIcon aria-hidden="true" />
-              System default
-            </DropdownMenuItem>
-          }
-        />
-      </div>
+        </div>
+      ) : null}
 
       {/* The discovered account carries no Rename/Remove at all — it is what cezar found, so either
           would imply a setting that does not exist. Nothing is rendered for it, not a disabled

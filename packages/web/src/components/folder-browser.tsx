@@ -1,9 +1,16 @@
 import { ChevronRightIcon, CornerLeftUpIcon, FolderIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { ApiError } from '@/api/client'
 import { useFsBrowse } from '@/api/queries'
 import type { FsBrowseDir } from '@open-mercato/cezar-api-client'
+import { parentDir } from '@/lib/fs-path'
 import { cn } from '@/lib/utils'
+
+/** System Settings ▸ Privacy & Security ▸ Files & Folders. */
+const PRIVACY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
+const errorAction =
+  'inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted'
 
 /**
  * The server-side folder picker, shared by "Add project" and "Add agent account".
@@ -49,6 +56,7 @@ export function FolderBrowser({
 }) {
   const listing = useFsBrowse(path, showHidden)
   const parent = listing.data?.parent ?? null
+  const errorParent = path === null ? null : parentDir(path)
 
   return (
     <>
@@ -62,9 +70,36 @@ export function FolderBrowser({
       </p>
 
       {listing.isError ? (
-        <p data-slot="fs-error" className="min-w-0 break-words text-[13px] text-danger">
-          {listing.error instanceof Error ? listing.error.message : 'could not list that folder'}
-        </p>
+        <div className="flex min-w-0 flex-col gap-2">
+          <p data-slot="fs-error" className="min-w-0 break-words text-[13px] text-danger">
+            {listing.error instanceof Error ? listing.error.message : 'could not list that folder'}
+          </p>
+          {/* macOS remembers a "Don't Allow" and never asks again — the switch is in System
+              Settings. The desktop shell hands a `_blank` link to `open`, which opens the pane. */}
+          {listing.error instanceof ApiError && listing.error.status === 403 ? (
+            <p data-slot="fs-privacy-hint" className="text-[12.5px] text-soft-foreground">
+              Allow it under Privacy &amp; Security ▸ Files &amp; Folders, then try again.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2 text-[12.5px]">
+            {errorParent !== null ? (
+              <button type="button" data-slot="fs-error-back" onClick={() => onEnter(errorParent)} className={errorAction}>
+                <CornerLeftUpIcon className="size-3.5" aria-hidden />
+                Back
+              </button>
+            ) : null}
+            {listing.error instanceof ApiError && listing.error.status === 403 ? (
+              <>
+                <a data-slot="fs-privacy-settings" href={PRIVACY_SETTINGS_URL} target="_blank" rel="noreferrer" className={errorAction}>
+                  Open Privacy Settings
+                </a>
+                <button type="button" data-slot="fs-retry" onClick={() => void listing.refetch()} className={errorAction}>
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
       ) : (
         <ul
           data-slot="fs-listing"

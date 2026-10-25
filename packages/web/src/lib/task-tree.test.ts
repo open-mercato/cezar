@@ -143,6 +143,46 @@ describe('flattenTaskTree', () => {
   })
 })
 
+/**
+ * The accordion rule (#1110): `isExpanded` decides, per parent, whether its subtree renders.
+ * Tabled here for the same reason the nesting rule is — three surfaces fold, one rule folds them.
+ */
+describe('taskTreeRows with isExpanded', () => {
+  const shapeWith = (runs: readonly TaskTreeInput[], expanded: readonly string[]): string[] =>
+    taskTreeRows(runs, (id) => expanded.includes(id)).map((node) => `${node.run.id}@${node.depth}`)
+
+  it('a collapsed parent keeps its row and folds its whole subtree away', () => {
+    const runs = [run('p'), run('c1', 'p'), run('c2', 'p'), run('q')]
+    expect(shapeWith(runs, [])).toEqual(['p@0', 'q@0'])
+  })
+
+  it('an expanded parent shows its children — and an inner collapsed parent still folds its own', () => {
+    const runs = [run('root'), run('mid', 'root'), run('leaf', 'mid'), run('other', 'root')]
+    expect(shapeWith(runs, ['root'])).toEqual(['root@0', 'mid@1', 'other@1'])
+    expect(shapeWith(runs, ['root', 'mid'])).toEqual(['root@0', 'mid@1', 'leaf@2', 'other@1'])
+  })
+
+  it('a collapsed parent still knows what it is hiding — counts survive the fold', () => {
+    const [row] = taskTreeRows([run('p'), run('c', 'p'), run('g', 'c')], () => false)
+    expect(row?.childCount).toBe(1)
+    expect(row?.descendantCount).toBe(2)
+  })
+
+  it('never asks about a leaf — a row with no children cannot fold and needs no answer', () => {
+    const asked: string[] = []
+    taskTreeRows([run('p'), run('c', 'p')], (id) => {
+      asked.push(id)
+      return true
+    })
+    expect(asked).toEqual(['p'])
+  })
+
+  it('no predicate means everything expanded — the pre-accordion behavior', () => {
+    const runs = [run('p'), run('c', 'p')]
+    expect(taskTreeRows(runs).map((node) => node.run.id)).toEqual(['p', 'c'])
+  })
+})
+
 describe('subtaskLabel', () => {
   it('is null for a task that dispatched nothing — no "0 subtasks" anywhere', () => {
     expect(subtaskLabel(0)).toBeNull()

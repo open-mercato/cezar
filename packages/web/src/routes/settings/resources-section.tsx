@@ -7,8 +7,10 @@ import { putWorkspaceConfig } from '@/api/client'
 import { useWorkspaceConfig, workspaceQueryKeys } from '@/api/queries'
 import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { MachineCard } from './machine-card'
 import { SettingsField } from './settings-field'
 
 /**
@@ -31,6 +33,7 @@ import { SettingsField } from './settings-field'
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
 const MAX_MONITORING_MAX = 16
+const IDLE_TIMEOUT_MAX = 1440
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
@@ -131,26 +134,23 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
       data-slot="resources-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      {/* Live host totals first: they answer "how is the machine" before the knobs below answer
+          "how hard may cezar push it" (spec 2026-09-20-host-resource-telemetry, §UI/UX). The
+          card owns its own subscription, so this screen is what keeps the sampler alive. */}
+      <MachineCard />
+
       <SettingsField
         title="Max parallel tasks"
         hint="How many tasks run at once across every project. The rest wait in the queue. A non-git directory always runs one at a time."
       >
-        <select
+        <IntegerStepper
           aria-label="Max parallel tasks"
           data-slot="resources-max-parallel"
           value={config.resources.maxParallel}
-          disabled={save.isPending}
-          onChange={(event) => save.mutate({ resources: { maxParallel: Number(event.target.value) } })}
-          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-        >
-          {Array.from({ length: MAX_PARALLEL_MAX - MAX_PARALLEL_MIN + 1 }, (_, i) => i + MAX_PARALLEL_MIN).map(
-            (n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ),
-          )}
-        </select>
+          min={MAX_PARALLEL_MIN}
+          max={MAX_PARALLEL_MAX}
+          onCommit={(maxParallel) => save.mutateAsync({ resources: { maxParallel: maxParallel ?? MAX_PARALLEL_MIN } })}
+        />
         <p className="text-[11px] text-soft-foreground">
           Need a different limit for one project?{' '}
           <Link
@@ -165,21 +165,34 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
       </SettingsField>
 
       <SettingsField
+        title="Waiting-session idle timeout"
+        hint="How long a plain waiting session may stay open without activity before its live backend session ends. Continue resumes it; set 0 to keep it open indefinitely."
+      >
+        <IntegerStepper
+          aria-label="Waiting-session idle timeout"
+          data-slot="resources-idle-timeout"
+          value={config.resources.idleTimeoutMinutes ?? 0}
+          min={0}
+          max={IDLE_TIMEOUT_MAX}
+          onCommit={(minutes) => save.mutateAsync({ resources: { idleTimeoutMinutes: minutes ?? 0 } })}
+        />
+        <p className="text-[11px] text-soft-foreground">
+          Minutes; 0 keeps plain waiting sessions alive. Monitoring sessions are already exempt.
+        </p>
+      </SettingsField>
+
+      <SettingsField
         title="Extra monitoring sessions"
         hint="How many agent sessions may wait on CI, sub-agents, or monitored commands without using an active task slot. Extra sessions stay alive but pause the queue."
       >
-        <select
+        <IntegerStepper
           aria-label="Extra monitoring sessions"
           data-slot="resources-max-monitoring"
           value={config.resources.maxMonitoringSessions ?? 2}
-          disabled={save.isPending}
-          onChange={(event) => save.mutate({ resources: { maxMonitoringSessions: Number(event.target.value) } })}
-          className="block w-28 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-        >
-          {Array.from({ length: MAX_MONITORING_MAX + 1 }, (_, n) => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
+          min={0}
+          max={MAX_MONITORING_MAX}
+          onCommit={(sessions) => save.mutateAsync({ resources: { maxMonitoringSessions: sessions ?? 0 } })}
+        />
         <p className="text-[11px] text-soft-foreground">
           Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
         </p>

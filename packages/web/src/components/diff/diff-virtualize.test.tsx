@@ -86,7 +86,20 @@ describe('the flat tier (small changesets)', () => {
 
     const rows = document.querySelector<HTMLElement>('[data-slot="diff-rows"]')!
     expect(rows.style.minInlineSize).toMatch(/^calc\(\d+ch \+ 7rem\)$/)
-    expect(rows.className).toContain('[content-visibility:auto]')
+  })
+
+  it('skips off-screen rows in blocks, not one by one, each sized at the real row height', async () => {
+    // Per row, a 3,000-line file meant thousands of skip boundaries checked every frame, and a
+    // fast scroll showed tinted rows with no text. 150 rows (+ the hunk header) → 3 blocks.
+    await renderDiff(<Diff files={[file('a.ts', 150)]} />, 'a.ts')
+
+    const rows = document.querySelector<HTMLElement>('[data-slot="diff-rows"]')!
+    expect(rows.className).not.toContain('content-visibility')
+    const chunks = [...rows.children] as HTMLElement[]
+    expect(chunks.map((chunk) => chunk.dataset.slot)).toEqual(['diff-row-chunk', 'diff-row-chunk', 'diff-row-chunk'])
+    expect(chunks.every((chunk) => chunk.className.includes('[content-visibility:auto]'))).toBe(true)
+    expect(chunks.map((chunk) => chunk.children.length)).toEqual([64, 64, 22])
+    expect(chunks[0]!.style.containIntrinsicBlockSize).toBe(`auto ${Math.round(64 * 20.4)}px`)
   })
 
   it('drops the width floor when wrapping, where rows never exceed the box', async () => {
@@ -111,6 +124,34 @@ describe('the virtualized tier (large changesets)', () => {
     await renderVirtualDiff(<Diff files={[file('a.ts', 3), file('b.ts', 3)]} />)
 
     expect(document.querySelector('[data-slot="diff-files"]')!.getAttribute('data-virtualized')).toBe('true')
+  })
+
+  // virtua reads its scroll element once, at mount. When the consumer swaps it (the Changes tab's
+  // own column from md up, the app shell's `main` below), the LIST must be rebuilt on the new one,
+  // while the view around it, holding the comment editor and collapse state, stays mounted.
+  it('picks the renderer from every file, held-back ones included — loading one never swaps it', async () => {
+    // 1,200 held back (past LARGE_DIFF_LINES) + 400 open. Counting only open rows would start flat
+    // and flip to virtua on "Load diff", remounting the list under the reader.
+    await renderVirtualDiff(<Diff files={[file('big.ts', 1200), file('small.ts', 400)]} />)
+    expect(document.querySelector('[data-slot="diff-files"]')!.getAttribute('data-virtualized')).toBe('true')
+  })
+
+  it('rebinds only the virtualized list when its scroller changes', async () => {
+    const files = [file('a.ts', 900), file('b.ts', 900)]
+    const view = await renderVirtualDiff(
+      <main data-slot="main"><div data-diff-scroller=""><Diff files={files} /></div></main>,
+    )
+    const diff = document.querySelector('[data-slot="diff"]')
+    const list = document.querySelector('[data-slot="diff-files"]')
+
+    // Same scroller on a re-render: nothing is rebuilt.
+    view.rerender(<main data-slot="main"><div data-diff-scroller=""><Diff files={files} /></div></main>)
+    expect(document.querySelector('[data-slot="diff-files"]')).toBe(list)
+
+    // The column stops being the scroller (below md): the list rebinds to `main`, the view stays.
+    view.rerender(<main data-slot="main"><div><Diff files={files} /></div></main>)
+    await waitFor(() => expect(document.querySelector('[data-slot="diff-files"]')).not.toBe(list))
+    expect(document.querySelector('[data-slot="diff"]')).toBe(diff)
   })
 })
 
@@ -145,13 +186,67 @@ describe('per-file state survives the unmount virtualization performs', () => {
 })
 
 describe('the reveal handle (the Changes tab file tree)', () => {
-  it('scrolls to the file element while flat', async () => {
+  it('scrolls only the diff column while flat, never the shell around it', async () => {
     const ref: { current: DiffHandle | null } = { current: null }
-    await renderDiff(<Diff files={[file('a.ts', 3), file('b.ts', 3)]} viewRef={ref} />, 'a.ts')
+    await renderDiff(
+      <main data-slot="main">
+        <div data-diff-scroller="">
+          <Diff files={[file('a.ts', 3), file('b.ts', 3)]} viewRef={ref} />
+        </div>
+      </main>,
+      'a.ts',
+    )
+    const main = document.querySelector<HTMLElement>('main')!
+    const column = document.querySelector<HTMLElement>('[data-diff-scroller]')!
+    const card = document.querySelectorAll<HTMLElement>('[data-slot="diff-file"]')[1]!
+    column.scrollTop = 100
+    vi.spyOn(column, 'getBoundingClientRect').mockReturnValue({ top: 50 } as DOMRect)
+    vi.spyOn(card, 'getBoundingClientRect').mockReturnValue({ top: 700 } as DOMRect)
 
     ref.current!.scrollToPath('b.ts')
 
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' })
+    // 100 already scrolled + (700 − 50) to the card; the sticky offset (scroll-margin) is 0 here.
+    expect(column.scrollTop).toBe(750)
+    // `scrollIntoView` would hand an at-its-end column's remainder to every ancestor and shove
+    // the whole shell up the window — the bug this pins.
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled()
+    expect(main.scrollTop).toBe(0)
+  })
+
+  it('gives the last file a viewport of room, so a short diff can still park it under the header', async () => {
+    // jsdom has no layout: every element reports this scroller height.
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    try {
+      const ref: { current: DiffHandle | null } = { current: null }
+      await renderDiff(
+        <main data-slot="main">
+          <Diff files={[file('a.ts', 3), file('b.ts', 3)]} viewRef={ref} />
+        </main>,
+        'a.ts',
+      )
+      const slots = document.querySelectorAll<HTMLElement>('[data-slot="diff-file-slot"]')
+      expect(slots[0]!.style.minHeight).toBe('')
+      expect(slots[1]!.style.minHeight).toBe('600px')
+    } finally {
+      clientHeight.mockRestore()
+    }
+  })
+
+  it('adds no end room where nothing jumps (commit and PR diffs pass no viewRef)', async () => {
+    const clientHeight = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(600)
+    try {
+      await renderDiff(
+        <main data-slot="main">
+          <Diff files={[file('a.ts', 3), file('b.ts', 3)]} />
+        </main>,
+        'a.ts',
+      )
+      for (const slot of document.querySelectorAll<HTMLElement>('[data-slot="diff-file-slot"]')) {
+        expect(slot.style.minHeight).toBe('')
+      }
+    } finally {
+      clientHeight.mockRestore()
+    }
   })
 
   it('is a no-op for a path the changeset no longer carries', async () => {

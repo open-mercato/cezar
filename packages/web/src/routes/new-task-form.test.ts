@@ -4,6 +4,8 @@ import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/ce
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  looksLikeQuestion,
+  projectDefaultSource,
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
@@ -65,7 +67,7 @@ describe('model option resolution', () => {
   })
 
   it('claude falls back to the tier aliases when there is no host catalog', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
     // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
@@ -100,7 +102,7 @@ describe('model option resolution', () => {
 
   it('an empty catalog is not an empty picker — the presets come back', () => {
     const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
-    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -109,9 +111,38 @@ describe('model option resolution', () => {
     expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
   })
 
+  it('junie: auto plus host-discovered models', () => {
+    const catalog = { runner: 'junie' as const, models: [{ id: 'v1:model:junie:sonnet', label: 'Sonnet', description: 'Junie model' }], source: 'live' as const, stale: false }
+    expect(modelsForRunner('junie', catalog).map((m) => m.id)).toEqual(['', 'v1:model:junie:sonnet'])
+  })
+
+  it('cursor: auto alone until the host catalog answers, plus host-discovered ids once it does', () => {
+    expect(modelsForRunner('cursor').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('cursor', {
+        runner: 'cursor',
+        models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
+  it('a pinned Cursor id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'cursor',
+        { runner: 'cursor', models: [], source: 'unavailable', stale: false },
+        ['composer-2.5'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
   it.each([
     ['codex', 'Codex'],
     ['claude', 'Claude'],
+    ['junie', 'Junie'],
+    ['cursor', 'Cursor'],
   ] as const)('names %s in its stale/unavailable rows without exposing raw reasons', (runner, label) => {
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'cache', stale: true, reason: 'raw' })).toBe(`Using cached ${label} model list`)
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe(`Latest ${label} models unavailable`)
@@ -131,12 +162,43 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
   })
 
-  it('every runner cezar ships reads its models from the host', () => {
-    // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
-    // preset-only runner. The contract's list is the single source both the route and the picker
-    // compile against — this asserts they still agree on who discovers.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode'])
+  it('accepts the vendor ids Copilot and Cursor host as their own', () => {
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5.4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false)
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
+  })
+
+  it('exactly the runners with a host catalog discover their models', () => {
+    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
+    // list is the single source both the route and the picker compile against — this asserts they
+    // still agree on who discovers, and that a runner is never added to it by accident.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
+  })
+
+  it('reports Cursor catalog status the same way', () => {
+    expect(modelCatalogStatus('cursor', { runner: 'cursor', models: [], source: 'unavailable', stale: false })).toBe('Latest Cursor models unavailable')
+    expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
+  })
+
+  it('copilot stays OUT of discovery: free text plus its own presets, and no /models request', () => {
+    // Copilot's catalog is fetched from GitHub per account, so cezar cannot list it truthfully and
+    // `GET /models?runner=copilot` would 400. The picker therefore offers Copilot's own documented
+    // `auto` and whatever the user types (#582; spec § API Contracts, same rule as pi).
+    expect(runnerDiscoversModels('copilot')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('copilot')
+    expect(modelsForRunner('copilot').map((m) => m.id)).toEqual([''])
+    // …and a host catalog handed in anyway is ignored rather than rendered.
+    expect(
+      modelsForRunner('copilot', {
+        runner: 'copilot',
+        models: [{ id: 'gpt-5.4', label: 'gpt-5.4', description: 'via GitHub' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual([''])
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {
@@ -255,6 +317,20 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     })
     // What actually goes over the wire: the undefineds vanish.
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
+  })
+
+  it('newBranch rides only an in-place single run (spec 2026-10-19-repo-git-sync)', () => {
+    const base = { task: 't', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+    const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+      JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+    expect(wire({ worktree: false, newBranch: true, branch: ' feat/x ' })).toMatchObject({
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/x',
+    })
+    expect(wire({ worktree: false, newBranch: true, branch: '' })).not.toHaveProperty('branch')
+    expect(wire({ worktree: true, newBranch: true, branch: 'feat/x' })).not.toHaveProperty('newBranch')
+    expect(wire({ worktree: false, newBranch: true, variants: 2 })).not.toHaveProperty('newBranch')
   })
 
   it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
@@ -447,5 +523,38 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const base = { task: 'x', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+  const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+    JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+
+  it('sends an Ask task as readOnly, with no worktree or branch keys', () => {
+    expect(wire({ readOnly: true, worktree: false, newBranch: true })).toEqual({ task: 'x', workflow: 'quick-task', readOnly: true })
+    // Variants and dispatch always isolate, so they win over Ask.
+    expect(wire({ readOnly: true, variants: 2 })).not.toHaveProperty('readOnly')
+    expect(wire({ readOnly: true, dispatch: {} })).not.toHaveProperty('readOnly')
+  })
+
+  it('asks for a worktree explicitly only against an in-place project default', () => {
+    expect(wire({ worktree: true, inPlaceByDefault: true })).toMatchObject({ worktree: true })
+    expect(wire({ worktree: false, inPlaceByDefault: true })).toMatchObject({ worktree: false })
+    expect(wire({ worktree: true })).not.toHaveProperty('worktree')
+  })
+
+  it("preselects the project's default or Ask skill, only when it exists", () => {
+    const skills = [{ name: 'ingest' }, { name: 'ask' }] as Skill[]
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, skills)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
+    expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('reads a trailing question mark as a question', () => {
+    expect(looksLikeQuestion("what's open with Daniel? ")).toBe(true)
+    expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)
   })
 })

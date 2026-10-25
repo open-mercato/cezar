@@ -1,0 +1,255 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+
+import { z } from 'zod';
+
+/**
+ * cezar's own GitHub star count, for the cockpit's ⭐ ask (sidebar chip + first-run toast).
+ *
+ * The count is read HERE and not in the browser, deliberately. The cockpit has never made a
+ * third-party request and should not start: one cezar process asking once per TTL is strictly
+ * less exposure than every open tab asking, it keeps working in remote mode where the browser
+ * may not reach the internet at all, and it lets the whole promo sit behind one off switch the
+ * server already owns.
+ *
+ * Failure is not exceptional here, it is the common case — offline, rate-limited (60/h per IP
+ * unauthenticated, 5000/h with `GITHUB_TOKEN`), behind a proxy, `CEZ_NO_BANNER=1`. Every one of
+ * them answers `{ available: false }` the way `server/github.ts` does, never an error and never
+ * a throw: a promo that can break a cockpit is worse than a promo nobody sees.
+ *
+ * Two caches, both cheap: in memory for the life of the process, and a single small JSON file
+ * under `~/.cache/cez/` so a restart (the desktop shell restarts often) paints the count
+ * immediately and does not spend another request. A stale disk entry is still served while the
+ * refresh is in flight — the number is decoration, and a slightly old one is better than a
+ * flicker.
+ */
+
+const REPO = 'open-mercato/cezar';
+export const CEZAR_REPO_URL = `https://github.com/${REPO}`;
+const API_URL = `https://api.github.com/repos/${REPO}`;
+const TIMEOUT_MS = 5_000;
+/** Ten seconds — the cockpit polls at the same cadence so the chip shows the live number. The
+ *  rate-limit pacing below stretches it whenever GitHub's hourly budget cannot afford it. */
+export const STAR_CACHE_TTL_MS = 10_000;
+/** The longest a rate-limit header may silence the reader — a garbled reset stays bounded. */
+export const STAR_MAX_PACE_MS = 60 * 60_000;
+/**
+ * One minute, and the reason a FAILED read is remembered too.
+ *
+ * `fetchedAtMs` only advances on success, so without this the failure path has no cache at all:
+ * an offline or proxied machine pays the full `TIMEOUT_MS` on every cockpit load forever, and a
+ * rate-limited IP (60/h unauthenticated) keeps spending requests into the very `403` that is
+ * telling it to stop. `inFlight` collapses a concurrent burst, never a sequential one.
+ *
+ * A floor, not the whole wait: a rate-limited `403` waits for the reset GitHub names instead.
+ */
+export const STAR_FAILURE_BACKOFF_MS = 60_000;
+
+export interface StarCount {
+  /** `false` whenever there is no number to show — offline, rate-limited, or promos silenced.
+   *  The cockpit renders no chip at all in that case; it never renders an empty one. */
+  available: boolean;
+  /** Only present when `available`. */
+  count?: number;
+  /** Where the ⭐ button points. Always sent, so the link never depends on the count. */
+  url: string;
+}
+
+/** Frozen: `read()` hands this same object to every caller, and a shared mutable answer is a
+ *  bug waiting for its first mutator. */
+const UNAVAILABLE: StarCount = Object.freeze({ available: false, url: CEZAR_REPO_URL });
+
+/** The one field we want, validated at the boundary like every other `--json`/API read. */
+const repoSchema = z
+  .object({ stargazers_count: z.number().int().nonnegative() })
+  .passthrough();
+
+interface DiskEntry {
+  count: number;
+  fetchedAtMs: number;
+}
+
+const diskEntrySchema = z.object({
+  count: z.number().int().nonnegative(),
+  fetchedAtMs: z.number().int().nonnegative(),
+});
+
+export function starCachePath(home: string = homedir()): string {
+  return join(home, '.cache', 'cez', 'star-count.json');
+}
+
+/**
+ * The promo's single off switch (AGENTS.md § Zero config: a network widening needs one, and a
+ * second spelling of an existing switch is a knob rather than a feature). `CEZ_NO_BANNER=1`
+ * already means "no `open-mercato` promo in my terminal"; it now means no star ask anywhere —
+ * no terminal line, no sidebar chip, no toast, and no request to github.com.
+ */
+export function starAskSilenced(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env.CEZ_NO_BANNER === '1') return true;
+  // `npm test` is the fast unit gate: "no server, no browser", and it must stay that way
+  // (AGENTS.md § Validation). Every test today injects its own reader or its own `fetchImpl`, so
+  // nothing reaches github.com — but that is an accident of which routes the suite happens to
+  // request, and `createApp` hands a DEFAULT reader to every case that builds an app. The first
+  // test to call `GET /api/v1/star-count` without meaning to would make the unit gate networked
+  // and non-deterministic, and it would do so silently.
+  //
+  // Same shape and same reasoning as `assertCezarHomeWriteIsSandboxed` (src/paths.ts): under
+  // vitest, reaching the real outside world is a leaked test rather than intent. A case that
+  // genuinely wants the fetch path passes its own `fetchImpl` to `fetchStarCount`, which this
+  // does not gate — only the shared reader's default is closed off.
+  if (env.VITEST) return true;
+  return false;
+}
+
+export interface StarCountFetch {
+  /** `null` means "nothing known". */
+  count: number | null;
+  /** How long GitHub's rate-limit headers say to wait before the next request, when they say. */
+  waitMs?: number;
+}
+
+/**
+ * The wait GitHub's headers ask for: `retry-after` (secondary limits) wins, otherwise the hourly
+ * budget left (`x-ratelimit-remaining`) spread evenly to `x-ratelimit-reset`, so an
+ * unauthenticated machine slows to ~1/min instead of spending its 60 and hitting the 403.
+ */
+export function rateLimitWaitMs(headers: Headers, nowMs: number): number | undefined {
+  const retryAfter = Number(headers.get('retry-after'));
+  if (headers.has('retry-after') && Number.isFinite(retryAfter) && retryAfter >= 0) {
+    return Math.min(retryAfter * 1000, STAR_MAX_PACE_MS);
+  }
+  const remaining = Number(headers.get('x-ratelimit-remaining'));
+  const resetMs = Number(headers.get('x-ratelimit-reset')) * 1000;
+  if (!headers.has('x-ratelimit-remaining') || !headers.has('x-ratelimit-reset')) return undefined;
+  if (!Number.isFinite(remaining) || !Number.isFinite(resetMs) || remaining < 0) return undefined;
+  const untilReset = Math.max(0, resetMs - nowMs);
+  return Math.min(remaining === 0 ? untilReset : untilReset / remaining, STAR_MAX_PACE_MS);
+}
+
+/** One request, zod-validated, silent on every failure. Carries the rate-limit wait too. */
+export async function readStarCount(
+  fetchImpl: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+  nowMs: number = Date.now(),
+): Promise<StarCountFetch> {
+  try {
+    const headers: Record<string, string> = { accept: 'application/vnd.github+json' };
+    const token = env.GITHUB_TOKEN || env.GH_TOKEN;
+    if (token) headers.authorization = `Bearer ${token}`;
+    const res = await fetchImpl(API_URL, { signal: AbortSignal.timeout(TIMEOUT_MS), headers });
+    const waitMs = rateLimitWaitMs(res.headers, nowMs);
+    const withWait = (count: number | null): StarCountFetch =>
+      waitMs === undefined ? { count } : { count, waitMs };
+    if (!res.ok) return withWait(null);
+    const parsed = repoSchema.safeParse(await res.json());
+    return withWait(parsed.success ? parsed.data.stargazers_count : null);
+  } catch {
+    return { count: null };
+  }
+}
+
+/** The count alone — `null` means "nothing known". */
+export async function fetchStarCount(fetchImpl: typeof fetch = fetch): Promise<number | null> {
+  return (await readStarCount(fetchImpl, {})).count;
+}
+
+async function readDisk(path: string): Promise<DiskEntry | null> {
+  try {
+    const parsed = diskEntrySchema.safeParse(JSON.parse(await readFile(path, 'utf8')));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeDisk(path: string, entry: DiskEntry): Promise<void> {
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, JSON.stringify(entry), 'utf8');
+  } catch {
+    // A read-only home is not a reason to lose the count — the memory cache still holds it.
+  }
+}
+
+export interface StarCountReaderOptions {
+  fetchImpl?: typeof fetch;
+  /** Injectable so tests never touch a real home. */
+  cachePath?: string;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+}
+
+/**
+ * Memoized reader behind `GET /api/v1/star-count`. Mirrors `self-update/registry.ts`'s
+ * `RegistryCache` on purpose — same shape, same guarantees — with a disk tier added because this
+ * value survives a restart usefully and a version document does not.
+ */
+export class StarCountReader {
+  private count: number | null = null;
+  private fetchedAtMs = 0;
+  /** No request before this instant: set by a failure's backoff or by rate-limit pacing. `null`
+   *  — not `0` — so a `now()` near the epoch (every test clock) never suppresses the first read. */
+  private retryAtMs: number | null = null;
+  private inFlight: Promise<number | null> | null = null;
+  private diskRead = false;
+
+  private readonly fetchImpl: typeof fetch;
+  private readonly cachePath: string;
+  private readonly env: NodeJS.ProcessEnv;
+  private readonly now: () => number;
+
+  constructor(options: StarCountReaderOptions = {}) {
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.cachePath = options.cachePath ?? starCachePath();
+    this.env = options.env ?? process.env;
+    this.now = options.now ?? Date.now;
+  }
+
+  async read(): Promise<StarCount> {
+    if (starAskSilenced(this.env)) return UNAVAILABLE;
+    await this.seedFromDisk();
+    if (this.count !== null && this.now() - this.fetchedAtMs < STAR_CACHE_TTL_MS) {
+      return { available: true, count: this.count, url: CEZAR_REPO_URL };
+    }
+    const fresh = this.backingOff() ? null : await this.refresh();
+    // A failed refresh falls back to whatever is still held: a stale number beats no number,
+    // and "no number" here would make the chip disappear on the first flaky minute.
+    const count = fresh ?? this.count;
+    return count === null ? UNAVAILABLE : { available: true, count, url: CEZAR_REPO_URL };
+  }
+
+  /** Once per process: fold a previous run's answer in before deciding to spend a request. */
+  private async seedFromDisk(): Promise<void> {
+    if (this.diskRead) return;
+    this.diskRead = true;
+    const entry = await readDisk(this.cachePath);
+    if (!entry) return;
+    this.count = entry.count;
+    this.fetchedAtMs = entry.fetchedAtMs;
+  }
+
+  /** Whether a recent failure or GitHub's rate limit says the next request is not worth making. */
+  private backingOff(): boolean {
+    return this.retryAtMs !== null && this.now() < this.retryAtMs;
+  }
+
+  /** Always goes to GitHub, and never twice at once — a burst of cockpit tabs is one request. */
+  private async refresh(): Promise<number | null> {
+    if (this.inFlight) return this.inFlight;
+    this.inFlight = readStarCount(this.fetchImpl, this.env, this.now()).then(async ({ count, waitMs }) => {
+      const now = this.now();
+      if (count === null) {
+        this.retryAtMs = now + Math.max(STAR_FAILURE_BACKOFF_MS, waitMs ?? 0);
+      } else {
+        this.count = count;
+        this.fetchedAtMs = now;
+        this.retryAtMs = waitMs !== undefined && waitMs > STAR_CACHE_TTL_MS ? now + waitMs : null;
+        await writeDisk(this.cachePath, { count, fetchedAtMs: now });
+      }
+      this.inFlight = null;
+      return count;
+    });
+    return this.inFlight;
+  }
+}

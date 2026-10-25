@@ -5,7 +5,7 @@ import { useParams } from 'react-router'
 import { Link } from '@/lib/project-router'
 
 import { ApiError } from '@/api/client'
-import { useRepoCommit } from '@/api/queries'
+import { useRepoCommit, useRepoSync } from '@/api/queries'
 import type { LogEntry } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffMode } from '@/components/diff'
@@ -24,7 +24,30 @@ import { DiffViewToggles } from '../task-git/diff-controls'
  */
 export function RepoCommitsSection({ log }: { log: LogEntry[] }) {
   const { sha } = useParams<{ sha: string }>()
+  const sync = useRepoSync().data
   if (sha) return <CommitDiffView sha={sha} />
+
+  // spec 2026-10-19-repo-git-sync: incoming commits first, as last fetched; local ones marked.
+  const outgoing = new Set(sync?.outgoing ?? [])
+  const incoming = sync?.incoming ?? []
+  const toItem = (commit: LogEntry, mark?: 'outgoing' | 'incoming') => ({
+    sha: commit.hash,
+    shaLabel: commit.hash,
+    subject: commit.subject,
+    author: commit.author,
+    when: commit.when,
+    href: `/git/commits/${commit.hash}`,
+    ...(mark ? { sync: mark } : {}),
+  })
+  const incomingList =
+    incoming.length > 0 ? (
+      <section data-slot="repo-incoming" className="border-b border-border">
+        <h2 className="px-4 pt-3 text-[11px] font-medium text-muted-foreground md:px-6">
+          Incoming from {sync?.upstream} · {incoming.length}
+        </h2>
+        <CommitList slot="repo-incoming-commits" commits={incoming.map((c) => toItem(c, 'incoming'))} />
+      </section>
+    ) : null
 
   if (log.length === 0) {
     return (
@@ -38,17 +61,13 @@ export function RepoCommitsSection({ log }: { log: LogEntry[] }) {
     )
   }
   return (
-    <CommitList
-      slot="repo-commits"
-      commits={log.map((commit) => ({
-        sha: commit.hash,
-        shaLabel: commit.hash,
-        subject: commit.subject,
-        author: commit.author,
-        when: commit.when,
-        href: `/git/commits/${commit.hash}`,
-      }))}
-    />
+    <>
+      {incomingList}
+      <CommitList
+        slot="repo-commits"
+        commits={log.map((commit) => toItem(commit, outgoing.has(commit.hash) ? 'outgoing' : undefined))}
+      />
+    </>
   )
 }
 

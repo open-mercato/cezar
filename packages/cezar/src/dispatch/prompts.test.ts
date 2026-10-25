@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
+
+function containsRunnerToken(text: string, runner: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
+}
 
 /** The prompt is the ONLY place an agent learns the CLI, so it must name every flag the
  *  contract accepts and the rules the engine enforces. */
@@ -17,10 +22,23 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('--suggestions');
   });
 
+  it('warns against leaving processes behind and against pkill -f on a generic pattern (#1411)', () => {
+    expect(DISPATCH_PROMPT).toContain('timeout 300');
+    expect(DISPATCH_PROMPT).toContain('never with pkill -f');
+    expect(DISPATCH_PROMPT).toContain('check ps');
+  });
+
   it('tells the parent how to pick a runner and model for a child, and that omitted means inherited', () => {
     expect(DISPATCH_PROMPT).toContain('--runner and --model choose who runs the child; omitted, it inherits yours');
     expect(DISPATCH_PROMPT).toContain("If the user's instructions name a runner or model, use that");
     expect(DISPATCH_PROMPT).toContain('cheaper or faster model');
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(DISPATCH_PROMPT, runner)).toBe(true);
+  });
+
+  it('keeps --budget optional so an uncapped parent does not invent a cap for its children', () => {
+    expect(DISPATCH_PROMPT).toContain('--budget is optional: OMIT it unless the user asked for a cost limit');
+    expect(DISPATCH_PROMPT).toContain('Never invent a figure');
+    expect(DISPATCH_PROMPT).not.toContain('each with its own budget');
   });
 
   it('says when NOT to dispatch — the task-shape gate the evidence demands', () => {

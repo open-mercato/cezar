@@ -101,6 +101,14 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         run: npm run build
 
+      # Public releases report telemetry under the real service; every other build uses the
+      # development id hard-coded in packages/cezar/src/telemetry.ts.
+      - name: Stamp telemetry service
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
+        run: node packages/cezar/scripts/stamp-telemetry-service.mjs
+
       - name: Run packaged CLI E2E tests
         if: steps.decide.outputs.publish == 'true'
         run: npm run test:package
@@ -142,10 +150,10 @@ jobs:
           console.log('');
           console.log(`- Version: \`${r.version}\``);
           console.log(`- Dist-tag: \`${r.distTag}\``);
-          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
+          console.log(`- Packages: \`${r.runAliasName}\` / \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
           console.log('');
           console.log('```bash');
-          console.log(`npx ${r.aliasName}@nightly          # always the latest nightly`);
+          console.log(`npx ${r.runAliasName}@nightly          # always the latest nightly`);
           for (const line of r.installLines) console.log(line);
           console.log('```');
           EOF

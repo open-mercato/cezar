@@ -6,7 +6,7 @@ import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-cli
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
 import { ProjectFolderField } from './project-location'
-import { AddBootProjectButton, MaxParallelSelect, STATUS_LABEL } from './projects-section'
+import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
 import { SettingsField } from './settings-field'
 
@@ -91,7 +91,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
           title="Add to your projects"
           hint="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
         >
-          <AddBootProjectButton root={project.root} name={project.name} />
+          <AddBootProjectButton root={project.root} name={project.name} notAddable={project.notAddable === true} />
         </SettingsField>
       ) : null}
       {managesRegistry ? (
@@ -100,14 +100,14 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
             title="Max parallel tasks"
             hint={
               config.data
-                ? `How many of this project's tasks may run at once. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
-                : "How many of this project's tasks may run at once. The workspace limit still applies as an overall ceiling."
+                ? `How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit (${config.data.resources.maxParallel}) still applies as an overall ceiling, so a higher value here has no extra effect until that one is raised.`
+                : "How many of this project's tasks may run at once — leave it empty to inherit the workspace limit. The workspace limit still applies as an overall ceiling."
             }
           >
             {config.data ? (
-              <MaxParallelSelect project={project} workspaceMax={config.data.resources.maxParallel} />
+              <MaxParallelStepper project={project} workspaceMax={config.data.resources.maxParallel} />
             ) : (
-              // The select's "Inherit workspace (N)" option has to name N, and guessing it would be
+              // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
               // the one thing this control must not do.
               <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
             )}

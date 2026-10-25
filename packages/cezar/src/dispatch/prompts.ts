@@ -10,16 +10,17 @@
  * restates the flags of `dispatchInputSchema` and `dispatchReportSchema` key for key.
  */
 import { DISPATCH_MAX_IN_FLIGHT, type DispatchIntent, type DispatchKind } from '@open-mercato/cezar-contract';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 
-export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each with its own budget, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
+export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
 To dispatch, run (from your shell) — always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez task …" below means node "$CEZ_BIN" task …:
 
-  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner claude|codex|opencode] [--model <model>]
+  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner ${RUNNER_IDS.join('|')}] [--model <model>]
 
 - The objective is the WHOLE assignment: the child sees it, its task order, and the shared tree directory (below) — nothing else you know. State the goal, the context it needs, and what finished means.
 - Give every sibling a DISJOINT scope. Two tasks editing the same file is the one failure this design cannot recover from.
-- --budget is carved out of your own remaining budget and returned to you, unspent, when the child settles. A dispatch that asks for more than you have left is refused with the reason.
+- --budget is optional: OMIT it unless the user asked for a cost limit or your own task order names a Max cost. Never invent a figure — a --budget you made up becomes a hard cap that parks the child mid-work. Under a capped parent a child that names none gets the whole remainder; under an uncapped one it is uncapped too. A --budget is carved out of your own remaining budget and returned to you, unspent, when the child settles; a dispatch that asks for more than you have left is refused with the reason.
 - The command prints the child's run id and branch. COMMIT before dispatching: children fork your committed tip, not your working tree.
 - At most ${DISPATCH_MAX_IN_FLIGHT} children in flight under you; one more is refused. Wait for reports, then dispatch again.
 - --runner and --model choose who runs the child; omitted, it inherits yours. If the user's instructions name a runner or model, use that. Otherwise choose deliberately: a narrow, well-specified assignment — a review, a mechanical change, a read-only investigation — is a good fit for a cheaper or faster model; keep your own model for work whose judgement you would not want to re-check.
@@ -33,6 +34,8 @@ Reporting. When YOUR assignment is settled and you were dispatched by another ta
   cez task report --status done|partial|failed|blocked --result "<what you did and the state now>" [--evidence "…" …] [--verdict approve|changes|reject] [--suggestions "…" …] [--confidence 0.8]
 
 Be honest: a done that is not done costs your parent a whole extra round trip to discover. Evidence is commands you ran and what they printed, files you changed, tests that passed. Suggestions are what the ROOT of the tree should know that lies outside your order — cezar forwards them there; suggest, never redefine the objective.
+
+Processes. Put a time limit on anything that could hang (timeout 300 <test binary>). Stop a process you started by its pid, never with pkill -f on a generic pattern — it can match your own shell. Before you report, check ps for anything you started that is still running and stop it; cezar stops what is left when the task settles.
 
 The tree directory. Your task order names it (also in the CEZ_TREE_DIR environment variable). brief.md is the root's objective — read it first if you were dispatched. units/<id8>/order.md, notes.md and report.md are each task's order, running notes and settle report. Write your own notes.md as you work. inbox/<id8>/ is a task's inbox: to message any task in the tree, write a markdown file into its inbox directory (inbox/root/ reaches the root); cezar wakes a parked recipient and hands an opening session a list of what arrived. A message is not an answer to a Guard question — a run parked on CEZ:ASK waits for the human.
 

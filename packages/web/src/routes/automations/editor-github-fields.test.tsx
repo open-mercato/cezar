@@ -24,7 +24,7 @@ function Harness({ events: initial = ['issue.opened'] }: { events?: AutomationEv
 }
 
 describe('EditorGithubFields', () => {
-  it('offers the four events as a multi-select, kept in contract order', () => {
+  it('offers the seven events as a multi-select, kept in contract order', () => {
     render(<Harness />)
     const chips = screen.getAllByRole('button', { pressed: true })
     expect(chips.map((chip) => chip.textContent)).toEqual(['issue.opened'])

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { bodyFromAddFlags, parseEvery, runAutomationCommand, type AutomationCliIo } from './automation-cli.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
+
+function containsRunnerToken(text: string, runner: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
+}
 
 /** The `cez automation` CLI is a thin client: what is pinned is the request it builds from the
  *  definition and env, how it relays a refusal, and that it never talks to a server it was not
@@ -190,9 +195,17 @@ describe('cez automation', () => {
     expect(await runAutomationCommand(['schema'], {}, schema.io)).toBe(0);
     expect(schema.out[0]).toBe(AUTOMATION_SCHEMA_REFERENCE);
     const none = harness([]);
-    expect(await runAutomationCommand(['list'], {}, none.io)).toBe(2);
+    expect(await runAutomationCommand(['list'], { CEZ_TASK_ID: 'run-1' }, none.io)).toBe(2);
     expect(none.err[0]).toContain('CEZ_API_URL is not set');
     expect(none.err[0]).toContain('Do not substitute a cron job');
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('outside a task, a missing address is explained to the person instead of calling it task-only (#1080)', async () => {
+    const none = harness([]);
+    expect(await runAutomationCommand(['list'], {}, none.io)).toBe(2);
+    expect(none.err[0]).toContain('CEZ_API_URL=http://127.0.0.1:4321 cez automation list');
+    expect(none.err[0]).not.toContain('only works inside a task');
     expect(none.calls).toHaveLength(0);
   });
 
@@ -207,6 +220,7 @@ describe('cez automation', () => {
     const help = harness([]);
     expect(await runAutomationCommand(['help'], {}, help.io)).toBe(0);
     expect(help.out[0]).toContain('cez automation create');
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(help.out[0] ?? '', runner)).toBe(true);
     const unknown = harness([]);
     expect(await runAutomationCommand(['frobnicate'], env, unknown.io)).toBe(2);
     expect(unknown.err[0]).toContain('unknown command "frobnicate"');
@@ -288,4 +302,46 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(() => parseEvery('soon')).toThrow('--every');
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
+
+  it('maps --at to a one-time schedule and refuses what is not a date and time (#771)', () => {
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'once', date: '2026-10-05', hour: 23, minute: 0 } });
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05T07:30', kind: 'schedule' }, 'p')).toMatchObject({ schedule: { type: 'once', date: '2026-10-05', hour: 7, minute: 30 } });
+    for (const bad of ['2026-02-30 10:00', '2026-10-05 24:00', 'tonight']) {
+      expect(() => bodyFromAddFlags({ name: 'later', at: bad }, 'p'), bad).toThrow('--at');
+    }
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', cron: '0 4 * * *' }, 'p')).toThrow('not both');
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', on: 'issue.opened' }, 'p')).toThrow('not both');
+  });
+});
+
+it('tracker flags build a provider event trigger with a 30 minute default', () => {
+  expect(bodyFromAddFlags({ name: 'Jira work', kind: 'tracker', on: 'issue.status_changed', 'to-status': ['todo-id'] }, 'Implement')).toMatchObject({
+    kind: 'tracker', intervalSeconds: 1800,
+    trackerTrigger: { events: ['issue.status_changed'], targetStatusIds: ['todo-id'] },
+  });
+});
+it('rejects tracker-only filters on GitHub flags instead of silently dropping them', () => {
+  expect(() => bodyFromAddFlags({ name: 'work', on: 'issue.opened', 'to-status': ['todo'] }, 'Implement')).toThrow(/tracker/);
+});
+
+it('tracker add resolves the project association before posting the trigger', async () => {
+  const association = { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: 'Team', connectionId: '11111111-1111-4111-8111-111111111111' };
+  const calls: Array<{ url: string; body?: unknown }> = [];
+  const errors: string[] = [];
+  const code = await runAutomationCommand(['add', '--kind', 'tracker', '--name', 'Jira work', '--on', 'issue.status_changed', '--to-status', 'todo-id', '--require-label', 'bug', '--require-label', 'urgent', '--prompt', 'Implement'], { CEZ_API_URL: 'http://localhost:4321', CEZ_PROJECT_ID: 'project' }, {
+    fetch: (async (input, init) => {
+      const url = String(input); calls.push({ url, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      return new Response(JSON.stringify(url.endsWith('/automation-options')
+        ? { available: true, association, events: ['issue.status_changed'], statuses: [{ id: 'todo-id', name: 'To Do' }], labels: [], limitations: [] }
+        : { automation: { id: 'auto', name: 'Jira work', kind: 'tracker', enabled: false } }), { status: url.endsWith('/automation-options') ? 200 : 201, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch,
+    log: () => {}, error: message => errors.push(message),
+  });
+  expect(errors).toEqual([]); expect(code).toBe(0);
+  expect(calls[0]?.url).toBe('http://localhost:4321/api/v1/p/project/tracker/automation-options');
+  expect(calls[1]?.body).toMatchObject({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo-id'], requiredLabels: ['bug', 'urgent'] } });
+});
+
+it('rejects required tracker labels on other automation kinds', () => {
+  expect(() => bodyFromAddFlags({ name: 'work', on: 'issue.opened', 'require-label': ['bug'] }, 'Implement')).toThrow(/tracker/);
 });

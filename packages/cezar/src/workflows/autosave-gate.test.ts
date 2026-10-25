@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -20,8 +20,9 @@ interface TimerState {
 }
 
 interface TimerSeam {
-  armAutosave(state: TimerState): void;
+  armAutosave(runId: string, state: TimerState): void;
   clearAutosaveTimer(state: TimerState): void;
+  active: Map<string, unknown>;
 }
 
 /**
@@ -35,6 +36,7 @@ describe('periodic autosave gate (#471)', () => {
   let store: RunStore;
   let manager: TimerSeam;
   let worktreePath: string;
+  let runId: string;
   const savedEnv = process.env.CEZ_AUTOSAVE;
 
   beforeAll(async () => {
@@ -46,7 +48,8 @@ describe('periodic autosave gate (#471)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot) as unknown as TimerSeam;
     const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
-    worktreePath = (await createWorktree(repoRoot, record.id, 'main')).path;
+    runId = record.id;
+    worktreePath = (await createWorktree(repoRoot, runId, 'main')).path;
   });
 
   afterAll(() => {
@@ -71,21 +74,23 @@ describe('periodic autosave gate (#471)', () => {
   it('does not arm the timer when the env is off (default)', () => {
     delete process.env.CEZ_AUTOSAVE;
     const state: TimerState = { cancelled: false, interrupt: () => undefined, cwd: worktreePath };
-    manager.armAutosave(state);
+    manager.armAutosave(runId, state);
     expect(state.autosaveTimer).toBeUndefined();
   });
 
   it('arms the timer when CEZ_AUTOSAVE=1, but never for a repo-root run', () => {
     process.env.CEZ_AUTOSAVE = '1';
     const state: TimerState = { cancelled: false, interrupt: () => undefined, cwd: worktreePath };
-    manager.armAutosave(state);
+    manager.active.set(runId, state);
+    manager.armAutosave(runId, state);
     expect(state.autosaveTimer).toBeDefined();
-    manager.armAutosave(state); // idempotent — the second call must not double-arm
+    manager.armAutosave(runId, state); // idempotent — the second call must not double-arm
     manager.clearAutosaveTimer(state);
     expect(state.autosaveTimer).toBeUndefined();
 
     const rootState: TimerState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
-    manager.armAutosave(rootState);
+    manager.armAutosave(runId, rootState);
+    manager.active.delete(runId);
     expect(rootState.autosaveTimer).toBeUndefined();
   });
 
@@ -112,5 +117,27 @@ describe('periodic autosave gate (#471)', () => {
       const { stdout } = await run('git', ['log', '-1', '--format=%s'], { cwd: worktreePath });
       expect(stdout.trim()).toBe(`cezar autosave (${reason})`);
     }
+  });
+
+  it('can checkpoint agent work without committing excluded check artifacts', async () => {
+    writeFileSync(join(worktreePath, 'work.txt'), 'agent progress\n');
+    writeFileSync(join(worktreePath, 'check-output.txt'), 'verification residue\n');
+
+    expect(await autosaveCommit(worktreePath, 'turn end', ['check-output.txt'])).toBe('committed');
+    const { stdout: files } = await run('git', ['show', '--format=', '--name-only', 'HEAD'], { cwd: worktreePath });
+    expect(files.trim().split('\n')).toEqual(['work.txt']);
+    expect(readFileSync(join(worktreePath, 'check-output.txt'), 'utf8')).toBe('verification residue\n');
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status.trim()).toBe('?? check-output.txt');
+  });
+
+  it('refuses a checkpoint when an excluded path cannot be reset, without losing work', async () => {
+    rmSync(join(worktreePath, 'check-output.txt'), { force: true });
+    writeFileSync(join(worktreePath, 'unsafe-work.txt'), 'keep this dirty\n');
+
+    expect(await autosaveCommit(worktreePath, 'turn end', ['../outside-worktree.txt'])).toBe('failed');
+    expect(readFileSync(join(worktreePath, 'unsafe-work.txt'), 'utf8')).toBe('keep this dirty\n');
+    const { stdout: status } = await run('git', ['status', '--porcelain'], { cwd: worktreePath });
+    expect(status.trim()).toBe('?? unsafe-work.txt');
   });
 });

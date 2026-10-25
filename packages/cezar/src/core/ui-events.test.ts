@@ -29,7 +29,7 @@ function assertType<_T extends true>(): void {}
 describe('UiEvent vocabulary (compile-time contract)', () => {
   it('UiBackend stays in lockstep with RunnerId (no drift with agent-runner.ts)', () => {
     assertType<Equal<UiBackend, RunnerId>>();
-    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'pi']).toBeDefined();
+    expect<UiBackend[]>(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']).toBeDefined();
   });
 
   it('enums match the research §7 vocabulary exactly', () => {
@@ -46,6 +46,10 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
         | 'think'
         | 'fetch'
         | 'task'
+        // `skill` is additive (#1202) and deliberately NOT folded into `task`: the cockpit's
+        // Agents dock counts `task` items as live sub-agent fan-out, so a skill wearing that
+        // kind is reported as an agent that never started.
+        | 'skill'
         | 'plan'
         | 'other'
       >

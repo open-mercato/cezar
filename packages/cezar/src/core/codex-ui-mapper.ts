@@ -37,6 +37,7 @@ import type {
   UiToolItem,
 } from './ui-events.ts';
 import { toolDisplay } from './tool-display.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 
 /** The two reasoning delta channels, accumulated separately — see
  *  `CodexUiMapperState.reasonings`. */
@@ -160,7 +161,7 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
     case 'turn/started':
       return mapTurnStarted(params, state);
     case 'turn/completed':
-      return mapTurnEnd(params, state, /* failed */ false);
+      return mapTurnEnd(params, state, codexTurnError('turn/completed', params) !== undefined);
     case 'turn/failed':
       return mapTurnEnd(params, state, /* failed */ true);
     case 'turn/plan/updated':
@@ -169,6 +170,13 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
       return mapItemLifecycle(params, state, 'item.started');
     case 'item/updated':
       return mapItemLifecycle(params, state, 'item.updated');
+    // `contextCompaction` arrives here like any other tool item and is mapped like any
+    // other tool item — a `tool`/`other` row titled "Compacted context" (`tool-display.ts`).
+    // Deliberately unchanged by #955: the v2 vocabulary is a protected contract
+    // (BACKWARD_COMPATIBILITY.md §7) and the golden fixtures pin this shape. The LIFECYCLE
+    // meaning the compaction boundary also carries travels on the v1 `turn-end` reason
+    // instead (`codex-app-server-runner.ts`), which is additive and leaves every v2
+    // consumer, and every old recording, reading exactly what it read before.
     case 'item/completed':
       return mapItemLifecycle(params, state, 'item.completed');
     case 'item/agentMessage/delta':
@@ -260,7 +268,18 @@ function turnStopReason(params: Record<string, unknown>, failed: boolean): StopR
   const turn = isRecord(params.turn) ? params.turn : {};
   if (turn.status === 'interrupted') return 'cancelled';
   if (!failed) return 'end_turn';
-  return /interrupt/i.test(errorMessage(params.error) ?? '') ? 'cancelled' : 'error';
+  return /interrupt/i.test(codexTurnError('turn/failed', params) ?? '') ? 'cancelled' : 'error';
+}
+
+/** The error a turn frame ends on, or undefined for a clean turn. Current app-servers report a
+ *  failure as `turn/completed` with `turn.status: 'failed'` and the error on `turn.error`; older
+ *  ones sent `turn/failed` with a top-level `error`. */
+export function codexTurnError(method: string, params: Record<string, unknown>): string | undefined {
+  const turn = isRecord(params.turn) ? params.turn : {};
+  if (method !== 'turn/failed' && turn.status !== 'failed') return undefined;
+  const message = errorMessage(params.error) ?? errorMessage(turn.error);
+  // The Responses API's error body arrives verbatim as the message (36b68a95).
+  return message === undefined ? 'codex turn failed' : unwrapJsonErrorEnvelope(message);
 }
 
 // ---- plan -------------------------------------------------------------------

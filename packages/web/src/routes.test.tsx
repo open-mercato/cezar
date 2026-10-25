@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from './api/query-client'
 import { queryKeys, workspaceQueryKeys } from './api/queries'
@@ -49,7 +49,7 @@ const HEALTH = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: false },
+  capabilities: { localHandoff: true, terminal: false, followups: true, singleProject: false, automations: false },
   projects: [{ id: BOOT, name: 'cezar' }],
   bootProject: BOOT,
 }
@@ -224,13 +224,16 @@ const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/workflows/ship-it', 'workflows', 'Loading workflows…'],
   ['/skills', 'skills', 'Skills'],
   // Project settings only (step 3.5) — appearance/notifications/resources/projects moved to
-  // the unscoped `/settings/global/*` area, covered in its own describe below.
-  ['/settings', 'settings', 'Settings'],
+  // the unscoped `/settings/global/*` area, covered in its own describe below. The project
+  // index is titled by the PROJECT (unified settings, spec 2026-10-13): the registry names
+  // the boot project "cezar".
+  ['/settings', 'settings', 'cezar'],
   ['/settings/agents', 'settings-agents', 'Agents'],
+  ['/settings/instructions', 'settings-instructions', 'Instructions'],
+  ['/settings/tasks', 'settings-tasks', 'Tasks'],
   ['/settings/agent-config', 'settings-agent-config', 'Agent config'],
   ['/settings/worktrees', 'settings-worktrees', 'Worktrees'],
   ['/settings/bookmarklets', 'settings-bookmarklets', 'Bookmarklets'],
-  ['/settings/prompt-templates', 'settings-prompt-templates', 'Prompt templates'],
 ]
 
 describe('scoped route map (/p/:projectId)', () => {
@@ -249,13 +252,12 @@ describe('scoped route map (/p/:projectId)', () => {
     expect(screen.queryByRole('heading', { name: 'Loading task…' })).toBeNull()
   })
 
-  // MCP lives inside Agent config; keyboard remains hidden and unrouted.
+  // MCP lives inside Agent config, so its old section URL is unrouted.
   const unknown = [
     '/nope-404',
     '/tasks',
     '/settings/nope',
     '/settings/mcp',
-    '/settings/keyboard',
     '/tasks/abc123/nope',
     '/compare',
   ]
@@ -331,8 +333,13 @@ describe('scoped route map (/p/:projectId)', () => {
  * project-scoped URLs alive as redirects, so pre-split bookmarks still land.
  */
 describe('the global settings area (/settings/global)', () => {
+  // These assertions cover routing and the capability gate, not Vite's cold module transform.
+  // Await the real lazy module before starting RTL's 1s DOM deadline; keep production lazy.
+  beforeAll(async () => {
+    await import('./routes/automations/automations-route')
+  }, 30_000)
+
   const GLOBAL_CASES: Array<[string, string, string]> = [
-    ['/settings/global', 'settings-global', 'Global settings'],
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
     ['/settings/global/resources', 'settings-global-resources', 'Resources'],
@@ -349,6 +356,12 @@ describe('the global settings area (/settings/global)', () => {
     })
   }
 
+  it('/settings/global has no page of its own: it lands, unscoped, on the first global section', () => {
+    renderAt('/settings/global')
+    expect(routeName()).toBe('settings-global-appearance')
+    expect(currentPathname()).toBe('/settings/global/appearance')
+  })
+
   // A bookmarked deep link into any of the four `/automations*` routes still resolves — the route
   // map is unchanged — but on a cockpit started with CEZ_AUTOMATIONS=0 the view says the feature
   // is off instead of rendering an editor whose every request would 409.
@@ -357,8 +370,8 @@ describe('the global settings area (/settings/global)', () => {
       renderAt(`/p/${BOOT}/${path}`)
       expect(currentPathname()).toBe(`/p/${BOOT}/${path}`)
       expect(routeName()).toBe('automations')
-      expect(await screen.findByText('Automations are off')).not.toBeNull()
-      expect(screen.getByText(/CEZ_AUTOMATIONS=0/)).not.toBeNull()
+      expect(await screen.findByText('Automations are off', {}, { timeout: 5_000 })).not.toBeNull()
+      expect(await screen.findByText(/CEZ_AUTOMATIONS=0/, {}, { timeout: 5_000 })).not.toBeNull()
     })
   }
 
@@ -379,6 +392,21 @@ describe('the global settings area (/settings/global)', () => {
     })
     expect(routeName()).not.toBe('settings-global-projects')
     expect(screen.queryByRole('heading', { level: 1, name: 'Projects' })).toBeNull()
+  })
+
+  // Prompt templates folded into Instructions (spec 2026-10-11-branch-naming-instructions):
+  // BACKWARD_COMPATIBILITY.md calls dropping a moved section's redirect a break.
+  it(`/p/${BOOT}/settings/prompt-templates lands on the Instructions anchor`, () => {
+    renderAt(`/p/${BOOT}/settings/prompt-templates`)
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/instructions`)
+    expect(currentHash()).toBe('#prompt-templates')
+    expect(routeName()).toBe('settings-instructions')
+  })
+
+  it('the legacy flat /settings/prompt-templates lands there too', () => {
+    renderAt('/settings/prompt-templates')
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/instructions`)
+    expect(currentHash()).toBe('#prompt-templates')
   })
 
   // A moved section's old URL, in both spellings a bookmark can have it.
@@ -517,6 +545,47 @@ describe('legacy flat URLs redirect to the boot project', () => {
     await waitFor(() => expect(currentPathname()).toBe(expected), { timeout: 4_000 })
   })
 
+  /** The launch folder stopped being a project once the user has some (#774 follow-up):
+   *  `/api/v1/projects` no longer lists `bootProject`, so a bare launch must open a project the
+   *  sidebar actually shows — while every explicit URL still reaches the served folder. */
+  describe('with the boot folder served but not listed', () => {
+    const UNLISTED: ProjectsResponse = {
+      ...REGISTRY,
+      projects: [
+        {
+          ...REGISTRY.projects[1]!,
+          id: 'older',
+          name: 'older',
+          root: '/home/u/older',
+          lastOpenedAt: '2026-01-01T00:00:00.000Z',
+        },
+        { ...REGISTRY.projects[1]!, lastOpenedAt: '2026-02-01T00:00:00.000Z' },
+      ],
+    }
+
+    it('opens the most recently opened registered project from the bare root', () => {
+      renderAt('/', { registry: UNLISTED })
+
+      expect(currentPathname()).toBe('/p/other/')
+      expect(routeName()).toBe('tasks')
+    })
+
+    it('still restores a remembered location', () => {
+      rememberLocation({ projectId: 'older', pathname: '/p/older/tasks/run-1' })
+      renderAt('/', { registry: UNLISTED })
+
+      expect(currentPathname()).toBe('/p/older/tasks/run-1')
+    })
+
+    it('still resolves an explicit legacy deep link to the served folder', () => {
+      renderAt('/tasks/run-2?file=y#L3', { registry: UNLISTED })
+
+      expect(currentPathname()).toBe('/p/boot/tasks/run-2')
+      expect(currentSearch()).toBe('?file=y')
+      expect(currentHash()).toBe('#L3')
+    })
+  })
+
   it('keeps the quiet resolving surface while bare-root inputs are pending', () => {
     renderAt('/', { seed: false })
 
@@ -601,6 +670,14 @@ describe('legacy flat URLs redirect to the boot project', () => {
     expect(currentSearch()).toBe('?skill=om-code-review')
     expect(currentHash()).toBe('#usage')
     expect(routeName()).toBe('skills')
+  })
+
+  it('keeps the old bookmarklet pseudo-skill deep link on the project bookmarklets page', () => {
+    renderAt('/settings/skills?skill=__bm#saved')
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/bookmarklets`)
+    expect(currentSearch()).toBe('')
+    expect(currentHash()).toBe('#saved')
+    expect(routeName()).toBe('settings-bookmarklets')
   })
 
   it('delivers the full bookmarklet grammar into the composer (spec 011 contract)', () => {
