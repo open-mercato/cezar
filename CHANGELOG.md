@@ -1,3 +1,17 @@
+# 0.16.2 (2026-10-21)
+
+<!-- Release notes generated using configuration in .github/release.yml at 9e3f35c7 -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(opencode): name OpenCode 2.x instead of failing with a bare 405 (telemetry dc1a91a6) by @patzick in https://github.com/open-mercato/cezar/pull/1577
+* fix(provider-auth): stop reporting an OpenCode CLI that fails to start as unrecognized output (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1582
+* fix(web): retry a transient transport failure on background reads before surfacing it (telemetry 4678fce9) by @patzick in https://github.com/open-mercato/cezar/pull/1583
+* fix(dispatch): don't hand a child another runner's model (telemetry 43bdda11) by @patzick in https://github.com/open-mercato/cezar/pull/1593
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.1...v0.16.2
+
 # 0.16.1 (2026-10-20)
 
 <!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->

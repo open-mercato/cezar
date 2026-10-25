@@ -32,6 +32,9 @@ export type TrackerAutomationLauncher = (
  * this for a project with no Jira/Linear connection configured (2026-09-19 discussion).
  */
 export interface ProjectAutomationHandle {
+  validateDeferred?: import('./schedule-runner.ts').ScheduleRunnerHandle['validateDeferred'];
+  deferredHoldUntil?: import('./schedule-runner.ts').ScheduleRunnerHandle['deferredHoldUntil'];
+  deferredRunIds?: import('./schedule-runner.ts').ScheduleRunnerHandle['deferredRunIds'];
   projectId: string;
   store: AutomationStore;
   /** The zone every schedule is evaluated in — the server's own. */
@@ -297,6 +300,8 @@ function laterCursor(
 
 /** The shortest a failed item is ever pushed out; a poll interval is at least this anyway. */
 const MIN_RETRY_MS = 60_000;
+/** Larger delays overflow Node's timer and become a 1ms wait. */
+const MAX_TIMER_WAIT_MS = 2_147_483_647;
 
 export interface WorkspaceAutomationSchedulerOptions {
   coordinator: AutomationCoordinator;
@@ -365,7 +370,13 @@ export class WorkspaceAutomationScheduler {
           const runner = new ScheduleRunner({ ...handle, launch: handle.launchSchedule, now: this.options.now });
           const at = runner.dueAt(definition);
           if (at === null) continue;
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: MIN_RETRY_MS, fire: () => runner.fire(definition) });
+          due.push({ key, at: this.notBefore(key, at), retryAfterMs: MIN_RETRY_MS, fire: async () => {
+            const outcome = await runner.fire(definition);
+            // Schedules retain their due instant on contention. Use the workspace's
+            // existing retry floor so a busy project cannot starve every other due item.
+            if (outcome.result === 'lease-held') throw new Error('Scheduled task lease is held');
+            return outcome;
+          } });
         } else if (isTrackerAutomation(definition)) {
           if (!handle.tracker) continue;
           const scheduler = new ProjectTrackerAutomationScheduler(handle);
@@ -378,8 +389,15 @@ export class WorkspaceAutomationScheduler {
     if (!due.length) return;
     due.sort((a, b) => a.at - b.at);
     const next = due[0]!;
+    const wait = Math.max(0, next.at - now);
     this.timer = setTimeout(() => {
       this.timer = undefined;
+      if (wait > MAX_TIMER_WAIT_MS) {
+        // This is only an intermediate wake. Re-read due times and retry floors;
+        // invoking fire here could consume an occurrence before its real due date.
+        this.schedule();
+        return;
+      }
       void next.fire().then(
         () => { this.retryAfter.delete(next.key); },
         // Never re-arm a rejected item at its own past `at` (#983): that is a zero-delay spin, and
@@ -388,7 +406,7 @@ export class WorkspaceAutomationScheduler {
         // failure — independent of whatever the project's store did or did not manage to persist.
         () => { this.retryAfter.set(next.key, (this.options.now?.() ?? Date.now()) + next.retryAfterMs); },
       ).finally(() => this.schedule());
-    }, Math.max(0, next.at - now));
+    }, Math.min(MAX_TIMER_WAIT_MS, wait));
   }
 
   /** An item that just failed waits out its retry floor, however due its persisted state looks. */

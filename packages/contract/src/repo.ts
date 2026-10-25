@@ -142,6 +142,8 @@ export const changesPayloadSchema = z.object({
   stat: diffStatSchema,
   /** Additive context for review tasks whose worktree HEAD no longer matches their own branch. */
   repointedHead: z.object({ headBranch: z.string(), taskBranch: z.string() }).optional(),
+  /** The diff's anchor commit as a full sha — the `rev` an image's old side is fetched at. */
+  baseSha: z.string().optional(),
 });
 export type ChangesPayload = z.infer<typeof changesPayloadSchema>;
 

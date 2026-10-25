@@ -51,12 +51,20 @@ describe('parseUsageLimit', () => {
   });
 
   it('uses tomorrow when a clock-only reset already passed today in its named timezone', () => {
-    const lateWarsawNight = Date.parse('2026-08-03T20:30:00.000Z');
+    const lateWarsawNight = Date.parse('2026-08-03T21:30:00.000Z');
     const hit = parseUsageLimit(
       "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",
       lateWarsawNight,
     );
     expect(hit?.resetAt.toISOString()).toBe('2026-08-04T18:10:00.000Z');
+  });
+
+  it('resumes now, not a day later, when a minute-truncated clock reset just passed (telemetry 4bf9686a)', () => {
+    const justAfter = Date.parse('2026-08-03T18:10:40.000Z');
+    const zoned = parseUsageLimit("You've hit your session limit · resets 8:10pm (Europe/Warsaw)", justAfter);
+    expect(zoned?.resetAt.getTime()).toBe(justAfter);
+    const local = new Date(2026, 7, 3, 2, 10, 40).getTime();
+    expect(parseUsageLimit("You've hit your session limit · resets 2:10am", local)?.resetAt.getTime()).toBe(local);
   });
 
   it('reads the session-limit prose with a UTC zone (telemetry 987e8238)', () => {

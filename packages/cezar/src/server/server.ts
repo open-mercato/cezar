@@ -1,3 +1,6 @@
+import { resolveDeferredReset, deferredHoldUntil } from '../automations/deferred-reset.ts';
+import { deferredStartOptions, previewDeferredStart, digest, validateDeferredBinding } from '../automations/deferred-start.ts';
+import { deferredOptionsInputSchema, deferredPreviewInputSchema, deferredCreateInputSchema, deferredMutationQuerySchema } from '@open-mercato/cezar-contract';
 import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
@@ -45,7 +48,7 @@ import {
   isScheduleAutomation,
   type AutomationDefinition,
 } from '../automations/types.ts';
-import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
+import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -152,10 +155,11 @@ import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdat
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
 import { StarCountReader } from './star-count.ts';
 import { DesignProxies } from './preview/design-proxy.ts';
-import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
+import { getTeamSkillsCached, isSafeRef, refreshTeamSkills, safeRemoteFor, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
+import { onRunFrames } from './run-frames.ts';
 import {
   HistoryCursorError,
   deriveRunContextEvents,
@@ -208,6 +212,8 @@ import {
   imageMimeType,
   isOsOpenableImage,
   listRepoPaths,
+  isCommitSha,
+  readImageAtRev,
   pushCurrentBranch,
   worktreeGitStatus,
   readWorktreePath,
@@ -302,6 +308,7 @@ import {
   telemetryBlockedBy,
   track,
 } from '../telemetry.ts';
+import { automationLabel } from '../feature-telemetry.ts';
 import {
   setTelemetryConsentInputSchema,
   telemetryErrorInputSchema,
@@ -566,6 +573,7 @@ function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'sch
   if (kind === 'tracker') return body.trackerTrigger ? null : 'Choose an event to finish configuring this automation';
   if (kind === 'schedule') {
     if (!body.schedule) return 'a scheduled automation needs a schedule';
+    if (body.schedule.type === 'once' && !body.schedule.date) return 'a one-time schedule needs a date';
     if (body.events || body.filters || body.intervalSeconds !== undefined) return 'a scheduled automation has no GitHub filter';
     return null;
   }
@@ -574,6 +582,16 @@ function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'sch
   if (!body.filters) return 'a GitHub automation needs its bounded filter';
   if (body.schedule) return 'a GitHub automation has no schedule';
   return null;
+}
+/**
+ * A one-time schedule can only be ENABLED while its instant is still ahead (#771): enabling one
+ * that has passed would arm nothing and sit "enabled" forever. Saved paused, it is a draft and is
+ * accepted; Run now still works on it.
+ */
+function oncePassedIssue(schedule: AutomationSchedule | undefined, enabled: boolean, now = Date.now()): string | null {
+  if (!enabled || schedule?.type !== 'once') return null;
+  if (nextOccurrence(schedule, now, localTimeZone()) !== null) return null;
+  return `the one-time schedule (${scheduleLabel(schedule)}, ${localTimeZone()}) is not in the future; pick a later time`;
 }
 const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
@@ -591,6 +609,12 @@ const automationLogQuerySchema = z.object({
   // never needed.
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
+
+/** A by-hand schedule launch that started no run, in words that say why (telemetry 411fac74:
+ *  "see the execution log" alone sent the user elsewhere for the one line that mattered). */
+function launchFailedMessage(outcome: { reason?: string }): string {
+  return outcome.reason ? `the launch failed: ${outcome.reason}` : 'the launch failed — see the execution log';
+}
 
 function editableAutomation(definition: AutomationDefinition) {
   return {
@@ -3527,6 +3551,7 @@ export function createApp(deps: ServerDeps) {
     projectsDir: config.projectsDir,
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
     effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
+    orgSkillsRepos: config.orgSkillsRepos ?? [],
     composerDefaults: {
       autonomous: config.composerDefaults.autonomous ?? null,
       worktree: config.composerDefaults.worktree ?? null,
@@ -3577,7 +3602,17 @@ export function createApp(deps: ServerDeps) {
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const { browseRoot, projectsDir, skillsAutoUpdate, composerDefaults, resources, agentDefaults, branding } = parsed.data;
+      const { browseRoot, projectsDir, skillsAutoUpdate, orgSkillsRepos, composerDefaults, resources, agentDefaults, branding } = parsed.data;
+      for (const src of orgSkillsRepos ?? []) {
+        if (safeRemoteFor(src.repo) === null || !isSafeRef(src.ref)) {
+          return c.json({ error: `unsafe skills repo: ${src.repo}@${src.ref}` }, 400);
+        }
+        // Global setting, shared by processes started in different directories: a relative path
+        // would resolve differently in each, while the cache directory is the same.
+        if (/^\.{1,2}([\\/]|$)/.test(src.repo)) {
+          return c.json({ error: `use an absolute path for a local skills repo: ${src.repo}` }, 400);
+        }
+      }
       for (const [configuredRoot, create] of [
         [browseRoot, false],
         [projectsDir, true],
@@ -3615,6 +3650,10 @@ export function createApp(deps: ServerDeps) {
           if (projectsDir !== undefined) config.projectsDir = projectsDir;
           if (skillsAutoUpdate === null) delete config.skillsAutoUpdate;
           else if (skillsAutoUpdate !== undefined) config.skillsAutoUpdate = skillsAutoUpdate;
+          if (orgSkillsRepos !== undefined) {
+            if (orgSkillsRepos.length === 0) delete config.orgSkillsRepos;
+            else config.orgSkillsRepos = orgSkillsRepos;
+          }
           if (composerDefaults?.autonomous === null) delete config.composerDefaults.autonomous;
           else if (composerDefaults?.autonomous !== undefined) {
             config.composerDefaults.autonomous = composerDefaults.autonomous;
@@ -3866,6 +3905,7 @@ export function createApp(deps: ServerDeps) {
         const message = err instanceof Error ? err.message : String(err);
         return c.json({ error: message }, 500);
       }
+      track('workflow_saved', { label: parsed.data.overwrite ? 'chain_updated' : 'chain_created' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ path, name: parsed.data.name }, 201);
     })
 
@@ -3890,6 +3930,7 @@ export function createApp(deps: ServerDeps) {
       } catch (err) {
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
+      track('workflow_saved', { label: 'deleted' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ ok: true, path: target });
     })
 
@@ -3925,6 +3966,7 @@ export function createApp(deps: ServerDeps) {
         }
         return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
       }
+      track('workflow_saved', { label: body.overwrite ? 'graph_updated' : 'graph_created' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ path, name: body.name }, 201);
     })
 
@@ -4061,6 +4103,9 @@ export function createApp(deps: ServerDeps) {
 
   /** The schedule runner's view of a project: the store, the zone, and a launcher onto its RunManager. */
   const scheduleHandle = (project: Parameters<typeof emitAutomationChange>[0]) => ({
+    deferredHoldUntil,
+    validateDeferred: (definition: Parameters<typeof validateDeferredBinding>[1]) => validateDeferredBinding(project.root, definition),
+    deferredRunIds: async (id: string, ids: string[]) => project.store.listPersistedRuns().filter(r => ids.includes(r.id) && r.automationTrigger?.automationId === id).map(r => r.id),
     projectId: project.id,
     store: project.automationStore,
     timeZone: localTimeZone(),
@@ -4125,6 +4170,47 @@ export function createApp(deps: ServerDeps) {
     .use('/automations/*', requireAutomations)
     .use('/automation-log', requireAutomations)
     .use('/automation-log/*', requireAutomations)
+    .post('/deferred-start/options', jsonZodValidator(deferredOptionsInputSchema), async (c) => {
+      return c.json(await deferredStartOptions(c.get('project').root, c.req.valid('json').task, capabilities().automations));
+    })
+    .post('/deferred-start/preview', requireAutomations, jsonZodValidator(deferredPreviewInputSchema), async (c) => {
+      const result = await previewDeferredStart(c.get('project').root, c.req.valid('json'), capabilities().automations, resolveDeferredReset);
+      return c.json(result.preview);
+    })
+    .post('/deferred-start', jsonZodValidator(deferredCreateInputSchema), async (c) => {
+      const project = c.get('project');
+      const input = c.req.valid('json');
+      const requestDigest = digest({ task: input.task, start: input.start, previewRevision: input.previewRevision });
+      const store = project.automationStore;
+      const lease = store.acquireLease();
+      if (!lease) return c.json({ error: 'Scheduling is busy. Retry with the same request.' }, 409);
+      try {
+        const previous = store.creation(input.idempotencyKey);
+        if (previous) return previous.requestDigest === requestDigest
+          ? c.json({ scheduled: previous }, 201)
+          : c.json({ error: 'This creation key belongs to a different request.' }, 409);
+        // A replay only acknowledges existing state; disabling scheduling must not
+        // trap a client recovering a lost response. New creation remains disabled.
+        if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
+        const resolved = await previewDeferredStart(project.root, input, capabilities().automations, resolveDeferredReset);
+        if (!resolved.preview.available) return c.json({ error: resolved.preview.message }, 400);
+        if (resolved.preview.previewRevision !== input.previewRevision || !lease.isValid()) return c.json({ error: 'Settings or reset time changed. Check the preview again.' }, 409);
+        if ((input.task.variants ?? 1) > 1 && !await getRepoInfo(project.root)) return c.json({ error: 'Parallel variants need a git repository.' }, 400);
+        const { task, images: _images, todoId: _todoId, variants, ...fields } = input.task;
+        const automation = store.create({
+          name: task.trim().replace(/\s+/g, ' ').slice(0, 100), kind: 'schedule', enabled: true,
+          schedule: resolved.schedule!,
+          task: { ...fields, prompt: task, variants: (variants ?? 1) as 1 | 2 | 3 },
+          deferredStart: { origin: 'composer', reason: input.start.kind, notBefore: resolved.preview.notBefore,
+            timeZone: resolved.preview.timeZone, binding: resolved.binding!, creationKey: input.idempotencyKey,
+            requestDigest, status: 'pending', runIds: [] },
+        });
+        emitAutomationChange(project, automation.id, automation.revision);
+        automationsChanged();
+        return c.json({ scheduled: store.creation(input.idempotencyKey)! }, 201);
+      } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+      finally { lease.release(); }
+    })
     .get('/automations', async (c) => {
       const { root, automationStore } = c.get('project');
       const forge = resolveForge(await getRepoInfo(root));
@@ -4199,6 +4285,8 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
+      const passedIssue = oncePassedIssue(parsed.data.schedule, parsed.data.enable === true);
+      if (passedIssue) return c.json({ error: passedIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
@@ -4212,6 +4300,7 @@ export function createApp(deps: ServerDeps) {
         );
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
+        track('automation_created', { label: automationLabel(automation) }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
         return c.json({ automation }, 201);
       } catch (error) {
         return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -4238,6 +4327,26 @@ export function createApp(deps: ServerDeps) {
       if (!current) return c.json({ error: 'not found' }, 404);
       // The stored kind unless the body names one; a switch is refused — receipts and cursors
       // are kind-specific, and a silent swap would orphan them (spec 2026-09-14 § Edge cases).
+      if (current.deferredStart) {
+        const lease = automationStore.acquireLease();
+        if (!lease) return c.json({ error: 'The scheduled task is being launched. Refresh its status.' }, 409);
+        try {
+          const fresh = automationStore.get(current.id);
+          if (!fresh?.deferredStart || fresh.revision !== parsed.data.expectedRevision || fresh.deferredStart.runIds.length) return c.json({ error: 'The task changed or its launch was already claimed.' }, 409);
+          if (digest(parsed.data.task) !== digest(fresh.task) || parsed.data.name !== fresh.name || parsed.data.kind !== 'schedule' || parsed.data.schedule?.type !== 'once') return c.json({ error: 'Cancel and submit a new task to change its prompt or settings.' }, 409);
+          await validateDeferredBinding(c.get('project').root, fresh);
+          const { prompt, ...fields } = fresh.task;
+          const schedule = parsed.data.schedule;
+          const resolved = await previewDeferredStart(c.get('project').root, { task: { ...fields, task: prompt }, start: { kind: 'at', date: schedule.date ?? '', hour: schedule.hour ?? 0, minute: schedule.minute ?? 0 } }, true);
+          if (!resolved.preview.available) return c.json({ error: resolved.preview.message }, 400);
+          const automation = automationStore.update(fresh.id, fresh.revision, { ...fresh, schedule: resolved.schedule!, enabled: true,
+            deferredStart: { ...fresh.deferredStart, reason: 'at', notBefore: resolved.preview.notBefore, timeZone: resolved.preview.timeZone, status: 'pending', failureKind: undefined, error: undefined, holdUntil: undefined, manualRequested: undefined } });
+          emitAutomationChange(c.get('project'), automation.id, automation.revision);
+          automationsChanged();
+          return c.json({ automation });
+        } catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
+        finally { lease.release(); }
+      }
       const kind = parsed.data.kind ?? current.kind;
       if (kind !== current.kind) return c.json({ error: 'change the kind by creating a new automation' }, 409);
       const kindIssue = automationKindIssue(parsed.data, kind);
@@ -4246,6 +4355,8 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
+      const passedIssue = oncePassedIssue(parsed.data.schedule, parsed.data.enabled === true);
+      if (passedIssue) return c.json({ error: passedIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
@@ -4284,6 +4395,9 @@ export function createApp(deps: ServerDeps) {
           }
         }
         if (kind !== 'tracker' && automation.enabled && !current.enabled) armAutomation(automationStore, automation);
+        if (automation.enabled !== current.enabled) {
+          track('automation_toggled', { label: automation.enabled ? 'enabled' : 'paused' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+        }
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });
@@ -4293,13 +4407,40 @@ export function createApp(deps: ServerDeps) {
       }
     })
 
-    .delete('/automations/:id', (c) => {
+    .delete('/automations/:id', queryZodValidator(deferredMutationQuerySchema), (c) => {
+      const conflict = (error: string, runIds?: string[]) => c.json({ error, ...(runIds ? { runIds } : {}) }, 409);
       const id = c.req.param('id');
       const store = c.get('project').automationStore;
       const current = store.get(id);
+      if (current?.deferredStart) {
+        const lease = store.acquireLease();
+        if (!lease) return conflict('Launch is in progress. Refresh before cancelling.');
+        try {
+          const fresh = store.get(id);
+          if (!fresh?.deferredStart) {
+            const creation = store.creationFor(id);
+            return creation?.outcome === 'launched'
+              ? conflict('This scheduled task already started.', creation.runIds)
+              : conflict('The task changed or its launch was already claimed.');
+          }
+          if (fresh.revision !== c.req.valid('query').expectedRevision) return conflict('The task changed or its launch was already claimed.');
+          const claimed = fresh.deferredStart.runIds;
+          // An uncertain launch may be dismissed; the ledger keeps whichever recorded runs exist.
+          if (claimed.length && !(fresh.deferredStart.status === 'failed' && fresh.deferredStart.failureKind === 'ambiguous')) return conflict('The task changed or its launch was already claimed.');
+          const existing = new Set(c.get('project').store.listPersistedRuns().filter(r => r.automationTrigger?.automationId === id).map(r => r.id));
+          store.finishDeferred(id, 'cancelled', claimed.filter(runId => existing.has(runId)));
+          emitAutomationChange(c.get('project'), id, fresh.revision, true);
+          automationsChanged();
+          return c.body(null, 204);
+        } catch (error) { return conflict(error instanceof Error ? error.message : String(error)); }
+        finally { lease.release(); }
+      }
+      const creation = !current ? store.creationFor(id) : undefined;
+      if (creation?.outcome === 'launched') return conflict('This scheduled task already started.', creation.runIds);
       if (!current || !store.delete(id)) return c.json({ error: 'not found' }, 404);
       emitAutomationChange(c.get('project'), id, current.revision, true);
       automationsChanged();
+      track('automation_deleted', { label: automationLabel(current) }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.body(null, 204);
     })
 
@@ -4307,10 +4448,13 @@ export function createApp(deps: ServerDeps) {
       const store = c.get('project').automationStore;
       const current = store.get(c.req.param('id'));
       if (!current) return c.json({ error: 'not found' }, 404);
+      if (current.deferredStart) return c.json({ error: 'Use the scheduled task actions in Tasks.' }, 409);
       if (current.kind === 'tracker') {
         const issue = await trackerTriggerIssue(c.get('project'), current.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
+      const passedIssue = oncePassedIssue(current.schedule, true);
+      if (passedIssue) return c.json({ error: passedIssue }, 409);
       let automation: AutomationDefinition;
       try {
         automation = store.update(
@@ -4322,6 +4466,7 @@ export function createApp(deps: ServerDeps) {
       catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
       automationsChanged();
+      if (!current.enabled) track('automation_toggled', { label: 'enabled' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ automation });
     })
 
@@ -4329,11 +4474,13 @@ export function createApp(deps: ServerDeps) {
       const store = c.get('project').automationStore;
       const current = store.get(c.req.param('id'));
       if (!current) return c.json({ error: 'not found' }, 404);
+      if (current.deferredStart) return c.json({ error: 'Use the scheduled task actions in Tasks.' }, 409);
       let automation: AutomationDefinition;
       try { automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: false }); }
       catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 409); }
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
       automationsChanged();
+      if (current.enabled) track('automation_toggled', { label: 'paused' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ automation });
     })
 
@@ -4390,17 +4537,23 @@ export function createApp(deps: ServerDeps) {
 
     // A scheduled automation fired NOW, by hand (spec 2026-09-14 Q10): paused or not, the
     // definition's `enabled` and `nextRunAt` are untouched — this is a launch, not an arm.
-    .post('/automations/:id/run', async (c) => {
+    .post('/automations/:id/run', queryZodValidator(deferredMutationQuerySchema), async (c) => {
       const project = c.get('project');
       const store = project.automationStore;
       const automation = store.get(c.req.param('id'));
       if (!automation) return c.json({ error: 'not found' }, 404);
+      if (automation.deferredStart && automation.revision !== c.req.valid('query').expectedRevision) return c.json({ error: 'The task changed. Refresh before running it.' }, 409);
       if (!isScheduleAutomation(automation)) return c.json({ error: 'a GitHub automation is run through check with mode execute' }, 409);
       const runner = new ScheduleRunner(scheduleHandle(project));
       const outcome = await runner.runNow(automation);
       if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
       if (outcome.result === 'duplicate') return c.json({ error: 'this instant was already launched' }, 409);
-      if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+      if (!('runId' in outcome)) {
+        automationsChanged();
+        return c.json({ error: automation.deferredStart
+          ? store.get(automation.id)?.deferredStart?.error ?? 'The task could not start. Refresh its details in Tasks.'
+          : launchFailedMessage(outcome) }, 409);
+      }
       automationsChanged();
       return c.json({ runId: outcome.runId }, 202);
     })
@@ -4421,12 +4574,13 @@ export function createApp(deps: ServerDeps) {
       if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
       const definition = store.get(receipt.automationId);
       if (!definition) return c.json({ error: 'automation not found' }, 404);
+      if (definition.deferredStart) return c.json({ error: 'Use Retry in Tasks with the current revision.' }, 409);
       // A schedule receipt retries as a by-hand launch of the same occurrence, under the same
       // receipt (spec 2026-09-14 § API).
       if (isScheduleAutomation(definition)) {
         const outcome = await new ScheduleRunner(scheduleHandle(project)).retry(definition, receipt);
         if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
-        if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+        if (!('runId' in outcome)) return c.json({ error: launchFailedMessage(outcome) }, 409);
         return c.json({ receiptId: receipt.receiptId, runId: outcome.runId }, 202);
       }
       if (isTrackerAutomation(definition)) {
@@ -4833,6 +4987,17 @@ export function createApp(deps: ServerDeps) {
       return c.json({ cancelled });
     })
 
+    // "Start now": jump a queued run past the `maxParallel` cap.
+    .post('/runs/:id/start-now', async (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const outcome = await manager.startNow(id);
+      if (outcome === 'not-queued') return c.json({ error: 'run is not queued' }, 409);
+      if (outcome === 'held') return c.json({ error: 'the agent account is held by a usage limit' }, 409);
+      return c.json({ started: true as const });
+    })
+
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {
@@ -4970,9 +5135,11 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/:id/finish', (c) => {
       const { store, manager } = c.get('project');
       const id = c.req.param('id');
-      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const before = store.getRun(id);
+      if (!before) return c.json({ error: 'not found' }, 404);
       const finished = manager.finish(id);
       if (!finished) return c.json({ error: 'no open session' }, 409);
+      if (before.status === 'review') track('review_decided', { label: 'accepted' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ finished: true });
     })
 
@@ -4982,6 +5149,7 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       const answer = await manager.land(id);
+      if (answer.outcome === 'landed') track('review_decided', { label: 'landed' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({
         outcome: answer.outcome,
         message: answer.message,
@@ -5323,7 +5491,7 @@ export function createApp(deps: ServerDeps) {
     // An `Accept` that asks for images reaches the same raw branch without the flag — which is
     // what an `<img>` sends — while the flag still wins whenever it is present and `*<slash>*`
     // (every `fetch`) still gets the JSON listing. See `negotiate`.
-    .get('/runs/:id/files', queryZodValidator(z.object({ path: queryValue, raw: queryValue })), async (c) => {
+    .get('/runs/:id/files', queryZodValidator(z.object({ path: queryValue, raw: queryValue, rev: queryValue.refine((v) => v === undefined || isCommitSha(v), 'rev must be a full commit sha') })), async (c) => {
       const { root: repoRoot, store } = c.get('project');
       const query = c.req.valid('query');
       c.header('vary', 'Accept');
@@ -5335,6 +5503,20 @@ export function createApp(deps: ServerDeps) {
       if (!run) return c.json({ error: 'not found' }, 404);
       const workingDirectory = workingDirectoryOf(run, repoRoot);
       if (!workingDirectory) return c.json({ error: NO_WORKTREE }, 409);
+      // `rev` (a full sha, the changes payload's `baseSha`) serves an image's OLD side from git —
+      // the before of a modified image, the only picture of a deleted one. Bytes only.
+      if (query.rev !== undefined) {
+        if (!wantsRaw) return c.json({ error: 'rev is only served as raw image bytes' }, 409);
+        const old = await readImageAtRev(workingDirectory, query.rev, query.path ?? '');
+        if (old.kind === 'refused') return c.json({ error: old.error }, 409);
+        return c.body(new Uint8Array(old.bytes).buffer as ArrayBuffer, 200, {
+          'content-type': old.mime,
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          // Addressed by content: the same sha and path are the same bytes forever.
+          'cache-control': 'private, max-age=31536000, immutable',
+        });
+      }
       const result = await readWorktreePath(workingDirectory, query.path ?? '');
       if (result.kind === 'invalid' || result.kind === 'missing') {
         return c.json({ error: result.error }, 409);
@@ -5469,6 +5651,7 @@ export function createApp(deps: ServerDeps) {
       // One publish per run at a time: a cockpit re-asking after its response was lost (telemetry
       // 9119d21a) joins the publish still running instead of racing its autosave commit and push.
       const key = `${dataDir}\0${id}`;
+      const sid = deviceSid(c.req.header('x-cezar-sid'));
       let publish = prPublishes.get(key);
       if (!publish) {
         const branch = run.branch;
@@ -5482,6 +5665,7 @@ export function createApp(deps: ServerDeps) {
           // ahead of the push looks like. It exists now.
           const createdNumber = refNumberFromUrl(outcome.url);
           if (createdNumber !== null) forgetRefStatus(repoRoot, createdNumber);
+          track('pr_opened', { label: draft ? 'draft' : 'ready' }, { sid });
           store.updateRun(id, {
             pullRequestUrl: outcome.url,
             status: 'done',
@@ -5524,6 +5708,7 @@ export function createApp(deps: ServerDeps) {
       // Unlike `POST /pr`, the status stays: the agent's session, not the cockpit, owns the run.
       store.updateRun(id, { pullRequestUrl: pr.url });
       store.appendEvent(id, { type: 'note', message: `PR opened by the agent: ${pr.url}` });
+      track('pr_opened', { label: 'agent' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ found: true as const, url: pr.url });
     })
 
@@ -6042,6 +6227,8 @@ export function createApp(deps: ServerDeps) {
           task,
           runner: parsed.data?.runner,
           model: parsed.data?.model,
+          origin: 'inbox',
+          deviceSid: deviceSid(c.req.header('x-cezar-sid')),
         });
         await markStarted(dataDir, id, run.id);
         return c.json({ run }, 201);
@@ -6094,15 +6281,14 @@ export function createApp(deps: ServerDeps) {
           if (replaying) buffered.push(event);
           else void writeEvent(event);
         };
-        const onRun = (run: RunRecord) => {
-          if (run.id !== id) return;
-          void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
-        };
         const offEvent = onRunEvent(store, id, onEvent);
-        store.on('run', onRun);
+        const offRun = onRunFrames(store, (run, frames) => {
+          if (run.id !== id) return;
+          void stream.writeSSE({ event: 'run', data: frames.record() });
+        });
         stream.onAbort(() => {
           offEvent();
-          store.off('run', onRun);
+          offRun();
         });
 
         const replay = query.cursor
@@ -6138,7 +6324,6 @@ export function createApp(deps: ServerDeps) {
     .get('/events', (c) => {
       const { dataDir, store } = c.get('project');
       return streamSSENoBuffer(c, async (stream) => {
-        const onRun = (run: RunRecord) => void stream.writeSSE({ event: 'run', data: JSON.stringify(run) });
         const onDeleted = (id: string) =>
           void stream.writeSSE({
             event: 'run-deleted',
@@ -6167,10 +6352,10 @@ export function createApp(deps: ServerDeps) {
           }
           void stream.writeSSE({ event: 'usage', data: JSON.stringify(owned) });
         });
-        store.on('run', onRun);
+        const offRun = onRunFrames(store, (_run, frames) => void stream.writeSSE({ event: 'run', data: frames.record() }));
         const offDeleted = onRunDeleted(store, onDeleted);
         stream.onAbort(() => {
-          store.off('run', onRun);
+          offRun();
           offDeleted();
           offTodos();
           offUsage();
@@ -6192,11 +6377,6 @@ export function createApp(deps: ServerDeps) {
         const attach = (project: string, ctx: Pick<ProjectContext, 'store' | 'dataDir' | 'manager'>): void => {
           if (attached.has(project)) return;
           const { store, dataDir } = ctx;
-          const onRun = (run: RunRecord) =>
-            void stream.writeSSE({
-              event: 'run',
-              data: JSON.stringify({ ...run, project }),
-            });
           const onDeleted = (id: string) =>
             void stream.writeSSE({
               event: 'run-deleted',
@@ -6212,16 +6392,18 @@ export function createApp(deps: ServerDeps) {
           // Same opt-in gate as the per-project stream (#471): no capability, no
           // watcher — and each subscription is scoped to its own dataDir (2.3).
           const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
+          const offRun = onRunFrames(store, (_run, frames) =>
+            void stream.writeSSE({ event: 'run', data: frames.workspace(project) }),
+          );
           const offLifecycle = ctx.manager.lifecycle?.onChange(event => {
             const payload: WorktreeLifecycleInvalidation = { ...event, projectId: project };
             void stream.writeSSE({ event: 'worktree-lifecycle', data: JSON.stringify(payload) });
           });
-          store.on('run', onRun);
           const offDeleted = onRunDeleted(store, onDeleted);
           attached.set(project, {
             store,
             detach: () => {
-              store.off('run', onRun);
+              offRun();
               offDeleted();
               offTodos();
               offLifecycle?.();
@@ -6443,7 +6625,7 @@ export function createApp(deps: ServerDeps) {
       // Not autonomous: an autonomous run skips the review gate (`settleSuccess`) a user may have
       // turned on, and the setup's whole point is a branch the user reviews before it lands. Its agent step is not the last
       // step, so it hands on to the checks without parking.
-      const run = project.manager.startRun(workflow, { task: E2E_SETUP_TASK });
+      const run = project.manager.startRun(workflow, { task: E2E_SETUP_TASK, origin: 'e2e_setup' });
       return c.json({ runId: run.id }, 201);
     });
 
@@ -7543,7 +7725,7 @@ export function createApp(deps: ServerDeps) {
 
   const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
     const usage = currentUsage(run.id);
-    const automationId =
+    const automationId = run.deferredBinding ? undefined :
       run.automation?.automationId ?? run.automationTrigger?.automationId ?? run.automationTracker?.automationId;
     return {
     projectId,
@@ -7935,6 +8117,9 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
           const context = await contextOf();
           return launchAutomationRun({ root: context.root, manager: context.manager, store: context.store, definition, candidate, receiptId, dispatchEnabled });
         },
+        deferredHoldUntil,
+        validateDeferred: async definition => validateDeferredBinding(project.root, definition),
+        deferredRunIds: async (id, ids) => (await contextOf()).store.listPersistedRuns().filter(r => ids.includes(r.id) && r.automationTrigger?.automationId === id).map(r => r.id),
         launchSchedule: async (definition, occurrence, receiptId) => {
           const context = await contextOf();
           return launchScheduledRun({ root: context.root, manager: context.manager, store: context.store, definition, occurrence, receiptId, projectName: basename(context.root), timeZone: localTimeZone(), dispatchEnabled });

@@ -1,5 +1,5 @@
 import { FolderTreeIcon, TriangleAlertIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useRef } from 'react'
 import { useParams } from 'react-router'
 
 import { ApiError } from '@/api/client'
@@ -14,6 +14,7 @@ import { RunHeader } from '../task-thread/run-header'
 import { FilePreview } from './file-preview'
 import { FilesTree } from './files-tree'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
+import { TreePaneResizeHandle, treePaneWidthProps, useTreePaneWidth } from './tree-pane-resize'
 
 /**
  * `/tasks/:id/files` — the session git view's read-only worktree browser (spec §"Session git
@@ -52,6 +53,9 @@ export function FilesView({
   const root = useRunFile(run.id, '')
   const [selected, setSelected] = useRememberedState<string | null>(stateKey, null)
   const desktop = useIsDesktop()
+  const treePaneRef = useRef<HTMLElement | null>(null)
+  const [treeWidth, setTreeWidth] = useTreePaneWidth()
+  const treeWidthProps = treePaneWidthProps(treeWidth)
 
   const refused = root.isError && root.error instanceof ApiError && root.error.status === 409
 
@@ -78,15 +82,24 @@ export function FilesView({
               header's height nor a long preview can hide the tree's rows. On phones the columns
               stack and the page IS the pane, so neither has a scroller of its own. */}
           <aside
+            ref={treePaneRef}
             data-slot="files-tree-pane"
+            style={treeWidthProps.style}
             className={cn(
-              'w-full shrink-0 md:overflow-y-auto md:overscroll-contain md:py-4',
+              'w-full shrink-0 md:max-w-[60%] md:overflow-y-auto md:overscroll-contain md:py-4',
               // Embedded, sized by the column (container query) rather than the window.
               embedded ? 'md:w-44 @xl:w-60 @4xl:w-72' : 'md:w-60 lg:w-72',
+              treeWidthProps.className,
             )}
           >
             <FilesTree runId={run.id} selected={selected} onSelect={setSelected} />
           </aside>
+          <TreePaneResizeHandle
+            paneRef={treePaneRef}
+            width={treeWidth}
+            onWidthChange={setTreeWidth}
+            className="hidden md:block"
+          />
           {/* From md up a focusable region, because it scrolls on its own and a text preview
               holds nothing else to focus: WebKit (the desktop app) never makes a scroller
               focusable by itself. Below md the page is the scroller, so no extra tab stop. Same

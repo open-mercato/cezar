@@ -113,6 +113,10 @@ describe('Continue on a Claude session whose transcript is gone', () => {
     expect(captured.specs).toHaveLength(2);
     const [resumed, fresh] = captured.specs as [AgentRunSpec, AgentRunSpec];
     expect(resumed).toMatchObject({ resume: true, sessionId: 'old-session' });
+    // Resuming and the missing-session fallback must retain the same account-bound
+    // usage observer; otherwise fresh Claude limits never reach deferred previews.
+    expect(resumed.onUsageWindows).toEqual(expect.any(Function));
+    expect(fresh.onUsageWindows).toBe(resumed.onUsageWindows);
     expect(fresh.resume).toBe(false);
     expect(fresh.sessionId).not.toBe('old-session');
     expect(fresh.userPrompt).toContain('The previous provider session cannot be resumed');
