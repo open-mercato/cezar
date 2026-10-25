@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  isFolderCollapsed,
   isProjectCollapsed,
   normalizeCollapsed,
   readStoredCollapsed,
@@ -27,6 +28,18 @@ describe('isProjectCollapsed', () => {
     // mistaken for "no entry" and collapsed back on the next render.
     expect(isProjectCollapsed({ shop: false }, 'shop', 'cezar')).toBe(false)
     expect(isProjectCollapsed({ cezar: true }, 'cezar', 'cezar')).toBe(true)
+  })
+})
+
+describe('isFolderCollapsed', () => {
+  it('stays open while the scoped project lives inside it', () => {
+    expect(isFolderCollapsed({ 'folder:client': true }, 'client', ['cezar', 'shop'], 'cezar')).toBe(
+      false,
+    )
+  })
+
+  it('defaults shut when it does not contain the active project', () => {
+    expect(isFolderCollapsed(undefined, 'client', ['shop'], 'cezar')).toBe(true)
   })
 })
 

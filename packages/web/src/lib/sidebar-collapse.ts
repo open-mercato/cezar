@@ -60,3 +60,14 @@ export function isProjectCollapsed(
   if (stored !== undefined) return stored
   return projectId !== activeProjectId
 }
+
+/** Folder keys use `folder:<id>` in the same collapse map as projects. */
+export function isFolderCollapsed(
+  collapsed: SidebarCollapsed | undefined,
+  folderId: string,
+  memberProjectIds: readonly string[],
+  activeProjectId: string | null,
+): boolean {
+  if (activeProjectId !== null && memberProjectIds.includes(activeProjectId)) return false
+  return isProjectCollapsed(collapsed, `folder:${folderId}`, activeProjectId)
+}

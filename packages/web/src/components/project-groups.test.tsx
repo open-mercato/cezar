@@ -7,6 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { ProjectGroups } from '@/components/project-groups'
+import { PROJECT_FOLDERS_STORAGE_KEY } from '@/lib/project-folders'
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from '@/lib/sidebar-collapse'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -702,6 +703,24 @@ describe('ProjectGroups', () => {
       // link into a scope where nothing answers.
       expect(group('shop').querySelector('a')).toBeNull()
       expect(disclosure('shop')).toBeNull()
+    })
+  })
+
+  describe('project folders', () => {
+    it('opens the wrapper while the scoped project lives inside it', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'client', name: 'Client A', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/shop/runs': [] })
+      renderGroups(
+        [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+        '/p/shop/',
+      )
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="client"]')
+      expect(folder?.querySelector('button[aria-expanded="true"]')).not.toBeNull()
     })
   })
 })

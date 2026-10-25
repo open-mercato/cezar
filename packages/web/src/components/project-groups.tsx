@@ -31,7 +31,12 @@ import { ProjectFolderDialog } from '@/components/project-folder-dialog'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
 import { readProjectFolders, writeProjectFolders, type ProjectFolder } from '@/lib/project-folders'
-import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
+import {
+  isFolderCollapsed,
+  isProjectCollapsed,
+  readStoredCollapsed,
+  writeStoredCollapsed,
+} from '@/lib/sidebar-collapse'
 import { filterRunsByOrigin } from '@/lib/task-filters'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
 import { useTaskOrigin } from '@/lib/task-origin'
@@ -148,6 +153,15 @@ export function ProjectGroups({
   const collapseAnchorId = scopedProjectId ?? bootProjectId
   const { collapsed, toggle, expand } = useSidebarCollapse(collapseAnchorId)
   const [folders, setFolders] = React.useState(readProjectFolders)
+  const selectProject = React.useCallback(
+    (projectId: string) => {
+      expand(projectId)
+      for (const folder of folders) {
+        if (folder.projectIds.includes(projectId)) expand(`folder:${folder.id}`)
+      }
+    },
+    [expand, folders],
+  )
   const [editingFolder, setEditingFolder] = React.useState<ProjectFolder | null | undefined>(undefined)
   const saveFolder = React.useCallback((folder: ProjectFolder | null, previousId?: string) => {
     let next = folders.filter((item) => item.id !== previousId && item.id !== folder?.id)
@@ -250,7 +264,7 @@ export function ProjectGroups({
       active={project.id === scopedProjectId}
       collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
       onToggle={toggle}
-      onSelect={expand}
+      onSelect={selectProject}
       view={view}
       activeTo={activeTo}
       currentRunId={currentRunId}
@@ -294,22 +308,28 @@ export function ProjectGroups({
             of place mid-drag. The rect strategy measures each item and moves it to where it will
             actually land. */}
         <SortableContext items={orderedIds} strategy={rectSortingStrategy}>
-          {folderSections.map(({ folder, projects: sectionProjects }) => (
-            <React.Fragment key={folder?.id ?? 'ungrouped'}>
-              {folder ? (
-                <div data-slot="project-folder" data-folder={folder.id} className="mb-1">
-                  <div className="flex items-center">
-                    <button type="button" aria-expanded={!isProjectCollapsed(collapsed, `folder:${folder.id}`, collapseAnchorId)} onClick={() => toggle(`folder:${folder.id}`)} className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted">
-                      <ChevronDownIcon className={cn('size-3 transition-transform', isProjectCollapsed(collapsed, `folder:${folder.id}`, collapseAnchorId) && '-rotate-90')} aria-hidden="true" />
-                      <span className="truncate">{folder.name}</span><span className="ml-auto">{sectionProjects.length}</span>
-                    </button>
-                    <button type="button" aria-label={`Edit ${folder.name}`} onClick={() => setEditingFolder(folder)} className="size-8 rounded text-xs text-muted-foreground hover:bg-muted">…</button>
+          {folderSections.map(({ folder, projects: sectionProjects }) => {
+            const memberIds = sectionProjects.map((project) => project.id)
+            const folderShut =
+              folder &&
+              isFolderCollapsed(collapsed, folder.id, memberIds, scopedProjectId)
+            return (
+              <React.Fragment key={folder?.id ?? 'ungrouped'}>
+                {folder ? (
+                  <div data-slot="project-folder" data-folder={folder.id} className="mb-1">
+                    <div className="flex items-center">
+                      <button type="button" aria-expanded={!folderShut} onClick={() => toggle(`folder:${folder.id}`)} className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted">
+                        <ChevronDownIcon className={cn('size-3 transition-transform', folderShut && '-rotate-90')} aria-hidden="true" />
+                        <span className="truncate">{folder.name}</span><span className="ml-auto">{sectionProjects.length}</span>
+                      </button>
+                      <button type="button" aria-label={`Edit ${folder.name}`} onClick={() => setEditingFolder(folder)} className="size-8 rounded text-xs text-muted-foreground hover:bg-muted">…</button>
+                    </div>
+                    {folderShut ? null : <div className="ml-2 border-l border-border pl-1">{sectionProjects.map((project) => groupsById.get(project.id))}</div>}
                   </div>
-                  {isProjectCollapsed(collapsed, `folder:${folder.id}`, collapseAnchorId) ? null : <div className="ml-2 border-l border-border pl-1">{sectionProjects.map((project) => groupsById.get(project.id))}</div>}
-                </div>
-              ) : sectionProjects.map((project) => groupsById.get(project.id))}
-            </React.Fragment>
-          ))}
+                ) : sectionProjects.map((project) => groupsById.get(project.id))}
+              </React.Fragment>
+            )
+          })}
         </SortableContext>
       </DndContext>
       {editingFolder !== undefined && <ProjectFolderDialog projects={projects} folder={editingFolder} onClose={() => setEditingFolder(undefined)} onSave={saveFolder} />}
