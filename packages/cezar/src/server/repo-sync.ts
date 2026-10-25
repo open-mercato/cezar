@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import type { BranchTracking, LogEntry, RepoSync } from '@open-mercato/cezar-contract';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes } from '../git-remotes.ts';
-import { pushCurrentBranch } from './git-changes.ts';
+import { pushCurrentBranch, syncFailureReason } from './git-changes.ts';
 
 /**
  * The main checkout against its remote, Source-Control style (spec 2026-10-19-repo-git-sync):
@@ -40,11 +40,6 @@ function git(cwd: string, args: string[], timeout?: number): Promise<GitResult> 
   });
 }
 
-function reason(res: GitResult, fallback: string): string {
-  const lines = (res.stderr.trim() || res.stdout.trim()).split('\n').map((l) => l.trim()).filter(Boolean);
-  // git prefixes the useful line with `fatal:`/`error:`; prefer it over progress chatter.
-  return lines.find((l) => /^(fatal|error):/.test(l)) ?? lines[0] ?? fallback;
-}
 
 const LOG_FORMAT = '--pretty=format:%h%x1f%s%x1f%an%x1f%cr';
 
@@ -168,7 +163,7 @@ export function fetchRepo(root: string): Promise<SyncActionResult> {
       ['-c', 'credential.interactive=false', 'fetch', '--all', '--prune', '--quiet'],
       NETWORK_TIMEOUT_MS,
     );
-    if (!res.ok) return { ok: false, error: reason(res, 'git fetch failed') };
+    if (!res.ok) return { ok: false, error: syncFailureReason(res, 'git fetch failed') };
     return { ok: true, message: 'fetched' };
   });
 }
@@ -193,10 +188,10 @@ async function pullUnlocked(root: string): Promise<SyncActionResult> {
       ['-c', 'credential.interactive=false', 'fetch', '--quiet', '--no-tags', remote, branch],
       NETWORK_TIMEOUT_MS,
     );
-    if (!fetched.ok) return { ok: false, error: reason(fetched, 'git fetch failed') };
+    if (!fetched.ok) return { ok: false, error: syncFailureReason(fetched, 'git fetch failed') };
   }
   const counts = await git(root, ['rev-list', '--left-right', '--count', 'HEAD...@{u}']);
-  if (!counts.ok) return { ok: false, error: reason(counts, `could not compare HEAD with ${upstream}`) };
+  if (!counts.ok) return { ok: false, error: syncFailureReason(counts, `could not compare HEAD with ${upstream}`) };
   const [ahead = 0, behind = 0] = counts.stdout.trim().split(/\s+/).map(Number);
   if (behind === 0) return { ok: true, message: 'already up to date' };
   if (ahead > 0) {
@@ -206,7 +201,7 @@ async function pullUnlocked(root: string): Promise<SyncActionResult> {
     };
   }
   const merge = await git(root, ['merge', '--ff-only', '--quiet', '@{u}']);
-  if (!merge.ok) return { ok: false, error: reason(merge, 'fast-forward failed') };
+  if (!merge.ok) return { ok: false, error: syncFailureReason(merge, 'fast-forward failed') };
   return { ok: true, message: `pulled ${behind} commit${behind === 1 ? '' : 's'}` };
 }
 

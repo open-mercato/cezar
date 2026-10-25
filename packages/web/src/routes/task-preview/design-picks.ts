@@ -11,7 +11,7 @@ export const DESIGN_PICKS_SURFACE = 'design-picks'
 export const DESIGN_PICKS_MAX = 12
 
 /** What `POST /runs/:id/messages` accepts — the same cap `messageWithReview` guards. */
-const MESSAGE_TEXT_MAX = 100_000
+export const MESSAGE_TEXT_MAX = 100_000
 
 export interface DesignPickRect {
   x: number

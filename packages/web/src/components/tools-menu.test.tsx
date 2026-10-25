@@ -272,7 +272,12 @@ describe('forgeNote', () => {
       forge: { kind: 'github', available: false, reason: 'gh not logged in' },
     })
     expect(note).toContain('gh not logged in')
-    expect(note).toContain('GitHub tab is hidden')
+    // #1412: the tab stays for a recognized remote, so the note must not claim it is hidden.
+    expect(note).not.toContain('hidden')
+  })
+
+  it('is null while the probe is still cold — no failure to report yet', () => {
+    expect(forgeNote({ ...HEALTH, forge: { kind: 'github' } })).toBeNull()
   })
 
   it('renders in the open menu when the forge is absent, and not when it works', async () => {

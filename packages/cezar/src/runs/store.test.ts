@@ -1,5 +1,7 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { threadId } from 'node:worker_threads';
+import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from './store.ts';
@@ -70,6 +72,41 @@ describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
     rmSync(blocker);
     store.appendEvent(run.id, { type: 'note', text: 'two' });
     expect(readFileSync(join(dataDir, 'runs', `${run.id}.ndjson`), 'utf8')).toContain('"text":"two"');
+  });
+
+  // chmod cannot deny root, and Windows ignores the write bit on files.
+  const canDenyWrites = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+  it.skipIf(!canDenyWrites)('degrades to live-only when an event file stops being writable mid-session (telemetry 73c6e796)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const eventsFile = join(dataDir, 'runs', `${run.id}.ndjson`);
+    // A read-only event file: the append is refused with EACCES, as macOS refused it with EPERM.
+    writeFileSync(eventsFile, '');
+    chmodSync(eventsFile, 0o444);
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+
+    expect(() => store.appendEvent(run.id, { type: 'user-message', text: 'one' })).not.toThrow();
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'two' })).not.toThrow();
+    expect(live).toHaveLength(2);
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('events stay live-only'));
+
+    chmodSync(eventsFile, 0o644);
+    store.appendEvent(run.id, { type: 'note', text: 'three' });
+    expect(readFileSync(eventsFile, 'utf8')).toContain('"text":"three"');
+  });
+
+  it('still throws when the project itself is gone — only a refused write degrades (#1105)', () => {
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    rmSync(dataDir, { recursive: true, force: true });
+
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'late' })).toThrow(/ENOENT/);
   });
 });
 
@@ -2553,5 +2590,136 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
     expect(store.getRun(stale.id)).toBeUndefined();
     // The dispatch path's next write after creating a child: it threw `unknown run` before.
     expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
+  });
+});
+
+describe('RunStore — index lock failures', () => {
+  let dataDir: string;
+  beforeEach(() => { dataDir = mkdtempSync(join(tmpdir(), 'cez-store-lock-')); });
+  afterEach(() => { vi.restoreAllMocks(); rmSync(dataDir, { recursive: true, force: true }); });
+
+  it('fails closed on a malformed live ticket, retaining ordinary writes and rolling back strict creation', () => {
+    const store = RunStore.open(dataDir);
+    const ordinary = store.createRun({ title: 'ordinary', workflow: 'test', task: 'test', steps: [] });
+    const directory = join(dataDir, 'runs', '.index-writers');
+    mkdirSync(directory);
+    const malformed = join(directory, `${process.pid}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.ticket`);
+    writeFileSync(malformed, 'invalid');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => store.flush()).not.toThrow();
+    expect(error).toHaveBeenCalled();
+    expect(store.getRun(ordinary.id)).toBe(ordinary);
+    const strict = store.createRun({ title: 'strict', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(strict)).toThrow('Could not persist');
+    expect(store.getRun(strict.id)).toBeUndefined();
+    rmSync(malformed);
+    store.flush({ throwOnError: true });
+    expect(RunStore.open(dataDir, { keepLive: true }).listRuns().map(run => run.id)).toEqual([ordinary.id]);
+    // Failure left no deletion tombstone: a caller may retry the reserved ID.
+    const retry = store.createRun({ id: strict.id, title: 'retry', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(retry)).not.toThrow();
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(strict.id)?.title).toBe('retry');
+  });
+
+  it('handles an unwritable lock location as an ordinary save failure and a strict creation failure', () => {
+    const store = RunStore.open(dataDir);
+    // A real filesystem error, independent of chmod/root privileges in the test runner.
+    writeFileSync(join(dataDir, 'runs', '.index-writers'), 'not a directory');
+    const run = store.createRun({ title: 'strict', workflow: 'test', task: 'test', steps: [] });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => store.flush()).not.toThrow();
+    expect(store.getRun(run.id)).toBe(run);
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    expect(store.getRun(run.id)).toBeUndefined();
+  });
+
+  // A crashed writer's ticket whose PID is now live again must not block every later save.
+  const boot = () => {
+    try { return readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim(); } catch {
+      return `~${Math.round(Date.now() / 1000 - uptime())}`;
+    }
+  };
+  const ticketFor = (pid: number, thread: number, fields: Record<string, unknown> = {}) => {
+    const directory = join(dataDir, 'runs', '.index-writers');
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, `${pid}-${thread}-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.ticket`);
+    writeFileSync(path, JSON.stringify({ n: 1, host: hostname(), ...(ns ? { ns } : {}), boot: boot(), ...fields }));
+    return path;
+  };
+  const ns = (() => { try { return readlinkSync('/proc/self/ns/pid'); } catch { return undefined; } })();
+  const otherBootFormat = () => (boot().startsWith('~') ? '00000000-0000-0000-0000-000000000000' : '~1');
+  const liveProcess = () => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+
+  it('reaps a ticket left by an earlier process that had this same PID', () => {
+    const store = RunStore.open(dataDir);
+    const leftover = ticketFor(process.pid, threadId);
+    const run = store.createRun({ title: 'after restart', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).not.toThrow();
+    expect(existsSync(leftover)).toBe(false);
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(run.id)?.title).toBe('after restart');
+  });
+
+  it.skipIf(!existsSync('/proc/self/stat'))('reaps a ticket whose PID now names a different live process', () => {
+    const other = liveProcess();
+    try {
+      const store = RunStore.open(dataDir);
+      // The start time the dead writer recorded cannot match the process now holding its PID.
+      const leftover = ticketFor(other.pid!, 0, { start: '1' });
+      const run = store.createRun({ title: 'reused pid', workflow: 'test', task: 'test', steps: [] });
+      expect(() => store.flushCreatedRun(run)).not.toThrow();
+      expect(existsSync(leftover)).toBe(false);
+    } finally { other.kill('SIGKILL'); }
+  });
+
+  it('reaps a ticket from an earlier boot whose PID is live again, on any platform', () => {
+    const other = liveProcess();
+    try {
+      const store = RunStore.open(dataDir);
+      const leftover = ticketFor(other.pid!, 0, { boot: boot().startsWith('~') ? '~1' : '00000000-0000-0000-0000-000000000000' });
+      const run = store.createRun({ title: 'after reboot', workflow: 'test', task: 'test', steps: [] });
+      expect(() => store.flushCreatedRun(run)).not.toThrow();
+      expect(existsSync(leftover)).toBe(false);
+    } finally { other.kill('SIGKILL'); }
+  });
+
+  // PIDs mean nothing in another process view: another container's PID 1 is not this cezar's.
+  it.each<[string, () => string]>([
+    ['another host', () => ticketFor(process.pid, threadId, { host: `not-${hostname()}` })],
+    ...(ns ? [['another PID namespace on this hostname', () => ticketFor(process.pid, threadId, { ns: 'pid:[1]' })] as [string, () => string]] : []),
+    ['a peer with the other boot-id format', () => ticketFor(process.pid, threadId, { boot: otherBootFormat() })],
+    ['another live thread of this process', () => ticketFor(process.pid, threadId + 1)],
+  ])('never reaps a ticket from %s', (_, make) => {
+    const store = RunStore.open(dataDir);
+    const live = make();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = store.createRun({ title: 'blocked', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    expect(existsSync(live)).toBe(true);
+    store.flush();
+    expect(String(vi.mocked(console.error).mock.calls.at(-1)?.[0])).toContain('.index-writers');
+  });
+
+  it('reaps a ticket power loss left empty long ago, and still fails closed on a fresh one', () => {
+    const store = RunStore.open(dataDir);
+    const empty = ticketFor(process.pid, threadId + 1);
+    writeFileSync(empty, '');
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const run = store.createRun({ title: 'after power loss', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).toThrow('Could not persist');
+    const old = (Date.now() - 6 * 60_000) / 1000;
+    utimesSync(empty, old, old);
+    const retry = store.createRun({ id: run.id, title: 'after power loss', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(retry)).not.toThrow();
+    expect(existsSync(empty)).toBe(false);
+  });
+
+  it('reaps an abandoned ticket from another process view, e.g. before a container restart', () => {
+    const store = RunStore.open(dataDir);
+    const leftover = ticketFor(process.pid, threadId, { host: `not-${hostname()}`, ...(ns ? { ns: 'pid:[1]' } : {}) });
+    const old = (Date.now() - 6 * 60_000) / 1000;
+    utimesSync(leftover, old, old);
+    const run = store.createRun({ title: 'after container restart', workflow: 'test', task: 'test', steps: [] });
+    expect(() => store.flushCreatedRun(run)).not.toThrow();
+    expect(existsSync(leftover)).toBe(false);
   });
 });

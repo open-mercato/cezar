@@ -39,6 +39,8 @@ export const workspaceConfigResponseSchema = z.object({
   /** Stored override; `null` means inherit `CEZ_SKILLS_AUTO_UPDATE`, then true. */
   skillsAutoUpdate: z.boolean().nullable(),
   effectiveSkillsAutoUpdate: z.boolean(),
+  /** Skills repos added in Global settings; every project loads them as team skills. */
+  orgSkillsRepos: z.array(z.object({ repo: z.string(), ref: z.string() })),
   composerDefaults: z.object({
     autonomous: z.boolean().nullable(),
     worktree: z.boolean().nullable(),
@@ -93,6 +95,12 @@ export const setWorkspaceConfigInputSchema = z.object({
   browseRoot: z.string().trim().min(1).max(4096).optional(),
   projectsDir: z.string().trim().min(1).max(4096).optional(),
   skillsAutoUpdate: z.boolean().nullable().optional(),
+  /** Replaces the whole list; entries keep unknown keys (a newer cezar's metadata). The server
+   *  rejects an unsafe `repo`/`ref` with a 400. */
+  orgSkillsRepos: z
+    .array(z.object({ repo: z.string().trim().min(1).max(500), ref: z.string().trim().min(1).max(200).default('main') }).passthrough())
+    .max(20)
+    .optional(),
   composerDefaults: z
     .object({
       autonomous: z.boolean().nullable().optional(),
@@ -433,6 +441,18 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
+   *  and the branch-per-task default applies. */
+  profile: z.enum(['branches', 'trunk']).nullable(),
+  taskWorkspace: z.enum(['worktree', 'in-place']).nullable(),
+  landing: z.enum(['review', 'auto']).nullable(),
+  /** Why `landing: auto` is not honored here (a git-tracked config.json), or null. */
+  landingBlocked: z.string().nullable(),
+  requiredChecks: z.array(z.string()),
+  defaultSkill: z.string().nullable(),
+  askSkill: z.string().nullable(),
+  /** False when `skillsRepos` is `[]` — team skill repositories are off for this project. */
+  teamSkills: z.boolean(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 
@@ -486,6 +506,16 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
+  /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
+   *  the branch-per-task default. */
+  profile: z.enum(['branches', 'trunk']).nullable().optional(),
+  taskWorkspace: z.enum(['worktree', 'in-place']).nullable().optional(),
+  landing: z.enum(['review', 'auto']).nullable().optional(),
+  requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).nullable().optional(),
+  defaultSkill: z.string().trim().max(200).nullable().optional(),
+  askSkill: z.string().trim().max(200).nullable().optional(),
+  /** `false` writes `skillsRepos: []`; `true` drops that override back to the default repos. */
+  teamSkills: z.boolean().optional(),
 });
 export type SetConfigInput = z.infer<typeof setConfigInputSchema>;
 

@@ -131,6 +131,7 @@ function serve({
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
+    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
     ...config,
   }
   const json = (payload: unknown, status = 200) =>

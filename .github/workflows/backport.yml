@@ -11,9 +11,9 @@ on:
   pull_request:
     types: [closed, labeled]
 
+# Every write uses the release App's token; this job's own token only reads.
 permissions:
-  contents: write # push the backport branch
-  pull-requests: write # open the backport PR and comment on the original
+  contents: read
 
 jobs:
   backport:
@@ -23,25 +23,34 @@ jobs:
     if: >-
       github.event.pull_request.merged == true &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      (github.event.action == 'closed' || startsWith(github.event.label.name, 'backport '))
+      ((github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, '|'), 'backport ')) ||
+       (github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport ')))
 
     steps:
+      - name: Mint the release token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The merged-into branch; a merged PR's refs/pull/N/merge may already be gone.
           ref: ${{ github.event.pull_request.base.ref }}
-          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Open backport PRs
         uses: korthout/backport-action@8560fb503c275d433c56f05a2f64850093baa9f7 # v4.7.0
         with:
-          # A PR opened with GITHUB_TOKEN runs no CI, so RELEASE_TOKEN is preferred when set.
-          github_token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          # The App's token, not GITHUB_TOKEN: a PR opened with GITHUB_TOKEN runs no CI.
+          github_token: ${{ steps.app-token.outputs.token }}
           label_pattern: '^backport (main|release/v\d+\.\d+\.x)$'
-          # Release notes group PRs by these labels (.github/release.yml) and list their titles,
-          # so a backport keeps both; the `backport` label marks it in the PR list instead.
-          copy_labels_pattern: '^(bug|feature|security|refactor|dependencies|documentation|skip-changelog)$'
+          # Release notes group PRs by category label and list their titles, so a backport keeps
+          # both; priority/risk/QA labels route it through the review pipeline. Never qa-approved:
+          # that vouched for main's code, not the line's.
+          copy_labels_pattern: '^(bug|feature|security|refactor|dependencies|documentation|skip-changelog|priority-.+|risk-.+|needs-qa|skip-qa)$'
           pull_title: '${pull_title}'
-          add_labels: backport
+          add_labels: 'backport,review'
           experimental: '{"conflict_resolution": "draft_commit_conflicts"}'

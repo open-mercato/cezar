@@ -57,6 +57,11 @@ export const DATA_GITIGNORE_ENTRIES = [
   'automation-mutation.lock',
 ] as const;
 
+/** cezar's own data directory as a git pathspec exclusion. An in-place task's Changes and its
+ *  landing commit leave it out (spec 2026-10-20-trunk-based-projects): its config, ui-state and
+ *  .gitignore are not untracked by default, but they are never the task's work. */
+export const CEZAR_DATA_EXCLUDE = ':(exclude).ai/cezar';
+
 export function ensureDataGitignore(repoRoot: string): void {
   const path = join(repoRoot, '.ai/cezar', '.gitignore');
   try {

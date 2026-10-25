@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
+import { formatChord } from '@/lib/keybindings'
+import { trackDesignModeEnabled } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -61,6 +63,7 @@ export function BrowserView({
   designMarks,
   renderDesignNote,
   onDesignEscape,
+  designTray,
   renderEmpty,
 }: {
   state: BrowserState
@@ -88,6 +91,9 @@ export function BrowserView({
   /** Esc was pressed in the page while the note for `mark` was open. The view closes the popup;
    *  the host decides what else that means (a draft is discarded). */
   onDesignEscape?: (mark: string) => void
+  /** The host's batch send for its notes, floated in the frame's corner while Design Mode is on;
+   *  `null` when there is nothing to send. */
+  designTray?: React.ReactNode
   /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
    *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
   renderEmpty?: (open: (url: string) => void) => React.ReactNode
@@ -126,10 +132,10 @@ export function BrowserView({
    * not same-origin with the cockpit, which in practice is every page worth framing, a dev
    * server on another port included.
    *
-   * So the history is the addresses THIS VIEW pointed the frame at. A link the user follows
-   * inside the page is unobservable for exactly the same reason its title is, and nothing here
-   * can change that; Back therefore returns to the previous address the bar held, which is the
-   * honest meaning of a history an embedder is allowed to keep.
+   * So the history is the addresses THIS VIEW pointed the frame at, plus the moves a page with
+   * cezar's location reporter tells it about (`followPage`). Without one, a link followed inside
+   * the page is unobservable for the same reason its title is; Back then returns to the previous
+   * address the bar held, which is the honest meaning of a history an embedder may keep.
    *
    * Session-lifetime, deliberately not persisted: the tabs save ADDRESSES, and a back stack is where
    * you have been rather than what the tab is.
@@ -139,8 +145,20 @@ export function BrowserView({
   const canBack = nav.position > 0
   const canForward = nav.position >= 0 && nav.position < nav.stack.length - 1
 
+  /**
+   * Where the framed document says it is now — moved by `pushState`, `replaceState` or a hash
+   * change, which fire no `load`. Null until it says so, and for every page that cannot: only a
+   * page carrying cezar's location reporter (the desktop shell's frame script, Design Mode's
+   * picker) speaks, because a cross-origin frame's `location` is unreadable from here.
+   */
+  const [live, setLive] = useState<string | null>(null)
+  /** Documents the current frame element has finished loading — a report from the second one on
+   *  is a link followed inside the page, not the redirect of the address this view asked for. */
+  const loads = useRef(0)
+
   // Switching tabs re-points everything at that tab's own address — but the echo of this view's
   // own successful-load write is not a tab switch, and must not re-point anything.
+  const mounted = useRef(false)
   useEffect(() => {
     if (echo.current && echo.current.index === active && echo.current.url === current) {
       echo.current = null
@@ -150,6 +168,10 @@ export function BrowserView({
     setDraft(current)
     setTarget(current)
     setStatus(current === '' ? 'idle' : 'loading')
+    // A fresh document even when the address matches the frame's, or differs from it by the hash
+    // alone — either would otherwise fire no `load` and time out as a failure.
+    if (mounted.current) setReloadToken((token) => token + 1)
+    mounted.current = true
   }, [active, current])
 
   // A loopback address this cockpit cannot honestly show: on a hosted cockpit it would open on
@@ -175,6 +197,7 @@ export function BrowserView({
   const [proxy, setProxy] = useState<{ upstream: string; origin: string } | null>(null)
   const [pickerReady, setPickerReady] = useState(false)
   const frameRef = useRef<HTMLIFrameElement>(null)
+  const addressRef = useRef<HTMLInputElement>(null)
   // The toggle shows wherever a host takes picks; the server's capability only decides whether it
   // can be switched on, so an unavailable Design Mode says why instead of vanishing.
   const designOffered = onPickElement !== undefined
@@ -186,11 +209,47 @@ export function BrowserView({
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
+  // ⌥D / Alt+D switches it — from any field too, so it works wherever the focus is in the cockpit.
+  // Inside the page only the mirror's picker can hear it (and forwards it): a directly framed
+  // page is another origin, whose keys never reach this window.
+  const toggleDesign = useRef<() => boolean>(() => false)
+  toggleDesign.current = () => {
+    if (!designAllowed || targetOrigin === null) return false
+    if (!design) trackDesignModeEnabled('shortcut')
+    setDesign((on) => !on)
+    return true
+  }
+  useEffect(() => {
+    if (!designOffered) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented || !isDesignKey(event)) return
+      // A dialog owns the keyboard (Radix sets no `aria-modal`); the note popup does not.
+      if (document.querySelector('[role="dialog"]:not([data-slot="browser-design-note"]), [role="alertdialog"]')) return
+      // Swallowed only when it switched something: unavailable, ⌥D still types its `∂`.
+      if (toggleDesign.current()) event.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [designOffered])
   const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
   // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
   // be loaded again a moment later through the mirror.
   const awaitingProxy = designActive && mirror === null
-  const frameSrc = mirror !== null && targetOrigin !== null ? mirror + target.slice(targetOrigin.length) : target
+  const framed = useCallback(
+    (url: string) => (mirror !== null && targetOrigin !== null ? mirror + url.slice(targetOrigin.length) : url),
+    [mirror, targetOrigin],
+  )
+  const frameSrc = framed(target)
+  /** One per DOCUMENT: a hash-only move re-points `src` without changing it, so the browser
+   *  navigates to the fragment in place instead of the frame being rebuilt. */
+  const frameKey = `${withoutHash(frameSrc)}#${reloadToken}`
+  /** The address the frame is showing — what Reload reopens and the bar follows. */
+  const shown = live ?? target
+
+  useEffect(() => {
+    setLive(null)
+    loads.current = 0
+  }, [frameKey])
 
   // Asked again before every load while the switch is on. The route is idempotent, and a mirror
   // the server closed for being idle comes back on a new port this way instead of as a dead frame.
@@ -212,7 +271,7 @@ export function BrowserView({
   }, [designActive, reloadToken, targetOrigin])
 
   // A new document means a new picker, which announces itself when it is listening.
-  useEffect(() => setPickerReady(false), [frameSrc, reloadToken])
+  useEffect(() => setPickerReady(false), [frameKey])
 
   useEffect(() => {
     if (!pickerReady || mirror === null) return
@@ -262,7 +321,7 @@ export function BrowserView({
   useEffect(() => {
     setRects({})
     setRectsReported(false)
-  }, [frameSrc, reloadToken])
+  }, [frameKey])
 
   // Under the element when there is room, above it when there is not, and always inside the
   // frame area. Without a known rect it parks in the bottom-right corner rather than guess.
@@ -313,6 +372,9 @@ export function BrowserView({
       } | null
       if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
       if (data.type === 'ready') setPickerReady(true)
+      // Only ever OFF from the page: its own script could post this too, and switching Design
+      // Mode on takes the user's own action (spec §7a).
+      else if (data.type === 'toggle') setDesign(false)
       else if (data.type === 'cancel') {
         // Esc in the page: with a note open it closes that note (the host discards a draft);
         // with none it leaves Design Mode.
@@ -362,15 +424,47 @@ export function BrowserView({
     return () => clearTimeout(timer)
   }, [refused, reloadToken, status, target])
 
-  const commit = useCallback(
-    (raw: string) => {
-      const url = normalizeAddress(raw)
-      if (url === null) return
+  /** Save `url` as the active tab's address. An address past the cap is shown but not kept. */
+  const keep = useCallback(
+    (url: string) => {
+      if (tabs[active] === url || url.length > MAX_TAB_URL_LENGTH) return
+      echo.current = { index: active, url }
+      onChange({ ...state, tabs: tabs.map((tab, index) => (index === active ? url : tab)) })
+    },
+    [active, onChange, state, tabs],
+  )
+
+  /**
+   * Point the frame at `url`. An address that differs from the page on show by its hash alone is
+   * a same-document move, as in any browser: `src` changes, the page gets `hashchange`, nothing
+   * reloads and no `load` follows — so it is kept at once.
+   */
+  const point = useCallback(
+    (url: string) => {
+      if (status === 'idle' && !refused && url !== shown && sameDocument(shown, url)) {
+        setLive(null)
+        setTarget(url)
+        setDraft(url)
+        // `src` already holds this address (the page moved away from it on its own), so React
+        // will not touch it: setting it again is what navigates the frame to the fragment.
+        if (url === target && frameRef.current) frameRef.current.src = framed(url)
+        keep(url)
+        return
+      }
       releaseMirror()
+      setLive(null)
       setTarget(url)
       setDraft(url)
       setStatus('loading')
       setReloadToken((token) => token + 1)
+    },
+    [framed, keep, refused, releaseMirror, shown, status, target],
+  )
+
+  const commit = useCallback(
+    (raw: string) => {
+      const url = normalizeAddress(raw)
+      if (url === null) return
       // A new entry, with anything ahead of the cursor dropped — the grammar every browser uses
       // when you navigate after going Back. Re-entering the address you are already on is a
       // reload, not a second entry.
@@ -381,8 +475,9 @@ export function BrowserView({
         const stack = [...kept, url].slice(-MAX_HISTORY)
         return { ...byTab, [active]: { stack, position: stack.length - 1 } }
       })
+      point(url)
     },
-    [active, current, releaseMirror],
+    [active, current, point],
   )
 
   /** Back (`-1`) and Forward (`+1`) — a move along this tab's own stack. */
@@ -391,26 +486,62 @@ export function BrowserView({
       const position = nav.position + delta
       const url = nav.stack[position]
       if (url === undefined) return
-      releaseMirror()
       setNavByTab((byTab) => ({ ...byTab, [active]: { stack: nav.stack, position } }))
-      setTarget(url)
-      setDraft(url)
-      setStatus('loading')
-      setReloadToken((token) => token + 1)
+      point(url)
     },
-    [active, nav.position, nav.stack, releaseMirror],
+    [active, nav.position, nav.stack, point],
   )
 
   /** A load succeeded: only now is the address worth keeping. */
   const onLoaded = useCallback(() => {
     if (target === '') return
+    loads.current += 1
     setStatus('idle')
-    // An address past the cap is shown but not kept.
-    if (tabs[active] !== target && target.length <= MAX_TAB_URL_LENGTH) {
-      echo.current = { index: active, url: target }
-      onChange({ ...state, tabs: tabs.map((tab, index) => (index === active ? target : tab)) })
+    keep(shown)
+  }, [keep, shown, target])
+
+  /**
+   * The framed page moved on its own. Pushes and hash changes become entries Back can return to,
+   * a replace rewrites the entry it is on, and the bar follows — unless the user is typing in it.
+   */
+  const followPage = useCallback(
+    (url: string, how: string) => {
+      setLive(url)
+      setDraft((typed) => (typed === shown || document.activeElement !== addressRef.current ? url : typed))
+      setNavByTab((byTab) => {
+        const base = byTab[active] ?? seedNav(current)
+        if (base.stack[base.position] === url) return byTab
+        let next: Nav
+        if (base.stack[base.position - 1] === url && how === 'pop') next = { stack: base.stack, position: base.position - 1 }
+        else if (base.stack[base.position + 1] === url && how === 'pop') next = { stack: base.stack, position: base.position + 1 }
+        // A link followed inside the page is a new document in the same frame: a new entry too.
+        else if (how === 'push' || (how === 'load' && loads.current > 0) || base.position < 0) {
+          const stack = [...base.stack.slice(0, base.position + 1), url].slice(-MAX_HISTORY)
+          next = { stack, position: stack.length - 1 }
+        } else next = { stack: base.stack.map((entry, index) => (index === base.position ? url : entry)), position: base.position }
+        return { ...byTab, [active]: next }
+      })
+      // While it is still loading the load itself keeps it — `shown` by then.
+      if (status === 'idle') keep(url)
+    },
+    [active, current, keep, shown, status],
+  )
+
+  const frameOrigin = originOf(frameSrc)
+  useEffect(() => {
+    if (frameOrigin === null) return
+    const onMessage = (event: MessageEvent) => {
+      // This view's own frame, at the origin it was pointed at: no other window speaks for it.
+      if (event.origin !== frameOrigin || event.source !== frameRef.current?.contentWindow) return
+      const data = event.data as { source?: unknown; type?: unknown; url?: unknown; how?: unknown } | null
+      if (data === null || typeof data !== 'object' || data.source !== 'cezar-preview' || data.type !== 'location') return
+      if (typeof data.url !== 'string') return
+      const url = pageAddress(data.url, frameOrigin, mirror !== null ? targetOrigin : null)
+      if (url !== null) followPage(url, typeof data.how === 'string' ? data.how : 'replace')
     }
-  }, [active, onChange, state, tabs, target])
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [followPage, frameOrigin, mirror, targetOrigin])
 
   const addTab = useCallback(() => {
     if (tabs.length >= MAX_BROWSER_TABS) return
@@ -528,7 +659,11 @@ export function BrowserView({
           label="Reload"
           onClick={() => {
             if (target === '') return
+            // The page as it is NOW — a hash or path it moved to on its own included.
             releaseMirror()
+            setLive(null)
+            setTarget(shown)
+            setDraft(shown)
             setStatus('loading')
             setReloadToken((token) => token + 1)
           }}
@@ -542,6 +677,7 @@ export function BrowserView({
           }}
         >
           <Input
+            ref={addressRef}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Enter an address, e.g. http://localhost:3000"
@@ -562,14 +698,24 @@ export function BrowserView({
             disabled={designUnavailable !== null || targetOrigin === null}
             title={
               designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? 'Stop selecting elements (Esc)'
-              : 'Click an element of the page to send it to the agent')
+              : designActive ? `Stop selecting elements (${formatChord(DESIGN_CHORD)} or Esc)`
+              : `Click an element of the page to send it to the agent (${formatChord(DESIGN_CHORD)})`)
             }
-            onClick={() => setDesign((on) => !on)}
+            onClick={() => {
+              if (!design) trackDesignModeEnabled('button')
+              setDesign((on) => !on)
+            }}
             className="ml-1 disabled:opacity-40"
           >
             <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
             Design Mode
+            <kbd
+              data-slot="browser-design-key"
+              aria-hidden="true"
+              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-[10px] leading-4 opacity-70"
+            >
+              {formatChord(DESIGN_CHORD)}
+            </kbd>
           </Button>
         ) : null}
       </div>
@@ -624,7 +770,10 @@ export function BrowserView({
                 ))}
               </div>
             ) : null}
-            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 ? (
+            {designAllowed && designTray ? (
+              <div className="absolute right-3 bottom-3 z-10">{designTray}</div>
+            ) : null}
+            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 && !designTray ? (
               <p
                 data-slot="browser-design-hint"
                 className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"
@@ -635,9 +784,10 @@ export function BrowserView({
             {awaitingProxy ? null : (
             <iframe
               ref={frameRef}
-              // Keyed by the address AND the reload token so Reload really re-fetches. It is the
-              // FRAMED address that keys it: entering Design Mode swaps it for the mirror's.
-              key={`${frameSrc}#${reloadToken}`}
+              // Keyed by the document (the address without its hash) AND the reload token so
+              // Reload really re-fetches. It is the FRAMED address that keys it: entering Design
+              // Mode swaps it for the mirror's.
+              key={frameKey}
               src={frameSrc}
               title="Preview"
               onLoad={onLoaded}
@@ -679,6 +829,14 @@ export function BrowserView({
       </div>
     </div>
   )
+}
+
+const DESIGN_CHORD = 'Alt+D'
+
+/** ⌥D / Alt+D, by the physical key: on a Mac ⌥D reports `∂`. Ctrl+Alt is AltGr off a Mac — typing. */
+function isDesignKey(event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>): boolean {
+  const d = event.code ? event.code === 'KeyD' : event.key === 'd' || event.key === 'D'
+  return d && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey
 }
 
 function ToolbarButton({
@@ -845,6 +1003,44 @@ export function designOrigin(url: string): string | null {
 }
 
 const DESIGN_HOSTS = /^(localhost|127\.0\.0\.1|\[::1\])$/i
+
+/** `url` without its fragment — what names the document. */
+function withoutHash(url: string): string {
+  const at = url.indexOf('#')
+  return at === -1 ? url : url.slice(0, at)
+}
+
+/** Whether moving from `from` to `to` stays in the same document: the same address up to the
+ *  hash, and `to` HAS one (dropping the hash entirely is a real navigation, as in a browser). */
+export function sameDocument(from: string, to: string): boolean {
+  return from !== '' && to.includes('#') && withoutHash(from) === withoutHash(to)
+}
+
+function originOf(url: string): string | null {
+  try {
+    const origin = new URL(url).origin
+    return origin === 'null' ? null : origin
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What a framed page reported as its address, as an address of the APP: on the frame's own origin
+ * (an in-page move cannot leave it) and, through a Design Mode mirror, renamed back to the app's
+ * real origin — `tabs` never holds a mirror's port.
+ */
+export function pageAddress(reported: string, frameOrigin: string, appOrigin: string | null): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(reported)
+  } catch {
+    return null
+  }
+  if (parsed.origin !== frameOrigin) return null
+  const path = parsed.pathname + parsed.search + parsed.hash
+  return normalizeAddress((appOrigin ?? frameOrigin) + path)
+}
 
 export function isLoopback(url: string): boolean {
   try {

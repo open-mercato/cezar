@@ -62,6 +62,8 @@ export class PiRunner implements AgentRunner {
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
     const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+    // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
+    child.stdin.on('error', () => {});
     let open = true;
     let settled = true;
     let timedOut = false;
@@ -86,8 +88,6 @@ export class PiRunner implements AgentRunner {
     child.on('error', (error: NodeJS.ErrnoException) => {
       spawnError = wrapSpawnError(error, this.bin);
     });
-    // A write into a dead child fails as an async pipe 'error'; unhandled it crashes cezar.
-    child.stdin.on('error', () => {});
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => stderr.push(chunk));
 

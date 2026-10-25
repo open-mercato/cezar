@@ -469,7 +469,8 @@ export function usePaletteTasks() {
   // can offer everywhere — including global settings, which has no active project at all. The
   // shell already holds this cache entry; opening the palette costs no extra request.
   const projects = useProjects()
-  // Health is cached by the shell's chips; ⌘K reads it to gate the forge-gated Views row (R6 1.1).
+  // Health is cached by the shell's chips; ⌘K reads it to gate the forge-gated Views row (R6 1.1)
+  // with the sidebar's recognized-remote rule (#1412), so the two never disagree.
   const health = useHealth()
   const registry = projects.data
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
@@ -836,7 +837,7 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandItem>
           ) : null}
           {visibleNavItems({
-            forge: health.data?.forge?.available === true,
+            forge: health.data?.forge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,

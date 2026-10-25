@@ -4,6 +4,8 @@ import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/ce
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  looksLikeQuestion,
+  projectDefaultSource,
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
@@ -65,7 +67,7 @@ describe('model option resolution', () => {
   })
 
   it('claude falls back to the tier aliases when there is no host catalog', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
     // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
@@ -100,7 +102,7 @@ describe('model option resolution', () => {
 
   it('an empty catalog is not an empty picker — the presets come back', () => {
     const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
-    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -158,6 +160,14 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('openai/gpt-6', 'claude')).toBe(false)
     expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'opencode')).toBe(false)
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
+  })
+
+  it('accepts the vendor ids Copilot and Cursor host as their own', () => {
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5.4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false)
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
   })
 
   it('exactly the runners with a host catalog discover their models', () => {
@@ -513,5 +523,38 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const base = { task: 'x', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+  const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+    JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+
+  it('sends an Ask task as readOnly, with no worktree or branch keys', () => {
+    expect(wire({ readOnly: true, worktree: false, newBranch: true })).toEqual({ task: 'x', workflow: 'quick-task', readOnly: true })
+    // Variants and dispatch always isolate, so they win over Ask.
+    expect(wire({ readOnly: true, variants: 2 })).not.toHaveProperty('readOnly')
+    expect(wire({ readOnly: true, dispatch: {} })).not.toHaveProperty('readOnly')
+  })
+
+  it('asks for a worktree explicitly only against an in-place project default', () => {
+    expect(wire({ worktree: true, inPlaceByDefault: true })).toMatchObject({ worktree: true })
+    expect(wire({ worktree: false, inPlaceByDefault: true })).toMatchObject({ worktree: false })
+    expect(wire({ worktree: true })).not.toHaveProperty('worktree')
+  })
+
+  it("preselects the project's default or Ask skill, only when it exists", () => {
+    const skills = [{ name: 'ingest' }, { name: 'ask' }] as Skill[]
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, skills)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
+    expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('reads a trailing question mark as a question', () => {
+    expect(looksLikeQuestion("what's open with Daniel? ")).toBe(true)
+    expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)
   })
 })

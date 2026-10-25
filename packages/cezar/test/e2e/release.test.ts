@@ -11,10 +11,10 @@ const execFile = promisify(execFileCallback);
 // This file lives at packages/cezar/test/e2e; the orchestrator it drives is at the REPO root,
 // because a release spans every workspace and belongs to none of them.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const script = join(repoRoot, 'scripts', 'release.mjs');
+const script = join(repoRoot, 'scripts', 'release.mts');
 
-// The orchestrator imports packages/cezar/dist/release/stable.js, so this suite (like the
-// snapshot e2e) runs after `npm run build`.
+// The .mts orchestrator imports packages/cezar/src/release/*.ts directly (Node type stripping),
+// so unlike the snapshot e2e this suite needs no build.
 
 /** A miniature of the real workspace: the three publishable manifests, in their real
  *  directories, with the same intra-release dependency edges the pipeline has to re-pin. */

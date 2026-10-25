@@ -13,6 +13,7 @@ import type {
   deleteRunResponseSchema,
   editQueuedMessageResponseSchema,
   finishResponseSchema,
+  landResponseSchema,
   gitCommitResponseSchema,
   gitPushResponseSchema,
   gitStatusResponseSchema,
@@ -22,6 +23,7 @@ import type {
   removeWorktreeResponseSchema,
   runCommitsResponseSchema,
   runRecordSchema,
+  startNowResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -64,6 +66,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type QueuedPatch200 = InferResponseType<Run['queued-messages'][':msgId']['$patch'], 200>;
   type QueuedDelete200 = InferResponseType<Run['queued-messages'][':msgId']['$delete'], 200>;
   type Finish200 = InferResponseType<Run['finish']['$post'], 200>;
+  type StartNow200 = InferResponseType<Run['start-now']['$post'], 200>;
+  type Land200 = InferResponseType<Run['land']['$post'], 200>;
   type Continue200 = InferResponseType<Run['continue']['$post'], 200>;
   type OpenInCli200 = InferResponseType<Run['open-in-cli']['$post'], 200>;
   type Commits200 = InferResponseType<Run['commits']['$get'], 200>;
@@ -100,6 +104,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof archiveFinishedResponseSchema>, ArchiveFinished200>>,
     Assert<Exact<z.infer<typeof cancelResponseSchema>, Cancel200>>,
     Assert<Exact<z.infer<typeof finishResponseSchema>, Finish200>>,
+    Assert<Exact<z.infer<typeof startNowResponseSchema>, StartNow200>>,
+    Assert<Exact<z.infer<typeof landResponseSchema>, Land200>>,
     Assert<Exact<z.infer<typeof continueResponseSchema>, Continue200>>,
     Assert<Exact<z.infer<typeof deleteRunResponseSchema>, DeleteRun200>>,
     Assert<Exact<z.infer<typeof createPrResponseSchema>, CreatePr201>>,

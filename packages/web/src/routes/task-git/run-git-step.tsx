@@ -1,12 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
-import { ApiError, adoptRunPr, createRunPr, pushRun } from '@/api/client'
-import { queryKeys, useHealth, useRepo, useRunGitStatus } from '@/api/queries'
+import { ApiError, adoptRunPr, createRunPr, landRun, pushRun } from '@/api/client'
+import { queryKeys, useConfig, useHealth, useRepo, useRunGitStatus } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useReferenceStatus } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
-import { gitActionPolicy, type GitAction, type GitActionId } from '@/lib/git-actions'
+import { gitActionPolicy, trunkGitActionPolicy, type GitAction, type GitActionId } from '@/lib/git-actions'
 import { ownedTaskPr } from '@/lib/tasks-table'
 
 import { useAskAnswer } from '../task-thread/ask-answer'
@@ -14,6 +14,8 @@ import {
   commitPrompt,
   createPrPrompt,
   fixChecksPrompt,
+  inPlacePrPrompt,
+  inPlaceUpdatePrompt,
   isRunActive,
   pushPrompt,
   resolveConflictsPrompt,
@@ -106,7 +108,24 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder (#791).
   const repo = useRepo()
-  const status = useRunGitStatus(run.id, Boolean(run.worktreePath) && !finished, isRunActive(run.status))
+  const config = useConfig()
+  // An in-place task in an auto-land project: its step is Commit to the base branch (spec
+  // 2026-10-20-trunk-based-projects).
+  const trunk =
+    !run.worktreePath &&
+    run.worktree === false &&
+    !run.readOnly &&
+    config.data?.landing === 'auto' &&
+    config.data.landingBlocked === null
+  const trunkBase = config.data?.baseBranch ?? repo.data?.info?.branch ?? 'main'
+  // A trunk task reads the shared checkout, which other tasks land from too: keep it live.
+  const status = useRunGitStatus(run.id, (Boolean(run.worktreePath) || trunk) && !finished, isRunActive(run.status) || trunk)
+  const queryClientForStatus = useQueryClient()
+  // A turn that just ended (or a landing that just settled) changed what there is to commit; the
+  // last poll may predate it, and a stale "2 uncommitted" offers Commit on a clean tree.
+  useEffect(() => {
+    void queryClientForStatus.invalidateQueries({ queryKey: queryKeys.runs.gitStatus(run.id) })
+  }, [run.status, run.id, queryClientForStatus])
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitAndPush, setCommitAndPush] = useState(false)
   // Every git step is a prompt to this task's own agent, through the same seam as the PR chip's
@@ -210,6 +229,17 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     },
     onError,
   })
+  // One request, whatever state the task is in; the answer says what happened.
+  const land = useMutation({
+    mutationFn: () => landRun(run.id),
+    onSuccess: (answer) => {
+      const text = answer.message.charAt(0).toUpperCase() + answer.message.slice(1)
+      toast(text, answer.outcome === 'busy' || answer.outcome === 'unavailable' ? { tone: 'danger' } : undefined)
+      void invalidateRuns()
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.gitStatus(run.id) })
+    },
+    onError,
+  })
   const createPr = useMutation({
     mutationFn: (draft: boolean) => createRunPr(run.id, { draft }),
     onSuccess: (result, draft) => {
@@ -222,6 +252,18 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // A 409 from `/git/status` is the server saying the worktree is gone — the same answer as the
   // Changes tab's 409, and every action greys out with that reason.
   const refused = status.isError && status.error instanceof ApiError && status.error.status === 409
+  const agentBlocked = agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined
+  const trunkAction = trunk
+    ? trunkGitActionPolicy({
+        status: run.status,
+        base: trunkBase,
+        uncommitted: status.data?.uncommitted,
+        unpushed: status.data?.unpushed,
+        behind: status.data?.behind,
+        forge: health.data?.forge ?? null,
+        agentBlocked,
+      })
+    : null
   const action = gitActionPolicy({
     status: run.status,
     hasWorktree: !refused,
@@ -241,12 +283,28 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   // The step in flight, if any: its button shows a spinner and refuses a second click.
   const pending: GitActionId | null =
     flight?.id ??
-    (push.isPending ? 'push' : createPr.isPending ? (createPr.variables ? 'create-draft-pr' : 'create-pr') : null)
+    (land.isPending ? 'land' : push.isPending ? 'push' : createPr.isPending ? (createPr.variables ? 'create-draft-pr' : 'create-pr') : null)
 
   const onAction = (id: GitActionId) => {
     // The agent runs every git step itself; the server only stands in when it cannot be reached.
     const viaServer = Boolean(agent.blockedBy)
+    if (trunk) {
+      if (id === 'land') {
+        if (!land.isPending) land.mutate()
+        return
+      }
+      if (id === 'create-pr' || id === 'create-draft-pr') {
+        void promptAgent(id, () => inPlacePrPrompt(id === 'create-draft-pr', trunkBase))
+        return
+      }
+      if (id === 'update-branch') {
+        void promptAgent(id, () => inPlaceUpdatePrompt(trunkBase))
+        return
+      }
+    }
     switch (id) {
+      case 'land':
+        break
       case 'commit':
       case 'commit-push':
         if (!viaServer) {
@@ -281,7 +339,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   }
 
   return {
-    action: run.worktreePath ? action : null,
+    action: trunk ? trunkAction : run.worktreePath ? action : null,
     pending,
     byAgent: !agent.blockedBy,
     onAction,
