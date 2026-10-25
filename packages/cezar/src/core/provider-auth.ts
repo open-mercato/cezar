@@ -10,9 +10,10 @@ import { resolveClaudeBin } from './claude-bin.ts';
 import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'kimi'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -422,6 +423,16 @@ function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefi
     + 'program named `copilot` comes first on PATH.';
 }
 
+/** `kimi provider list`: one `<name>  type=…  models=N  source=…` row per provider, or
+ *  "No providers configured." before `kimi login`. */
+function parseKimiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
+  const lines = normalizedLines(result.stdout);
+  if (lines.some((line) => /\stype=\S+\s+models=[1-9]\d*/.test(line))) return 'connected';
+  if (lines.some((line) => line.includes('no providers configured'))) return 'disconnected';
+  return null;
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -507,6 +518,15 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     // The version of the binary the probe ran, not a cached newer package.
     versionArgs: ['--no-auto-update', '--version'],
     unrecognizedHint: copilotUnrecognizedHint,
+  },
+  {
+    id: 'kimi',
+    overrideEnv: 'CEZ_KIMI_BIN',
+    executable: () => resolveKimiExecutable(),
+    statusArgs: ['provider', 'list'],
+    loginArgs: ['login'],
+    installHint: 'Install Kimi Code, then run `kimi login`.',
+    parse: parseKimiStatus,
   },
 ];
 

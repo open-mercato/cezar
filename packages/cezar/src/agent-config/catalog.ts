@@ -40,6 +40,8 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `$KIMI_CODE_HOME` or `~/.kimi-code` */
+  kimi: string;
 }
 
 export interface ConfigFileDef {
@@ -85,6 +87,7 @@ const OPENCODE_CONFIG_DOCS = 'https://opencode.ai/docs/config/';
 const OPENCODE_RULES_DOCS = 'https://opencode.ai/docs/rules/';
 const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configuration';
 const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
+const KIMI_DOCS = 'https://moonshotai.github.io/kimi-code/';
 const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
 const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
 const COPILOT_INSTRUCTIONS_DOCS =
@@ -451,14 +454,43 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     holdsMcp: true,
     private: true,
     precedence:
-      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor and pi have no launch-time MCP channel.',
+      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot/Kimi ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor and pi have no launch-time MCP channel.',
     docsUrl: PRIVATE_MCP_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----
+  // ---- Kimi Code ----
+  {
+    id: 'kimi.user.config',
+    runners: ['kimi'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kimi, 'config.toml'),
+    label: '~/.kimi-code/config.toml',
+    format: 'toml',
+    tracked: 'outside-repo',
+    modelKey: 'default_model',
+    modelPriority: 1,
+    precedence:
+      'User-level only: Kimi Code has no project config file. default_model names one of the [models."<alias>"] tables; providers, thinking effort and MCP client settings live here too.',
+    docsUrl: KIMI_DOCS,
+  },
+  {
+    id: 'kimi.user.memory',
+    runners: ['kimi'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kimi, 'AGENTS.md'),
+    label: '~/.kimi-code/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Personal instructions for every project. Loaded before the repository’s AGENTS.md files.',
+    docsUrl: KIMI_DOCS,
+  },
+
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot AND Kimi ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode', 'copilot'],
+    runners: ['codex', 'opencode', 'copilot', 'kimi'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -466,7 +498,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex, OpenCode and Copilot CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI and Kimi (Claude ignores it). Codex and Kimi concatenate it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

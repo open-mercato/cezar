@@ -99,6 +99,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  kimi: 'Kimi Code',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
@@ -110,6 +111,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   cursor: 'curl https://cursor.com/install -fsS | bash',
   pi: 'https://github.com/badlogic/pi-mono',
   copilot: 'npm i -g @github/copilot',
+  kimi: 'https://moonshotai.github.io/kimi-code/',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */

@@ -530,6 +530,7 @@ describe('the agents form', () => {
         'cursor',
         'pi',
         'copilot',
+        'kimi',
       ])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
