@@ -52,6 +52,7 @@
  * changes collection, persistence, events, or API run records.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { followupsEnabled } from '../handoff.ts';
 import type { Capabilities } from '@open-mercato/cezar-contract';
 
@@ -191,9 +192,16 @@ export function agentAccountsEnabled(
   return localHandoffEnabled(env, bindHost) || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
 }
 
-/** One spelling of the local-machine boundary, shared by every capability derived from it. */
+/** Set while a request that arrived over the LAN listener is handled (spec
+ *  `2026-10-20-lan-basic-auth-https`): that client is on another machine, so it gets hosted-mode
+ *  capabilities however the server itself is bound. Async-context scoped, so every
+ *  `capabilities()` call site sees it without threading the request through. */
+export const lanClientScope = new AsyncLocalStorage<true>();
+
+/** One spelling of the local-machine boundary, shared by every capability derived from it:
+ *  the client sits at this machine's keyboard — not hosted, not a LAN request. */
 function localHandoffEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
-  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost) && lanClientScope.getStore() !== true;
 }
 
 /**

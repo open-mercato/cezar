@@ -49,7 +49,7 @@ import {
   type AutomationDefinition,
 } from '../automations/types.ts';
 import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -280,7 +280,10 @@ import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
-import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { agentAccountsEnabled, isLoopbackHost, isLoopbackHostHeader, lanClientScope, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { LanAccess } from './lan-access.ts';
+import { hashPassword, parseBasicAuth, safeEqualString, verifyPassword } from './auth-crypto.ts';
+import { loadOrCreateCert } from './certs.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
@@ -311,10 +314,12 @@ import {
 import { automationLabel } from '../feature-telemetry.ts';
 import {
   setTelemetryConsentInputSchema,
+  setSecurityLanInputSchema,
   telemetryErrorInputSchema,
   telemetryEventInputSchema,
   telemetryPageInputSchema,
   type TelemetryConsentPayload,
+  type SecurityLanStatus,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
@@ -427,6 +432,9 @@ export interface ServerDeps {
   /** The Design Mode proxies behind `POST /api/v1/preview/design-proxy` (src/server/preview/).
    *  Injected by tests that need to close the listeners they opened. */
   designProxies?: DesignProxies;
+  /** The opt-in LAN listener (spec 2026-10-20-lan-basic-auth-https). `startServer` builds it;
+   *  absent, `/security/lan` reports LAN access unavailable and no request is a LAN request. */
+  lanAccess?: LanAccess;
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -1672,6 +1680,33 @@ export function createApp(deps: ServerDeps) {
     return c.text('Internal Server Error', 500);
   });
 
+  // ---- LAN gate (spec 2026-10-20-lan-basic-auth-https) -----------------------
+  // Only sockets the LAN listener handed over reach this branch; loopback requests pass straight
+  // through to the #426 guard below, unchanged. A LAN request must name one of the addresses we
+  // bound (a DNS-rebound name never does) and carry the Basic credentials, on EVERY path — the
+  // shell and assets included, which is what makes the browser ask once and then reuse them.
+  // It is then handled inside `lanClientScope`, so every `capabilities()` call answers as hosted.
+  const lanAccess = deps.lanAccess;
+  if (lanAccess) {
+    app.use('*', async (c, next) => {
+      const socket = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming?.socket;
+      if (!lanAccess.isLanSocket(socket)) return next();
+      if (!lanAccess.isAllowedHost(c.req.header('host'))) {
+        return c.json({ error: 'forbidden: unexpected Host header for LAN access' }, 403);
+      }
+      const verdict = await lanAccess.authorize(c.req.header('authorization'), socket?.remoteAddress);
+      if (verdict === 'throttled') {
+        return c.json({ error: 'too many failed sign-ins from this address — try again in a few minutes' }, 429);
+      }
+      if (verdict === 'challenge') {
+        return c.text('cezar: sign in with the LAN access username and password\n', 401, {
+          'WWW-Authenticate': 'Basic realm="cezar", charset="UTF-8"',
+        });
+      }
+      return lanClientScope.run(true, next);
+    });
+  }
+
   // Reject oversized request bodies before they reach any handler (#429). GETs
   // and SSE carry no body, so this only ever gates the mutating routes.
   app.use('*', bodyLimit({ maxSize: GLOBAL_BODY_LIMIT }));
@@ -1992,7 +2027,9 @@ export function createApp(deps: ServerDeps) {
     if (healthInFlight) return healthInFlight;
     healthInFlight = (async () => {
       try {
-        const payload = await healthSnapshot();
+        // Computed as the machine sees itself even when a LAN request triggered the refresh: the
+        // cache is shared, and `scopedHealth` re-derives the LAN view per reader.
+        const payload = await lanClientScope.exit(() => healthSnapshot());
         const body = JSON.stringify(payload);
         const changed = body !== healthCache?.body;
         healthCache = { at: Date.now(), payload, body };
@@ -2024,7 +2061,14 @@ export function createApp(deps: ServerDeps) {
   // statement's return value is discarded, so `typeof app` would record nothing
   // and `hc<AppType>` would have no endpoint to offer. `createApp` mounts this
   // under both `/api` (the frozen legacy spelling) and `/api/v1`.
-  const healthRoutes = new Hono().get('/health', async (c) => c.json(await readHealth()));
+  // The cache is computed for whoever asked first; a LAN request (spec 2026-10-20) re-derives the
+  // two request-scoped fields, or a LAN cockpit would believe it sits at this machine's keyboard.
+  const scopedHealth = (payload: HealthPayload): HealthPayload => {
+    if (lanClientScope.getStore() !== true) return payload;
+    const caps = capabilities();
+    return { ...payload, capabilities: caps, repoRoot: caps.localHandoff ? bootRoot : basename(bootRoot) };
+  };
+  const healthRoutes = new Hono().get('/health', async (c) => c.json(scopedHealth(await readHealth())));
 
   // The push twin of the poll it replaced (#369): while at least one cockpit
   // holds the `health` topic the server re-reads the snapshot on the old 5 s
@@ -7913,6 +7957,29 @@ export function createApp(deps: ServerDeps) {
     blockedBy: telemetryBlockedBy(),
     endpoint: (process.env.CEZ_TELEMETRY_URL || DEFAULT_TELEMETRY_URL).replace(/\/+$/, ''),
   });
+  // LAN access (spec 2026-10-20-lan-basic-auth-https). Readable from anywhere the request got in;
+  // changed only from this machine — a LAN client could otherwise re-key or widen its own access.
+  const lanUnavailable: SecurityLanStatus = {
+    available: false, editable: false, lanAccess: false, active: false, authConfigured: false, username: null,
+    port: 0, tlsEnabled: false, lanIp: null, lanUrls: [], certFingerprint: null, error: null,
+  };
+  const securityRoutes = new Hono()
+    .get('/security/lan', async (c) =>
+      c.json(lanAccess ? await lanAccess.status(capabilities().localHandoff) : lanUnavailable))
+    .put(
+      '/security/lan',
+      jsonZodValidator(setSecurityLanInputSchema, { message: 'invalid LAN access settings' }),
+      async (c) => {
+        if (!lanAccess) return c.json({ error: 'LAN access is not available on this server' }, 409);
+        if (!capabilities().localHandoff) {
+          return c.json({ error: 'LAN access can only be changed from this machine' }, 409);
+        }
+        const result = await lanAccess.apply(c.req.valid('json'));
+        if (!result.ok) return c.json({ error: result.error }, result.status);
+        return c.json(await lanAccess.status(true));
+      },
+    );
+
   const telemetryRoutes = new Hono()
     .get('/telemetry/consent', async (c) => c.json(telemetryConsentBody(await loadTelemetryConsent())))
     .put(
@@ -7984,7 +8051,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', runsIndexRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
     .route('/', workspaceEventsRoutes)
-    .route('/', telemetryRoutes);
+    .route('/', telemetryRoutes)
+    .route('/', securityRoutes);
 
   // ---- mount ---------------------------------------------------------------
   // Scoped first, then the unscoped alias bound to the boot project. The paths are disjoint (no
@@ -8042,6 +8110,12 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // workspace scheduler below is gated on it. Read per call rather than captured, for the same
   // reason `capabilities()` is inside `createApp`: tests flip the variable between apps.
   const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
+  // Hosted mode already has a perimeter (its reverse proxy); LAN access is for a loopback cockpit.
+  const lanAccess = deps.lanAccess ?? new LanAccess({
+    hashPassword, verifyPassword, parseBasicAuth, safeEqualString, loadOrCreateCert,
+    available: () => process.env.CEZ_LAN_ACCESS !== '0' && process.env.CEZ_REMOTE !== '1' && isLoopbackHost(deps.bindHost),
+    ...(deps.workspaceConfig ? { config: deps.workspaceConfig } : {}),
+  });
   let rescheduleAutomations = () => {};
   const appCleanups: Array<() => void> = [];
   const app = createApp({
@@ -8053,6 +8127,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     skillsUpdate,
     socketHub,
     automationsChanged: () => rescheduleAutomations(),
+    lanAccess,
   });
   // SECURITY: default to loopback. This server executes agents locally and its endpoints are
   // same-origin-trusted (only /api/health is CORS-open); binding to a non-loopback host would
@@ -8147,6 +8222,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     }
   });
   server.once('listening', () => {
+    // The port actually bound: the LAN side shares it, and a test's `0` is not a port.
+    const address = server.address();
+    void lanAccess.attach(server as HttpServer, typeof address === 'object' && address ? address.port : port)
+      .then(() => lanAccess.status(true))
+      .then((lan) => {
+        if (lan.active) console.log(`  LAN → ${lan.lanUrls.join(', ')} (HTTPS, sign-in required)\n`);
+        else if (lan.lanAccess && lan.error) console.log(`  ⚠ LAN access is on but not listening: ${lan.error}\n`);
+      })
+      .catch(() => undefined);
     void listProjects().then((projects) => {
       if (shutdownPromise) return;
       const all = projects.some((project) => project.root === deps.repoRoot)
@@ -8168,7 +8252,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     }).catch(() => undefined);
   });
   server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
-  socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
+  socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost, lanAccess));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {
       if (shutdownPromise) return shutdownPromise;
@@ -8221,9 +8305,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
  * provably the cockpit itself: a same-authority Origin, a no-Origin native
  * client, or a dev proxy the browser vouches for via `Sec-Fetch-Site`.
  */
-export function verifyWsUpgrade(req: IncomingMessage, bindHost?: string): WsUpgradeVerdict {
+export function verifyWsUpgrade(req: IncomingMessage, bindHost?: string, lanAccess?: LanAccess): WsUpgradeVerdict {
   const host = req.headers.host;
   const hostName = hostnameOfHost(host);
+  // A LAN client (spec 2026-10-20-lan-basic-auth-https) gets no socket at all: its cockpit runs
+  // in remote mode, which opens none, and the topics publish the host's own view (local
+  // capabilities, absolute paths) to every subscriber alike.
+  if (lanAccess?.isLanSocket(req.socket)) return false;
   const hosted = !resolveCapabilities(process.env, bindHost).localHandoff;
   if (!hosted && !isLoopbackHostHeader(hostName)) return false;
   const origin = req.headers.origin;

@@ -48,6 +48,7 @@ import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { apiOrigin, pickPort } from './api-origin.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
+import { runAuthCommand } from './auth-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
@@ -69,6 +70,7 @@ Usage:
   cezar secrets <list|set NAME|unset NAME>  this project's secrets (--workspace: the user's)
                             (set reads the value from stdin; agents never receive them)
   cezar telemetry [status|enable|disable|inspect]  opt-in usage data (off until you enable it)
+  cezar auth [status|reset]  LAN access sign-in (reset: LAN off, credentials forgotten)
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -135,6 +137,11 @@ async function main(): Promise<void> {
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
+    return;
+  }
+  // LAN access lockout recovery (spec 2026-10-20-lan-basic-auth-https): no server, no repo needed.
+  if (process.argv[2] === 'auth') {
+    process.exitCode = await runAuthCommand(process.argv.slice(3));
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.

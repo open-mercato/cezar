@@ -37,7 +37,7 @@ export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
-  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',
+  'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy', 'security',
 ];
 
 export const telemetryRouteSchema = z

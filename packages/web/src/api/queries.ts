@@ -71,6 +71,7 @@ import {
   getSelfUpdateDevelopment,
   getStarCount,
   getTelemetryConsent,
+  getSecurityLan,
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
@@ -461,6 +462,8 @@ export const workspaceQueryKeys = {
   starCount: ['workspace', 'star-count'] as const,
   /** The opt-in telemetry answer via `GET /api/v1/telemetry/consent` — one per machine. */
   telemetryConsent: ['workspace', 'telemetry-consent'] as const,
+  /** LAN access via `GET/PUT /api/v1/security/lan` (spec 2026-10-20-lan-basic-auth-https). */
+  securityLan: ['workspace', 'security-lan'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
@@ -1603,6 +1606,16 @@ export function useTelemetryConsent() {
   return useQuery({
     queryKey: workspaceQueryKeys.telemetryConsent,
     queryFn: ({ signal }) => getTelemetryConsent({ signal }),
+    staleTime: Infinity,
+    retry: false,
+  })
+}
+
+/** LAN access settings (`GET /api/v1/security/lan`). Workspace-level: one machine, one listener. */
+export function useSecurityLan() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.securityLan,
+    queryFn: ({ signal }) => getSecurityLan({ signal }),
     staleTime: Infinity,
     retry: false,
   })

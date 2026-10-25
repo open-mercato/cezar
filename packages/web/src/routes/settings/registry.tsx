@@ -16,6 +16,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  LockIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -29,6 +30,7 @@ import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { PrivacySection } from './privacy-section'
+import { SecuritySection } from './security-section'
 import { ProjectsSection } from './projects-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
@@ -72,6 +74,7 @@ export type SettingsSectionId =
   | 'secrets'
   | 'integrations'
   | 'workspace-secrets'
+  | 'security'
   | 'privacy'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -227,6 +230,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'The workspace registry and where GitHub checkouts land.',
     icon: FoldersIcon,
     component: ProjectsSection,
+    scope: 'global',
+  },
+  {
+    id: 'security',
+    title: 'Security',
+    description: 'Reach this cockpit from other devices on your network, over HTTPS with a password.',
+    icon: LockIcon,
+    component: SecuritySection,
     scope: 'global',
   },
   {
