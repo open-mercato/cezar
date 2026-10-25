@@ -500,7 +500,8 @@ function SidebarContent({
         {repo && !projectGroups ? (
           <span
             data-slot="repo-chip"
-            className="ml-auto truncate font-mono text-[11px] font-medium text-soft-foreground"
+            // basis-0 + flex-1: a long repo name truncates itself, never the brand beside it.
+            className="min-w-0 flex-1 basis-0 truncate text-right font-mono text-[11px] font-medium text-soft-foreground"
           >
             {repo.name} / {repo.branch}
           </span>
