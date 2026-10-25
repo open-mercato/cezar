@@ -25,7 +25,7 @@ Every event carries `service`, `version` (release and channel, e.g. `0.15.0-nigh
 - for something done in a browser, `<cezarId>:<sid>`, where `sid` is a random UUIDv7 kept in
   that browser's localStorage (`cezar:sid`).
 
-Events: `cezar_run` (at most once a day), `app_start`, `app_stop`, `task_start` (agent and model),
+Events: `cezar_run` (at most once a day), `app_start`, `app_stop` (why: `signal`, `restart`, `supervisor_gone`), `task_start` (agent and model),
 `page_viewed` (the route's shape, e.g. `/p/:param/tasks/:param/changes`), `message_sent` (where
 from), `open_in` (which app), `add_project_opened` (which Add project dialog: `new`, `clone`,
 `folder`), `project_added` (`local`, `github`, `cli`, or for a new project `new_local`,
@@ -59,14 +59,37 @@ a ⌘P row or from its keyboard shortcut — as a fixed command name such as `pi
 (`enter`, `cycle`, `tab`, `cmdk`, `cmdk_tab`), `palette_mode_used` (`tasks`, `commands`, `files`,
 `pr_number`, `automation` — the shape of a search, never its text; a bare prefix such as the `@`
 ⌘P pre-fills is not counted), `palette_dismissed` (the view a
-palette was closed from with nothing chosen) and `shortcut_rebound` (which command's shortcut was
-changed; a reset is not counted). Pins and archives also say `palette` or `shortcut` when they came from there. Every label
+palette was closed from with nothing chosen), `shortcut_rebound` (which command's shortcut was
+changed; a reset is not counted), `schedule_menu_opened` (the start-time menu beside the new-task
+Send button was opened), `start_option_picked` (`now`, `at`, `usage_reset`) and `task_scheduled`
+(`at`, `usage_reset` — a task was scheduled; never the time itself). Pins and archives also say `palette` or `shortcut` when they came from there. Every label
 comes from a closed set the server enforces.
+
+Which features are used, never what they are named: `task_origin` (where a task came from —
+`cockpit`, `cli`, `api`, `inbox`, `e2e_setup`, `scheduled_task`, `automation_schedule`,
+`automation_github`, `automation_tracker`, `dispatch_implement`, `dispatch_review`),
+`workflow_used` (a built-in workflow by name — `quick-task`, `implement-and-verify`, … — or
+`custom`, `custom_graph`, `planned`, `dispatch`, `other_builtin`; your own workflow's name is never
+sent), `skill_used` (once per session per skill: a public skill by name — Open Mercato's `om-*`
+skills and cezar's own `create-cezar-automation` — any other only as `repo`, `global` or `team`),
+`variants_started` (`2` or `3`), `dispatch_tree_started` (`toggle` from the composer, `agent` when
+a task first dispatches on its own), `automation_created` / `automation_deleted` /
+`automation_fired` (what the automation listens to — e.g. `github:pull_request.opened`,
+`github:multi`, `schedule:daily`, `tracker:jira` — and for a firing how many tasks it started;
+never its name, prompt or filters), `automation_toggled` (`enabled`, `paused`), `workflow_saved`
+(`chain_created`, `chain_updated`, `graph_created`, `graph_updated`, `deleted`), `pr_opened`
+(`draft`, `ready`, or `agent` when the task's agent opened it), `review_decided` (`accepted`,
+`landed`), `design_mode_enabled` (`button`, `shortcut`), and once a day with `cezar_run`,
+`feature_inventory`: how many projects, enabled and paused automations, custom workflows, repo
+and global skills, projects with their own skills repos, and tracker connections this machine has
+— counts only, and only those above zero.
 
 Error reports carry the error type, message and stack with your home directory, working
 directory, temp directory and registered project roots replaced by `~`, `<repo>` and `<tmp>`,
 plus technical context: build, uptime, memory, route shape, browser engine, enabled feature flags.
-Every red error toast the cockpit shows is reported the same way, with the method, status and
+Every red error toast the cockpit shows is reported the same way — except an expected outcome the
+toast already tells you how to resolve (a file over the attachment limit, git refusing a pull or
+push, an agent CLI that is not installed), which is shown and not reported — with the method, status and
 route shape of the API call that failed just before it (e.g. `POST
 /api/v1/p/:param/runs/:param/messages`, 409). The toast's text is masked first: quoted values,
 emails, URLs, slash-bearing names (paths, branches, `owner/repo`), your project names and

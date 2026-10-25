@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 import { ZoomableImage } from '@/components/zoomable-image'
 
 import type { DiffFileChange } from './types'
@@ -25,28 +27,45 @@ export function shouldPreviewImage(file: DiffFileChange): boolean {
 }
 
 /**
- * `raw=1` only ever serves the file's CURRENT (new-side) bytes, so a deleted image has nothing
- * to fetch; `imageSrc` absent (a consumer that never wired byte access, e.g. repo/commit diffs)
- * degrades to the same honest note every other binary gets.
+ * `imageSrc` serves the file's CURRENT (worktree) bytes; `oldImageSrc` serves its bytes at the
+ * diff's base commit. A deleted image shows the old side only, a modified or renamed one shows
+ * before | after, an added one the new side. Either loader absent (repo/commit diffs never wire
+ * byte access) degrades to an honest note.
  */
 export function ImagePreview({
   file,
   imageSrc,
+  oldImageSrc,
   onOpenInApp,
 }: {
   file: DiffFileChange
   imageSrc?: (path: string) => string
+  oldImageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
 }) {
+  const oldPath = file.oldPath ?? file.path
   if (file.status === 'deleted') {
-    return <ImageNote>Image deleted — only the new side can be previewed.</ImageNote>
+    if (!oldImageSrc) return <ImageNote>Image deleted — only the new side can be previewed.</ImageNote>
+    return (
+      <div data-slot="diff-image-preview" className="flex flex-col items-center gap-2 p-4">
+        <ImageSide src={oldImageSrc(oldPath)} alt={oldPath} side="old" />
+      </div>
+    )
   }
   if (!imageSrc) {
     return <ImageNote>Binary file — no text diff.</ImageNote>
   }
+  const showBefore = oldImageSrc !== undefined && file.status !== 'added'
   return (
     <div data-slot="diff-image-preview" className="flex flex-col items-center gap-2 p-4">
-      <ZoomableImage src={imageSrc(file.path)} alt={file.path} className="max-h-[60vh] max-w-full rounded-sm" />
+      {showBefore ? (
+        <div className="grid w-full grid-cols-1 items-start gap-4 sm:grid-cols-2">
+          <ImageSide label="Before" src={oldImageSrc(oldPath)} alt={oldPath} side="old" />
+          <ImageSide label="After" src={imageSrc(file.path)} alt={file.path} side="new" />
+        </div>
+      ) : (
+        <ImageSide src={imageSrc(file.path)} alt={file.path} side="new" />
+      )}
       {onOpenInApp ? (
         <button
           type="button"
@@ -58,6 +77,27 @@ export function ImagePreview({
         </button>
       ) : null}
     </div>
+  )
+}
+
+// No caption for a deleted image: the header's `deleted` badge already says it. A side the
+// server refuses (past `FILE_CONTENT_CAP`, absent at the base) gets a note, not a broken icon.
+function ImageSide({ label, src, alt, side }: { label?: string; src: string; alt: string; side: 'old' | 'new' }) {
+  const [failed, setFailed] = useState<string | null>(null)
+  return (
+    <figure data-slot="diff-image-side" data-side={side} className="flex min-w-0 flex-col items-center gap-1.5">
+      {label ? <figcaption className="text-[11px] font-medium text-soft-foreground">{label}</figcaption> : null}
+      {failed === src ? (
+        <ImageNote>Image can’t be previewed (too large or unavailable).</ImageNote>
+      ) : (
+        <ZoomableImage
+          src={src}
+          alt={alt}
+          onError={() => setFailed(src)}
+          className="max-h-[60vh] max-w-full rounded-sm"
+        />
+      )}
+    </figure>
   )
 }
 

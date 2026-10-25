@@ -34,6 +34,10 @@
  * `create-cezar-automation` skill and the composer's "Create an automation"
  * template all hang off this one capability.
  *
+ * `agentAccountsEnabled` keeps account folders local by default. An operator may explicitly set
+ * `CEZ_REMOTE_AGENT_ACCOUNTS=1` for an authenticated remote deployment; this does not change
+ * `localHandoff`, so desktop-only actions remain unavailable.
+ *
  * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
  * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
  * AGENTS.md § Zero config, recorded there: the brakes live in the engine — four children in
@@ -74,13 +78,40 @@ function expandIpv6(h: string): string | null {
   if (halves.length === 2) {
     const head = halves[0] ? halves[0].split(':') : [];
     const tail = halves[1] ? halves[1].split(':') : [];
+    const dotted = tail.findIndex((group) => group.includes('.'));
+    if (dotted !== -1) {
+      if (dotted !== tail.length - 1) return null;
+      const ipv4 = expandIpv4(tail[dotted]!);
+      if (!ipv4) return null;
+      tail.splice(dotted, 1, ...ipv4);
+    }
     if (head.length + tail.length > 7) return null;
     groups = [...head, ...Array(8 - head.length - tail.length).fill('0'), ...tail];
   } else {
     groups = h.split(':');
+    const dotted = groups.findIndex((group) => group.includes('.'));
+    if (dotted !== -1) {
+      if (dotted !== groups.length - 1) return null;
+      const ipv4 = expandIpv4(groups[dotted]!);
+      if (!ipv4) return null;
+      groups.splice(dotted, 1, ...ipv4);
+    }
   }
   if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return null;
   return groups.map((g) => parseInt(g, 16).toString(16)).join(':');
+}
+
+/** Convert a strict dotted-quad IPv4 tail to the two IPv6 groups it occupies. */
+function expandIpv4(value: string): [string, string] | null {
+  const octets = value.split('.');
+  // Keep the dotted form unambiguous. WHATWG URL and node:net reject
+  // multi-digit leading-zero octets, so accepting them here would let a
+  // malformed Host authority through a security boundary that rejects the
+  // equivalent URL spelling.
+  if (octets.length !== 4 || !octets.every((octet) => /^(?:0|[1-9]\d{0,2})$/.test(octet))) return null;
+  const numbers = octets.map(Number);
+  if (numbers.some((octet) => octet > 255)) return null;
+  return [((numbers[0]! << 8) | numbers[1]!).toString(16), ((numbers[2]! << 8) | numbers[3]!).toString(16)];
 }
 
 /** Canonical hostname of an authority: port and IPv6 brackets removed, IPv6
@@ -117,7 +148,15 @@ function stripZone(h: string): string {
 /** True when the hostname names this machine and nothing else. Expects the
  *  canonical output of `normalizeHostname`. */
 function isLoopbackName(hostname: string): boolean {
-  return hostname === 'localhost' || LOOPBACK_V4.test(hostname) || hostname === LOOPBACK_V6;
+  if (hostname === 'localhost' || LOOPBACK_V4.test(hostname) || hostname === LOOPBACK_V6) return true;
+
+  // An IPv4-mapped IPv6 address has the fixed first six groups followed by
+  // the IPv4 value in the final two groups. Only mapped 127/8 values are
+  // loopback; do not treat other mapped private/public addresses as local.
+  const mapped = hostname.match(/^0:0:0:0:0:ffff:([0-9a-f]+):([0-9a-f]+)$/);
+  if (!mapped) return false;
+  const high = Number.parseInt(mapped[1]!, 16);
+  return (high >>> 8) === 0x7f;
 }
 
 /** True for bind hosts that only the local machine can reach. Undefined = the
@@ -139,12 +178,31 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
 }
 
 /**
+ * Whether the agent-account store may cross the HTTP boundary.
+ *
+ * Local cockpits retain the zero-config behaviour. A remote cockpit can opt in when its operator
+ * has put the server behind an authenticated perimeter; the exact-value flag is deliberately
+ * separate from `localHandoff`, since opening a desktop app still makes no sense on a VPS.
+ */
+export function agentAccountsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  bindHost?: string,
+): boolean {
+  return localHandoffEnabled(env, bindHost) || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+}
+
+/** One spelling of the local-machine boundary, shared by every capability derived from it. */
+function localHandoffEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
+/**
  * Whether the Preview tab may offer Design Mode (spec `2026-10-09-design-mode`). Only on a local
  * cockpit: the picker proxy listens on loopback, which a hosted cockpit's viewer cannot reach.
  * `CEZ_DESIGN_MODE=0` is the off switch; there is deliberately no `=1` for hosted mode.
  */
 function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
-  return env.CEZ_DESIGN_MODE !== '0' && env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+  return env.CEZ_DESIGN_MODE !== '0' && localHandoffEnabled(env, bindHost);
 }
 
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
@@ -170,7 +228,7 @@ function designModeEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
 function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   if (env.CEZ_TERMINAL === '1') return true;
   if (env.CEZ_TERMINAL === '0') return false;
-  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+  return localHandoffEnabled(env, bindHost);
 }
 
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
@@ -178,7 +236,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
-    localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    localHandoff: localHandoffEnabled(env, bindHost),
     terminal: terminalEnabled(env, bindHost),
     designMode: designModeEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,

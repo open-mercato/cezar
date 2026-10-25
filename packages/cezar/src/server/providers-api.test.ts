@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PROVIDER_IDS,
@@ -79,7 +79,9 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
 
 const providerForExecutable = (executable: string): ProviderId => {
   if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
-  if (executable === 'agent') return 'cursor';
+  // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
+  // Cursor installed (#1503), so match it too or the suite fails only on such machines.
+  if (executable === 'agent' || basename(executable) === 'cursor-agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 

@@ -24,7 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
-import { filterSkills, isProjectSkill, orderSkills, skillUsedBy } from '@/lib/skills'
+import { filterSkills, groupSkillsByRepo, isProjectSkill, orderSkills, skillUsedBy } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 
 type SkillCatalogItem = Skill & { enabled: boolean }
@@ -95,6 +95,7 @@ function SkillsCatalog() {
   const importableQuery = useImportableSkills()
   const [searchParams] = useSearchParams()
   const [query, setQuery] = useState('')
+  const [repoFilter, setRepoFilter] = useState<string | null>(null)
   const queryClient = useQueryClient()
   const uiState = useUiState()
   const importable = importableQuery.data ?? []
@@ -168,7 +169,17 @@ function SkillsCatalog() {
   const selectedActivation = selected
     ? skillActivation(selected, importableNames, uiState.isPending, toggleImportedSkill, importableQuery.isError)
     : undefined
-  const shown = filterSkills(catalog, query)
+  const repoGroups = groupSkillsByRepo(catalog)
+  const groupKeys = repoGroups.map((group) => group.key)
+  // A stale filter (repo removed, refresh) falls back to everything instead of an empty list.
+  const activeRepo = repoFilter !== null && groupKeys.includes(repoFilter) ? repoFilter : null
+  const shownGroups = groupSkillsByRepo(
+    filterSkills(
+      activeRepo === null ? catalog : catalog.filter((skill) => (skill.team?.repo ?? '') === activeRepo),
+      query,
+    ),
+  )
+  const shown = shownGroups.flatMap((group) => group.skills)
 
   return (
     <div data-slot="skills-section" className="flex min-h-full flex-1 items-stretch">
@@ -208,6 +219,24 @@ function SkillsCatalog() {
             Refresh
           </button>
         </div>
+        {repoGroups.length > 1 ? (
+          <div className="shrink-0 px-3 pb-2">
+            <select
+              data-slot="skills-repo-filter"
+              aria-label="Filter by repository"
+              value={activeRepo ?? '__all__'}
+              onChange={(event) => setRepoFilter(event.target.value === '__all__' ? null : event.target.value)}
+              className="h-8 w-full rounded-md border border-border bg-card px-2 text-[13px] text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              <option value="__all__">All repositories</option>
+              {repoGroups.map((group) => (
+                <option key={group.key} value={group.key}>
+                  {group.label} ({group.skills.length})
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : null}
         {projectId ? (
           <div className="shrink-0 px-3 pb-2">
             <SkillsUpdateCard projectId={projectId} state={updateQuery.data} loadError={updateQuery.error} />
@@ -240,19 +269,30 @@ function SkillsCatalog() {
           {skillsQuery.isPending ? (
             <li className="px-2.5 py-2 text-[13px] text-soft-foreground">Loading…</li>
           ) : shown.length > 0 ? (
-            shown.map((skill) => (
-              <SkillRow
-                key={skill.name}
-                skill={skill}
-                active={selection === skill.name}
-                activation={skillActivation(
-                  skill,
-                  importableNames,
-                  uiState.isPending,
-                  toggleImportedSkill,
-                  importableQuery.isError,
-                )}
-              />
+            shownGroups.map((group) => (
+              <li key={group.key} data-slot="skill-group" data-group={group.key || 'local'} className="list-none">
+                {repoGroups.length > 1 ? (
+                  <h3 className="px-2.5 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-soft-foreground">
+                    {group.label}
+                  </h3>
+                ) : null}
+                <ul className="space-y-1">
+                  {group.skills.map((skill) => (
+                    <SkillRow
+                      key={skill.name}
+                      skill={skill}
+                      active={selection === skill.name}
+                      activation={skillActivation(
+                        skill,
+                        importableNames,
+                        uiState.isPending,
+                        toggleImportedSkill,
+                        importableQuery.isError,
+                      )}
+                    />
+                  ))}
+                </ul>
+              </li>
             ))
           ) : (
             <li className="px-2.5 py-2 text-xs leading-relaxed text-soft-foreground">

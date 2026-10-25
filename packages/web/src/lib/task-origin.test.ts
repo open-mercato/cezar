@@ -17,6 +17,12 @@ const byId = (runs: OriginInput[]) => {
 }
 
 describe('automationIdOf', () => {
+  it('keeps composer-scheduled tasks and their children in the regular task list', () => {
+    const root: OriginInput = { id: 'root', deferredBinding: {}, automationTrigger: { automationId: 'internal' } }
+    const child: OriginInput = { id: 'child', dispatch: { rootRunId: root.id } }
+    expect(automationIdOf(root, byId([root]))).toBeUndefined()
+    expect(automationIdOf(child, byId([root, child]))).toBeUndefined()
+  })
   it('reads every provenance key a run can carry', () => {
     const none = byId([])
     expect(automationIdOf({ id: 'a', automationId: 'idx' }, none)).toBe('idx')

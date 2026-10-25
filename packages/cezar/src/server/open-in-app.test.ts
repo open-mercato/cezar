@@ -231,6 +231,16 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
     expect(resolveOnPath('editor', 'linux', true, stubDir)).toBeNull();
   });
 
+  // telemetry 4fda9ce5: VS Code's bin dir holds a bare `code` bash shim beside `code.cmd`; libuv
+  // never spawns an extensionless name on Windows, so offering it failed every open.
+  it('does not offer a bare extensionless shim on native Windows', () => {
+    addStub('editor');
+    addStub('editor.cmd');
+    expect(resolveOnPath('editor', 'win32', false, stubDir)).toBeNull();
+    addStub('editor.exe');
+    expect(resolveOnPath('editor', 'win32', false, stubDir)).toBe('editor.exe');
+  });
+
   it('prefers a WSL-native bare launcher over a Windows-side executable', () => {
     addStub('editor');
     addStub('editor.exe');

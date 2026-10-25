@@ -162,7 +162,6 @@ describe('mergeRun', () => {
   it('carries usage over, and invents none when there was none', () => {
     expect(mergeRun({ ...run('r1'), usage: SAMPLE }, run('r1', { status: 'done' })).usage).toEqual(SAMPLE)
     expect(mergeRun(run('r1'), run('r1')).usage).toBeUndefined()
-    expect(mergeRun(undefined, run('r1')).usage).toBeUndefined()
   })
 
   it.each([

@@ -214,3 +214,18 @@ describe('HANDOFF_INSTRUCTIONS — the still-working marker contract (#933)', ()
     expect(HANDOFF_INSTRUCTIONS).toContain('above any CEZ:DONE / CEZ:MONITORING line');
   });
 });
+
+// The ask card adds "Other…" and "Need more info" to every question; the agent must know both.
+describe('HANDOFF_INSTRUCTIONS — the ask card answers an agent must handle', () => {
+  const paragraph = HANDOFF_INSTRUCTIONS.slice(HANDOFF_INSTRUCTIONS.indexOf('Structured question marker:'));
+
+  it('tells the agent the card already offers own text and Need more info', () => {
+    expect(paragraph).toContain('"Other…"');
+    expect(paragraph).toContain('"Need more info"');
+    expect(paragraph).toContain('never add either as an option yourself');
+  });
+
+  it('asks for an explanation and a re-ask on a request for more information', () => {
+    expect(paragraph).toContain('ask it again with CEZ:ASK');
+  });
+});

@@ -27,6 +27,13 @@ describe('automation-cli', () => {
       .not.toContain('autonomous')
   })
 
+  it('prints a one-time schedule as --at, which cez automation add maps back (#771)', () => {
+    const once = { name: 'x', kind: 'schedule' as const, schedule: { type: 'once' as const, date: '2026-10-05', hour: 23, minute: 5 }, task: { prompt: 'p' } }
+    expect(flagExpressible(once)).toBe(true)
+    expect(cliFlagsOf(once)).toBe('cez automation add --name "x" --at "2026-10-05 23:05" --prompt "p"')
+    expect(flagExpressible({ ...once, schedule: { type: 'once' } })).toBe(false)
+  })
+
   it('prints a simple poll as flags and an untitled one as "untitled"', () => {
     expect(cliOf({ name: '', kind: 'github', events: ['issue.opened'], intervalSeconds: 300, task: { prompt: '' } }))
       .toBe('cez automation add --name "untitled" --on issue.opened --every 5m --prompt "…"')

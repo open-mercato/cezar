@@ -3,7 +3,8 @@ name: Release cut
 # Splits main into a release line (docs/publishing.md § Release lines): with main at X.Y.Z it
 # creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` label, and opens
 # the PR that moves main to X.(Y+1).0. Then ship the line with the Release workflow, run from
-# the new branch. Re-running is safe: an existing branch is left alone and the PR is reused.
+# the new branch. A re-run from the same main commit finishes a half-done cut (branch kept, PR
+# reused); once main has moved past the cut it refuses, so the bump PR is never rebuilt.
 on:
   workflow_dispatch:
     inputs:
@@ -13,10 +14,9 @@ on:
         default: false
         type: boolean
 
+# Every write uses the release App's token; this job's own token only reads.
 permissions:
-  contents: write # the release branch and the version-bump commit
-  pull-requests: write # the PR moving main to the next minor
-  issues: write # the backport label
+  contents: read
 
 concurrency:
   group: release-cut
@@ -36,20 +36,24 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: lts/*
-          cache: npm
+          node-version: lts/* # runs the .mts tooling directly (type stripping)
 
-      - name: Install dependencies
-        run: npm ci
 
-      - name: Build release tooling
-        run: npm run build:server
+
+      # A dry run calls no API, so it needs no token.
+      - name: Mint the release token
+        if: ${{ !inputs.dry_run }}
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
       - name: Cut the release line
         id: cut
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
-        run: node scripts/release-line.mjs cut ${{ inputs.dry_run && '--dry-run' || '' }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/release-line.mts cut ${{ inputs.dry_run && '--dry-run' || '' }}
 
       - name: Write workflow summary
         if: always() && steps.cut.outputs.releaseBranch != ''

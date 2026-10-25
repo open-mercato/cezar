@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-// scripts/lib/github.mjs is the release-line workflows' only GitHub writer; its "re-runs are
+// scripts/lib/github.mts is the release-line workflows' only GitHub writer; its "re-runs are
 // safe" promises (docs/publishing.md § Release lines) are pinned here against a stubbed fetch.
 
 interface Client {
@@ -10,9 +10,13 @@ interface Client {
   ensureLabel(name: string, color: string, description: string): Promise<void>;
   addLabels(number: number, labels: string[]): Promise<void>;
   createRelease(input: { tag: string; sha: string; name: string; body: string; makeLatest: boolean }): Promise<boolean>;
+  getTagSha(tag: string): Promise<string | null>;
+  createTag(tag: string, sha: string): Promise<boolean>;
+  releasedTags(): Promise<string[]>;
+  readFile(path: string, ref: string): Promise<string>;
 }
 
-const modulePath = new URL('../../../../scripts/lib/github.mjs', import.meta.url).href;
+const modulePath = new URL('../../../../scripts/lib/github.mts', import.meta.url).href;
 const { githubClient } = (await import(modulePath)) as {
   githubClient: (opts: { token: string | undefined; repository: string | undefined }) => Client;
 };
@@ -130,6 +134,47 @@ describe('githubClient', () => {
     calls = stubGitHub({ 'POST /repos/acme/app/releases': { status: 201, data: {} } });
     expect(await client().createRelease(release)).toBe(true);
     expect(calls.at(-1)!.body).toMatchObject({ tag_name: 'v1.0.0', target_commitish: 'abc', make_latest: 'false' });
+  });
+
+  it('dereferences an annotated tag to its commit', async () => {
+    stubGitHub({
+      'GET /repos/acme/app/git/ref/tags/v1.0.0': { status: 200, data: { object: { type: 'tag', sha: 'tagobj' } } },
+      'GET /repos/acme/app/git/tags/tagobj': { status: 200, data: { object: { sha: 'commit1' } } },
+    });
+    expect(await client().getTagSha('v1.0.0')).toBe('commit1');
+    expect(await client().getTagSha('v9.9.9')).toBeNull();
+  });
+
+  it('creates a missing tag, keeps one already at the commit, and refuses to move one', async () => {
+    const calls = stubGitHub({
+      'GET /repos/acme/app/git/ref/tags/v1.0.1': { status: 200, data: { object: { type: 'commit', sha: 'same' } } },
+      'POST /repos/acme/app/git/refs': { status: 201, data: {} },
+    });
+    expect(await client().createTag('v1.0.2', 'new')).toBe(true);
+    expect(calls.at(-1)).toEqual({ method: 'POST', path: '/repos/acme/app/git/refs', body: { ref: 'refs/tags/v1.0.2', sha: 'new' } });
+    expect(await client().createTag('v1.0.1', 'same')).toBe(false);
+    await expect(client().createTag('v1.0.1', 'other')).rejects.toThrow(/already points at same/);
+  });
+
+  it('lists released tags across pages', async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ tag_name: `v0.0.${i}` }));
+    stubGitHub({
+      'GET /repos/acme/app/releases?per_page=100&page=1': { status: 200, data: page1 },
+      'GET /repos/acme/app/releases?per_page=100&page=2': { status: 200, data: [{ tag_name: 'v1.0.0' }, { tag_name: 'v1.0.1', draft: true }] },
+    });
+    const tags = await client().releasedTags();
+    expect(tags).toHaveLength(101);
+    expect(tags.at(-1)).toBe('v1.0.0');
+    // A draft is not "done": hasRelease() cannot see it either.
+    expect(tags).not.toContain('v1.0.1');
+  });
+
+  it('reads a file over 1 MB through the blob API', async () => {
+    stubGitHub({
+      'GET /repos/acme/app/contents/CHANGELOG.md': { status: 200, data: { sha: 'b1', content: '' } },
+      'GET /repos/acme/app/git/blobs/b1': { status: 200, data: { content: Buffer.from('# big').toString('base64') } },
+    });
+    expect(await client().readFile('CHANGELOG.md', 'main')).toBe('# big');
   });
 
   it('surfaces a failed write with its method, path and message', async () => {

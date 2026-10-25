@@ -218,3 +218,29 @@ describe('the cockpit is the authority on what is selected', () => {
     expect(marks()).toHaveLength(1)
   })
 })
+
+describe('the Design Mode key', () => {
+  const press = (init: KeyboardEventInit, target: Element = page.document.body) => {
+    const event = new page.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    target.dispatchEvent(event)
+    return event
+  }
+
+  it('forwards ⌥D / Alt+D to the cockpit — picker on or off, from a field too — and keeps it from the page', async () => {
+    tell({ type: 'set-active', active: false })
+    const field = page.document.createElement('input')
+    page.document.body.appendChild(field)
+    expect(press({ code: 'KeyD', key: '∂', altKey: true }).defaultPrevented).toBe(true)
+    expect(press({ code: 'KeyD', key: '∂', altKey: true }, field).defaultPrevented).toBe(true)
+    await settle()
+    expect(posted.filter((message) => message.type === 'toggle')).toHaveLength(2)
+  })
+
+  it('leaves a bare D, and D with another modifier, to the page', async () => {
+    expect(press({ code: 'KeyD', key: 'd' }).defaultPrevented).toBe(false)
+    expect(press({ code: 'KeyD', key: 'd', metaKey: true, altKey: true }).defaultPrevented).toBe(false)
+    expect(press({ code: 'KeyD', key: 'd', ctrlKey: true, altKey: true }).defaultPrevented).toBe(false)
+    await settle()
+    expect(posted.some((message) => message.type === 'toggle')).toBe(false)
+  })
+})

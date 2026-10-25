@@ -1,13 +1,18 @@
+import { z } from 'zod';
+import type { RunnerId } from '../core/agent-runner.ts';
+import { validateDeferredBinding, DeferredPrelaunchError } from './deferred-start.ts';
 import type { DispatchIntent } from '@open-mercato/cezar-contract';
-import { zonedParts } from '@open-mercato/cezar-contract';
+import { dispatchIntentSchema, zonedParts } from '@open-mercato/cezar-contract';
 import { loadWorkflows } from '../workflows/load.ts';
 import { stepsIssue, type WorkflowDef } from '../workflows/types.ts';
 import type { RunStore } from '../runs/store.ts';
-import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import { VARIANT_HINTS, type RunManager, type StartRunInput } from '../workflows/run.ts';
 import type { GithubCandidate } from './github-poller.ts';
 import type { ScheduleOccurrence } from './schedule-runner.ts';
 import type { TrackerAutomationCandidate } from './tracker-poller.ts';
 import { resolvePrHead, type CommandRunner } from './pr-head.ts';
+import { automationLabel, automationTaskOrigin } from '../feature-telemetry.ts';
+import { track } from '../telemetry.ts';
 import type { AutomationDefinition, GithubAutomationDefinition, ScheduleAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
 
 const GITHUB_PLACEHOLDERS = new Set([
@@ -45,6 +50,16 @@ export function dispatchIntentOf(task: AutomationDefinition['task']): DispatchIn
   return task.dispatch.maxSubtasks !== undefined ? { maxSubtasks: task.dispatch.maxSubtasks } : {};
 }
 
+/** A composer start keeps the composer's whole dispatch intent (#1340): caps, budget, child defaults. */
+function deferredDispatchIntent(task: AutomationDefinition['task']): DispatchIntent | undefined {
+  if (!task.dispatch) return undefined;
+  const { reviewChild: _reviewChild, ...intent } = task.dispatch as Record<string, unknown>;
+  const parsed = dispatchIntentSchema.safeParse(intent);
+  // Validated at creation; a stored value that no longer parses must not widen the caps.
+  if (!parsed.success) throw new DeferredPrelaunchError('The saved dispatch settings are no longer valid. Cancel and submit the task again.');
+  return parsed.data;
+}
+
 function withReviewChild(prompt: string, task: AutomationDefinition['task']): string {
   return task.dispatch?.reviewChild ? `${prompt}\n\n${REVIEW_CHILD_SUFFIX}` : prompt;
 }
@@ -75,6 +90,7 @@ export function renderScheduleTask(
   occurrence: ScheduleOccurrence,
   context: { projectName: string; timeZone: string },
 ): string {
+  if (definition.deferredStart) return definition.task.prompt;
   const issue = validateAutomationPrompt(definition.task.prompt, 'schedule');
   if (issue) throw new Error(issue);
   const parts = zonedParts(Date.parse(occurrence.at), context.timeZone);
@@ -138,18 +154,35 @@ async function resolveWorkflow(root: string, definition: AutomationDefinition): 
   return workflow;
 }
 
+// A composer start (#1340) stores POST /runs' in-place branch and Ask choices through the
+// passthrough task schema; replay them so a scheduled Ask task never launches writable.
+const composerRunModeSchema = z.object({
+  newBranch: z.boolean().optional().catch(undefined),
+  branch: z.string().trim().min(1).max(200).optional().catch(undefined),
+  readOnly: z.boolean().optional().catch(undefined),
+});
+function composerRunMode(task: AutomationDefinition['task']): Pick<StartRunInput, 'newBranch' | 'branch' | 'readOnly'> {
+  const mode = composerRunModeSchema.parse(task);
+  return {
+    ...(mode.newBranch ? { newBranch: true, ...(mode.branch ? { branch: mode.branch } : {}) } : {}),
+    ...(mode.readOnly ? { readOnly: true } : {}),
+  };
+}
+
 function startInput(definition: AutomationDefinition, task: string, dispatchEnabled: boolean): StartRunInput {
-  const intent = dispatchEnabled ? dispatchIntentOf(definition.task) : undefined;
+  const intent = !dispatchEnabled ? undefined : definition.deferredStart ? deferredDispatchIntent(definition.task) : dispatchIntentOf(definition.task);
   return {
     task,
     model: definition.task.model,
-    runner: definition.task.runner,
-    agentProfile: definition.task.agentProfile,
+    runner: definition.task.runner ?? definition.deferredStart?.binding.runner as RunnerId | undefined,
+    agentProfile: definition.task.agentProfile ?? definition.deferredStart?.binding.accounts.find(a => a.runner === definition.deferredStart?.binding.runner)?.id,
     systemPrompt: definition.task.systemPrompt,
     worktree: definition.task.worktree,
+    ...(definition.deferredStart ? composerRunMode(definition.task) : {}),
     autonomous: definition.task.autonomous,
     generateFollowups: definition.task.generateFollowups,
     ...(intent ? { dispatchIntent: intent } : {}),
+    origin: automationTaskOrigin(definition),
   };
 }
 
@@ -232,6 +265,7 @@ async function launchRuns(
     githubUrl: candidate.url,
   };
   for (const run of runs) options.store.updateRun(run.id, { automation: provenance });
+  track('automation_fired', { label: `github:${candidate.event}`, value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
@@ -252,12 +286,17 @@ export async function launchScheduledRun(options: {
   dispatchEnabled?: boolean;
 }): Promise<{ runId: string }> {
   const { definition, occurrence } = options;
-  const workflow = await resolveWorkflow(options.root, definition);
+  let workflow: WorkflowDef;
+  try {
+    await validateDeferredBinding(options.root, definition);
+    workflow = await resolveWorkflow(options.root, definition);
+  } catch (error) {
+    if (error instanceof DeferredPrelaunchError) throw error;
+    if (definition.deferredStart) throw new DeferredPrelaunchError(error instanceof Error ? error.message : String(error));
+    throw error;
+  }
   const task = renderScheduleTask(definition, occurrence, { projectName: options.projectName, timeZone: options.timeZone });
   const input = startInput(definition, task, options.dispatchEnabled ?? false);
-  const runs = (definition.task.variants ?? 1) > 1
-    ? options.manager.startVariants(workflow, input, definition.task.variants ?? 1)
-    : [options.manager.startRun(workflow, input)];
   const provenance = {
     automationId: definition.id,
     automationRevision: definition.revision,
@@ -265,7 +304,29 @@ export async function launchScheduledRun(options: {
     trigger: occurrence.trigger,
     occurrenceAt: occurrence.at,
   };
-  for (const run of runs) options.store.updateRun(run.id, { automationTrigger: provenance });
+  // A second cockpit may have persisted a variant since this store was opened. Read
+  // under the caller's project lease; never adopt or rewrite the foreign live record.
+  const persisted = definition.deferredStart
+    ? new Map(options.store.listPersistedRuns().map(run => [run.id, run]))
+    : undefined;
+  const runs = definition.deferredStart
+    ? definition.deferredStart.runIds.map((id, index) => {
+        const existing = persisted?.get(id) ?? options.store.getRun(id);
+        if (existing) return existing;
+        const hint = VARIANT_HINTS[['A', 'B', 'C'][index]!];
+        return options.manager.startRun(workflow, { ...input, task: hint ? `${input.task}\n\n${hint}` : input.task,
+          scheduledLaunch: { id, provenance, binding: definition.deferredStart!.binding },
+          ...((definition.task.variants ?? 1) > 1 ? { worktree: true } : {}),
+        }, (definition.task.variants ?? 1) > 1 ? { groupId: definition.id, variant: ['A', 'B', 'C'][index]! } : undefined);
+      })
+    : (definition.task.variants ?? 1) > 1
+      ? options.manager.startVariants(workflow, input, definition.task.variants ?? 1)
+      : [options.manager.startRun(workflow, input)];
+  for (const run of runs) {
+    if (!persisted?.has(run.id)) options.store.updateRun(run.id, { automationTrigger: provenance });
+  }
+  // A composer "schedule send" is a task (`task_origin: scheduled_task`), not an automation firing.
+  if (!definition.deferredStart) track('automation_fired', { label: automationLabel(definition), value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
@@ -304,6 +365,7 @@ export async function launchTrackerAutomationRun(options: {
     url: candidate.url,
   };
   for (const run of runs) options.store.updateRun(run.id, { automationTracker: provenance });
+  track('automation_fired', { label: `tracker:${candidate.provider}`, value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.

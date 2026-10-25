@@ -67,7 +67,7 @@ describe('model option resolution', () => {
   })
 
   it('claude falls back to the tier aliases when there is no host catalog', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
     // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
@@ -102,7 +102,7 @@ describe('model option resolution', () => {
 
   it('an empty catalog is not an empty picker — the presets come back', () => {
     const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
-    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -160,6 +160,14 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('openai/gpt-6', 'claude')).toBe(false)
     expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'opencode')).toBe(false)
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
+  })
+
+  it('accepts the vendor ids Copilot and Cursor host as their own', () => {
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5.4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false)
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
   })
 
   it('exactly the runners with a host catalog discover their models', () => {

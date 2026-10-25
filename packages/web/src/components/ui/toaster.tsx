@@ -82,10 +82,12 @@ function schedule(fn: () => void, ms: number): void {
  * that asks the reader to decide something rather than telling them what already happened. Both
  * are optional and both default to exactly the previous behavior. `reported` marks a `danger`
  * toast whose failure the caller already reported with its own fingerprint, so the observers skip it.
+ * `expected` marks one that is an expected, user-actionable outcome — a validation limit, a 409
+ * guarding a precondition, a CLI that is not installed: shown, never reported as an error.
  */
 export function toast(
   message: string,
-  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean } = {},
+  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean; expected?: boolean } = {},
 ): void {
   const item: ToastItem = {
     id: nextId++,
@@ -96,7 +98,7 @@ export function toast(
   }
   const lifetime = opts.durationMs ?? TOAST_MS
   publish([...items, item])
-  if (item.tone === 'danger' && !opts.reported) {
+  if (item.tone === 'danger' && !opts.reported && !opts.expected) {
     for (const listener of dangerListeners) {
       try {
         listener(message)

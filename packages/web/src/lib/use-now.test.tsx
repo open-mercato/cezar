@@ -2,9 +2,10 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useNow } from '@/lib/use-now'
+import { LiveNowProvider, RelativeAge } from '@/lib/live-now'
 
-function Probe({ intervalMs }: { intervalMs: number }) {
-  return <output>{useNow(intervalMs)}</output>
+function Probe({ intervalMs, enabled = true }: { intervalMs: number; enabled?: boolean }) {
+  return <output>{useNow(intervalMs, enabled)}</output>
 }
 
 const shown = () => Number(screen.getByRole('status').textContent)
@@ -36,6 +37,16 @@ describe('useNow', () => {
     render(<Probe intervalMs={30_000} />)
     cleanup()
     // An orphaned interval would warn about setState on an unmounted component and leak.
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('runs no interval when a pinned clock is supplied', () => {
+    render(
+      <LiveNowProvider intervalMs={30_000} now={1_000_000}>
+        <RelativeAge at="1970-01-01T00:16:40.000Z" />
+      </LiveNowProvider>,
+    )
+    // The provider still calls the hook unconditionally; a pinned clock disables its timer.
     expect(vi.getTimerCount()).toBe(0)
   })
 })
