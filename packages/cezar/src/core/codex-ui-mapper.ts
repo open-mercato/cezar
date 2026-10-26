@@ -287,8 +287,8 @@ function turnStopReason(params: Record<string, unknown>, failed: boolean): StopR
  *  ones sent `turn/failed` with a top-level `error`. */
 export function codexTurnError(method: string, params: Record<string, unknown>): string | undefined {
   const turn = isRecord(params.turn) ? params.turn : {};
-  if (method !== 'turn/failed' && turn.status !== 'failed') return undefined;
-  const message = errorMessage(params.error) ?? errorMessage(turn.error);
+  if (method !== 'turn/failed' && !codexTurnFailed(params)) return undefined;
+  const message = errorMessage(turn.error) ?? errorMessage(params.error);
   // The Responses API's error body arrives verbatim as the message (36b68a95).
   return message === undefined ? 'codex turn failed' : unwrapJsonErrorEnvelope(message);
 }

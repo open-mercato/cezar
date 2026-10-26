@@ -116,7 +116,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     await session.result;
 
-    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported [other]" });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
 

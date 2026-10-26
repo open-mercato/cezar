@@ -232,7 +232,7 @@ rl.on('line', (line) => {
       } });
       return;
     }
-    if (turnText.includes('mock:turn-completed-failed')) {
+    if (turnText.includes('mock:turn-completed-failed') && !turnText.includes('mock:turn-failed')) {
       emit({ method: 'turn/completed', params: {
         threadId: 'th_mock_1',
         turn: { id: 'turn_mock_1', status: 'failed', error: { message: "The 'fable' model is not supported", codexErrorInfo: 'other' } },
