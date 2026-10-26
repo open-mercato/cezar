@@ -81,7 +81,7 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
     >
       <SettingsField
         title="System prompt"
-        hint="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (Settings → Global → Instructions) and takes precedence over them."
+        hint="Read by every agent step of every new task in this project, whichever runner executes it. Added after the global instructions (General settings → Instructions) and takes precedence over them."
       >
         <Textarea
           aria-label="System prompt"
