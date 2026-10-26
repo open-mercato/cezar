@@ -939,12 +939,13 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
  *
  * De-duplicated against the run's extra system prompt, and that is not a micro-optimisation:
  * `dispatch()` seeds a child's extra prompt with the very same text, so composing both would
- * hand the backend the same instructions twice.
+ * hand the backend the same instructions twice. Containment, not equality: with global
+ * instructions set, `resolveExtraSystemPrompt` wraps that seed under its own heading.
  */
 export function dispatchPromptPart(prompt: string | undefined, extra: string | undefined): string | undefined {
   const part = prompt?.trim();
   if (!part) return undefined;
-  return part === extra?.trim() ? undefined : part;
+  return extra?.includes(part) ? undefined : part;
 }
 
 /**

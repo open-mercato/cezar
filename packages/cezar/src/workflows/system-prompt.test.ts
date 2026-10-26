@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -15,6 +16,7 @@ import {
   GLOBAL_INSTRUCTIONS_HEADING,
   PROJECT_INSTRUCTIONS_HEADING,
   composeSystemPrompt,
+  dispatchPromptPart,
   makeRunTitle,
   resolveExtraSystemPrompt,
   skillSystemPrompt,
@@ -54,6 +56,14 @@ describe('resolveExtraSystemPrompt', () => {
     expect(merged).toContain('Global rule');
     expect(merged).toContain('Override');
     expect(merged).not.toContain('Project rule');
+  });
+
+  it('a dispatched child keeps ONE copy of the dispatch prompt when global instructions wrap it', () => {
+    const seed = composeDispatchPrompt('implement');
+    const extra = resolveExtraSystemPrompt(seed, 'Project rule', 'Global rule');
+    expect(dispatchPromptPart(seed, extra)).toBeUndefined();
+    expect(composeSystemPrompt(dispatchPromptPart(seed, extra), extra)!.split(seed).length - 1).toBe(1);
+    expect(dispatchPromptPart(seed, 'Unrelated extra')).toBe(seed);
   });
 });
 
