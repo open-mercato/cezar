@@ -1,0 +1,58 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": "3ab90c11-4466-4471-ba39-d186ca148373",
+    "cwd": "/repo",
+    "tools": [
+      "run_command",
+      "view_file"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_70",
+      "role": "assistant",
+      "text": "PONG"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_70",
+    "field": "text",
+    "delta": "\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_70",
+      "role": "assistant",
+      "text": "PONG\n"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 63873,
+      "output": 2,
+      "total": 63875
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 63873,
+      "output": 2,
+      "total": 63875
+    }
+  }
+]
