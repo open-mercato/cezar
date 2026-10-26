@@ -7979,6 +7979,7 @@ export function createApp(deps: ServerDeps) {
         return c.json(await lanAccess.status(true));
       },
     );
+  if (lanAccess) deps.onDispose?.(() => { void lanAccess.close(); });
 
   const telemetryRoutes = new Hono()
     .get('/telemetry/consent', async (c) => c.json(telemetryConsentBody(await loadTelemetryConsent())))

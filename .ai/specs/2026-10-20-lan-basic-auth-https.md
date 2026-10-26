@@ -70,6 +70,11 @@ Three parts of the proposal were changed while building it. Each kept the goal a
    browsers stay live through SSE, which passes the same Basic Auth gate as every other request.
    (§ Security & Edge Cases 4 is superseded for WebSocket.)
 
+5. **Network change discovery & auto-retry.** When LAN access is enabled but no external IP is
+   available (e.g. computer booted offline), or when network interfaces disconnect, reconnect,
+   or change IP/subnet while running, Cezar polls reachable LAN addresses every 30 seconds (and
+   on status queries) to auto-retry binding or update listeners to the new network.
+
 Also added: a wrong username costs the same scrypt as a wrong password (no username timing
 oracle); a LAN connection must send its first byte within 10 s. `PUT /security/lan` is refused (`409`) from the LAN — a LAN client cannot re-key or
 widen its own access; credential changes and switching off drop every open LAN socket; ten failed

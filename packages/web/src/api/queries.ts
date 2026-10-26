@@ -1616,7 +1616,12 @@ export function useSecurityLan() {
   return useQuery({
     queryKey: workspaceQueryKeys.securityLan,
     queryFn: ({ signal }) => getSecurityLan({ signal }),
-    staleTime: Infinity,
+    staleTime: 5000,
+    refetchInterval: (query) => {
+      const data = query.state.data
+      if (!data?.available || !data.editable) return false
+      return data.lanAccess ? (data.active ? 30_000 : 5000) : false
+    },
     retry: false,
   })
 }

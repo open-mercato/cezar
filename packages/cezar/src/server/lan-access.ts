@@ -37,6 +37,8 @@ export interface LanAccessDeps {
   addresses?: () => string[];
   certDir?: () => string;
   now?: () => number;
+  /** Cadence for re-discovering network interfaces and auto-retrying bindings; defaults to 30s. */
+  pollIntervalMs?: number;
 }
 
 export type LanVerdict = 'ok' | 'challenge' | 'throttled';
@@ -49,6 +51,7 @@ const DECOY_HASH = { salt: '0'.repeat(32), hash: '0'.repeat(128) };
 /** A LAN connection must send its first byte within this, or it is closed (slowloris). */
 const FIRST_BYTE_TIMEOUT_MS = 10_000;
 const FAILURE_WINDOW_MS = 5 * 60_000;
+const DEFAULT_POLL_INTERVAL_MS = 30_000;
 
 /** This machine's reachable IPv4 addresses (no loopback, no 169.254 link-local). */
 export function lanAddresses(): string[] {
@@ -88,8 +91,12 @@ export class LanAccess {
   private port = 0;
   private queue: Promise<unknown> = Promise.resolve();
   private readonly redirector = createHttpServer((req, res) => this.redirectToHttps(req, res));
+  private pollTimer: NodeJS.Timeout | undefined;
+  private readonly pollIntervalMs: number;
 
-  constructor(private readonly deps: LanAccessDeps) {}
+  constructor(private readonly deps: LanAccessDeps) {
+    this.pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  }
 
   private get config() {
     return this.deps.config ?? { load: loadWorkspaceConfig, mergeWrite: mergeWriteWorkspaceConfig };
@@ -99,12 +106,18 @@ export class LanAccess {
   attach(server: HttpServer, port: number): Promise<void> {
     this.server = server;
     this.port = port;
-    server.once('close', () => void this.closeListeners());
+    server.once('close', () => {
+      this.stopPolling();
+      void this.closeListeners();
+    });
     return this.serialize(async () => {
       if (!this.deps.available()) return;
       const security = (await this.config.load()).security;
       this.auth = security?.auth;
-      if (security?.lanAccess && this.auth) await this.openListeners();
+      if (security?.lanAccess && this.auth) {
+        await this.openListeners();
+        this.startPolling();
+      }
     });
   }
 
@@ -151,6 +164,15 @@ export class LanAccess {
 
   async status(editable: boolean): Promise<SecurityLanStatus> {
     const security = (await this.config.load()).security;
+    if (security?.lanAccess && security.auth && this.server && this.deps.available()) {
+      const current = this.addresses();
+      const boundSet = new Set(this.boundAddresses);
+      const differs = current.length !== this.boundAddresses.length
+        || current.some((a) => !boundSet.has(a));
+      if (differs || (this.listeners.length === 0 && current.length > 0)) {
+        await this.syncNetwork();
+      }
+    }
     const active = this.listeners.length > 0;
     const lanIp = (active ? this.boundAddresses : this.addresses())[0] ?? null;
     return {
@@ -199,7 +221,9 @@ export class LanAccess {
           await this.closeListeners();
           await this.openListeners();
         }
+        this.startPolling();
       } else {
+        this.stopPolling();
         await this.closeListeners();
         this.lastError = null;
       }
@@ -207,16 +231,81 @@ export class LanAccess {
     });
   }
 
+  /**
+   * Re-checks reachable LAN addresses and syncs listeners to network changes.
+   * Auto-retries binding every 30s when no address was available, drops listeners on disconnect,
+   * and updates listeners if IP or subnet changes.
+   */
+  syncNetwork(): Promise<void> {
+    return this.serialize(async () => {
+      if (!this.deps.available() || !this.server) return;
+      const security = (await this.config.load()).security;
+      if (!security?.lanAccess || !security.auth) {
+        if (this.listeners.length > 0) {
+          await this.closeListeners();
+        }
+        this.stopPolling();
+        return;
+      }
+      this.auth = security.auth;
+      const current = this.addresses();
+      const boundSet = new Set(this.boundAddresses);
+      const addressesChanged = current.length !== this.boundAddresses.length
+        || current.some((addr) => !boundSet.has(addr));
+
+      if (current.length === 0) {
+        if (this.listeners.length > 0) {
+          await this.closeListeners();
+        }
+        this.lastError = 'no LAN address found on this machine (retrying every 30s)';
+        return;
+      }
+
+      if (addressesChanged || this.listeners.length === 0 || this.lastError !== null) {
+        const wasBound = this.boundAddresses.slice();
+        await this.closeListeners();
+        await this.openListeners();
+        if (this.listeners.length > 0) {
+          const urls = this.boundAddresses.map((addr) => `https://${addr}:${this.port}`).join(', ');
+          if (wasBound.length === 0) {
+            console.log(`  LAN → ${urls} (HTTPS, sign-in required)\n`);
+          } else {
+            console.log(`  LAN address changed → ${urls} (HTTPS, sign-in required)\n`);
+          }
+        }
+      }
+    });
+  }
+
   /** `cezar auth reset` and tests: drop the listener and every LAN session. */
   close(): Promise<void> {
+    this.stopPolling();
     return this.serialize(() => this.closeListeners());
+  }
+
+  private startPolling(): void {
+    if (this.pollTimer || this.pollIntervalMs <= 0 || !this.server) return;
+    this.pollTimer = setInterval(() => {
+      void this.syncNetwork().catch(() => undefined);
+    }, this.pollIntervalMs);
+    this.pollTimer.unref?.();
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = undefined;
+    }
   }
 
   private async openListeners(): Promise<void> {
     if (!this.server) return;
+    if (this.listeners.length > 0) {
+      await this.closeListeners();
+    }
     const addresses = this.addresses();
     if (addresses.length === 0) {
-      this.lastError = 'no LAN address found on this machine';
+      this.lastError = 'no LAN address found on this machine (retrying every 30s)';
       return;
     }
     let material: TlsMaterialLike;
@@ -252,7 +341,7 @@ export class LanAccess {
     this.boundAddresses = bound;
     this.allowedHosts = new Set(lanHostnames(bound));
     this.fingerprint = material.fingerprint256;
-    this.lastError = failed.length > 0 ? `could not listen on ${failed.join(', ')}` : null;
+    this.lastError = failed.length > 0 ? `could not listen on ${failed.join(', ')} (retrying every 30s)` : null;
   }
 
   /** One port, two protocols: a TLS ClientHello starts with 0x16; anything else is a browser that

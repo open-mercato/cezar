@@ -339,4 +339,59 @@ describe.skipIf(process.platform === 'darwin')('LAN listener through startServer
       delete process.env.CEZ_LAN_ACCESS;
     }
   });
+
+  it('discovers network appearance, auto-retries binding, handles disconnect and IP change', async () => {
+    let currentAddresses: string[] = [];
+    const dynamicAccess = new LanAccess({
+      hashPassword, verifyPassword, parseBasicAuth, safeEqualString, loadOrCreateCert,
+      available: () => true,
+      config,
+      addresses: () => currentAddresses,
+      certDir: () => join(home, 'certs'),
+      pollIntervalMs: 50,
+    });
+    await dynamicAccess.attach(server as unknown as Parameters<typeof dynamicAccess.attach>[0], port);
+    await dynamicAccess.apply({ lanAccess: true, username: 'alex', password: 'lan-password' });
+
+    // 1. Started with no network: not active, has retry error
+    let st = await dynamicAccess.status(true);
+    expect(st.lanAccess).toBe(true);
+    expect(st.active).toBe(false);
+    expect(st.error).toContain('no LAN address found');
+
+    // 2. Network appears: gets IP 127.0.0.2
+    currentAddresses = [LAN_IP];
+    // Wait for the poll timer (50ms) to trigger syncNetwork
+    await new Promise((r) => setTimeout(r, 150));
+    st = await dynamicAccess.status(true);
+    expect(st.active).toBe(true);
+    expect(st.error).toBeNull();
+    expect(st.lanUrls).toEqual([`https://${LAN_IP}:${port}`]);
+
+    // Request over LAN succeeds
+    const health = await overLan('GET', '/api/v1/health', AUTH);
+    expect(health.status).toBe(200);
+
+    // 3. Network disconnects: 0 addresses
+    currentAddresses = [];
+    await new Promise((r) => setTimeout(r, 150));
+    st = await dynamicAccess.status(true);
+    expect(st.active).toBe(false);
+    expect(st.error).toContain('no LAN address found');
+    await expect(overLan('GET', '/api/v1/health', AUTH)).rejects.toThrow();
+
+    // 4. Network reconnects on a new IP/subnet
+    const NEW_IP = '127.0.0.3';
+    currentAddresses = [NEW_IP];
+    // status() query also triggers syncNetwork immediately
+    st = await dynamicAccess.status(true);
+    expect(st.active).toBe(true);
+    expect(st.error).toBeNull();
+    expect(st.lanUrls).toEqual([`https://${NEW_IP}:${port}`]);
+
+    // 5. Turning off stops polling and closes listener
+    await dynamicAccess.apply({ lanAccess: false });
+    expect((await dynamicAccess.status(true)).active).toBe(false);
+    await dynamicAccess.close();
+  });
 });
