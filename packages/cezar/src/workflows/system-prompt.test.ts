@@ -12,6 +12,8 @@ import { CLAUDE_HEADLESS_GUIDANCE } from '../core/claude-cli-runner.ts';
 import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
+  GLOBAL_INSTRUCTIONS_HEADING,
+  PROJECT_INSTRUCTIONS_HEADING,
   composeSystemPrompt,
   makeRunTitle,
   resolveExtraSystemPrompt,
@@ -33,6 +35,25 @@ describe('resolveExtraSystemPrompt', () => {
     ['both blank', '', '   ', undefined],
   ] as const)('%s', (_name, override, configDefault, expected) => {
     expect(resolveExtraSystemPrompt(override, configDefault)).toBe(expected);
+  });
+
+  it('global instructions alone ride along unlabelled', () => {
+    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe('Global rule');
+    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe('Global rule');
+  });
+
+  it('merges global FIRST and the project prompt after it, labelled as winning', () => {
+    const merged = resolveExtraSystemPrompt(undefined, 'Project rule', 'Global rule');
+    expect(merged).toBe(
+      `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule\n\n---\n\n${PROJECT_INSTRUCTIONS_HEADING}\n\nProject rule`,
+    );
+  });
+
+  it('a per-run override replaces the project prompt but keeps the global one', () => {
+    const merged = resolveExtraSystemPrompt('Override', 'Project rule', 'Global rule');
+    expect(merged).toContain('Global rule');
+    expect(merged).toContain('Override');
+    expect(merged).not.toContain('Project rule');
   });
 });
 

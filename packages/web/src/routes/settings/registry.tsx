@@ -24,6 +24,7 @@ import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
+import { GlobalInstructionsSection } from './global-instructions-section'
 import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
@@ -61,6 +62,7 @@ export type SettingsSectionId =
   | 'agents'
   | 'agent-config'
   | 'instructions'
+  | 'global-instructions'
   | 'tasks'
   | 'resources'
   | 'worktrees'
@@ -203,6 +205,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Updates for skills installed on this machine.',
     icon: PackageCheckIcon,
     component: SkillsSection,
+    scope: 'global',
+  },
+  {
+    id: 'global-instructions',
+    title: 'Instructions',
+    description: 'A system prompt for every task in every project; a project’s own wins where they conflict.',
+    icon: MessageSquareTextIcon,
+    component: GlobalInstructionsSection,
     scope: 'global',
   },
   {

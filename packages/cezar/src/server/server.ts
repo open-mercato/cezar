@@ -3552,6 +3552,7 @@ export function createApp(deps: ServerDeps) {
     skillsAutoUpdate: config.skillsAutoUpdate ?? null,
     effectiveSkillsAutoUpdate: effectiveSkillsAutoUpdate(config),
     orgSkillsRepos: config.orgSkillsRepos ?? [],
+    systemPrompt: config.systemPrompt ?? null,
     composerDefaults: {
       autonomous: config.composerDefaults.autonomous ?? null,
       worktree: config.composerDefaults.worktree ?? null,
@@ -3602,7 +3603,7 @@ export function createApp(deps: ServerDeps) {
 
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const { browseRoot, projectsDir, skillsAutoUpdate, orgSkillsRepos, composerDefaults, resources, agentDefaults, branding } = parsed.data;
+      const { browseRoot, projectsDir, skillsAutoUpdate, orgSkillsRepos, systemPrompt, composerDefaults, resources, agentDefaults, branding } = parsed.data;
       for (const src of orgSkillsRepos ?? []) {
         if (safeRemoteFor(src.repo) === null || !isSafeRef(src.ref)) {
           return c.json({ error: `unsafe skills repo: ${src.repo}@${src.ref}` }, 400);
@@ -3654,6 +3655,8 @@ export function createApp(deps: ServerDeps) {
             if (orgSkillsRepos.length === 0) delete config.orgSkillsRepos;
             else config.orgSkillsRepos = orgSkillsRepos;
           }
+          if (systemPrompt === null || systemPrompt === '') delete config.systemPrompt;
+          else if (systemPrompt !== undefined) config.systemPrompt = systemPrompt;
           if (composerDefaults?.autonomous === null) delete config.composerDefaults.autonomous;
           else if (composerDefaults?.autonomous !== undefined) {
             config.composerDefaults.autonomous = composerDefaults.autonomous;
