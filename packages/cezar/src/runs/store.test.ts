@@ -2518,7 +2518,7 @@ describe('RunStore — runs.json encoding', () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it('writes compact by default, both on the debounce and on a plain flush', () => {
+  it('writes compact by default, both on the debounce and on a plain flush', async () => {
     vi.useFakeTimers();
     try {
       const store = RunStore.open(dataDir);
@@ -2526,6 +2526,7 @@ describe('RunStore — runs.json encoding', () => {
       vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
 
       const indexPath = join(dataDir, 'runs.json');
+      await vi.waitFor(() => expect(readFileSync(indexPath, 'utf8')).not.toContain('\n'));
       expect(readFileSync(indexPath, 'utf8')).not.toContain('\n');
 
       store.flush();

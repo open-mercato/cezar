@@ -39,11 +39,11 @@ describe('graph workflows run through RunManager', () => {
     manager = new RunManager(store, repoRoot);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
-    store.flush();
+    await store.flushAsync();
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -204,6 +204,7 @@ describe('graph workflows run through RunManager', () => {
         if (Date.now() > deadline) throw new Error('continue did not settle in time');
         await new Promise((r) => setTimeout(r, 100));
       }
+      await vi.waitFor(() => expect(store.readEvents(first.id).filter((e) => e.stepId === 'continue-1' && e.type === 'turn.started')).toHaveLength(1));
       const final = store.getRun(first.id)!;
       expect(final.status).toBe('waiting');
       const step = final.steps.find((s) => s.id === 'continue-1');

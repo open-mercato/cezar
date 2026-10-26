@@ -186,7 +186,7 @@ describe('workspace projects API', () => {
       const scoped = await apiRequest(makeApp({ contexts }), `/api/v1/p/${registered.id}/repo`);
       expect(scoped.status).toBe(200);
       expect(contexts.peek(registered.id)?.root).toBe(await realpath(registeredRoot));
-      contexts.disposeAll();
+      await contexts.disposeAll();
     });
 
     it('pins flagged reads to the boot project without pruning stored projects', async () => {
@@ -388,7 +388,7 @@ describe('workspace projects API', () => {
       const scoped = await apiRequest(makeApp({ contexts }), `/api/v1/p/${bootId}/repo`);
       expect(scoped.status).toBe(200);
       expect(contexts.peek(bootId)?.root).toBe(await realpath(twin));
-      contexts.disposeAll();
+      await contexts.disposeAll();
     });
   });
 
@@ -640,7 +640,7 @@ describe('workspace projects API', () => {
         other.id,
       ]);
       expect(contexts.peek(other.id)).toBeUndefined();
-      contexts.disposeAll();
+      await contexts.disposeAll();
     });
 
     const del = async (id: string, over: Partial<ServerDeps> = {}) => {
@@ -716,7 +716,7 @@ describe('workspace projects API', () => {
       expect(allowed.status).toBe(200);
       // The store/manager handles are dropped with the entry (step 2.1's dispose).
       expect(contexts.peek(other.id)).toBeUndefined();
-      contexts.disposeAll();
+      await contexts.disposeAll();
     });
 
     it('404s an unknown id and a malformed one, without touching the registry', async () => {

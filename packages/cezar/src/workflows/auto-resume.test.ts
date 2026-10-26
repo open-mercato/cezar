@@ -119,7 +119,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     // into a removed path. The teardown error is the useful failure; leaking this temp directory
     // is safer than recreating the ENOENT race this test guards against.
     if (!teardownError) {
-      store.flush();
+      await store.flushAsync();
       rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
     if (teardownError) throw teardownError;
@@ -185,7 +185,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
 
     if (restart === true) {
       manager.dispose();
-      store.flush();
+      await store.flushAsync();
       store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
       manager = new RunManager(store, repoRoot);
     }
@@ -218,7 +218,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
         }
         manager.dispose();
         pump.mockRestore();
-        store.flush();
+        await store.flushAsync();
         store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
         manager = new RunManager(store, repoRoot);
         await manager.recover();
@@ -276,7 +276,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
       task: 'mock:done use the selected account',
       autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
     });
-    store.flush();
+    await store.flushAsync();
     store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
     manager = new RunManager(store, repoRoot);
     await manager.recover();
@@ -323,7 +323,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
         task: 'mock:done work in the task tree',
         autoResumeAt: new Date(Date.now() - 1_000).toISOString(),
       });
-      store.flush();
+      await store.flushAsync();
       store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
       manager = new RunManager(store, repoRoot);
       await manager.recover();
@@ -394,7 +394,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     if (legacy) store.updateStep(record.id, 'check', { retriesUsed: undefined });
     if (legacy === 'walk') expect(Object.values(store.getRun(record.id)?.graphState?.loops ?? {})).toEqual([1]);
     if (legacy === 'no-walk') store.updateRun(record.id, { graphState: undefined });
-    store.flush();
+    await store.flushAsync();
     const eventsPath = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
     if (transcript === 'missing') {
       rmSync(eventsPath);
@@ -449,7 +449,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
     expect(store.getRun(record.id)?.steps.find((step) => step.id === 'first-check')?.retriesUsed).toBe(0);
     manager.dispose();
     store.updateRun(record.id, { autoResumeAt: new Date(Date.now() - 1_000).toISOString() });
-    store.flush();
+    await store.flushAsync();
     store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
     manager = new RunManager(store, repoRoot);
     await manager.recover();
@@ -986,7 +986,7 @@ describe('a run stopped by a usage limit resumes itself', () => {
   }
   async function restartAndRecover(): Promise<void> {
     manager?.dispose();
-    store.flush();
+    await store.flushAsync();
     store = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
     manager = new RunManager(store, repoRoot);
     await manager.recover();

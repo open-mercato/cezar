@@ -13,13 +13,27 @@ const store = AutomationStore.open(dir);
 const runs = RunStore.open(dir);
 const manager = new RunManager(runs, dir);
 const flush = runs.flush.bind(runs);
+const flushAsync = runs.flushAsync.bind(runs);
 let writes = 0;
-runs.flush = options => {
-  if (!options?.throwOnError) return flush(options);
+const beforeWrite = options => {
+  if (!options?.throwOnError) return false;
   if (boundary === 'before') process.kill(process.pid, 'SIGKILL');
-  flush(options);
+  return true;
+};
+const afterWrite = strict => {
+  if (!strict) return;
   writes++;
   if (boundary === 'partial' || writes === 2) process.kill(process.pid, 'SIGKILL');
+};
+runs.flush = options => {
+  const strict = beforeWrite(options);
+  flush(options);
+  afterWrite(strict);
+};
+runs.flushAsync = async options => {
+  const strict = beforeWrite(options);
+  await flushAsync(options);
+  afterWrite(strict);
 };
 const definition = store.list()[0];
 const runner = new ScheduleRunner({ projectId: 'fixture', store, timeZone: 'UTC', validateDeferred: async () => {},

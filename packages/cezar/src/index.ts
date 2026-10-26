@@ -273,20 +273,34 @@ async function serveCommand(
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
+  let initialFlush: Promise<void> | undefined;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
-    if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
+    if (stopping) {
+      void initialFlush?.then(
+        () => process.exit(process.exitCode ?? 0),
+        () => process.exit(process.exitCode ?? 1),
+      );
+      return; // a second Ctrl-C skips scripts and telemetry after the durable checkpoint
+    }
     stopping = true;
-    store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
-    void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
+    initialFlush = store.flushAsync({ pretty: true, throwOnError: true });
+    void initialFlush.catch((error: unknown) => {
+      console.error('cezar: run history flush failed', error);
+      process.exitCode = 1;
+    }).then(() => (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()))
       .catch((error: unknown) => {
         console.error('cezar: lifecycle shutdown failed', error);
         process.exitCode = 1;
       })
-      .then(() => {
-        store.flush({ pretty: true });
+      .then(async () => {
+        await store.flushAsync({ pretty: true, throwOnError: true });
         track('app_stop', { label: reason });
         return flushTelemetry(reason === 'signal' ? undefined : 1_000);
+      })
+      .catch((error: unknown) => {
+        console.error('cezar: shutdown flush failed', error);
+        process.exitCode = 1;
       })
       .finally(() => process.exit(process.exitCode ?? 0));
   };
@@ -350,8 +364,8 @@ async function serveCommand(
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
-      void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
-        store.flush({ pretty: true });
+      void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(async () => {
+        await store.flushAsync({ pretty: true, throwOnError: true });
         // The old process stops here, so it reports its own stop before handing over (bounded).
         track('app_stop', { label: 'restart' });
         void flushTelemetry(1_000).finally(() =>
@@ -615,7 +629,7 @@ async function runCommand(
       } else if (['done', 'review', 'failed', 'cancelled'].includes(r.status)) resolveStatus(r.status);
     });
   });
-  store.flush({ pretty: true });
+  await store.flushAsync({ pretty: true, throwOnError: true });
   const record = store.getRun(run.id);
   if (final === 'review') {
     console.log(`\n  changes ready for review on branch ${record?.branch ?? '?'} — inspect them in the cockpit: npx cezar`);

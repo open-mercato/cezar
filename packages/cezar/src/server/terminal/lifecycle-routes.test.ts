@@ -143,7 +143,7 @@ describe('terminals stop on every archive / worktree-removal path', () => {
     expect(sessions.listFor(theirs)).toEqual([]);
     expect(ptys[0]!.killed).toBeGreaterThan(0);
     expect(sessions.listFor(ours)).toHaveLength(1);
-    contexts.disposeAll();
+    await contexts.disposeAll();
   });
 
   it('a closed session’s WS topic is unregistered, not left answering forever', async () => {
