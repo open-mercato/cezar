@@ -2472,7 +2472,11 @@ export class RunManager {
       return;
     }
     if (!this.deferredMessages.delete(runId)) return;
-    rmSync(marker, { force: true });
+    try {
+      rmSync(marker, { force: true });
+    } catch {
+      // Best effort, like the write: a stale marker costs one spurious note after a restart.
+    }
   }
 
   /** Startup: messages a previous process held for a session that never reopened are gone. */
@@ -2498,7 +2502,11 @@ export class RunManager {
           message: `${count === 1 ? 'a message' : `${count} messages`} sent while the session was closing could not be delivered — cezar restarted; send it again`,
         });
       }
-      rmSync(path, { force: true });
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        // A read-only data dir must not fail recovery; the note repeats on the next boot at worst.
+      }
     }
   }
 
@@ -4096,8 +4104,9 @@ export class RunManager {
     // A session gap on a live owner — between workflow steps, or settling after the last turn
     // (landing, review gate: well over ten seconds on a busy Windows host) while the record still
     // says `running`. The next session's open flushes it; `dropActive` resumes with it otherwise
-    // (telemetry 1408d7cb).
-    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.lifecycle.isBlocked(runId);
+    // (telemetry 1408d7cb). A park (`waiting`: a CI or children wait, the review gate) is not a gap —
+    // nothing opens a session there soon, so the message would sit unseen; it answers 409 as before.
+    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.waiting.has(runId) && !this.lifecycle.isBlocked(runId);
     if (!startingUp && !sessionGap) return false;
     this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     return true;
