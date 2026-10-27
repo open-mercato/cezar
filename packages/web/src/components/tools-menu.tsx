@@ -54,8 +54,14 @@ export function toolsBlocker(health: HealthResponse): string | null {
     return `default runner (${health.defaultRunner}) not found`
   }
   // Below the floor the server refuses to start agents (9cdcedc3) — that stops a task too.
-  if (health.disk?.level === 'critical') return `disk almost full — ${formatMem(health.disk.freeBytes)} free`
+  if (health.disk?.level === 'critical') return `disk almost full — ${formatFree(health.disk.freeBytes)} free`
   return null
+}
+
+/** Health floors free space to 100 MiB steps once short, so a nearly full disk arrives as 0 —
+ *  which `formatMem` renders as an empty string. */
+function formatFree(bytes: number): string {
+  return formatMem(bytes) || 'under 100 MB'
 }
 
 /**
@@ -67,7 +73,7 @@ export function diskNote(health: HealthResponse): string | null {
   if (!disk || disk.level === 'ok') return null
   const used = disk.worktreesBytes ? ` Task worktrees use ${formatMem(disk.worktreesBytes)}.` : ''
   const effect = disk.level === 'critical' ? ' New agents will not start until space is freed.' : ''
-  return `Only ${formatMem(disk.freeBytes)} free on the disk holding task worktrees.${used}${effect} Reclaim finished tasks' worktrees (branches are kept) or delete old tasks.`
+  return `Only ${formatFree(disk.freeBytes)} free on the disk holding task worktrees.${used}${effect} Reclaim finished tasks' worktrees (branches are kept) or delete old tasks.`
 }
 
 /** The trigger's hover tooltip: the cezar version, then the blocker if there is one — else
@@ -76,7 +82,7 @@ export function toolsTooltip(health: HealthResponse): string {
   const base = `cezar v${health.version}`
   const blocker = toolsBlocker(health)
   if (blocker) return `${base} · ${blocker}`
-  const low = health.disk?.level === 'low' ? ` · low disk space (${formatMem(health.disk.freeBytes)} free)` : ''
+  const low = health.disk?.level === 'low' ? ` · low disk space (${formatFree(health.disk.freeBytes)} free)` : ''
   const missing = health.checks.filter((check) => !check.available).map((check) => check.name)
   if (low) return `${base}${low}`
   return missing.length ? `${base} · optional: ${missing.join(', ')} not installed` : base

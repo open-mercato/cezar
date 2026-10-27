@@ -37,6 +37,11 @@ describe('diskHealth', () => {
     expect(at(3000 * MIB)).not.toBe(at(3100 * MIB));
   });
 
+  it('rounds the volume size to whole GiB — health is CORS-open, an exact size fingerprints the machine', () => {
+    const total = diskHealth('/repo', () => ({ freeBytes: 50 * GIB, totalBytes: 500 * GIB + 123_456_789 })).disk?.totalBytes;
+    expect(total).toBe(500 * GIB);
+  });
+
   it('marks the spawn floor as critical, and the payload satisfies the contract', () => {
     const health = diskHealth('/repo', () => ({ freeBytes: 0.5 * GIB, totalBytes: 500 * GIB }), async () => null);
     expect(health.disk?.level).toBe('critical');

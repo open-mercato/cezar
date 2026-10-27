@@ -344,6 +344,10 @@ describe('disk space', () => {
   it('names the refusal below the floor, as a blocker', () => {
     expect(diskNote(CRITICAL)).toMatch(/Only 300 MB free .* New agents will not start until space is freed\./)
     expect(toolsBlocker(CRITICAL)).toBe('disk almost full — 300 MB free')
+    // Under 100 MiB free, health's 100 MiB steps report 0 — still a readable amount.
+    const NEARLY_FULL: HealthResponse = { ...ALL_GOOD, disk: { freeBytes: 0, totalBytes: 500 * GIB, level: 'critical' } }
+    expect(toolsBlocker(NEARLY_FULL)).toBe('disk almost full — under 100 MB free')
+    expect(diskNote(NEARLY_FULL)).toMatch(/^Only under 100 MB free on/)
   })
 
   it('goes amber and links to Settings → Worktrees', async () => {

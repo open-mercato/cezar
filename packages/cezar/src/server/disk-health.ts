@@ -29,6 +29,7 @@ export function diskHealth(
   // Spread, never `worktreesBytes: undefined` — the contract says optional (contract-parity).
   const worktreesBytes = level === 'ok' ? undefined : cachedDirSize(worktrees, sizer);
   return {
-    disk: { freeBytes, totalBytes: space.totalBytes, level, ...(worktreesBytes !== undefined ? { worktreesBytes } : {}) },
+    // Whole GiB: health is CORS-open (#431), and an exact volume size is a stable cross-origin fingerprint.
+    disk: { freeBytes, totalBytes: quantize(space.totalBytes, 1024 * MIB), level, ...(worktreesBytes !== undefined ? { worktreesBytes } : {}) },
   };
 }

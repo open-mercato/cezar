@@ -289,6 +289,13 @@ function canonicalPath(path: string): string {
   }
 }
 
+/** A checkout (and its lifecycle install) on a near-full disk dies half-written with ENOSPC —
+ *  refuse up front with the same reclaim hint the agent spawn guard gives (9cdcedc3). */
+function refuseBelowDiskFloor(worktreePath: string): void {
+  const refusal = diskFloorRefusal('worktree', worktreePath);
+  if (refusal) throw new Error(refusal);
+}
+
 /**
  * Establish the task worktree idempotently. Besides the fresh
  * `git worktree add -b` path, recover the two normal restart/deletion cases:
@@ -303,13 +310,6 @@ function canonicalPath(path: string): string {
  * (`uniqueBranchName`), because an existing branch of that name is treated as this run's own
  * surviving branch and reattached — that is what rematerializing a reclaimed worktree needs.
  */
-/** A checkout (and its lifecycle install) on a near-full disk dies half-written with ENOSPC —
- *  refuse up front with the same reclaim hint the agent spawn guard gives (9cdcedc3). */
-function refuseBelowDiskFloor(worktreePath: string): void {
-  const refusal = diskFloorRefusal('worktree', worktreePath);
-  if (refusal) throw new Error(refusal);
-}
-
 export async function createWorktree(
   repoRoot: string,
   runId: string,
