@@ -456,7 +456,11 @@ describe('a run stopped by a usage limit resumes itself', () => {
     await expect.poll(() => store.getRun(record.id)?.status, { timeout: 20_000 }).toBe('done');
     expect(sessions).toHaveLength(4);
     expect(sessions[2]?.spec.resume).toBe(true);
-    expect(sessions[3]?.spec.resume).not.toBe(true);
+    // A retry reopens the step's previous session and sends only the failure (#1180); the
+    // usage-limit preamble of the resumed pass is not a change to the step's instructions.
+    expect(sessions[3]?.spec.resume).toBe(true);
+    expect(sessions[3]?.spec.userPrompt).not.toContain('Your instructions for this step changed');
+    expect(sessions[3]?.spec.userPrompt).not.toContain('create a plan');
     expect(store.getRun(record.id)?.steps.find((step) => step.id === 'first-check'))
       .toMatchObject({ iterations: 3, retriesUsed: 1 });
     expect(store.getRun(record.id)?.steps.find((step) => step.id === 'second-check'))

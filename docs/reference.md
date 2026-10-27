@@ -275,9 +275,15 @@ steps:
 ```
 
 `{{task}}` is replaced with the task text you typed. When a check fails and loops
-back, its failing output — with host secrets, the run's registered secrets and
-known token shapes redacted — is appended to the retried agent's prompt so the
-next attempt can see what broke.
+back, the retried agent step reopens the session its previous attempt left and is
+sent only the failing output, so it keeps what it already read; when a graph node's
+prompt renders differently on the retry, the new prompt is sent too. Under another
+backend or account the step starts a fresh session with the task and the failing
+output appended. On Claude, Codex and OpenCode the same fresh session takes over when
+the reopened session fails before doing anything, unless the failure is a usage limit,
+another refusal by the provider or a timeout, which a fresh session would hit as well.
+The failing output the retried step is sent has host secrets, the run's registered
+secrets and known token shapes redacted.
 
 A check step runs `bash -lc <command>` in the task's worktree with the server's
 environment plus the **secrets** it may read, which no agent step ever

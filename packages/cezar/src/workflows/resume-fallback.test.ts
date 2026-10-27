@@ -80,6 +80,72 @@ describe('ResumeFallback', () => {
     expect(fallback.takeFallback()).toBeUndefined();
   });
 
+  describe('a message as the resume\'s first output', () => {
+    const SESSION_STARTED = { type: 'session.started', backend: 'claude', sessionId: 's' } as unknown as UiEvent;
+    const message = (type: 'item.started' | 'item.completed', t: string) =>
+      ({ type, item: { id: 'm1', kind: 'message', role: 'assistant', text: t } }) as unknown as UiEvent;
+
+    function liveGuard() {
+      const out: string[] = [];
+      const fallback = new ResumeFallback(
+        true,
+        (event) => out.push(`v1:${event.type}`),
+        (event) => out.push(`v2:${event.type}`),
+        undefined,
+        undefined,
+        (event) => out.push(`live-v1:${event.type}`),
+      );
+      const ui = (event: UiEvent) => { if (!fallback.holdUi(event)) out.push(`v2:${event.type}`); };
+      const v1 = (event: AgentEvent) => { if (!fallback.hold(event)) out.push(`live-v1:${event.type}`); };
+      return { fallback, out, ui, v1 };
+    }
+
+    it('keeps the turn bookkeeping ahead of the message it proves alive', async () => {
+      const { out, ui, v1 } = liveGuard();
+      ui(SESSION_STARTED);
+      ui(TURN_STARTED);
+      await Promise.resolve();
+      ui(message('item.started', ''));
+      v1({ type: 'text', text: 'Sure' });
+      ui(message('item.completed', 'Sure'));
+      v1({ type: 'cost', usd: 0.01 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(out).toEqual([
+        'v2:session.started',
+        'v2:turn.started',
+        'v2:item.started',
+        'v2:item.completed',
+        'live-v1:text',
+        'live-v1:cost',
+      ]);
+      // Settled: what follows passes straight through.
+      v1({ type: 'text', text: 'more' });
+      expect(out.at(-1)).toBe('live-v1:text');
+    });
+
+    it('drops a reason echoed as text when the same frame reports the session gone', async () => {
+      const { fallback, out, ui, v1 } = liveGuard();
+      ui(TURN_STARTED);
+      ui(message('item.completed', 'No conversation found with session ID: s-1'));
+      v1({ type: 'text', text: 'No conversation found with session ID: s-1' });
+      v1(MISSING);
+      v1({ type: 'turn-end' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fallback.takeFallback()).toEqual([]);
+      expect(out).toEqual([]);
+    });
+
+    it('releases a held message through the live path when the failure is real', async () => {
+      const { fallback, out, ui, v1 } = liveGuard();
+      ui(message('item.completed', 'partial'));
+      v1({ type: 'text', text: 'partial' });
+      v1(RESULT_ERROR);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fallback.takeFallback()).toBeUndefined();
+      expect(out).toEqual(['v2:item.completed', 'live-v1:text', 'v1:error']);
+    });
+  });
+
   it('a fresh (non-resumed) session passes everything straight through', () => {
     const { fallback } = guard(false);
     expect(fallback.holdUi(TURN_STARTED)).toBe(false);

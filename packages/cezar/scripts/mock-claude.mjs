@@ -141,6 +141,65 @@ function writeHandoffAndTodo() {
 async function respond(userText, imageCount) {
   turn += 1;
   await pace(250);
+  // `mock:session-gone` on a `--resume` spawn → the other envelope Claude Code emits for a
+  // conversation it no longer has: an `is_error` result carrying the reason only in `errors`,
+  // then exit 1. `mock:session-gone-text` also echoes the reason into `result`.
+  if (resumedId && userText.includes('mock:session-gone')) {
+    const reason = `No conversation found with session ID: ${resumedId}`;
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      ...(userText.includes('mock:session-gone-text') ? { result: reason } : {}),
+      errors: [reason],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
+  // `mock:resume-mystery` on a `--resume` spawn → a resume failure in a wording cezar has never seen.
+  if (resumedId && userText.includes('mock:resume-mystery')) {
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['resume failed: ERR_RESUME_PROTOCOL_v7'],
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
+  // `mock:resume-mid-fail` on a `--resume` spawn → the session reopened and the agent started
+  // answering, then the provider failed mid-turn. A real failure, never a missing conversation.
+  if (resumedId && userText.includes('mock:resume-mid-fail')) {
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Looking at the failing test.' }] } });
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['API Error: 500 Internal Server Error'],
+      usage: { input_tokens: 5, output_tokens: 5 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
+  // `mock:resume-limit` on a `--resume` spawn → the account, not the conversation, is the problem:
+  // the session reopened fine but the provider refuses the turn.
+  if (resumedId && userText.includes('mock:resume-limit')) {
+    emit({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: `Claude AI usage limit reached|${Math.floor(Date.now() / 1_000) + 3_600}`,
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    process.stdout.write('', () => process.exit(1));
+    return new Promise(() => {});
+  }
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child

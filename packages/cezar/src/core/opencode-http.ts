@@ -58,6 +58,24 @@ export class OpencodeTransportError extends Error {
   }
 }
 
+/**
+ * The server answered, but not 2xx. Carries the status so a caller can act on
+ * the specific answer rather than re-parsing the message — a `GET /session/:id`
+ * 404 is "that session is gone", while a 500 or a transport drop is no evidence
+ * at all and must not be mistaken for one.
+ */
+export class OpencodeHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly method: string,
+    readonly path: string,
+    body: string,
+  ) {
+    super(`${method} ${path} → ${status} ${body.slice(0, 200)}`);
+    this.name = 'OpencodeHttpError';
+  }
+}
+
 /** `http.request`, with a malformed url/options surfacing as a rejection
  *  rather than a synchronous throw from inside the promise executor. */
 function open(url: string, options: RequestOptions): ClientRequest | Error {

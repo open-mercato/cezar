@@ -30,10 +30,15 @@
 //                 the final text names the reply.
 // `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
-// the no-event-bus fallback.
+// the no-event-bus fallback. `GET /session/ses_mock_1` answers like the real
+// server reopening a stored session; any other id is a 404. With
+// `MOCK_OPENCODE_PROMPTS_FILE=<path>` every prompt text is appended (one JSON
+// string per line) so a test can assert exactly what reached the session.
+// `MOCK_OPENCODE_SESSIONS_GONE=1` answers every session lookup with a 404.
 // `MOCK_START=silent` never prints the URL line; `MOCK_START=stderr` prints it on
 // stderr. `MOCK_PATH_DIR` overrides the `directory` `GET /path` reports.
 // `MOCK_API=v2` answers every non-`/api/` POST with 405, as OpenCode 2.x does.
+import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -106,6 +111,28 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
       return;
     }
+    if (req.method === 'GET' && url.startsWith('/session/') && !url.slice('/session/'.length).includes('/')) {
+      const id = decodeURIComponent(url.slice('/session/'.length));
+      if (id === 'ses_server_error') {
+        // A 5xx is not evidence the session is gone — the runner must propagate it, never replace
+        // the conversation with a fresh one.
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ name: 'InternalServerError', data: { message: 'storage unavailable' } }));
+      } else if (id === SESSION_ID && process.env.MOCK_OPENCODE_SESSIONS_GONE !== '1') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
+      } else if (id.startsWith('ses_')) {
+        // A well-formed but unknown session id: the real server says 404.
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ name: 'NotFoundError', data: { message: `Session not found: ${id}` } }));
+      } else {
+        // Not an opencode id at all (cezar's pre-assigned placeholder): real opencode answers 500
+        // UnknownError.
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ name: 'UnknownError', data: { message: `Invalid session id: ${id}` } }));
+      }
+      return;
+    }
     // The current reply route, or — under `MOCK_LEGACY_PERMISSION=1`, a server
     // from before the permission rework — only the session-scoped one.
     const legacy = process.env.MOCK_LEGACY_PERMISSION === '1';
@@ -147,6 +174,7 @@ const server = createServer((req, res) => {
           return '';
         }
       })();
+      if (process.env.MOCK_OPENCODE_PROMPTS_FILE) appendFileSync(process.env.MOCK_OPENCODE_PROMPTS_FILE, `${JSON.stringify(promptText)}\n`);
       const script = promptText.includes('#drop-then-die')
         ? 'drop-then-die'
         : promptText.includes('#drop-post')
