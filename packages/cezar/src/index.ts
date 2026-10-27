@@ -52,6 +52,7 @@ import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
+import { launchPageUrl } from './cockpit-address.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -479,7 +480,7 @@ async function serveCommand(
   // paint is the cockpit and never a connection error.
   if (openBrowser) {
     const healthy = await waitForHealth(`${url}/api/v1/health`, 5_000);
-    if (healthy) openUrl(url);
+    if (healthy) openUrl(launchPageUrl(url));
   }
 }
 

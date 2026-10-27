@@ -333,6 +333,13 @@ describe('the grouped multi-project sidebar', () => {
         '[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-row"]'
       )).backgroundColor`))
     expect(rowBackground(ALPHA.id)).not.toBe('rgba(0, 0, 0, 0)')
+    // The row carries `transition-colors`, so right after deselection the computed colour is
+    // still mid-fade (e.g. rgba(38,38,38,0.3)); wait for it to settle instead of sampling once.
+    browser.waitForFunction(
+      `getComputedStyle(document.querySelector(
+        '[data-slot="project-group"][data-project="${bootProject}"] [data-slot="project-group-row"]'
+      )).backgroundColor === 'rgba(0, 0, 0, 0)'`
+    )
     expect(rowBackground(bootProject)).toBe('rgba(0, 0, 0, 0)')
 
     // …and the New task CTA now starts a task in the project the user picked. This is the bug as

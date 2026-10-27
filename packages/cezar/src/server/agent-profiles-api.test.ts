@@ -60,7 +60,8 @@ describe('agent profiles API', () => {
 
   afterEach(() => {
     store.flush();
-    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
+    // Boot warming can still be writing into `home` as the test ends; retry instead of ENOTEMPTY.
+    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     for (const [key, value] of [
       ['CEZ_HOME', saved.home],
       ['CEZ_REMOTE', saved.remote],
