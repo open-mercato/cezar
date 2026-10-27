@@ -63,10 +63,12 @@ export function createTrackerService(env: NodeJS.ProcessEnv = process.env, fetch
   };
   return {
     connection,
-    async saveConnection(root: string, credentials: TrackerCredentials): Promise<TrackerConnectionResponse | null> {
-      if (demo) return null;
-      const saved = await store.write(root, credentials);
-      if (!saved) return null;
+    /** `{ saveFailure }` carries a user-facing reason, or `null` for the generic storage failure. */
+    async saveConnection(root: string, credentials: TrackerCredentials): Promise<TrackerConnectionResponse | { saveFailure: string | null }> {
+      if (demo) return { saveFailure: null };
+      const outcome = await store.saveCredentials(root, credentials);
+      if (!('record' in outcome)) return { saveFailure: outcome.error };
+      const saved = outcome.record;
       invalidate(root);
       return { connection: { id: saved.id, kind: saved.credentials.kind }, demo: false };
     },

@@ -391,18 +391,15 @@ The multi-project workspace (spec `.ai/specs/2026-07-20-multi-project-workspace.
   refreshed before credential mutations. Excludes credentials, locks and temporary files from
   ordinary Git staging even when `CEZ_HOME` is inside a checkout; not a defense against forced
   staging or already tracked files. Missing guard is recreated on the next mutation.
-- **`tracker-connections/<canonical-root-hash>.env`** — private per-project credentials, managed
-  dotenv, POSIX 0700/0600 and atomic replacement. Contains canonical PROJECT_ROOT validated against
-  the filename, format version, fresh connection UUID and credential digest. Parsed values never
-  enter process.env; only captured-project tracker automation workflows receive them after revision
-  validation. Browsing/manual handoffs do not. Deliberate §9 exception: credential objects reject
-  unknown keys/unsupported versions rather than salvage partial secrets; malformed records disable
-  only that connection with a controlled diagnostic. No prototype JSON migration/fallback/tombstone;
-  removal unlinks the record. Unsupported future formats are not automatically overwritten.
-  Per-record cross-process mutation locks serialize save/remove. Local `tracker-connections list`
-  and `remove <id>` expose safe inventory and explicit cleanup without a running server or vendor
-  access. Development prototype records require explicit reconnect/cleanup; no released format
-  has been superseded. No encryption or downgrade compatibility with prototype builds is promised.
+- **`tracker-connections/<canonical-root-hash>.vault`** — authenticated encrypted project
+  credentials, bound to the canonical root/record ID; POSIX 0700/0600 and serialized atomic
+  mutations. Legacy `.env` migration preserves UUIDs and verifies ciphertext before deleting
+  plaintext. `.migrated` survives removal and rejects stale legacy records in this version.
+  Unknown formats and unreadable authoritative ciphertext fail closed; boot remains available.
+  Values never enter `process.env`; only validated captured tracker automation bindings receive decrypted credentials.
+  Older versions cannot read migrated records; use a separate home for downgrade.
+  Local `tracker-connections list/remove` provides metadata-only inventory and explicit cleanup.
+  See [migration](docs/issue-trackers.md#credential-migration).
 - **Vault key storage:** `secrets/.keychain-account` selects `cezar/secrets-data-key:<uuid>`;
   without it, the legacy shared item remains readable but is never overwritten. Existing
   `.key` files retain precedence. `.backend` is a recovery hint, not a key. Preserve the
