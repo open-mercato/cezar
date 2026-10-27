@@ -17,7 +17,7 @@
  */
 
 import type { AgentBackend } from './agent-runner.ts';
-import { SECRET_NAME_RE } from './secret-redaction.ts';
+import { SECRET_NAME_RE, isCredentialName } from './secret-redaction.ts';
 
 /**
  * Env var names are matched case-INSENSITIVELY (#427 review). Windows spells
@@ -254,6 +254,15 @@ const GH_ALLOW_NAMES: ReadonlySet<string> = upperSet([
   'GH_CONFIG_DIR',
 ]);
 
+/** The `GH_ALLOW_NAMES` that authenticate: the tokens, and the config dir whose `hosts.yml` holds one.
+ *  `GH_HOST` only names a host and is not one of them. */
+const GH_CREDENTIAL_NAMES: ReadonlySet<string> = upperSet([
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'GH_ENTERPRISE_TOKEN',
+  'GH_CONFIG_DIR',
+]);
+
 /**
  * Claude Code can be pointed at Bedrock or Vertex instead of the Anthropic API
  * by `CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1`. Those toggles
@@ -347,12 +356,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   }
 
   const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
-  const passthrough = upperSet(
-    (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
-  );
+  const passthrough = readPassthrough(source);
 
   // Cloud auth is unlocked only for Claude Code backends. Keep this gate tied
   // to backend identity, not to whether an allowlist happens to contain the
@@ -400,4 +404,46 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     if (matchesPrefix(key, BASE_ALLOW_PREFIXES) && !looksSecret(key)) return true;
     return false;
   }
+}
+
+function readPassthrough(source: NodeJS.ProcessEnv): ReadonlySet<string> {
+  return upperSet(
+    (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+}
+
+/**
+ * The environment a workflow check command runs in: the host environment with its credentials
+ * removed. A check is the project's own verification command (`npm test`, `make lint`), so the
+ * host's PATH, toolchain and connection settings (`DATABASE_URL`, `REDIS_URL`, `AWS_PROFILE`)
+ * stay; what goes is every credential-shaped name — the one classification `secret-redaction.ts`
+ * also redacts by — except cezar's own `CEZ_*`, the shell/toolchain base the agent env forwards
+ * (`SSH_AUTH_SOCK`), and `gh` auth.
+ *
+ * `CEZ_ENV_PASSTHROUGH` names credentials to keep anyway; `CEZ_AGENT_ENV_FULL=1` keeps them all.
+ * `untrusted` (a fork PR's head) removes the `gh` credentials from whatever the rest of this
+ * function would have produced, the escape hatches included.
+ */
+export function buildCheckEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  options: { untrusted?: boolean } = {},
+): NodeJS.ProcessEnv {
+  const full = isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'));
+  const passthrough = readPassthrough(source);
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const key = name.toUpperCase();
+    if (options.untrusted && GH_CREDENTIAL_NAMES.has(key)) continue;
+    if (full || passthrough.has(key) || !isCheckCredential(key)) out[name] = value;
+  }
+  return out;
+}
+
+function isCheckCredential(key: string): boolean {
+  if (key.startsWith('CEZ_') || GH_ALLOW_NAMES.has(key) || BASE_ALLOW_NAMES.has(key)) return false;
+  return isCredentialName(key);
 }
