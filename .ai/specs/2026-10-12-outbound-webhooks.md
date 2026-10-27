@@ -821,6 +821,9 @@ show test success with the current state and no recovery claim. Refresh through 
 SSE. This adds disclosure, not another consent gate or a change to automatic recovery.
 
 Use existing toast components, scoped to the owning project for activation, disabled state, test result and queue drops.
+With `CEZ_WEBHOOKS=1`, the project-scoped toast observer holds one extra EventSource for as long as a project is on
+screen. It counts toward the browser's six-connections-per-origin limit alongside the global stream, which is
+acceptable for an opt-in feature. Do not add a second one per panel.
 Activity records a bounded, redacted reason and source. UI filters apply only to the loaded range;
 show the loaded range and Load older while `hasMore`; do not suggest a complete search. Activity
 remains latest-100 with an honest more-results hint; it does not inherit delivery pagination. Deleted tasks show
