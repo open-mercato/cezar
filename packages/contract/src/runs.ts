@@ -1,3 +1,4 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
@@ -249,6 +250,8 @@ export const runRecordSchema = z.object({
           labelName: z.string().optional(),
         })
         .optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string(),
     })

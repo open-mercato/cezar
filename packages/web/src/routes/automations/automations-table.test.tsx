@@ -81,6 +81,16 @@ describe('AutomationsTable', () => {
     expect(row(STALE_PR.id).querySelector('[data-slot="dispatch-badge"]')).toBeNull()
   })
 
+  it('flags a tracker automation whose access was never reviewed', () => {
+    const trackerTrigger = { events: ['issue.opened' as const], association: { kind: 'linear' as const, source: { id: 's', webUrl: 'https://linear.app/a' }, externalId: 't', externalName: 'T' } }
+    const legacy = { ...TRIAGE, id: 'legacy', kind: 'tracker' as const, events: undefined, trackerTrigger }
+    const reviewed = { ...TRIAGE, id: 'reviewed', kind: 'tracker' as const, events: undefined, trackerTrigger: { ...trackerTrigger, access: { version: 1 as const, writes: [] } } }
+    renderTable(response({ automations: [legacy, reviewed] as unknown as typeof AUTOMATIONS }))
+
+    expect(row('legacy').querySelector('[data-slot="needs-review-badge"]')?.textContent).toBe('Needs review')
+    expect(row('reviewed').querySelector('[data-slot="needs-review-badge"]')).toBeNull()
+  })
+
   it('prints the trigger label with the full text as the tooltip', () => {
     renderTable()
 

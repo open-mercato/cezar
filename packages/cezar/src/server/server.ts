@@ -9,12 +9,15 @@ import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
+  trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
+import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
+import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -4062,6 +4065,9 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /** The run a `cez tracker` session capability belongs to; never another project's. */
+  const trackerTaskRun = (project: ProjectContext, authorization: string | undefined) =>
+    project.manager.trackerTaskForCapability(authorization?.match(/^Bearer (\S+)$/)?.[1]);
   /**
    * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
    * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
@@ -4069,6 +4075,7 @@ export function createApp(deps: ServerDeps) {
    */
   const trackerTriggerIssue = async (project: ProjectContext, trigger: AutomationEditableBody['trackerTrigger']): Promise<string | null> => {
     if (!trigger) return 'Choose an event to finish configuring this automation';
+    if (!trigger.access) return 'Review tracker access in the automation editor before saving or enabling this automation.';
     const driver = await trackers.driver(project.root, project.dataDir);
     if ('available' in driver) return driver.reason;
     if (JSON.stringify(driver.association) !== JSON.stringify(trigger.association)) return 'Tracker connection or scope changed; reload the event options';
@@ -4375,12 +4382,17 @@ export function createApp(deps: ServerDeps) {
         ]);
         const trackerSourceChanged = kind === 'tracker'
           && trackerScanIdentity(current.trackerTrigger) !== trackerScanIdentity(input.trackerTrigger);
+        // Confirming a pre-mediation definition's access resumes its checkpoint, unless it sat in
+        // review past its lookback: then, like rebaselineIdleAutomations, the backlog is dropped.
+        const lastSuccess = Date.parse(automationStore.state(current.id)?.lastSuccessAt ?? '');
+        const staleMigration = kind === 'tracker' && !current.trackerTrigger?.access && Boolean(input.trackerTrigger?.access)
+          && !(Date.now() - lastSuccess <= (current.filters?.lookbackDays ?? 7) * 86_400_000);
         const automation = automationStore.update(
           c.req.param('id'), expectedRevision,
           { ...input, kind, enabled: input.enabled ?? false },
           definition => {
             // Publish the new baseline and definition under the same mutation lease.
-            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged)) armAutomation(automationStore, definition);
+            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged || staleMigration)) armAutomation(automationStore, definition);
             else if (trackerSourceChanged) {
               // A paused definition still needs a compatible read-only preview. Clear source-bound
               // progress without arming a timer; Enable will establish its own current-time baseline.
@@ -6674,6 +6686,33 @@ export function createApp(deps: ServerDeps) {
     });
 
   const trackerRoutes = new Hono<ProjectApiEnv>()
+    .get('/tracker/task', async c => {
+      const project = c.get('project');
+      const run = trackerTaskRun(project, c.req.header('Authorization'));
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      try {
+        return c.json(trackerContextSchema.parse(await trackerTaskContext(project.root, run.automationTracker)));
+      } catch (error) {
+        const reason = error instanceof TrackerAgentBindingError ? error.message : 'Tracker context unavailable. Check connection and task binding.';
+        return c.json({ error: reason }, 409);
+      }
+    })
+    .post('/tracker/task', jsonZodValidator(trackerOperationInputSchema), async c => {
+      const project = c.get('project');
+      const authorization = c.req.header('Authorization');
+      const run = trackerTaskRun(project, authorization);
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      const stillBound = () => trackerTaskRun(project, authorization)?.id === run.id;
+      try {
+        const result = await executeTrackerOperation(project.root, project.dataDir, run.id, run.automationTracker, c.req.valid('json'), stillBound);
+        return c.json(trackerOperationResultSchema.parse(result));
+      } catch (error) {
+        const reason = error instanceof TrackerAgentBindingError ? error.message : 'Tracker operation unavailable.';
+        return c.json({ error: `${reason} Reuse its operation ID after checking the connection.` }, 409);
+      }
+    })
     .get('/tracker/automation-options', queryZodValidator(trackerAutomationOptionsQuerySchema), async c => {
       const project = c.get('project');
       const driver = await trackers.driver(project.root, project.dataDir);

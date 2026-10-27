@@ -1,6 +1,7 @@
 # Adding an issue tracker
 
-Use this guide when asking an agent to add a compiled-in, read-only issue tracker.
+Use this guide when asking an agent to add a compiled-in issue tracker. Browsing is read-only;
+agent writes are limited to the mediated comment/transition operations described below.
 The Jira and Linear integration provides the reusable path; a new provider should
 not need its own HTTP route family, React screen, persistence file, or task composer.
 For connecting an existing provider, see [issue-trackers.md](issue-trackers.md).
@@ -13,8 +14,8 @@ with a description snapshot and the user's instruction.
 
 One repository has one saved tracker association. Each project has its own
 credential connection, stored outside the repository. Multi-account selection, OAuth, multiple associations,
-vendor writes, comments/attachments/custom fields, and background synchronization
-are separate design changes. Do not quietly pretend the current connection model
+writes beyond the mediated comment/status operations, attachments/custom fields, and background
+synchronization are separate design changes. Do not quietly pretend the current connection model
 supports them. A provider unable to support search/filter semantics needs an explicit
 design decision, not silent local filtering of the first page.
 
@@ -67,13 +68,15 @@ Reads begin only on user demand. Credentials stay on the server.
    browser caching already limits normal reads; a second server cache must not renew an old
    snapshot after explicit Refresh. Keep in-flight deduplication and cooldown. Never log raw credentials, headers or
    upstream error bodies. Map vendor-specific errors inside the adapter.
-5. **Wire project credentials and registration.** Extend the strict record schema in
-   `tracker/connection-env.ts`; encrypted records are owned by `TrackerConnections`.
-   The dotenv codec remains for legacy migration only.
-   Never load project credentials into `process.env`; use the existing private per-project store.
-   Manual edits must not keep an old provider cached. Preserve canonical-root/filename validation,
-   per-record mutation serialization and the local inventory/remove CLI. Preserve the existing
-   encrypted-format migration marker, including after removal; do not invent prototype migrations.
+5. **Wire project credentials and registration.** Extend the managed record schema in
+   `tracker/connection-env.ts` and use `TrackerConnections` to encrypt complete records through
+   `SecretStore`'s managed-record seam. New records are owner-only `.vault` files outside
+   checkouts; the dotenv codec is only for legacy migration, not new provider storage.
+   Never load project credentials into `process.env` or agent environments.
+   Preserve canonical-root/filename validation, per-record mutation serialization and the
+   local inventory/remove CLI. Legacy migration preserves the connection ID, verifies the
+   encrypted record before deleting plaintext and retains `.migrated` markers so an old writer
+   cannot resurrect removed credentials. Corrupt ciphertext must never fall back to plaintext.
    Extend the discriminated write-only
    `trackerCredentialsSchema` and the factory map in `createTrackerService`. Missing credentials
    disable only that project connection. Never use host-wide environment keys as fallback.
@@ -106,6 +109,16 @@ Reads begin only on user demand. Credentials stay on the server.
     Do not introduce global token environment variables for a project-scoped connection. New or
     changed `CEZ_*` variables must follow the root env-contract rule. No secrets in examples,
     screenshots, plans or test recordings.
+
+11. **Optional: mediated task access.** Tracker automation runs read the issue through the
+    driver's optional `context(id)` and write only through `act(id, action, beforeWrite)`
+    (`types.ts`, `tracker/task-access.ts`). Without `context`, tracker tasks are told the
+    context is unavailable, and `cez tracker` refuses with "does not support mediated task access". `context` must check source/scope, read
+    comments with bounded pages (an oversized page degrades to a limitation, never a failure)
+    and pass lossy content through `boundedContext`. `act` must re-read the issue, refuse a
+    stale `expectedStatusId`, call `beforeWrite` immediately before the single write request,
+    never retry or fall back after it, and throw unless the vendor confirmed the write: the
+    operation ledger records a failure after `beforeWrite` as `unknown`, before it as `rejected`.
 
 ## Verification gate
 

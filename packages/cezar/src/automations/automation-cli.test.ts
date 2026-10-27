@@ -345,3 +345,38 @@ it('tracker add resolves the project association before posting the trigger', as
 it('rejects required tracker labels on other automation kinds', () => {
   expect(() => bodyFromAddFlags({ name: 'work', on: 'issue.opened', 'require-label': ['bug'] }, 'Implement')).toThrow(/tracker/);
 });
+
+describe('cez automation tracker write grants', () => {
+  const env = { CEZ_API_URL: 'http://127.0.0.1:4321/', CEZ_PROJECT_ID: 'proj' };
+  const trigger = { events: ['issue.opened'], association: { kind: 'linear', source: { id: 's', webUrl: 'https://linear.app/a' }, externalId: 't', externalName: 'T' } };
+  const tracker = { name: 'Linear work', kind: 'tracker', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'Do {{tracker.key}}', worktree: true }, trackerTrigger: trigger };
+  const run = async (args: string[], current?: Record<string, unknown>) => {
+    const bodies: unknown[] = [];
+    const err: string[] = [];
+    const io: AutomationCliIo = {
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) bodies.push(JSON.parse(String(init.body)));
+        const body = init?.method ? { automation: { id: 'a', name: 'n', revision: 2, enabled: false } } : { automation: current };
+        return new Response(JSON.stringify(body), { status: init?.method === 'POST' ? 201 : 200, headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch,
+      log: () => {}, error: (line) => err.push(line),
+    };
+    return { code: await runAutomationCommand(args, env, io), bodies, err };
+  };
+  it('creates tracker automations read-only and refuses a write grant', async () => {
+    const created = await run(['create', '--json', JSON.stringify(tracker)]);
+    expect(created.bodies[0]).toMatchObject({ trackerTrigger: { access: { version: 1, writes: [] } } });
+    const widened = await run(['create', '--json', JSON.stringify({ ...tracker, trackerTrigger: { ...trigger, access: { version: 1, writes: ['comment'] } } })]);
+    expect(widened.code).not.toBe(0);
+    expect(widened.bodies).toEqual([]);
+    expect(widened.err.join(' ')).toContain('automation editor');
+  });
+  it('keeps existing grants on update and refuses to add one', async () => {
+    const current = { ...tracker, enabled: true, revision: 1, trackerTrigger: { ...trigger, access: { version: 1, writes: ['comment'] } } };
+    const kept = await run(['update', 'a', '--json', JSON.stringify({ trackerTrigger: trigger })], current);
+    expect(kept.bodies[0]).toMatchObject({ trackerTrigger: { access: { writes: ['comment'] } } });
+    const widened = await run(['update', 'a', '--json', JSON.stringify({ trackerTrigger: { ...trigger, access: { version: 1, writes: ['comment', 'transition'] } } })], current);
+    expect(widened.code).not.toBe(0);
+    expect(widened.bodies).toEqual([]);
+  });
+});

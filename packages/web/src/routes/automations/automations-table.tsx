@@ -124,6 +124,16 @@ function AutomationRow({
               <GitForkIcon className="size-2.5" />×{dispatch.maxSubtasks ?? 1}
             </span>
           ) : null}
+          {automation.kind === 'tracker' && automation.trackerTrigger && !automation.trackerTrigger.access ? (
+            // Pre-mediation tracker automations stop polling until their access is reviewed.
+            <span
+              data-slot="needs-review-badge"
+              title="Tracker access changed: open this automation and review its access before it can run again"
+              className="inline-flex shrink-0 items-center rounded-full bg-warning/15 px-1.5 py-px text-[10.5px] font-medium text-warning"
+            >
+              Needs review
+            </span>
+          ) : null}
         </span>
       </td>
       <td className={cn(TD, 'max-w-[260px] overflow-hidden font-mono text-xs text-ellipsis text-muted-foreground')} title={trigger}>

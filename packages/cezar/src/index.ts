@@ -22,7 +22,6 @@ import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
-import { resolveTrackerAgentEnv } from './server/tracker/agent-credentials.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
@@ -56,6 +55,7 @@ import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
+import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
 import { launchPageUrl } from './cockpit-address.ts';
 
@@ -117,6 +117,10 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'tracker') {
+    process.exitCode = await runTrackerCommand(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === 'tracker-connections') {
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
     return;
@@ -275,7 +279,7 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
+  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.

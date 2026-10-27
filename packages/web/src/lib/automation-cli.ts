@@ -3,8 +3,8 @@ import { cronOf, hm, normalizeSchedule, type AutomationDefinition, type Automati
 /**
  * The editor's "Copy as CLI" card (spec 2026-09-14-automations-redesign Q1): the flag form of
  * `cez automation add` when the definition is expressible in flags, the JSON form of
- * `cez automation create` otherwise. Both build the same request body server-side, so either
- * line recreates exactly what the cockpit would save.
+ * `cez automation create` otherwise. Tracker exports start paused and read-only when access needs review; write grants
+ * must be confirmed in the cockpit editor. Other definitions retain their settings.
  *
  * Flag-expressible: any schedule; a poll whose filters are at most `anyLabels` (`--label`) and
  * `authors` (`--author`) at their default lookback and cap. Everything else — assignees, all-of
@@ -28,6 +28,13 @@ export interface CliDefinition {
   }
   enable?: boolean
 }
+
+export function trackerCliNeedsReview(definition: Pick<CliDefinition, 'kind' | 'trackerTrigger'>): boolean {
+  return definition.kind === 'tracker' && !!definition.trackerTrigger
+    && (!definition.trackerTrigger.access || definition.trackerTrigger.access.writes.length > 0)
+}
+
+export const TRACKER_CLI_REVIEW_NOTE = 'Creates a paused, read-only automation. Review its prompt and grant any required writes in the cockpit editor before enabling.'
 
 const shellQuote = (value: string): string => `"${value.replace(/(["\\$`!])/g, '\\$1')}"`
 
@@ -88,10 +95,10 @@ export function cliJsonOf(definition: CliDefinition): string {
     ...(definition.kind === 'schedule'
       ? { schedule: definition.schedule }
       : definition.kind === 'tracker'
-        ? { trackerTrigger: definition.trackerTrigger, intervalSeconds: definition.intervalSeconds ?? 1800, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }
+        ? { trackerTrigger: definition.trackerTrigger ? { ...definition.trackerTrigger, access: { version: 1, writes: [] } } : undefined, intervalSeconds: definition.intervalSeconds ?? 1800, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }
         : { events: definition.events, intervalSeconds: definition.intervalSeconds ?? 300, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }),
     task: definition.task,
-    ...(definition.enable ? { enable: true } : {}),
+    ...(definition.enable && !trackerCliNeedsReview(definition) ? { enable: true } : {}),
   }
   return `cez automation create --json '${JSON.stringify(body).replace(/'/g, `'\\''`)}'`
 }

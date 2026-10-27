@@ -4,10 +4,11 @@ import type { WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservati
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
+import { trackerBindingComplete, trackerContextPath, trackerPrompt, trackerTaskContext } from '../server/tracker/task-access.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { mkdir, realpath, access } from 'node:fs/promises';
+import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import {
@@ -1375,8 +1376,20 @@ export class RunManager {
   /** See the constructor option of the same name. */
   private readonly secrets: SecretStore;
 
-  /** See the constructor option of the same name. */
-  private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
+  /** Per-execution grants retained while a live session waits for follow-up. */
+  private readonly trackerCapabilities = new Map<string, { epoch: unknown; tokens: Set<string> }>();
+
+  /** A session capability never authorizes another run, project, child or terminal task. */
+  trackerTaskForCapability(token: string | undefined) {
+    if (!token) return undefined;
+    for (const [id, grant] of this.trackerCapabilities) {
+      if (!grant.tokens.has(token) || grant.epoch !== this.active.get(id)) continue;
+      const run = this.store.getRun(id);
+      return run?.status === 'running' && run.automationTracker ? run : undefined;
+    }
+    return undefined;
+  }
+
 
   constructor(
     private readonly store: RunStore,
@@ -1384,12 +1397,6 @@ export class RunManager {
     options: {
       semaphore?: WorkspaceSemaphore;
       projectId?: string;
-      /**
-       * Revalidate the tracker association captured by the run before every spawn,
-       * including Continue and recovery. A mismatch fails the step before credentials
-       * reach an agent. Secrets are registered with RunStore before any output arrives.
-       */
-      resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
       /** The project/workspace secret store (spec 2026-10-10-project-secrets-vault-options);
        *  check steps read it with the `checks` audience. */
       secrets?: SecretStore;
@@ -1401,7 +1408,6 @@ export class RunManager {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.projectId = options.projectId;
-    this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
@@ -1625,9 +1631,13 @@ export class RunManager {
   private async agentEnvForStep(
     runId: string,
     backend: RunnerId,
-    options: { generateFollowups?: boolean; recordedProfileId?: string } = {},
-  ): Promise<{ env: Record<string, string>; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
+    options: { generateFollowups?: boolean; recordedProfileId?: string; namingOnly?: boolean } = {},
+  ): Promise<{ env: Record<string, string>; trackerContext?: string; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
     const run = this.store.getRun(runId);
+    const owner = this.active.get(runId);
+    const ownsTrackerContext = () => this.active.get(runId) === owner
+      && !owner?.cancelled && Boolean(this.store.getRun(runId))
+      && this.store.getRun(runId)?.status !== 'cancelled';
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
@@ -1652,15 +1662,63 @@ export class RunManager {
     const profilePath = await realpath(resolved.profile.path).catch(() => resolved.profile.path);
     const boundIdentity = backend === 'codex' && bound?.id === resolved.profile.id && bound.path === profilePath ? bound.identity : undefined;
     let attributionDisabled = false;
-    const association = run?.automationTracker?.association;
-    const trackerEnv = association && this.resolveTrackerEnv && process.env.CEZ_DRY_RUN !== '1'
-      ? await this.resolveTrackerEnv(this.repoRoot, association)
-      : {};
-    const secrets = [trackerEnv.JIRA_API_TOKEN, trackerEnv.LINEAR_API_KEY].filter((value): value is string => Boolean(value));
-    if (trackerEnv.JIRA_EMAIL && trackerEnv.JIRA_API_TOKEN) {
-      secrets.push(Buffer.from(`${trackerEnv.JIRA_EMAIL}:${trackerEnv.JIRA_API_TOKEN}`).toString('base64'));
+    const trackerEnv: Record<string, string> = {};
+    let trackerContext: string | undefined;
+    if (!options.namingOnly && run?.automationTracker && process.env.CEZ_DRY_RUN !== '1') {
+      // Degrade, never fail the launch: an offline tracker, a rotated connection or a run
+      // from before mediated access still starts or continues, told what it lacks.
+      const binding = run.automationTracker;
+      const complete = trackerBindingComplete(binding);
+      let context: Awaited<ReturnType<typeof trackerTaskContext>> | undefined;
+      let unavailable: string | undefined;
+      let contextFile: string | undefined;
+      if (!complete) unavailable = 'this task was started before mediated tracker access, so tracker commands are unavailable. Open the issue URL if you need it.';
+      else {
+        try { context = await trackerTaskContext(this.repoRoot, binding); }
+        catch (err) { unavailable = err instanceof TrackerAgentBindingError ? err.message : 'the tracker could not be read.'; }
+      }
+      if (context && ownsTrackerContext()) {
+        const path = trackerContextPath(this.dataDir, runId);
+        const temporary = `${path}.${randomUUID()}.tmp`;
+        try {
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(temporary, JSON.stringify(context, null, 2), { mode: 0o600 });
+          // No await between ownership check and publication: deletion/cancellation
+          // on this manager must either precede this check or remove the published file.
+          if (ownsTrackerContext()) {
+            renameSync(temporary, path);
+            contextFile = path;
+          }
+        } catch {
+          context = undefined;
+          unavailable = 'the fetched context could not be saved for this session; use tracker read.';
+        } finally {
+          try { rmSync(temporary, { force: true }); } catch { /* best effort on storage failure */ }
+        }
+      }
+      const commands = ownsTrackerContext() && complete && Boolean(process.env.CEZ_API_URL && process.env.CEZ_BIN);
+      if (commands) {
+        const capability = randomUUID() + randomUUID();
+        for (const [id, grant] of this.trackerCapabilities) {
+          const existing = this.store.getRun(id);
+          // Waiting live sessions resume with the same environment. Suspend their
+          // authorization via trackerTaskForCapability, but retain the grant.
+          if (!existing || isTerminalStatus(existing.status) || grant.epoch !== this.active.get(id)) {
+            this.trackerCapabilities.delete(id);
+          }
+        }
+        // Graph nodes may execute concurrently within one ActiveRun. Keep their grants
+        // together; a continuation/restart has a new ActiveRun and invalidates the old epoch.
+        const epoch = this.active.get(runId);
+        const previous = this.trackerCapabilities.get(runId);
+        const grant = epoch && previous?.epoch === epoch ? previous : { epoch, tokens: new Set<string>() };
+        grant.tokens.add(capability);
+        this.trackerCapabilities.set(runId, grant);
+        this.store.registerRunSecrets(runId, [capability]);
+        Object.assign(trackerEnv, { CEZ_TRACKER_CAPABILITY: capability, CEZ_API_URL: process.env.CEZ_API_URL!, CEZ_BIN: process.env.CEZ_BIN!, CEZ_TASK_ID: runId, ...(this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}) });
+      }
+      trackerContext = trackerPrompt({ binding, ...(context && contextFile ? { context, contextFile } : {}), ...(unavailable ? { unavailable } : {}), commands });
     }
-    this.store.registerRunSecrets(runId, secrets);
     const usageProvider = backend === 'claude' ? 'claude' : boundIdentity ? 'codex' : undefined;
     const onUsageWindows = usageProvider ? async (observation: UsageWindowsObservation) => {
       try {
@@ -1683,7 +1741,8 @@ export class RunManager {
       }
     } : undefined;
     return {
-      env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env },
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env, ...trackerEnv },
+      ...(trackerContext ? { trackerContext } : {}),
       profileId: resolved.profile.id,
       ...(onUsageWindows ? { onUsageWindows } : {}),
     };
@@ -5117,7 +5176,7 @@ export class RunManager {
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
     await this.provisionTaskSkills(state, { slash: leadingSlashSkillName(prompt) });
-    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    const expandedPrompt = [continueProfile.trackerContext, expandRegistrySlashSkillText(prompt, state.skills ?? [])].filter(Boolean).join('\n\n');
     // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
@@ -7278,7 +7337,7 @@ export class RunManager {
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
           ),
-          userPrompt: prompt,
+          userPrompt: [stepProfile.trackerContext, prompt].filter(Boolean).join('\n\n'),
           images,
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
@@ -7558,7 +7617,7 @@ export class RunManager {
           ? Object.values(scheduled.workflowDef.graph.nodes).find(node => node.type === 'agent')
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
         const runner = first?.runner ?? scheduled.runner ?? 'claude';
-        const profile = await this.agentEnvForStep(runId, runner);
+        const profile = await this.agentEnvForStep(runId, runner, { namingOnly: true });
         const { namerModel } = await loadConfig(this.repoRoot);
         execution = { runner, model: runner === 'claude' ? namerModel : undefined, env: profile.env, onUsageWindows: profile.onUsageWindows };
       }
@@ -8744,6 +8803,11 @@ export class RunManager {
     // login shell `runCheckStep` spawns sources the user's profile after this, so the guarantee
     // is about the server's environment, not about a profile that exports one of these names.
     const base: NodeJS.ProcessEnv = { ...process.env };
+    // Parent task authority never belongs to a check, including trusted checks.
+    // Match case-insensitively as agent env filtering does (and Windows requires).
+    for (const name of Object.keys(base)) {
+      if (name.toUpperCase() === 'CEZ_TRACKER_CAPABILITY') delete base[name];
+    }
     for (const name of CHECK_CONTEXT_VARS) {
       // `CEZ_PROJECT_ID` is the one context name that is ALSO a documented CLI input
       // (BACKWARD_COMPATIBILITY.md §1 — `cez task`/`cez automation` address a cockpit with it),

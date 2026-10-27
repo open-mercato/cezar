@@ -14,7 +14,7 @@ import { onWorkspaceEvent } from '@/api/global-events'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useHealth } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
-import { cliOf } from '@/lib/automation-cli'
+import { cliOf, trackerCliNeedsReview, TRACKER_CLI_REVIEW_NOTE } from '@/lib/automation-cli'
 import { useActiveProjectId } from '@/lib/project-router'
 import { writeClipboard } from '@/lib/clipboard'
 
@@ -139,7 +139,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         filters: automation.filters,
         task: automation.task,
       })
-      await copyText(line)
+      await copyText(line, trackerCliNeedsReview(automation) ? TRACKER_CLI_REVIEW_NOTE : undefined)
     },
     busy: preview.isPending || run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
   }
@@ -148,10 +148,10 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
 }
 
 /** Clipboard write with the honest failure the spec asks for (non-secure contexts have none). */
-export async function copyText(text: string): Promise<void> {
+export async function copyText(text: string, note?: string): Promise<void> {
   try {
     await writeClipboard(text)
-    toast('Copied to the clipboard.')
+    toast(note ? `Copied to the clipboard. ${note}` : 'Copied to the clipboard.')
   } catch {
     toast('Copy failed — select the text to copy it.', { tone: 'danger' })
   }

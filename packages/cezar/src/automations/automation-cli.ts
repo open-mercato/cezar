@@ -199,7 +199,7 @@ export function bodyFromAddFlags(values: {
     body.schedule = schedule;
   } else if (values.kind === 'tracker') {
     body.kind = 'tracker';
-    body.trackerTrigger = { events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
+    body.trackerTrigger = { access: { version: 1, writes: [] }, events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
       ...(values['to-status']?.length ? { targetStatusIds: values['to-status'] } : {}),
       ...(values['require-label']?.length ? { requiredLabels: values['require-label'] } : {}),
       ...(values['changed-label']?.length ? { changedLabelIds: values['changed-label'] } : {}),
@@ -221,6 +221,24 @@ export function bodyFromAddFlags(values: {
 
 function shortEvents(events: unknown): string {
   return Array.isArray(events) ? events.map(String).join(',') : '';
+}
+
+/**
+ * Tracker write grants are the user's explicit decision in the cockpit editor: this CLI (the agent's
+ * path) may keep or narrow them, never add one. Not a boundary against a same-user process.
+ */
+function withTrackerAccess(next: Record<string, unknown>, current?: Record<string, unknown>): void {
+  const trigger = next.trackerTrigger as { access?: { writes?: unknown } } | undefined;
+  if (!trigger || typeof trigger !== 'object') return;
+  const existing = (current?.trackerTrigger as { access?: { version: 1; writes: string[] } } | undefined)?.access;
+  if (!trigger.access) {
+    // A new definition starts read-only; an edit that restates the trigger keeps its grants.
+    if (existing || !current) (trigger as Record<string, unknown>).access = existing ?? { version: 1, writes: [] };
+    return;
+  }
+  const writes = Array.isArray(trigger.access.writes) ? trigger.access.writes : [];
+  const added = writes.filter(write => !(existing?.writes ?? []).includes(write as string));
+  if (added.length) throw new Error(`tracker write access (${added.join(', ')}) can only be granted in the cockpit's automation editor; create or update it read-only here`);
 }
 
 export async function runAutomationCommand(
@@ -283,6 +301,7 @@ export async function runAutomationCommand(
         // `enable: true` is the one-step "create and baseline". A definition that carries it
         // (copied from `show`) would be refused, so it is lifted into the flag's slot.
         const { enabled, ...body } = definition;
+        withTrackerAccess(body);
         const enable = values.enable || enabled === true;
         return await createFrom({ ...body, ...(enable ? { enable: true } : {}) });
       }
@@ -355,6 +374,7 @@ export async function runAutomationCommand(
         }
         // A PUT restates `enabled` (an edit may not silently pause a running automation) and
         // echoes the revision it read, so a concurrent edit in the cockpit is a 409, not a clobber.
+        withTrackerAccess(body, automation);
         body.enabled = 'enabled' in patch ? patch.enabled : automation.enabled;
         body.expectedRevision = automation.revision;
         const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) });
