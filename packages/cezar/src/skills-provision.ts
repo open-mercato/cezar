@@ -1,7 +1,8 @@
 import { copyFile, cp, lstat, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative } from 'node:path';
-import type { Skill } from './skills.ts';
-import { excludeFromGit, materializeSkillDir } from './skills-remote.ts';
+import { parseFrontmatter, type Skill } from './skills.ts';
+import { excludeFromGit, materializedSkillContent, materializeSkillDir } from './skills-remote.ts';
 import { reportError } from './telemetry.ts';
 
 /**
@@ -86,7 +87,11 @@ async function ignoreProvisioned(cwd: string, skillsDir: string, name: string): 
   await writeFile(file, [...lines, `/${name}`].join('\n') + '\n', 'utf8');
 }
 
-/** One skill into one skills dir. An existing entry (tracked, or the user's own) is never touched. */
+/**
+ * One skill into one skills dir. A team directory skill is (re)materialized from the clone every
+ * time, over whatever entry holds its name; any other existing entry (tracked, or the user's own)
+ * is never touched.
+ */
 async function provisionOne(cwd: string, skillsDir: string, skill: Skill): Promise<boolean> {
   // The name is frontmatter verbatim; it becomes a path segment, so it must be exactly one.
   if (!SAFE_SKILL_NAME.test(skill.name)) return false;
@@ -149,4 +154,59 @@ export async function provisionSkills(
     if (any) installed.push(skill.name);
   }
   return installed;
+}
+
+function readSkillFile(file: string): string | undefined {
+  try {
+    const raw = readFileSync(file, 'utf8');
+    return raw.trim() ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a materialized `SKILL.md` declares `name` (frontmatter `name`, else its directory). */
+function declaresSkill(raw: string, file: string, name: string): boolean {
+  const { frontmatter } = parseFrontmatter(raw);
+  const declared =
+    typeof frontmatter.name === 'string' && frontmatter.name.trim() ? frontmatter.name.trim() : basename(dirname(file));
+  return declared === name;
+}
+
+/**
+ * The `SKILL.md` inside `cwd` that carries exactly `skill`, for naming it to the agent instead of
+ * inlining the body. Native loaders pick a skill by NAME, so every `<dir>/<name>` entry in `cwd`
+ * must carry the selected skill. One that differs means the agent may load other instructions, and
+ * the body is inlined instead: a tracked or user-owned skill of the same name, which `provisionOne`
+ * leaves in place for an on-disk skill, or what a failed team materialization left behind.
+ * On-disk skills compare against their source file; a team skill against the blob this process
+ * materialized there, so a stale or foreign copy never counts. An in-place run's own installed
+ * `SKILL.md` counts as itself. Built-in skills return undefined.
+ */
+export function provisionedSkillFile(
+  cwd: string,
+  skill: Pick<Skill, 'name' | 'path' | 'source'>,
+): string | undefined {
+  if (!SAFE_SKILL_NAME.test(skill.name) || skill.source === 'builtin') return undefined;
+  let source: string | undefined;
+  let named: string | undefined;
+  if (skill.source !== 'team') {
+    if (!isAbsolute(skill.path)) return undefined;
+    source = readSkillFile(skill.path);
+    if (source === undefined) return undefined;
+    const inCwd = relative(cwd, skill.path);
+    if (inCwd && !inCwd.startsWith('..') && !isAbsolute(inCwd)) {
+      if (basename(skill.path) !== 'SKILL.md' || !declaresSkill(source, skill.path, skill.name)) return undefined;
+      named = skill.path;
+    }
+  }
+  for (const dir of PROVISION_SKILL_DIRS) {
+    const entry = join(cwd, dir, skill.name);
+    if (!existsSync(entry)) continue;
+    const file = join(entry, 'SKILL.md');
+    const expected = skill.source === 'team' ? materializedSkillContent(file) : source;
+    if (expected === undefined || readSkillFile(file) !== expected) return undefined;
+    named ??= file;
+  }
+  return named;
 }

@@ -377,6 +377,7 @@ export async function materializeSkillDir(
   /** Keeps the copy out of git; defaults to the shared `info/exclude`. */
   ignore: () => Promise<void> = () => excludeFromGit(repoRoot, `${skillsDir}/${skill.name}/`),
 ): Promise<boolean> {
+  materializedSkillFiles.delete(join(repoRoot, skillsDir, skill.name, 'SKILL.md'));
   if (!skill.team?.dir || !skill.team.path.endsWith('SKILL.md')) return false;
   const bareDir = bareDirFor(skill.team.repo);
   if (!existsSync(join(bareDir, 'HEAD'))) return false;
@@ -388,6 +389,7 @@ export async function materializeSkillDir(
 
   const destDir = join(repoRoot, skillsDir, skill.name);
   let wrote = 0;
+  let skillFile: { path: string; content: string } | undefined;
   for (const file of ls.stdout.split('\n').filter(Boolean)) {
     const rel = file.slice(srcDir.length + 1);
     // git paths are repo-relative and normalized, but never trust them blindly.
@@ -397,11 +399,26 @@ export async function materializeSkillDir(
     const target = join(destDir, rel);
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, show.stdout, 'utf8');
+    if (rel === 'SKILL.md') skillFile = { path: target, content: show.stdout };
     wrote++;
   }
   if (wrote === 0) return false;
   await ignore();
+  if (skillFile) rememberMaterialized(skillFile.path, skillFile.content);
   return true;
+}
+
+const MAX_MATERIALIZED = 1_000;
+const materializedSkillFiles = new Map<string, string>();
+
+function rememberMaterialized(file: string, content: string): void {
+  if (materializedSkillFiles.size >= MAX_MATERIALIZED) materializedSkillFiles.clear();
+  materializedSkillFiles.set(file, content);
+}
+
+/** The team `SKILL.md` blob this process last materialized at `file`, if any. */
+export function materializedSkillContent(file: string): string | undefined {
+  return materializedSkillFiles.get(file);
 }
 
 /** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */
@@ -465,9 +482,13 @@ export function shouldPassiveFetch(opts: {
 // project resolves its own `.ai/cezar/config.json` → `skillsRepos`, so one
 // project's team-skill list must never be served under another project's scope.
 const teamSkillsByRoot = new Map<string, Skill[]>();
-const firstLoadByRoot = new Map<string, Promise<Skill[]>>();
+interface TeamSkillsLoad {
+  promise: Promise<Skill[]>;
+  startedAt: number;
+  settled: boolean;
+}
+const loadByRoot = new Map<string, TeamSkillsLoad>();
 
-/** Forget every project's team-skill list — the workspace's org repos changed. */
 let teamSkillsGeneration = 0;
 let lastOrgSignature: string | undefined;
 
@@ -482,10 +503,11 @@ function orgReposSignature(): string {
   }
 }
 
+/** Forget every project's team-skill list — the workspace's org repos changed. */
 export function invalidateTeamSkills(): void {
   teamSkillsGeneration++;
   teamSkillsByRoot.clear();
-  firstLoadByRoot.clear();
+  loadByRoot.clear();
 }
 
 /** Drop every cached list when the org repos on disk differ from the ones last loaded. */
@@ -496,13 +518,37 @@ function syncOrgSignature(): void {
   invalidateTeamSkills();
 }
 
+/**
+ * Start a load and make it the root's current one. A load that settles after a newer one
+ * started (a Refresh racing a passive load) does not write the cache; its caller gets the
+ * newer load's result instead. A load that an invalidation overtook read a stale source list,
+ * so it does not write the cache either.
+ */
+function startTeamSkillsLoad(repoRoot: string, refresh: boolean): Promise<Skill[]> {
+  syncOrgSignature();
+  const generation = teamSkillsGeneration;
+  const load: TeamSkillsLoad = { promise: Promise.resolve([]), startedAt: Date.now(), settled: false };
+  load.promise = loadTeamSkills(repoRoot, refresh, load.startedAt)
+    .catch(() => teamSkillsByRoot.get(repoRoot) ?? [])
+    .then((skills) => {
+      load.settled = true;
+      const current = loadByRoot.get(repoRoot);
+      if (current && current !== load) return current.promise;
+      if (generation === teamSkillsGeneration) teamSkillsByRoot.set(repoRoot, skills);
+      return skills;
+    });
+  loadByRoot.set(repoRoot, load);
+  return load.promise;
+}
+
+/** Single-flight passive load: reuse the in-flight or still-fresh load, else start a new one. */
 function initialTeamSkillsLoad(repoRoot: string): Promise<Skill[]> {
   syncOrgSignature();
-  const existing = firstLoadByRoot.get(repoRoot);
-  if (existing) return existing;
-  const load = loadTeamSkills(repoRoot, false).catch(() => teamSkillsByRoot.get(repoRoot) ?? []);
-  firstLoadByRoot.set(repoRoot, load);
-  return load;
+  const current = loadByRoot.get(repoRoot);
+  if (current && (!current.settled || Date.now() - current.startedAt <= PASSIVE_FETCH_TTL_MS)) {
+    return current.promise;
+  }
+  return startTeamSkillsLoad(repoRoot, false);
 }
 
 /**
@@ -520,16 +566,18 @@ export function getTeamSkillsCached(repoRoot: string): Skill[] {
  * Wait for the same non-refreshing load kicked off by `getTeamSkillsCached`.
  * The normal catalog read stays immediate; callers use this only for a
  * background convergence read after they have already rendered local skills.
+ * Only the first load is ever awaited: once a list has settled, a TTL reload
+ * runs in the background and this answers with the list already held.
  */
 export function waitForTeamSkills(repoRoot: string): Promise<Skill[]> {
-  return initialTeamSkillsLoad(repoRoot);
+  const load = initialTeamSkillsLoad(repoRoot);
+  const settled = teamSkillsByRoot.get(repoRoot);
+  return settled ? Promise.resolve(settled) : load;
 }
 
 /** Refresh: clone missing sources, `git fetch` existing ones, reload the list. */
 export async function refreshTeamSkills(repoRoot: string): Promise<Skill[]> {
-  const load = loadTeamSkills(repoRoot, true).catch(() => teamSkillsByRoot.get(repoRoot) ?? []);
-  firstLoadByRoot.set(repoRoot, load);
-  return load;
+  return startTeamSkillsLoad(repoRoot, true);
 }
 
 /** Which repository a source names: the cache directory, with GitHub's case-insensitive
@@ -540,9 +588,7 @@ export function sourceIdentity(repo: string): string {
   return github ? key.toLowerCase() : key;
 }
 
-async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill[]> {
-  syncOrgSignature();
-  const generation = teamSkillsGeneration;
+async function loadTeamSkills(repoRoot: string, refresh: boolean, startedAt: number): Promise<Skill[]> {
   const config = await loadConfig(repoRoot);
   const org = (await loadWorkspaceConfig().catch(() => null))?.orgSkillsRepos ?? [];
   // Org repos are the user's own: strict `skills/` discovery, so docs and commands stay out.
@@ -569,12 +615,12 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
         const { bareDir, created } = await ensureBareClone(src.repo);
         if (!created) await fetchAll(bareDir);
         cloneAttempted.add(src.repo);
-        lastFetchByRepo.set(src.repo, Date.now());
+        lastFetchByRepo.set(src.repo, Math.max(lastFetchByRepo.get(src.repo) ?? 0, startedAt));
       } else if (
         shouldPassiveFetch({
           attempted: cloneAttempted.has(src.repo),
           fetchedAt: lastFetchByRepo.get(src.repo) ?? 0,
-          now: Date.now(),
+          now: startedAt,
           ttlMs: PASSIVE_FETCH_TTL_MS,
         })
       ) {
@@ -583,7 +629,7 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
         // A clone left by an earlier run is very likely behind origin; fetch it
         // so worktree reviews never read a stale skills template.
         if (!created) await fetchAll(bareDir);
-        lastFetchByRepo.set(src.repo, Date.now());
+        lastFetchByRepo.set(src.repo, Math.max(lastFetchByRepo.get(src.repo) ?? 0, startedAt));
       }
     } catch {
       // offline / no access — list whatever an older clone has (or nothing)
@@ -598,7 +644,5 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
       // degrade: this source contributes nothing
     }
   }
-  // An invalidation during this load means its source list is stale: don't publish it.
-  if (generation === teamSkillsGeneration) teamSkillsByRoot.set(repoRoot, out);
   return out;
 }
