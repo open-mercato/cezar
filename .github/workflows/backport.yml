@@ -1,30 +1,90 @@
 name: Backport
 
-# Cherry-picks a merged PR onto another line (docs/publishing.md § Release lines): label it
+# Cherry-picks merged PRs onto another line (docs/publishing.md § Release lines): label a PR
 # `backport release/vX.Y.x` (fix on main → a release line) or `backport main` (a hotfix that
-# landed on a release line first), before or after the merge. Each label opens one PR; a
-# conflict opens a draft with the conflict committed and instructions on the original PR.
+# landed on a line first), before or after the merge. Each label gets one PR; a conflict opens a
+# draft with the conflict committed and instructions on the original PR.
 #
-# `pull_request`, not `pull_request_target`: fork PRs get no secrets, so a merged fork
-# contribution is skipped here and ported by hand.
+# No job reacts to a PR's own event with secrets. `scripts/backport-queue.mts` scans recently
+# merged PRs in this repository's context instead, so fork PRs — whose events carry no secrets —
+# are backported like any other. The label is the source of truth: a backport is owed until an
+# open or merged backport PR exists; remove the label to stop one.
 on:
+  push:
+    branches: [main] # a merge, fork PRs included
+  schedule:
+    - cron: '7,22,37,52 * * * *' # labels added after a merge, and anything a run missed
+  workflow_dispatch:
   pull_request:
-    types: [closed, labeled]
+    types: [closed, labeled] # instant feedback for same-repo PRs; forks wait for the scan
 
 # Every write uses the release App's token; this job's own token only reads.
 permissions:
   contents: read
 
+# Runs one at a time, so two triggers for the same merge never open two PRs: the second scan
+# sees the first's backport. GitHub keeps one waiting run; the scan is idempotent. A run whose
+# queue job skips (an unmerged or fork PR's event) gets its own group, or it would displace a
+# waiting scan.
+concurrency:
+  group: >-
+    ${{ (github.event_name != 'pull_request' ||
+         (github.event.pull_request.merged == true &&
+          github.event.pull_request.head.repo.full_name == github.repository))
+        && 'backport' || format('backport-noop-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
+  queue:
+    name: Find owed backports
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # A fork's own PR event has no secrets to mint a token with; the push and the schedule cover it.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.merged == true &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    outputs:
+      jobs: ${{ steps.queue.outputs.jobs }}
+      count: ${{ steps.queue.outputs.count }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts
+            packages/cezar/src/release
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/* # runs the .mts tooling directly (type stripping)
+
+      - name: Mint the release token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Scan merged PRs
+        id: queue
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/backport-queue.mts
+
   backport:
-    name: Backport
+    name: 'Backport #${{ matrix.pr }} → ${{ matrix.target }}'
+    needs: queue
+    if: needs.queue.outputs.count != '0' && needs.queue.outputs.count != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: >-
-      github.event.pull_request.merged == true &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      ((github.event.action == 'closed' && contains(join(github.event.pull_request.labels.*.name, '|'), 'backport ')) ||
-       (github.event.action == 'labeled' && startsWith(github.event.label.name, 'backport ')))
+    strategy:
+      matrix: ${{ fromJSON(needs.queue.outputs.jobs) }}
+      fail-fast: false
+      max-parallel: 1
 
     steps:
       - name: Mint the release token
@@ -37,16 +97,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The merged-into branch; a merged PR's refs/pull/N/merge may already be gone.
-          ref: ${{ github.event.pull_request.base.ref }}
+          ref: ${{ matrix.target }}
           token: ${{ steps.app-token.outputs.token }}
 
-      - name: Open backport PRs
+      - name: Open the backport PR
         uses: korthout/backport-action@8560fb503c275d433c56f05a2f64850093baa9f7 # v4.7.0
         with:
           # The App's token, not GITHUB_TOKEN: a PR opened with GITHUB_TOKEN runs no CI.
           github_token: ${{ steps.app-token.outputs.token }}
-          label_pattern: '^backport (main|release/v\d+\.\d+\.x)$'
+          source_pr_number: ${{ matrix.pr }}
+          target_branches: ${{ matrix.target }}
+          # The queue already chose the target; matching no label keeps the action to that one.
+          label_pattern: '^queued-by-backport-queue ([^ ]+)$'
           # Release notes group PRs by category label and list their titles, so a backport keeps
           # both; priority/risk/QA labels route it through the review pipeline. Never qa-approved:
           # that vouched for main's code, not the line's.
