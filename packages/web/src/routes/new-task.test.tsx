@@ -157,6 +157,7 @@ const CONFIG: ConfigResponse = {
   worktreeRetention: 10,
   liveTitleUpdates: null,
   reviewGate: null,
+  permissions: null,
   profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
 }
 
@@ -474,6 +475,21 @@ describe('picker data flows', () => {
     expect(options.some((option) => option.textContent?.includes('opencode'))).toBe(false)
   })
 
+  it('can pick Auto after a configured non-auto default (#475)', async () => {
+    serve({ config: { permissions: { mode: 'guarded' } } })
+    renderNewTask()
+    await pillReady()
+
+    const permPill = () => document.querySelector('[data-slot="permission-pill"]') as HTMLElement
+    await waitFor(() => expect(permPill().textContent).toContain('guarded'))
+
+    fireEvent.pointerDown(permPill())
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((o) => o.textContent?.toLowerCase().includes('auto')) as HTMLElement)
+    await waitFor(() => expect(permPill().textContent).toContain('auto'))
+    expect(readDraft().permissionMode).toBe('auto')
+  })
+
   it('excludes connected but disabled providers while retaining an enabled runner choice', async () => {
     serve({
       health: HEALTH_ALL,
@@ -529,7 +545,7 @@ describe('picker data flows', () => {
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
       text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
-      worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+      worktree: null, autonomous: null, generateFollowups: null, permissionMode: null, dispatch: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -1041,7 +1057,7 @@ describe('submit', () => {
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
-      variants: 1, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+      variants: 1, worktree: null, autonomous: null, generateFollowups: null, permissionMode: null, dispatch: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()

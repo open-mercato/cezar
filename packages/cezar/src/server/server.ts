@@ -95,6 +95,7 @@ import {
   uploadIdParamSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  permissionSpecSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
@@ -840,6 +841,10 @@ const startRunSchema = z
     // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
     // off: the task itself is still perfectly valid as an ordinary run.
     dispatch: dispatchIntentSchema.optional(),
+    // Per-task permission mode override (spec 2026-07-17-permission-modes, #475).
+    // Merged with the config default (mode from the body; rules unioned). Absent = config
+    // or the historical zero-config posture.
+    permissions: permissionSpecSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -945,6 +950,9 @@ const uiStateSchema = z
     lastWorktree: z.boolean().optional(),
     lastAutonomous: z.boolean().optional(),
     lastGenerateFollowups: z.boolean().optional(),
+    // Last-used permission mode in the composer (spec 2026-07-17-permission-modes, #475).
+    // Stored as a string to stay additive-safe when new modes are added.
+    lastPermissionMode: z.string().optional(),
     // Default team-skill curation belongs to this repo's ui-state, never the workspace state.
     importedSkills: z.array(z.string().min(1).max(200)).max(UI_STATE_MAX_KEYS).optional(),
     // Skill selection frequency (#408): name → times chosen, incremented on a successful run
@@ -4883,6 +4891,8 @@ export function createApp(deps: ServerDeps) {
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
+        // Per-task permission override (spec 2026-07-17-permission-modes, #475).
+        ...(parsed.data.permissions ? { permissions: parsed.data.permissions } : {}),
         deviceSid: deviceSid(c.req.header('x-cezar-sid')),
       };
       if (variants > 1) {
@@ -4981,6 +4991,31 @@ export function createApp(deps: ServerDeps) {
       return c.json({ cancelled });
     })
 
+    // Answer a pending permission prompt (#475 Phase 2).
+    .post(
+      '/runs/:id/permissions/:requestId',
+      paramZodValidator(
+        z.object({
+          id: z.string().min(1),
+          requestId: z.string().min(1).max(200).regex(/^[^\s/]+$/, 'invalid requestId'),
+        }),
+        { message: 'invalid requestId' },
+      ),
+      jsonZodValidator(
+        z.object({ optionId: z.string().min(1).max(64) }).strict(),
+        { message: 'optionId is required' },
+      ),
+      async (c) => {
+        const { store, manager } = c.get('project');
+        const { id, requestId } = c.req.valid('param');
+        if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+        const { optionId } = c.req.valid('json');
+        const result = await manager.respondPermission(id, requestId, optionId);
+        if (result === 'not-found') return c.json({ error: 'not found' }, 404);
+        if (result === 'conflict') return c.json({ error: 'already resolved or session closed' }, 409);
+        return c.json({ ok: true });
+      },
+    )
     // "Start now": jump a queued run past the `maxParallel` cap.
     .post('/runs/:id/start-now', async (c) => {
       const { store, manager } = c.get('project');
@@ -7212,6 +7247,9 @@ export function createApp(deps: ServerDeps) {
       // Optional review gate (#489): tri-state — null means "no config key, the
       // CEZ_REVIEW_GATE env default (OFF) decides".
       reviewGate: config.reviewGate ?? null,
+      // Permission mode (spec 2026-07-17-permission-modes, #475): null means
+      // no key set — the client treats it as `auto`.
+      permissions: config.permissions ?? null,
       profile: config.profile ?? null,
       taskWorkspace: config.taskWorkspace ?? null,
       landing: config.landing ?? null,
@@ -7305,6 +7343,11 @@ export function createApp(deps: ServerDeps) {
           if (parsed.data.reviewGate !== undefined) {
             if (parsed.data.reviewGate === null) delete raw.reviewGate;
             else raw.reviewGate = parsed.data.reviewGate;
+          }
+          if (parsed.data.permissions !== undefined) {
+            // null clears back to the historical default (not skip-all).
+            if (parsed.data.permissions === null) delete raw.permissions;
+            else raw.permissions = parsed.data.permissions;
           }
           // Trunk-based keys (spec 2026-10-20-trunk-based-projects): null or '' clears.
           for (const key of ['profile', 'taskWorkspace', 'landing', 'defaultSkill', 'askSkill'] as const) {
@@ -7730,6 +7773,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.titleOrigin !== undefined ? { titleOrigin: run.titleOrigin } : {}),
     status: run.status,
     ...(run.activity !== undefined ? { activity: run.activity } : {}),
+    ...(run.awaitingPermission !== undefined ? { awaitingPermission: run.awaitingPermission } : {}),
     createdAt: run.createdAt,
     ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
     ...(run.seenAt !== undefined ? { seenAt: run.seenAt } : {}),

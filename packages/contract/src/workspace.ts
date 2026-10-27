@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema } from './health.ts';
+import { permissionSpecSchema } from './permissions.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
@@ -194,6 +195,9 @@ export const uiStateSchema = z.looseObject({
   lastWorktree: z.boolean().optional(),
   /** The last autonomous choice — remembered like `lastWorktree`. Absent → off. */
   lastAutonomous: z.boolean().optional(),
+  /** Last-used permission mode in the composer (spec 2026-07-17-permission-modes, #475).
+   *  Stored as a string to stay additive-safe when new modes are added. Absent → follow config. */
+  lastPermissionMode: z.string().optional(),
   /** Whether new runs should ask agents to append follow-up work. Absent → on. */
   lastGenerateFollowups: z.boolean().optional(),
   /** The selected default team skills for this repo. Absent means all default skills remain available. */
@@ -446,6 +450,10 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Permission mode (spec 2026-07-17-permission-modes, #475): null = no config key, which
+   *  keeps each backend's historical zero-config posture (Claude: `dontAsk` + coding-tool
+   *  allowlist; Codex/OpenCode: unrestricted). Explicit `{ mode: 'auto' }` is skip-all. */
+  permissions: permissionSpecSchema.nullable(),
   /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
    *  and the branch-per-task default applies. */
   profile: z.enum(['branches', 'trunk']).nullable(),
@@ -511,6 +519,8 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
+  /** null clears the key back to the historical workspace default (not skip-all). */
+  permissions: permissionSpecSchema.nullable().optional(),
   /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
    *  the branch-per-task default. */
   profile: z.enum(['branches', 'trunk']).nullable().optional(),

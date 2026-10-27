@@ -131,6 +131,7 @@ function serve({
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
+    permissions: null,
     profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
     ...config,
   }
@@ -170,6 +171,9 @@ function serve({
         }
         if (body?.reviewGate !== undefined) {
           state.reviewGate = body.reviewGate as boolean | null
+        }
+        if (body?.permissions !== undefined) {
+          state.permissions = body.permissions as ConfigResponse['permissions']
         }
         if (body?.defaultModels !== undefined) {
           for (const [runner, model] of Object.entries(body.defaultModels as Record<string, string | null>)) {

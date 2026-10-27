@@ -47,6 +47,7 @@ import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
+import { PermissionCard } from './permission-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { ThreadLoading } from './thread-loading'
 import { threadRenderMode } from './thread-scroll'
@@ -63,6 +64,7 @@ import {
   threadFilePaths,
   threadFooter,
   type ThreadAsk,
+  type ThreadPermission,
   type ThreadState,
 } from './thread-state'
 
@@ -300,6 +302,10 @@ export function ThreadView({
   const sections = useMemo(() => mainTranscriptSections(run, thread), [run, thread])
   const rows = useMemo(() => buildTranscriptRows(sections, run.id), [sections, run.id])
   const renderAsk = useCallback((ask: ThreadAsk) => <AskCard ask={ask} run={run} />, [run])
+  const renderPermission = useCallback(
+    (permission: ThreadPermission) => <PermissionCard permission={permission} run={run} />,
+    [run],
+  )
   const messageActions = useMemo<Readonly<Record<string, TranscriptMessageActions>> | undefined>(() => {
     if (edit === undefined) return undefined
     const actions: Record<string, TranscriptMessageActions> = {
@@ -364,6 +370,7 @@ export function ThreadView({
           sections={sections}
           mode="document"
           renderAsk={renderAsk}
+          renderPermission={renderPermission}
           messageActions={messageActions}
           scrollControls={scroll}
           renderMode={mode}

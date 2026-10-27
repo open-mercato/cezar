@@ -12,6 +12,8 @@ import type {
 } from './agent-runner.ts';
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import { translateOpencodePermissions, type PermissionSpec } from './permission-map.ts';
+import { opencodePermissionResponse } from './permission-prompt.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
@@ -320,6 +322,24 @@ class OpencodeSession implements AgentSession {
   }
 
   /**
+   * Answer a pending OpenCode permission prompt (#475).
+   * `POST /session/:id/permissions/:permissionID` with `{response: once|always|reject}`.
+   */
+  async respondPermission(requestId: string, optionId: string): Promise<boolean> {
+    if (!this.serverOpen || !this.baseUrl || !this.sessionId) return false;
+    const response = opencodePermissionResponse(optionId);
+    if (response === undefined) return false;
+    try {
+      await this.http('POST', `/session/${this.sessionId}/permissions/${encodeURIComponent(requestId)}`, {
+        response,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * The one place either signal is sent: SIGTERM now, SIGKILL once the grace
    * window elapses.
    *
@@ -503,9 +523,21 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
+    // Translate permissions (spec 2026-07-17-permission-modes, #475).
+    const effectivePermSpec: PermissionSpec = this.spec.permissions ?? { mode: 'auto' };
+    const opencodePerm = translateOpencodePermissions(effectivePermSpec);
+    if (opencodePerm.engineNote) {
+      this.emit({ type: 'note', message: opencodePerm.engineNote });
+    }
+    const sessionBody: Record<string, unknown> = { title: 'cezar task' };
+    // OpenCode ≥1.18: `permission` must be a Ruleset array
+    // (`{ permission, pattern, action }[]`). Object syntax 400s.
+    if (opencodePerm.permissions.length > 0) {
+      sessionBody.permission = opencodePerm.permissions;
+    }
     let created: Record<string, unknown>;
     try {
-      created = await this.http('POST', '/session', { title: 'cezar task' });
+      created = await this.http('POST', '/session', sessionBody);
     } catch (err) {
       // OpenCode 2.x moved its whole server API under `/api` with new payloads
       // and events, so its server refuses the 1.x route (telemetry dc1a91a6).

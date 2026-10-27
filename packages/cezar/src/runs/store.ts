@@ -214,6 +214,24 @@ export const runRecordSchema = z.object({
    *  group-pick winner-park read it). Additive-safe: absent = falsy = not
    *  autonomous. Set at creation from `WorkflowInput.autonomous`. */
   autonomous: z.boolean().optional(),
+  /**
+   * Permission mode snapshot (spec 2026-07-17-permission-modes, #475): the
+   * effective spec the run started with (mode + rules), for display and resume.
+   * Optional and additive: absent on all pre-#475 runs (historical posture, not skip-all).
+   */
+  permissions: z
+    .object({
+      mode: z.string(),
+      rules: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          ask: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional(),
+        })
+        .optional(),
+    })
+    .optional()
+    .catch(undefined),
   /** Optional provenance for tasks launched by a project GitHub automation. */
   automation: z
     .object({
@@ -277,6 +295,10 @@ export const runRecordSchema = z.object({
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
   activity: z.enum(['monitoring']).optional(),
+  /** True while a live `permission.requested` is unanswered (#475). Feeds the
+   *  attention ladder's `permission` bucket. Cleared on resolve/cancel and on
+   *  any non-waiting status (same invariant as `askParked`). */
+  awaitingPermission: z.boolean().optional(),
   /** Exact server-computed deadline for the next automatic monitoring check. */
   monitoringWakeAt: z.string().datetime().optional().catch(undefined),
   /** True only for the live epoch that exhausted all automatic monitoring checks. */
@@ -895,7 +917,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
-    const askParked = run.status === 'waiting' && run.askParked === true;
+    const askParked = run.status === 'waiting' && (run.askParked === true || run.awaitingPermission === true);
     run.status = 'failed';
     run.error = 'interrupted — cezar process exited during the run';
     run.finishedAt = run.finishedAt ?? new Date().toISOString();
@@ -920,7 +942,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   run.monitoringWakeCapReached = undefined;
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
-  if (run.status !== 'waiting') run.askParked = undefined;
+  if (run.status !== 'waiting') {
+    run.askParked = undefined;
+    run.awaitingPermission = undefined;
+  }
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
   // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
   // could match the created number. The evidence is all still on the record — only the
@@ -1360,6 +1385,7 @@ export class RunStore extends EventEmitter {
     // enforcing the invariant here spares every one of those callers the bookkeeping.
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
+      normalized.awaitingPermission = undefined;
     }
     // An unanswered question belongs to the `failed` run its closed session left behind: the
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.

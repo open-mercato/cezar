@@ -58,11 +58,29 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
   autoApplyText,
   availablePromptTemplates,
   normalizePromptTemplates,
   resolveAutoApply,
 } from '@/lib/prompt-templates'
+import {
+  DEFAULT_PERMISSION_PRESET,
+  isPermissionMode,
+  PERMISSION_MODES,
+  permissionModeLabel,
+  type PermissionChoice,
+  type PermissionMode,
+} from '@/lib/permission-modes'
 import {
   bumpSkillUsage,
   orderSkillsByUsage,
@@ -392,6 +410,16 @@ export function NewTaskRoute() {
   const worktreeOn = runMode.worktree && !askOn
   const autonomousOn = runMode.autonomous
 
+  // Permission mode: draft override → configured default → historical (`default`).
+  // A remembered last-used value must not outrank a configured security default (#475 M3).
+  const configPermissionMode: PermissionMode | null =
+    config.data?.permissions?.mode && isPermissionMode(config.data.permissions.mode)
+      ? config.data.permissions.mode
+      : null
+  const effectivePermissionMode: PermissionChoice = draft.permissionMode ?? configPermissionMode ?? 'default'
+  const permissionConflictsWithAutonomous =
+    autonomousOn && effectivePermissionMode !== 'auto' && effectivePermissionMode !== 'default'
+
   // Follow-up generation (#444) is offered only while the server has the global inbox on
   // (#471, `CEZ_FOLLOWUPS=1`) — there is no inbox for the follow-ups to land in otherwise, and
   // the server pins the flag to false regardless, so a toggle would be a lie. Hidden, the value
@@ -515,6 +543,11 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Pending submit blocked on the autonomous+permissions confirm (spec #475). */
+  const [permissionConfirm, setPermissionConfirm] = useState<{
+    text: string
+    submitted: AttachmentEntry[]
+  } | null>(null)
   const [startChoice, setStartChoice] = useState<StartChoice | null>(null)
   const [scheduleBlocked, setScheduleBlocked] = useState<string>()
   const [scheduleLabel, setScheduleLabel] = useState<{ text: string; title: string }>()
@@ -572,7 +605,7 @@ export function NewTaskRoute() {
     }
   }
   // Trimmed on both sides: the composer submits the trimmed body, so the preview must match it.
-  const taskBody = (text: string, submitted: AttachmentEntry[]) => {
+  const taskBody = (text: string, submitted: AttachmentEntry[], permissionMode: PermissionChoice = effectivePermissionMode) => {
     return buildCreateRunBody({
         task: text.trim(),
         source,
@@ -598,6 +631,12 @@ export function NewTaskRoute() {
         dispatch,
         readOnly: askOn,
         inPlaceByDefault,
+        // Only send an override when it differs from the config default — otherwise the
+        // server applies config (or the historical zero-config posture).
+        permissions:
+          permissionMode === 'default' || permissionMode === configPermissionMode
+            ? undefined
+            : { mode: permissionMode },
       })
   }
   const schedulingDisabledReason = images.length ? 'Remove attachments to schedule this task.' : deepLink.todo ? 'Tasks linked to a todo can only start now.' : health.data?.capabilities?.automations !== true ? 'Scheduling is disabled on this server.' : undefined
@@ -622,7 +661,16 @@ export function NewTaskRoute() {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
     }
-    const body = taskBody(text, submitted)
+    // Autonomous + non-auto permissions: confirm before starting (spec #475). Checking
+    // Autonomous never silently changes the mode.
+    if (permissionConflictsWithAutonomous) {
+      setPermissionConfirm({ text, submitted })
+      return
+    }
+    await startRun(text, submitted, effectivePermissionMode)
+  }
+  const startRun = async (text: string, submitted: AttachmentEntry[], permissionMode: PermissionChoice) => {
+    const body = taskBody(text, submitted, permissionMode)
     if (startChoice) {
       if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.settingsKey !== previewSettingsKey(body)) throw new Error('Check the start time again after changing the task settings.')
       await sendSchedule({ task: body, start: startChoice.start, previewRevision: startChoice.preview.previewRevision, idempotencyKey: crypto.randomUUID() })
@@ -642,6 +690,7 @@ export function NewTaskRoute() {
       // filling the list with the default would push real choices out of it.
       ...(source ? { recentSources: pushRecentSource(recentSources, source) } : {}),
       ...(followupsToggleShown ? { lastGenerateFollowups: generateFollowupsOn } : {}),
+      lastPermissionMode: permissionMode === 'default' ? undefined : permissionMode,
       // Frequency sort (#408): only a SKILL pick counts — the map is keyed by skill name, and a
       // workflow choice here doesn't select one directly. Gated on the CURRENT map being known:
       // the PUT merge is shallow, so bumping off an errored ui-state query (`sourcesReady` only
@@ -877,6 +926,29 @@ export function NewTaskRoute() {
                 on={autonomousOn}
                 onChange={(on) => update({ autonomous: on })}
               />
+              <PickerPill
+                slot="permission-pill"
+                ariaLabel="Permission mode"
+                label={permissionModeLabel(effectivePermissionMode).toLowerCase()}
+                value={effectivePermissionMode}
+                hint="What the agent may do without asking. Default keeps Claude's historical dontAsk allowlist; Auto is skip-all."
+                className={
+                  permissionConflictsWithAutonomous
+                    ? 'border-warning/60 text-warning'
+                    : effectivePermissionMode !== 'auto' && effectivePermissionMode !== 'default'
+                      ? 'border-warning/40 text-pending-strong'
+                      : undefined
+                }
+                onPick={(next) => {
+                  if (next === 'default') update({ permissionMode: null })
+                  else update({ permissionMode: next as PermissionMode })
+                }}
+                options={[DEFAULT_PERMISSION_PRESET, ...PERMISSION_MODES].map((m) => ({
+                  value: m.id,
+                  label: m.label,
+                  desc: m.desc,
+                }))}
+              />
               {followupsToggleShown ? (
                 <GenerateFollowupsToggle
                   on={generateFollowupsOn}
@@ -968,9 +1040,71 @@ export function NewTaskRoute() {
           </p>
         ) : null}
 
+        {permissionConflictsWithAutonomous ? (
+          <p
+            data-slot="permission-autonomous-guard"
+            className="mt-2 flex gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning"
+          >
+            <span aria-hidden="true">⚠️</span>
+            <span>
+              <strong className="font-semibold">
+                Autonomous + {permissionModeLabel(effectivePermissionMode)}:
+              </strong>{' '}
+              this run pauses whenever{' '}
+              {PERMISSION_MODES.find((m) => m.id === effectivePermissionMode)?.askWhat ||
+                'the agent needs permission'}
+              , so it will need your attention. Switch to <strong className="font-semibold">Auto</strong>{' '}
+              to let it run unattended.
+            </span>
+          </p>
+        ) : null}
+
         <SuggestedChips onPick={(text) => update({ text })} />
       </div>
 
+      <AlertDialog
+        open={permissionConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setPermissionConfirm(null)
+        }}
+      >
+        <AlertDialogContent data-slot="permission-autonomous-confirm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Autonomous runs park on permission prompts</AlertDialogTitle>
+            <AlertDialogDescription>
+              The permission mode is <strong>{permissionModeLabel(effectivePermissionMode)}</strong>:{' '}
+              {PERMISSION_MODES.find((m) => m.id === effectivePermissionMode)?.askWhat ||
+                'the agent'}{' '}
+              will pause the run until you approve them — the opposite of unattended. Use{' '}
+              <strong>Auto</strong> for this task instead?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-transparent px-4 text-sm font-medium hover:bg-muted"
+              onClick={() => {
+                const pending = permissionConfirm
+                setPermissionConfirm(null)
+                if (pending) void startRun(pending.text, pending.submitted, effectivePermissionMode)
+              }}
+            >
+              Continue with {permissionModeLabel(effectivePermissionMode)}
+            </button>
+            <AlertDialogAction
+              onClick={() => {
+                const pending = permissionConfirm
+                setPermissionConfirm(null)
+                update({ permissionMode: 'auto' })
+                if (pending) void startRun(pending.text, pending.submitted, 'auto')
+              }}
+            >
+              Use Auto for this task
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

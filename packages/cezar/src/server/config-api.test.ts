@@ -86,6 +86,7 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      permissions: null,
       profile: null,
       taskWorkspace: null,
       landing: null,
@@ -272,6 +273,7 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      permissions: null,
       profile: null,
       taskWorkspace: null,
       landing: null,
@@ -480,5 +482,21 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     const cleared = (await (await put({ reviewGate: null })).json()) as Record<string, unknown>;
     expect(cleared.reviewGate).toBeNull();
     expect(rawFile().reviewGate).toBeUndefined();
+  });
+
+  it('rejects an illegal permission specifier with 400 instead of storing a fail-open config', async () => {
+    const res = await put({
+      permissions: { mode: 'manual', rules: { deny: ['Bash (git *)'] } },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('round-trips an explicit auto (skip-all) distinct from null (historical)', async () => {
+    const saved = (await (await put({ permissions: { mode: 'auto' } })).json()) as {
+      permissions: { mode: string } | null;
+    };
+    expect(saved.permissions?.mode).toBe('auto');
+    const cleared = (await (await put({ permissions: null })).json()) as { permissions: unknown };
+    expect(cleared.permissions).toBeNull();
   });
 });

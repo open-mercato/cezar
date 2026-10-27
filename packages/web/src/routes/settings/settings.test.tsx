@@ -82,6 +82,7 @@ const AGENTS_CONFIG = {
   worktreeRetention: 10,
   liveTitleUpdates: null,
   reviewGate: null,
+    permissions: null,
   profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
 }
 

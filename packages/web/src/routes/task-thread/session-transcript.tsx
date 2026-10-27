@@ -31,6 +31,7 @@ import type {
   ThreadEntry,
   ThreadImage,
   ThreadNote,
+  ThreadPermission,
   ThreadAgentUpdateRequired,
   ThreadProviderAuthRequired,
   ThreadState,
@@ -89,6 +90,8 @@ export interface SessionTranscriptProps {
   empty?: ReactNode
   /** Injects the run-aware reply behavior without coupling this view to run data or stores. */
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  /** Injects the run-aware permission prompt card (#475). */
+  renderPermission?: (permission: ThreadPermission) => ReactNode
   messageActions?: Readonly<Record<string, TranscriptMessageActions>>
   /** Main-document integration preserves the shell's existing dock-owned jump pill. */
   scrollControls?: ThreadScrollControls
@@ -234,6 +237,7 @@ export function SessionTranscript({
   mode,
   empty,
   renderAsk,
+  renderPermission,
   messageActions,
   scrollControls,
   renderMode,
@@ -255,10 +259,11 @@ export function SessionTranscript({
             row={row}
             actions={messageActions?.[row.key]}
             renderAsk={renderAsk}
+            renderPermission={renderPermission}
           />
         ),
       })),
-    [messageActions, renderAsk, rowModels, runId],
+    [messageActions, renderAsk, renderPermission, rowModels, runId],
   )
   const rowMode = renderMode ?? threadRenderMode('', rows.length)
 
@@ -300,13 +305,15 @@ function TranscriptRow({
   row,
   actions,
   renderAsk,
+  renderPermission,
 }: {
   runId: string
   row: TranscriptRowModel
   actions?: TranscriptMessageActions
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  renderPermission?: (permission: ThreadPermission) => ReactNode
 }) {
-  return renderRowContent(runId, row, actions, renderAsk)
+  return renderRowContent(runId, row, actions, renderAsk, renderPermission)
 }
 
 const MemoizedRow = memo(
@@ -315,6 +322,7 @@ const MemoizedRow = memo(
     before.runId === after.runId &&
     before.actions === after.actions &&
     before.renderAsk === after.renderAsk &&
+    before.renderPermission === after.renderPermission &&
     sameData(before.row, after.row),
 )
 
@@ -323,6 +331,7 @@ function renderRowContent(
   row: TranscriptRowModel,
   actions: TranscriptMessageActions | undefined,
   renderAsk: ((ask: ThreadAsk) => ReactNode) | undefined,
+  renderPermission: ((permission: ThreadPermission) => ReactNode) | undefined,
 ): ReactNode {
   switch (row.content.kind) {
     case 'user-message':
@@ -337,7 +346,14 @@ function renderRowContent(
         />
       )
     case 'block':
-      return <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
+      return (
+        <ThreadBlockRenderer
+          block={row.content.block}
+          scope={row.scope}
+          renderAsk={renderAsk}
+          renderPermission={renderPermission}
+        />
+      )
     default:
       return assertNever(row.content)
   }
@@ -372,14 +388,23 @@ const ThreadBlockRenderer = memo(function ThreadBlockRenderer({
   block,
   scope,
   renderAsk,
+  renderPermission,
 }: {
   block: ThreadBlock
   scope: string
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  renderPermission?: (permission: ThreadPermission) => ReactNode
 }): ReactNode {
   switch (block.kind) {
     case 'entry':
-      return <ThreadEntryRenderer entry={block.entry} scope={scope} renderAsk={renderAsk} />
+      return (
+        <ThreadEntryRenderer
+          entry={block.entry}
+          scope={scope}
+          renderAsk={renderAsk}
+          renderPermission={renderPermission}
+        />
+      )
     case 'tool-card':
       return (
         <ToolCard
@@ -387,7 +412,12 @@ const ThreadBlockRenderer = memo(function ThreadBlockRenderer({
           nested={block.children}
           cacheKey={`${scope}:${block.id}`}
           renderNested={(entries, nestedScope) => (
-            <GroupedEntries entries={entries} scope={nestedScope} renderAsk={renderAsk} />
+            <GroupedEntries
+              entries={entries}
+              scope={nestedScope}
+              renderAsk={renderAsk}
+              renderPermission={renderPermission}
+            />
           )}
         />
       )
@@ -397,7 +427,13 @@ const ThreadBlockRenderer = memo(function ThreadBlockRenderer({
       return (
         <ToolStreak count={block.count}>
           {block.blocks.map((inner) => (
-            <ThreadBlockRenderer key={inner.id} block={inner} scope={scope} renderAsk={renderAsk} />
+            <ThreadBlockRenderer
+              key={inner.id}
+              block={inner}
+              scope={scope}
+              renderAsk={renderAsk}
+              renderPermission={renderPermission}
+            />
           ))}
         </ToolStreak>
       )
@@ -410,13 +446,21 @@ function GroupedEntries({
   entries,
   scope,
   renderAsk,
+  renderPermission,
 }: {
   entries: readonly ThreadEntry[]
   scope: string
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  renderPermission?: (permission: ThreadPermission) => ReactNode
 }) {
   return groupThreadItems([...entries]).map((block) => (
-    <ThreadBlockRenderer key={block.id} block={block} scope={scope} renderAsk={renderAsk} />
+    <ThreadBlockRenderer
+      key={block.id}
+      block={block}
+      scope={scope}
+      renderAsk={renderAsk}
+      renderPermission={renderPermission}
+    />
   ))
 }
 
@@ -424,10 +468,12 @@ function ThreadEntryRenderer({
   entry,
   scope,
   renderAsk,
+  renderPermission,
 }: {
   entry: ThreadEntry
   scope: string
   renderAsk?: (ask: ThreadAsk) => ReactNode
+  renderPermission?: (permission: ThreadPermission) => ReactNode
 }): ReactNode {
   switch (entry.kind) {
     case 'message':
@@ -452,6 +498,17 @@ function ThreadEntryRenderer({
           The agent asked a question. Open the main session to answer it.
         </div>
       )
+    case 'permission':
+      return renderPermission !== undefined ? (
+        renderPermission(entry)
+      ) : (
+        <div
+          data-slot="permission-card"
+          className="rounded-lg border border-border bg-card px-4 py-3 text-sm"
+        >
+          Permission needed. Open the main session to answer it.
+        </div>
+      )
     case 'provider-auth-required':
       return <ProviderAuthRequiredCard incident={entry} />
     case 'agent-update-required':
@@ -466,13 +523,24 @@ function assertNever(value: never): never {
 }
 
 function sameThreadBlockProps(
-  previous: { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode },
-  next: { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode },
+  previous: {
+    block: ThreadBlock
+    scope: string
+    renderAsk?: (ask: ThreadAsk) => ReactNode
+    renderPermission?: (permission: ThreadPermission) => ReactNode
+  },
+  next: {
+    block: ThreadBlock
+    scope: string
+    renderAsk?: (ask: ThreadAsk) => ReactNode
+    renderPermission?: (permission: ThreadPermission) => ReactNode
+  },
 ): boolean {
   return (
     previous.scope === next.scope &&
     sameThreadBlock(previous.block, next.block) &&
-    (!containsAsk(next.block) || previous.renderAsk === next.renderAsk)
+    (!containsAsk(next.block) || previous.renderAsk === next.renderAsk) &&
+    (!containsPermission(next.block) || previous.renderPermission === next.renderPermission)
   )
 }
 
@@ -481,6 +549,13 @@ function containsAsk(block: ThreadBlock): boolean {
   if (block.kind === 'tool-card') return block.children.some((entry) => entry.kind === 'ask')
   if (block.kind === 'context-group') return false
   return block.blocks.some(containsAsk)
+}
+
+function containsPermission(block: ThreadBlock): boolean {
+  if (block.kind === 'entry') return block.entry.kind === 'permission'
+  if (block.kind === 'tool-card') return block.children.some((entry) => entry.kind === 'permission')
+  if (block.kind === 'context-group') return false
+  return block.blocks.some(containsPermission)
 }
 
 function sameThreadBlock(previous: ThreadBlock, next: ThreadBlock): boolean {
@@ -534,6 +609,8 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
       return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
     case 'ask':
       return previous.kind === 'ask' && sameFields(previous, next, ASK_COMPARE_FIELDS)
+    case 'permission':
+      return previous.kind === 'permission' && sameFields(previous, next, PERMISSION_COMPARE_FIELDS)
     case 'provider-auth-required':
       return previous.kind === 'provider-auth-required' &&
         sameFields(previous, next, PROVIDER_AUTH_COMPARE_FIELDS)
@@ -583,6 +660,16 @@ const ASK_COMPARE_FIELDS = {
   answer: true,
   fromWorkflow: true,
 } satisfies Record<keyof ThreadAsk, true>
+
+const PERMISSION_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  title: true,
+  options: true,
+  resolved: true,
+  optionId: true,
+  cancelled: true,
+} satisfies Record<keyof ThreadPermission, true>
 
 const PROVIDER_AUTH_COMPARE_FIELDS = {
   kind: true,
