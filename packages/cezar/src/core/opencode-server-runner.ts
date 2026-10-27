@@ -481,7 +481,11 @@ class OpencodeSession implements AgentSession {
           .catch(() => undefined);
       }, SERVER_PROBE_INTERVAL_MS);
       probe.unref?.();
-      const onExit = () => fail('opencode serve exited before it started listening');
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${code}`;
+        const tail = stderrChunks.join('').trim().slice(-800);
+        fail(`opencode serve exited before it started listening (${detail})${tail ? `: ${tail}` : ''}`);
+      };
       const cleanup = () => {
         settled = true;
         clearTimeout(stall);
@@ -838,7 +842,12 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      const envelope = parseRecord(res.body);
+      const data = isRecord(envelope.data) ? envelope.data : {};
+      const name = stringField(envelope, 'name');
+      const message = stringField(data, 'message');
+      const detail = name && message ? `${name}: ${message}`.slice(0, 300) : res.body.slice(0, 200);
+      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${detail}`);
     }
     if (!res.body) return {};
     try {

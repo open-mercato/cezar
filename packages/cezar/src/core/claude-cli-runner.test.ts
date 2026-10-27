@@ -401,6 +401,25 @@ describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', ()
   });
 });
 
+describe('a CLI that dies before reading its prompt', () => {
+  const stubBin = fileURLToPath(
+    new URL('./__fixtures__/claude/stub-exits-before-reading.mjs', import.meta.url),
+  );
+
+  // A failed stdin write surfaces as an async 'error' event on the pipe, not a throw; unhandled,
+  // it crashed the whole cezar process (seen on a fleet hub when the CLI failed to start).
+  it('fails the session instead of crashing the process on EPIPE', async () => {
+    const runner = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      { userPrompt: 'x'.repeat(8 * 1024 * 1024), cwd: process.cwd() },
+      () => {},
+    );
+    await expect(session.result).rejects.toThrow('claude CLI exited with code 1');
+    // Give a late EPIPE time to surface as an unhandled error, which vitest reports as a failure.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  });
+});
+
 // Spec 2026-10-24 item 9 (eb4b12dc): a gateway's OpenAI-shaped envelope read as its type and message.
 describe('claude result error with a JSON envelope', () => {
   it('shows the vendor error type and message, not the raw JSON', async () => {

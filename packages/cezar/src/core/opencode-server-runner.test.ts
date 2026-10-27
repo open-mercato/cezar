@@ -216,6 +216,24 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
+  it('includes the early exit status and bounded stderr tail', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}EADDRINUSE`);
+    (child as unknown as EventEmitter).emit('exit', 1, null);
+    await session.result.catch(() => undefined);
+    expect(events).toContainEqual({
+      type: 'error',
+      message: `opencode: opencode serve exited before it started listening (exit code 1): ${'x'.repeat(790)}EADDRINUSE`,
+    });
+  });
+
   // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
   it('keeps waiting while the server is still printing, up to the hard cap', async () => {
     const child = silentChild();
@@ -322,6 +340,19 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     expect(errors(events)).toEqual([]);
     expect(events.map((e) => e.type)).toContain('turn-end');
     expect(result.sessionId).toBe('ses_mock_1');
+  }, 30_000);
+
+  it('surfaces the OpenCode error name and message for a failed prompt POST', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: '#http-error', cwd: process.cwd() },
+      (e) => events.push(e),
+    );
+    await session.result;
+    expect(errors(events)).toContainEqual({
+      type: 'error',
+      message: 'opencode: POST /session/ses_mock_1/message → 500 InternalError: Provider rejected the configured model',
+    });
   }, 30_000);
 
   it('never adopts a server on that port that serves another directory', async () => {
