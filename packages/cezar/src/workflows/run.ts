@@ -89,7 +89,7 @@ import {
 import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
-import { getHeadCommit, getRepoInfo } from '../server/git.ts';
+import { clearRepoInfoCache, getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
@@ -5135,7 +5135,7 @@ export class RunManager {
     // `.ai/cezar/worktrees/<id>`, never in the user's working tree. A Git task
     // that requests isolation fails closed if the worktree cannot be
     // established; only explicit opt-out and non-Git modes run in place.
-    const repo = await getRepoInfo(this.repoRoot);
+    const repo = await getRepoInfo(this.repoRoot, { fresh: true });
     if (state.cancelled) {
       this.dropActive(runId, state);
       return;
@@ -5295,11 +5295,12 @@ export class RunManager {
     }
     if (repo && switchInPlaceTo && !state.cancelled) {
       // Re-read HEAD: the lease wait may have let another in-place run move the checkout.
-      const current = (await getRepoInfo(this.repoRoot))?.branch ?? repo.branch;
+      const current = (await getRepoInfo(this.repoRoot, { fresh: true }))?.branch ?? repo.branch;
       const base = await chooseForkBase(this.repoRoot, current, config.baseBranch, (message) =>
         emit({ type: 'note', message }),
       );
       const switched = await createOrSwitchBranch(repo.root, switchInPlaceTo, base);
+      clearRepoInfoCache();
       if (!switched.ok) {
         const error = `could not switch the checkout to ${switchInPlaceTo}: ${switched.error}`;
         this.store.updateRun(runId, { status: 'failed', error, finishedAt: new Date().toISOString(), currentStepId: undefined });

@@ -1,9 +1,46 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getHeadCommit, getRepoInfo } from './git.ts';
+import * as gitApi from './git.ts';
+import { getBranches, getHeadCommit, getRepoInfo } from './git.ts';
+
+/** Named via the namespace so the memo tests can load against a build that
+ *  predates the export and still fail on behavior, not on an import error. */
+const clearRepoInfoCache = (gitApi as { clearRepoInfoCache?: () => void }).clearRepoInfoCache;
+
+/**
+ * A PATH shim that logs every `git` invocation and execs the real binary, so a
+ * test can assert on the number of child processes a helper starts. Each test
+ * installs and restores its own (vitest gives each file its own worker).
+ */
+function installGitShim(): { calls: () => number; restore: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), 'cez-git-shim-'));
+  const log = join(dir, 'calls.log');
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+  writeFileSync(
+    join(dir, 'git'),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexec ${JSON.stringify(realGit)} "$@"\n`,
+  );
+  chmodSync(join(dir, 'git'), 0o755);
+  const previous = process.env.PATH;
+  process.env.PATH = `${dir}:${previous ?? ''}`;
+  const count = () => {
+    try {
+      return readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+    } catch {
+      return 0;
+    }
+  };
+  return {
+    calls: count,
+    restore: () => {
+      process.env.PATH = previous;
+      rmSync(dir, { recursive: true, force: true });
+    },
+  };
+}
 
 /**
  * getRepoInfo remote discovery: the forge seam (and so the GitHub tab) hangs
@@ -85,4 +122,85 @@ it('preserves the default non-isolated path for repositories before their first 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe('getRepoInfo memoization', () => {
+  function repo(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-git-memo-'));
+    g(dir, 'init', '-q', '-b', 'main');
+    g(dir, '-c', 'user.email=t@test', '-c', 'user.name=t', 'commit', '--allow-empty', '-q', '-m', 'init');
+    return dir;
+  }
+
+  it('serves a repeated default read from the memo; a clear makes it fresh again', async () => {
+    const dir = repo();
+    const shim = installGitShim();
+    try {
+      clearRepoInfoCache?.();
+      const start = shim.calls();
+      await getRepoInfo(dir);
+      const first = shim.calls();
+      expect(first).toBeGreaterThan(start);
+      await getRepoInfo(dir);
+      expect(shim.calls()).toBe(first);
+      clearRepoInfoCache?.();
+      await getRepoInfo(dir);
+      expect(shim.calls()).toBeGreaterThan(first);
+    } finally {
+      shim.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves identity-sensitive option-bearing reads uncached', async () => {
+    const dir = repo();
+    const shim = installGitShim();
+    try {
+      clearRepoInfoCache?.();
+      await getRepoInfo(dir, { requireRemoteRead: true });
+      const first = shim.calls();
+      await getRepoInfo(dir, { requireRemoteRead: true });
+      expect(shim.calls()).toBeGreaterThan(first);
+    } finally {
+      shim.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('bypasses the memo for a fresh read of a branch switched inside the TTL', async () => {
+    const dir = repo();
+    try {
+      clearRepoInfoCache?.();
+      expect((await getRepoInfo(dir))?.branch).toBe('main');
+      g(dir, 'checkout', '-q', '-b', 'other');
+      // The cached default is still the branch it saw a moment ago…
+      expect((await getRepoInfo(dir))?.branch).toBe('main');
+      // …while a fresh read reflects the checkout that already happened.
+      expect((await getRepoInfo(dir, { fresh: true }))?.branch).toBe('other');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('getBranches', () => {
+  it('answers local and remote branches in a single git spawn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-git-branches-'));
+    g(dir, 'init', '-q', '-b', 'main');
+    g(dir, '-c', 'user.email=t@test', '-c', 'user.name=t', 'commit', '--allow-empty', '-q', '-m', 'init');
+    g(dir, 'branch', 'feature');
+    g(dir, 'branch', 'cez/deadbeef');
+    const shim = installGitShim();
+    try {
+      const start = shim.calls();
+      const branches = await getBranches(dir);
+      expect(shim.calls() - start).toBe(1);
+      expect(branches).toContain('main');
+      expect(branches).toContain('feature');
+      expect(branches).not.toContain('cez/deadbeef');
+    } finally {
+      shim.restore();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

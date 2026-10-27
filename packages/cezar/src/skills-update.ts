@@ -4,6 +4,8 @@ import { access, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { cezarCacheDir } from './paths.ts';
+import { readJsonCache, writeJsonCache } from './skills-cache-state.ts';
 
 const execFileAsync = promisify(execFile);
 const CHECK_TTL_MS = 6 * 60 * 60 * 1_000;
@@ -131,9 +133,12 @@ export class SkillsUpdateService {
   private readonly invalidateCatalog: NonNullable<SkillsUpdateServiceOptions['invalidateCatalog']>;
   private readonly states = new Map<string, SkillsUpdateState>();
   private readonly pending = new Map<string, Promise<SkillsUpdateState>>();
+  private readonly cacheDir: string;
+  private readonly statePath: string;
   private readonly updating = new Set<string>();
   private globalScopeCache?: SkillsUpdateScopeState;
   private operationTail: Promise<void> = Promise.resolve();
+  private hydrated = false;
 
   constructor(options: SkillsUpdateServiceOptions = {}) {
     this.home = options.homeDir ?? homedir();
@@ -142,16 +147,58 @@ export class SkillsUpdateService {
     this.runCommand = options.run ?? defaultRun;
     this.resolveNpx = options.resolveNpx ?? defaultResolveNpx;
     this.invalidateCatalog = options.invalidateCatalog ?? (() => undefined);
+    // A pinned `homeDir` keeps its own cache; the default is `~/.cache/cez`, or
+    // under a pinned `CEZ_HOME`, so a suite never writes the real home.
+    this.cacheDir = options.homeDir ? join(options.homeDir, '.cache', 'cez') : cezarCacheDir();
+    this.statePath = join(this.cacheDir, 'skills-update-state.json');
+  }
+
+  /**
+   * Seed `checkedAt` from `~/.cache/cez` so a restart inside the six-hour
+   * window does not re-run `npx --yes skills check` for every scope. Read once,
+   * lazily, and only when the file parses as this version — a corrupt or
+   * unwritable cache degrades to in-memory state.
+   */
+  private hydrate(): void {
+    if (this.hydrated) return;
+    this.hydrated = true;
+    const parsed = readJsonCache<{
+      version?: number;
+      states?: Record<string, SkillsUpdateState>;
+      globalScope?: SkillsUpdateScopeState;
+    }>(this.statePath);
+    if (!parsed || parsed.version !== 1) return;
+    if (parsed.states && typeof parsed.states === 'object') {
+      for (const [root, state] of Object.entries(parsed.states)) {
+        if (state && typeof state === 'object') this.states.set(root, state);
+      }
+    }
+    if (parsed.globalScope) this.globalScopeCache = parsed.globalScope;
+  }
+
+  private persist(): void {
+    writeJsonCache(this.statePath, {
+      version: 1,
+      states: Object.fromEntries(this.states),
+      ...(this.globalScopeCache ? { globalScope: this.globalScopeCache } : {}),
+    });
+  }
+
+  private remember(repoRoot: string, state: SkillsUpdateState): void {
+    this.states.set(repoRoot, state);
+    this.persist();
   }
 
   /** An in-flight apply shows as `updating`, so a cockpit whose apply request dropped can
    * follow it to the end instead of guessing (telemetry edd8c83e). */
   snapshot(repoRoot: string): SkillsUpdateState {
+    this.hydrate();
     const state = this.states.get(repoRoot) ?? this.makeState();
     return this.updating.has(repoRoot) ? { ...state, status: 'updating' } : state;
   }
 
   check(repoRoot: string, force = false): Promise<SkillsUpdateState> {
+    this.hydrate();
     const cached = this.states.get(repoRoot);
     if (!force && cached?.checkedAt && this.now() - Date.parse(cached.checkedAt) < CHECK_TTL_MS) return Promise.resolve(cached);
     const active = this.pending.get(repoRoot);
@@ -165,6 +212,7 @@ export class SkillsUpdateService {
    * cannot widen this list: ownership is re-read from the lock immediately
    * before each fixed-argument invocation. */
   update(repoRoot: string, rejectIfBusy = false): Promise<SkillsUpdateState> {
+    this.hydrate();
     const active = this.pending.get(repoRoot);
     if (active) return rejectIfBusy ? Promise.reject(new SkillsUpdateConflictError()) : active;
     this.updating.add(repoRoot);
@@ -177,7 +225,8 @@ export class SkillsUpdateService {
   }
 
   evict(repoRoot: string): void {
-    this.states.delete(repoRoot);
+    this.hydrate();
+    if (this.states.delete(repoRoot)) this.persist();
   }
 
   private async serialized<T>(operation: () => Promise<T>): Promise<T> {
@@ -198,6 +247,8 @@ export class SkillsUpdateService {
       const checkedAt = new Date(this.now()).toISOString();
       const scopes = [blankScope('project'), blankScope('global')].map((scope) => ({ ...scope, status: 'current' as const, checkedAt }));
       const state = { ...this.makeState(scopes), status: 'current' as const, checkedAt };
+      // Dry-run is a simulation — never persisted, so it cannot convince a real
+      // boot that a check already happened.
       this.states.set(repoRoot, state); return state;
     }
     const lockPath = join(this.home, '.cache', 'cez', 'skills-update.lock');
@@ -217,7 +268,7 @@ export class SkillsUpdateService {
           scopes.push(this.globalScopeCache);
         } else {
           const result = await this.checkScope(scope, path, repoRoot, npx);
-          if (scope === 'global') this.globalScopeCache = result;
+          if (scope === 'global') { this.globalScopeCache = result; this.persist(); }
           scopes.push(result);
         }
       }
@@ -227,14 +278,14 @@ export class SkillsUpdateService {
         : scopes.some((scope) => scope.status === 'error') ? 'error'
         : scopes.every((scope) => scope.status === 'unavailable') ? 'unavailable' : 'current';
       const state = { ...this.makeState(scopes), status, available, checkedAt };
-      this.states.set(repoRoot, state); return state;
+      this.remember(repoRoot, state); return state;
     } catch (error) {
       if (error instanceof SkillsUpdateConflictError) throw error;
       const checkedAt = new Date(this.now()).toISOString();
       const reason = reasonFor(error);
       const scopes = [blankScope('project'), blankScope('global')].map((scope) => ({ ...scope, status: 'unavailable' as const, checkedAt, reason }));
       const state = { ...this.makeState(scopes), status: 'unavailable' as const, checkedAt };
-      this.states.set(repoRoot, state); return state;
+      this.remember(repoRoot, state); return state;
     } finally { await release?.(); }
   }
 
@@ -243,6 +294,7 @@ export class SkillsUpdateService {
       const updatedAt = new Date(this.now()).toISOString();
       const scopes = [blankScope('project'), blankScope('global')].map((scope) => ({ ...scope, status: 'current' as const, checkedAt: updatedAt, updatedAt }));
       const state = { ...this.makeState(scopes), status: 'current' as const, checkedAt: updatedAt, updatedAt, needsUpgradeNotes: true };
+      // Dry-run is a simulation — never persisted.
       this.states.set(repoRoot, state);
       return state;
     }
@@ -289,7 +341,7 @@ export class SkillsUpdateService {
 
     // Recheck after releasing the cross-process lock: performCheck owns the
     // same lock and must observe the files written by every successful scope.
-    this.states.set(repoRoot, { ...current, scopes: outcomes, status: outcomes.some((s) => s.status === 'error') ? 'error' : 'current' });
+    this.remember(repoRoot, { ...current, scopes: outcomes, status: outcomes.some((s) => s.status === 'error') ? 'error' : 'current' });
     if (completed.size > 0) await Promise.resolve(this.invalidateCatalog(repoRoot)).catch(() => undefined);
     const checked = await this.performCheck(repoRoot, true);
     const failedByScope = new Map(outcomes.filter((s) => s.status === 'error').map((s) => [s.scope, s]));
@@ -298,7 +350,7 @@ export class SkillsUpdateService {
     const status: SkillsUpdateStatus = scopes.some((scope) => scope.status === 'error') ? 'error' : available ? 'available' : 'current';
     const updatedAt = completed.size > 0 ? new Date(this.now()).toISOString() : current.updatedAt;
     const final = { ...checked, scopes, available, status, updatedAt, needsUpgradeNotes: current.needsUpgradeNotes || completed.size > 0 };
-    this.states.set(repoRoot, final);
+    this.remember(repoRoot, final);
     return final;
   }
 

@@ -1,11 +1,12 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { loadConfig, projectGatedSkillsRepos, type SkillsRepoSource } from './config.ts';
+import { cezarCacheDir, workspaceConfigPath } from './paths.ts';
 import { parseFrontmatter, type Skill } from './skills.ts';
-import { workspaceConfigPath } from './paths.ts';
+import { readJsonCache, writeJsonCache } from './skills-cache-state.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 /**
@@ -19,6 +20,7 @@ import { loadWorkspaceConfig } from './workspace/config.ts';
 
 const LIST_TIMEOUT_MS = 10_000; // ls-tree / show / rev-parse
 const CLONE_TIMEOUT_MS = 60_000; // clone / fetch
+const GIT_OUTPUT_CAP = 16 * 1024 * 1024;
 
 // ---- git plumbing ------------------------------------------------------------
 
@@ -56,21 +58,123 @@ const GIT_HARDENING_ENV = {
 };
 
 function git(args: string[], timeoutMs: number, cwd?: string): Promise<GitResult> {
+  if (backgroundWorkAborted) return Promise.resolve({ ok: false, stdout: '', stderr: '' });
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       'git',
       [...GIT_HARDENING_ARGS, ...args],
       {
         cwd,
         timeout: timeoutMs,
         killSignal: 'SIGKILL',
-        maxBuffer: 16 * 1024 * 1024,
+        maxBuffer: GIT_OUTPUT_CAP,
         encoding: 'utf8',
         env: { ...process.env, ...GIT_HARDENING_ENV },
       },
-      (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      (err, stdout, stderr) => {
+        inFlightGitChildren.delete(child);
+        resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
+      },
     );
+    inFlightGitChildren.add(child);
   });
+}
+
+// The background team-skills load is fire-and-forget on the read paths, so a
+// caller can return while a `git clone`/`fetch` is still writing under the
+// cache dir. Tests tear that cache dir down at the end of a file, and a child
+// still writing into it turns the removal into ENOTEMPTY. This tracks the
+// children and lets a teardown stop them. It is never set on the real paths.
+const inFlightGitChildren = new Set<ChildProcess>();
+let backgroundWorkAborted = false;
+
+/** Stop every in-flight team-skills git child and refuse to start new ones. */
+export function abortTeamSkillsBackgroundWork(): void {
+  backgroundWorkAborted = true;
+  for (const child of inFlightGitChildren) child.kill('SIGKILL');
+  inFlightGitChildren.clear();
+}
+
+/** Re-arm after an abort (test teardown only). */
+export function resetTeamSkillsBackgroundWorkAbort(): void {
+  backgroundWorkAborted = false;
+}
+
+/** Resolve once the aborted/in-flight background loads have stopped touching disk. */
+export async function settleTeamSkillsBackgroundWork(): Promise<void> {
+  await Promise.allSettled([...teamLoadInFlight.values()]);
+}
+
+/**
+ * Read many blobs from a bare clone over ONE `git cat-file --batch` process,
+ * keyed by the object name each line answers for. The names come from an
+ * `ls-tree` listing (hex SHAs), never from user input, so there is no option
+ * surface to guard. A blob git reports `missing` is simply absent from the map.
+ */
+function batchReadBlobs(bareDir: string, names: string[]): Promise<Map<string, string>> {
+  return new Promise((resolve) => {
+    if (backgroundWorkAborted || names.length === 0) {
+      resolve(new Map());
+      return;
+    }
+    const child = spawn('git', [...GIT_HARDENING_ARGS, 'cat-file', '--batch'], {
+      cwd: bareDir,
+      env: { ...process.env, ...GIT_HARDENING_ENV },
+      stdio: ['pipe', 'pipe', 'ignore'],
+    });
+    inFlightGitChildren.add(child);
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      inFlightGitChildren.delete(child);
+      resolve(parseBatchBlobs(Buffer.concat(chunks)));
+    };
+    // A stalled network mount must not park the load forever — and with
+    // single-flight every later caller would join it.
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish();
+    }, LIST_TIMEOUT_MS);
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (settled) return;
+      const remaining = GIT_OUTPUT_CAP - bytes;
+      chunks.push(chunk.subarray(0, remaining));
+      bytes += Math.min(chunk.length, remaining);
+      if (chunk.length > remaining) {
+        child.kill('SIGKILL');
+        finish();
+      }
+    });
+    child.on('error', finish);
+    child.on('close', finish);
+    child.stdin.on('error', () => {});
+    child.stdin.write(names.map((name) => `${name}\n`).join(''));
+    child.stdin.end();
+  });
+}
+
+function parseBatchBlobs(buf: Buffer): Map<string, string> {
+  const out = new Map<string, string>();
+  let offset = 0;
+  while (offset < buf.length) {
+    const newline = buf.indexOf(0x0a, offset);
+    if (newline === -1) break;
+    const header = buf.toString('utf8', offset, newline);
+    offset = newline + 1;
+    // `<sha> <type> <size>`; a missing object answers `<name> missing`.
+    const [name, type, sizeText] = header.split(' ');
+    if (!name || type === 'missing') continue;
+    const size = Number(sizeText);
+    if (!Number.isFinite(size) || size < 0) continue;
+    if (offset + size + 1 > buf.length) break;
+    if (type === 'blob') out.set(name, buf.toString('utf8', offset, offset + size));
+    offset += size + 1; // git terminates each body with a newline
+  }
+  return out;
 }
 
 const ALLOWED_URL_SCHEMES = new Set(['https', 'http', 'ssh', 'git', 'file']);
@@ -154,7 +258,7 @@ export function bareDirFor(repo: string): string {
     .replace(/^~\//, '');
   const segments = trimmed.split(/[/:]/).filter(Boolean).map(sanitizeSegment);
   const key = segments.slice(-2).join('__') || 'skills';
-  return join(homedir(), '.cache', 'cez', 'skills', key);
+  return join(cezarCacheDir(), 'skills', key);
 }
 
 function sanitizeSegment(s: string): string {
@@ -176,6 +280,7 @@ function warnUnsafeRemoteOnce(repo: string): void {
 
 /** Clone the skills repo bare (no checkout) into the global cache, once. */
 export async function ensureBareClone(repo: string): Promise<{ bareDir: string; created: boolean }> {
+  if (backgroundWorkAborted) throw new Error('team-skills background work aborted');
   // Validate before anything else, cache hit or not: "this source is refusable"
   // should never depend on whether a clone happens to exist already.
   const remote = safeRemoteFor(repo);
@@ -322,28 +427,43 @@ export async function listRemoteSkills(
   // this one commit, and it is what gets recorded on each skill.
   const commit = await resolveRef(bareDir, src.ref);
   if (commit === null) return [];
+  // One tree listing (with object ids), then one batched read for every skill
+  // body — a bounded two spawns regardless of how many skills the repo holds.
   // `--` after the ref keeps a `-`-leading value out of git's option surface.
-  const ls = await git(['ls-tree', '-r', '--name-only', commit, '--'], LIST_TIMEOUT_MS, bareDir);
+  const ls = await git(['ls-tree', '-r', commit, '--'], LIST_TIMEOUT_MS, bareDir);
   if (!ls.ok) return [];
+
+  const entries: Array<{ path: string; sha: string }> = [];
+  for (const line of ls.stdout.split('\n')) {
+    const tab = line.indexOf('\t');
+    if (tab === -1) continue;
+    const sha = line.slice(0, tab).split(' ')[2];
+    const path = line.slice(tab + 1);
+    if (sha && path) entries.push({ path, sha });
+  }
+  const paths = entries.map((entry) => entry.path);
+  const skillDirs = paths
+    .filter((p) => isUnderSkillsDir(p) && p.endsWith('/SKILL.md'))
+    .map((p) => p.slice(0, -'/SKILL.md'.length))
+    .filter((dir) => dir.split('/').pop() !== 'skills');
+  const wanted = entries.filter((entry) =>
+    opts.skillsDirOnly ? matchSkillsDirPath(entry.path, skillDirs) : matchSkillPath(entry.path),
+  );
+  const blobs = await batchReadBlobs(bareDir, [...new Set(wanted.map((entry) => entry.sha))]);
 
   const skills: Skill[] = [];
   const seen = new Set<string>();
-  const lines = ls.stdout.split('\n').filter(Boolean);
-  const skillDirs = lines
-    .filter((line) => isUnderSkillsDir(line) && line.endsWith('/SKILL.md'))
-    .map((line) => line.slice(0, -'/SKILL.md'.length))
-    .filter((dir) => dir.split('/').pop() !== 'skills');
-  for (const line of lines) {
-    const hit = opts.skillsDirOnly ? matchSkillsDirPath(line, skillDirs) : matchSkillPath(line);
+  for (const { path: skillPath, sha } of wanted) {
+    const hit = opts.skillsDirOnly ? matchSkillsDirPath(skillPath, skillDirs) : matchSkillPath(skillPath);
     if (!hit) continue;
-    const raw = await readRemoteSkill(src, line, commit);
-    if (raw === null) continue;
+    const raw = blobs.get(sha);
+    if (raw === undefined) continue;
     const { frontmatter, body } = parseFrontmatter(raw);
     const name =
       hit.name ??
       (typeof frontmatter.name === 'string' && frontmatter.name.trim()
         ? frontmatter.name.trim()
-        : basename(line, '.md'));
+        : basename(skillPath, '.md'));
     if (seen.has(name)) continue;
     seen.add(name);
     const description =
@@ -354,9 +474,9 @@ export async function listRemoteSkills(
       name,
       description,
       body,
-      path: `${src.repo}@${src.ref}:${line}`,
+      path: `${src.repo}@${src.ref}:${skillPath}`,
       source: 'team',
-      team: { repo: src.repo, ref: src.ref, path: line, dir: hit.kind === 'skill', commit },
+      team: { repo: src.repo, ref: src.ref, path: skillPath, dir: hit.kind === 'skill', commit },
     });
   }
   return skills;
@@ -431,7 +551,7 @@ export async function excludeFromGit(repoRoot: string, pattern: string): Promise
   }
 }
 
-// ---- in-process cache ----------------------------------------------------------
+// ---- in-process + persisted cache ---------------------------------------------
 
 // Clone attempts are expensive when the network is down (git can hang on
 // DNS/TCP), so each source gets one implicit attempt per process. "Refresh"
@@ -447,6 +567,33 @@ const cloneAttempted = new Set<string>();
 // invalidateCatalog) still fetches unconditionally.
 const PASSIVE_FETCH_TTL_MS = 6 * 60 * 60 * 1_000;
 const lastFetchByRepo = new Map<string, number>();
+let fetchStateHydrated = false;
+
+/** Resolved at call time: tests redirect `HOME`/`CEZ_HOME` before their first load. */
+function fetchStatePath(): string {
+  return join(cezarCacheDir(), 'team-skills-state.json');
+}
+
+/** Seed fetch times from `~/.cache/cez` so a restart inside the six-hour
+ *  window does not pay another `git fetch`. Read once, lazily — never at module
+ *  load, so a test that redirects `HOME` before its first load is respected. */
+function hydrateFetchState(): void {
+  if (fetchStateHydrated) return;
+  fetchStateHydrated = true;
+  const parsed = readJsonCache<{ lastFetch?: Record<string, number> }>(fetchStatePath());
+  const lastFetch = parsed?.lastFetch;
+  if (!lastFetch || typeof lastFetch !== 'object') return;
+  for (const [repo, at] of Object.entries(lastFetch)) {
+    if (typeof at === 'number' && Number.isFinite(at) && !lastFetchByRepo.has(repo)) {
+      lastFetchByRepo.set(repo, at);
+    }
+  }
+}
+
+function persistFetchState(): void {
+  if (backgroundWorkAborted) return;
+  writeJsonCache(fetchStatePath(), { lastFetch: Object.fromEntries(lastFetchByRepo) });
+}
 
 /**
  * Whether a passive (non-`refresh`) load should `git fetch` an existing bare
@@ -461,11 +608,30 @@ export function shouldPassiveFetch(opts: {
 }): boolean {
   return !opts.attempted || opts.now - opts.fetchedAt > opts.ttlMs;
 }
-// Both maps are keyed by `repoRoot` (multi-project workspace, step 2.6): each
-// project resolves its own `.ai/cezar/config.json` → `skillsRepos`, so one
-// project's team-skill list must never be served under another project's scope.
+// The list and in-flight maps are keyed by `repoRoot` (multi-project workspace,
+// step 2.6): each project resolves its own `.ai/cezar/config.json` →
+// `skillsRepos`, so one project's team-skill list must never be served under
+// another project's scope. The in-flight map is single-flight per root, and it
+// is cleared on completion so the TTL can fire.
 const teamSkillsByRoot = new Map<string, Skill[]>();
-const firstLoadByRoot = new Map<string, Promise<Skill[]>>();
+const teamLoadInFlight = new Map<string, Promise<Skill[]>>();
+const lastListByRoot = new Map<string, number>();
+// Monotonic per root so a slow passive load cannot overwrite a refresh that
+// started after it.
+const loadEpoch = new Map<string, number>();
+
+function beginTeamLoad(repoRoot: string, refresh: boolean): Promise<Skill[]> {
+  const epoch = (loadEpoch.get(repoRoot) ?? 0) + 1;
+  loadEpoch.set(repoRoot, epoch);
+  const load = loadTeamSkills(repoRoot, refresh, epoch).catch(
+    () => teamSkillsByRoot.get(repoRoot) ?? [],
+  );
+  teamLoadInFlight.set(repoRoot, load);
+  void load.finally(() => {
+    if (teamLoadInFlight.get(repoRoot) === load) teamLoadInFlight.delete(repoRoot);
+  });
+  return load;
+}
 
 /** Forget every project's team-skill list — the workspace's org repos changed. */
 let teamSkillsGeneration = 0;
@@ -485,7 +651,8 @@ function orgReposSignature(): string {
 export function invalidateTeamSkills(): void {
   teamSkillsGeneration++;
   teamSkillsByRoot.clear();
-  firstLoadByRoot.clear();
+  teamLoadInFlight.clear();
+  lastListByRoot.clear();
 }
 
 /** Drop every cached list when the org repos on disk differ from the ones last loaded. */
@@ -498,18 +665,24 @@ function syncOrgSignature(): void {
 
 function initialTeamSkillsLoad(repoRoot: string): Promise<Skill[]> {
   syncOrgSignature();
-  const existing = firstLoadByRoot.get(repoRoot);
-  if (existing) return existing;
-  const load = loadTeamSkills(repoRoot, false).catch(() => teamSkillsByRoot.get(repoRoot) ?? []);
-  firstLoadByRoot.set(repoRoot, load);
-  return load;
+  const loadedAt = lastListByRoot.get(repoRoot);
+  if (
+    teamSkillsByRoot.has(repoRoot) &&
+    loadedAt !== undefined &&
+    Date.now() - loadedAt < PASSIVE_FETCH_TTL_MS
+  ) {
+    return Promise.resolve(teamSkillsByRoot.get(repoRoot) as Skill[]);
+  }
+  return teamLoadInFlight.get(repoRoot) ?? beginTeamLoad(repoRoot, false);
 }
 
 /**
  * The current team-skill list for this project, straight from memory. The
  * first call per `repoRoot` kicks off an async background load (clone + list)
  * and returns immediately — the GUI refetches, so remote skills appear moments
- * later instead of blocking the first `GET /api/skills`.
+ * later instead of blocking the first `GET /api/skills`. Once the list is older
+ * than the warm window a later call starts the same background reload, so a
+ * long-running server does not serve one boot's catalog forever.
  */
 export function getTeamSkillsCached(repoRoot: string): Skill[] {
   void initialTeamSkillsLoad(repoRoot);
@@ -526,10 +699,8 @@ export function waitForTeamSkills(repoRoot: string): Promise<Skill[]> {
 }
 
 /** Refresh: clone missing sources, `git fetch` existing ones, reload the list. */
-export async function refreshTeamSkills(repoRoot: string): Promise<Skill[]> {
-  const load = loadTeamSkills(repoRoot, true).catch(() => teamSkillsByRoot.get(repoRoot) ?? []);
-  firstLoadByRoot.set(repoRoot, load);
-  return load;
+export function refreshTeamSkills(repoRoot: string): Promise<Skill[]> {
+  return beginTeamLoad(repoRoot, true);
 }
 
 /** Which repository a source names: the cache directory, with GitHub's case-insensitive
@@ -540,7 +711,9 @@ export function sourceIdentity(repo: string): string {
   return github ? key.toLowerCase() : key;
 }
 
-async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill[]> {
+async function loadTeamSkills(repoRoot: string, refresh: boolean, epoch: number): Promise<Skill[]> {
+  if (backgroundWorkAborted) return teamSkillsByRoot.get(repoRoot) ?? [];
+  hydrateFetchState();
   syncOrgSignature();
   const generation = teamSkillsGeneration;
   const config = await loadConfig(repoRoot);
@@ -564,15 +737,23 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
   const out: Skill[] = [];
   const seen = new Set<string>();
   for (const src of sources) {
+    if (backgroundWorkAborted) break;
     try {
       if (refresh) {
         const { bareDir, created } = await ensureBareClone(src.repo);
         if (!created) await fetchAll(bareDir);
         cloneAttempted.add(src.repo);
         lastFetchByRepo.set(src.repo, Date.now());
+        persistFetchState();
       } else if (
         shouldPassiveFetch({
-          attempted: cloneAttempted.has(src.repo),
+          // A persisted fetch from an earlier process counts as attempted — so a
+          // restart inside the window skips the boot fetch — but only while the
+          // clone it recorded still exists. A deleted cache dir must rebuild,
+          // and `ensureBareClone` below is the only path that does.
+          attempted:
+            cloneAttempted.has(src.repo) ||
+            (lastFetchByRepo.has(src.repo) && existsSync(join(bareDirFor(src.repo), 'HEAD'))),
           fetchedAt: lastFetchByRepo.get(src.repo) ?? 0,
           now: Date.now(),
           ttlMs: PASSIVE_FETCH_TTL_MS,
@@ -584,6 +765,7 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
         // so worktree reviews never read a stale skills template.
         if (!created) await fetchAll(bareDir);
         lastFetchByRepo.set(src.repo, Date.now());
+        persistFetchState();
       }
     } catch {
       // offline / no access — list whatever an older clone has (or nothing)
@@ -598,7 +780,12 @@ async function loadTeamSkills(repoRoot: string, refresh: boolean): Promise<Skill
       // degrade: this source contributes nothing
     }
   }
-  // An invalidation during this load means its source list is stale: don't publish it.
-  if (generation === teamSkillsGeneration) teamSkillsByRoot.set(repoRoot, out);
+  // Discard a superseded (older) completion: a refresh racing the passive load
+  // must not leave the stale list cached. An invalidation during this load means
+  // its source list is stale too.
+  if (loadEpoch.get(repoRoot) === epoch && generation === teamSkillsGeneration) {
+    teamSkillsByRoot.set(repoRoot, out);
+    lastListByRoot.set(repoRoot, Date.now());
+  }
   return out;
 }
