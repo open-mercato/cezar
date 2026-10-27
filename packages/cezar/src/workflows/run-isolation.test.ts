@@ -20,7 +20,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-vi.mock('../git-worktree.js', async (importOriginal) => {
+vi.mock('../git-worktree.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../git-worktree.ts')>();
   return {
     ...actual,

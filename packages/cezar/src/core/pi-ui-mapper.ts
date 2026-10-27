@@ -12,8 +12,8 @@ import type {
   UiMessageItem,
   UiReasoningItem,
   UiToolItem,
-} from './ui-events.js';
-import { toolDisplay } from './tool-display.js';
+} from './ui-events.ts';
+import { toolDisplay } from './tool-display.ts';
 
 export interface PiUiMapperState {
   readonly sessionStarted: boolean;

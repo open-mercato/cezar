@@ -2,14 +2,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { UiEvent } from './ui-events.js';
+import type { UiEvent } from './ui-events.ts';
 import {
   createPiUiState,
   mapPiRpcMessage,
   piTurnStarted,
   type PiUiMapperState,
   type PiUiMapping,
-} from './pi-ui-mapper.js';
+} from './pi-ui-mapper.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(HERE, '__fixtures__', 'pi');

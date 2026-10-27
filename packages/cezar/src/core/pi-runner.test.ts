@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { AgentEvent } from './agent-runner.js';
-import { buildChildEnv } from './agent-env.js';
-import { detectEnvironment } from './backend-detect.js';
-import { createRunner } from './runner-factory.js';
-import { buildPiArgs, PiRunner } from './pi-runner.js';
+import type { AgentEvent } from './agent-runner.ts';
+import { buildChildEnv } from './agent-env.ts';
+import { detectEnvironment } from './backend-detect.ts';
+import { createRunner } from './runner-factory.ts';
+import { buildPiArgs, PiRunner } from './pi-runner.ts';
 
 /**
  * The `pi` runner (#387): a new AgentBackend slotted into the runner seam as

@@ -14,7 +14,7 @@ import { createApp, type ServerDeps } from './server.ts';
  * and the detection are mocked, so the suite never spawns a GUI app and never depends on which
  * editors happen to be installed on the machine running it.
  */
-vi.mock('./open-in-app.js', async (importOriginal) => {
+vi.mock('./open-in-app.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./open-in-app.ts')>();
   return {
     ...actual,
