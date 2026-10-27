@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -168,6 +168,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   skillsAutoUpdate: null,
   effectiveSkillsAutoUpdate: true,
   orgSkillsRepos: [],
+  systemPrompt: null,
   composerDefaults: {
     autonomous: null,
     worktree: null,
@@ -218,6 +219,9 @@ function serve(overrides: {
   uiState?: Record<string, unknown>
   /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
+  /** Non-2xx catalog answers, or a request that never settles (`'pending'`). */
+  skillsStatus?: number | 'pending'
+  workflowsStatus?: number | 'pending'
   deferredPreview?: () => Promise<Response>
   createRun?: unknown
   /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
@@ -241,6 +245,8 @@ function serve(overrides: {
     repo: REPO,
     uiState: {},
     uiStateStatus: 200,
+    skillsStatus: 200 as number | 'pending',
+    workflowsStatus: 200 as number | 'pending',
     createRun: { id: 'r1' },
     createRunStatus: 201,
     launchKey: 'k-real',
@@ -272,8 +278,14 @@ function serve(overrides: {
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
-      if (url === '/api/v1/skills') return json(data.skills)
-      if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
+      if (url === '/api/v1/skills') {
+        if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.skills, data.skillsStatus)
+      }
+      if (url === '/api/v1/workflows' && method === 'GET') {
+        if (data.workflowsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.workflows, data.workflowsStatus)
+      }
       if (url === '/api/v1/repo') return json(data.repo)
       if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
@@ -1054,6 +1066,42 @@ describe('submit', () => {
     expect(put?.body).not.toHaveProperty('skillUsage')
   })
 
+  // Telemetry 31eda062: a failed catalog fetch left `sourcesReady` false forever, so every
+  // Start answered "Still loading workflows and skills". 404s land errored at once (no retry).
+  it('a FAILED skills fetch still starts the drafted workflow — never "Still loading"', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve({ skillsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'fix-and-verify' })
+    expect(screen.queryByText(/Still loading workflows and skills/)).toBeNull()
+  })
+
+  it('a FAILED catalog keeps the drafted skill instead of swapping in quick-task', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ skillsStatus: 404, workflowsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Fix it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ task: 'Fix it', steps: [expect.objectContaining({ skill: 'om-fix' })] })
+  })
+
+  it('Start stays disabled while the catalog is still loading', async () => {
+    serve({ workflowsStatus: 'pending' })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+
+    expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(true)
+  })
+
   it('a WORKFLOW source posts { workflow, task }', async () => {
     draftSource({ source: 'workflow', ref: 'fix-and-verify' })
     serve()
@@ -1337,7 +1385,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -2379,15 +2427,34 @@ it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedu
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
   const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
-  await waitFor(() => expect(send().disabled).toBe(false))
+  await waitFor(() => expect(send().disabled).toBe(false), { timeout: 3000 })
   fireEvent.click(send())
   await waitFor(() => expect(requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))).toBeTruthy())
   const created = requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))!
   expect((created.body as { task: { task: string } }).task.task).toBe('Later')
   const preview = requests.find(r => r.url.endsWith('/deferred-start/preview'))!
   expect((preview.body as { task: { task: string } }).task.task).toBe('Later')
+})
+
+it('puts the start-time menu beside Send, not on the pill row, and summarizes a chosen start', async () => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  renderNewTask()
+  await pillReady()
+  const menu = screen.getByRole('button', { name: 'Choose task start time' })
+  expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
+  expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
+  expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
+  // The submit chord lives in Send's tooltip, not on the button.
+  expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('')
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  fireEvent.click(menu)
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'), { timeout: 3000 })
 })
 
 it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {
@@ -2403,30 +2470,32 @@ it('gates scheduling while unchecked, checking, unavailable and changed, includi
   expect(send().disabled).toBe(true)
   expect(textarea().disabled).toBe(false)
   const why = () => document.querySelector('[data-slot="schedule-blocked"]')?.textContent
-  expect(why()).toBe('Check the start time to schedule this task.')
+  expect(why()).toBe('Finding when your usage limit resets…')
   fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
   expect(textarea().value).toBe('Later')
   expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/options'))).toBe(false)
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
+  const previews = () => requests.filter(r => r.url.endsWith('/deferred-start/preview')).length
+  await waitFor(() => expect(previews()).toBe(1), { timeout: 3000 })
   expect(send().disabled).toBe(true)
   await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }))
   await waitFor(() => expect(send().disabled).toBe(false))
   expect(why()).toBeUndefined()
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
   expect(send().disabled).toBe(true)
-  await act(async () => delayed.release({ available: false, reason: 'no-data', message: 'No reset available' }))
+  await act(async () => delayed.release({ available: false, reason: 'account-unverifiable', message: 'No reset available' }))
   await screen.findByRole('alert')
   expect(send().disabled).toBe(true)
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r2' }))
   await waitFor(() => expect(send().disabled).toBe(false))
-  fireEvent.change(textarea(), { target: { value: 'Changed' } })
-  expect(send().disabled).toBe(true)
+  // Rewording the prompt keeps the check: the preview binds execution settings, not wording.
+  fireEvent.change(textarea(), { target: { value: 'Later, reworded' } })
+  expect(send().disabled).toBe(false)
+  expect(why()).toBeUndefined()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)) })
+  expect(previews()).toBe(3)
   fireEvent.change(textarea(), { target: { value: 'Later' } })
-  expect(send().disabled).toBe(true)
-  fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
-  await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r3' }))
-  await waitFor(() => expect(send().disabled).toBe(false))
+  expect(send().disabled).toBe(false)
   const toggle = document.querySelector('[data-slot="autonomous-toggle"]')!
   fireEvent.click(toggle)
   expect(send().disabled).toBe(true)
@@ -2474,8 +2543,7 @@ describe('lost schedule response recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
     await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
     fireEvent.click(screen.getByLabelText('After usage limit resets'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
-    await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 })
     fireEvent.click(screen.getByRole('button', { name: 'Schedule task' }))
     await screen.findByRole('button', { name: 'Recover original schedule' })
     await waitFor(() => expect(textarea().value).toBe('Original task'))
@@ -2495,8 +2563,9 @@ describe('lost schedule response recovery', () => {
     }
     if (change === 'now') fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
     else {
-      fireEvent.click(await screen.findByRole('button', { name: 'Check start time' }))
-      await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2))
+      // Changed settings (or a fresh mount) re-check by themselves; otherwise the user refreshes.
+      if (change !== 'settings' && change !== 'remount') fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }))
+      await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2), { timeout: 3000 })
     }
     expect((screen.getByRole('button', { name: change === 'now' ? 'Start task' : 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })

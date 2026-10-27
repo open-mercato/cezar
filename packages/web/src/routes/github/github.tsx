@@ -17,7 +17,7 @@ import {
   TagIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { memo, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 import { Virtualizer } from 'virtua'
 
@@ -71,6 +71,7 @@ import {
 } from './github-filter'
 import { GithubLoading } from './github-loading'
 import { HandToAgent } from './hand-to-agent'
+import { SwipeLaunchSheet, SwipeReveal, useRowSwipe } from './swipe-launch'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
 
 /**
@@ -359,6 +360,17 @@ export function GithubRoute({
     [skillsData, skillUsage],
   )
   const [queued, setQueued] = useState<ReadonlyMap<string, string>>(new Map())
+  // The swipe launcher (touch): the item stays set while the sheet animates closed.
+  const [swipeItem, setSwipeItem] = useState<GithubItem | null>(null)
+  const [swipeOpen, setSwipeOpen] = useState(false)
+  const openSwipeLaunch = useCallback((item: GithubItem) => {
+    setSwipeItem(item)
+    setSwipeOpen(true)
+  }, [])
+  const markQueued = useCallback(
+    (url: string, runId: string) => setQueued((current) => new Map(current).set(url, runId)),
+    [],
+  )
   // List filtering (#gh-filter): free-text search (by #id or any text) + a label narrow.
   const [query, setQuery] = useState('')
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
@@ -669,6 +681,7 @@ export function GithubRoute({
                     active={selected?.url === item.url}
                     queued={queued.has(item.url)}
                     checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                    onSwipe={openSwipeLaunch}
                   />
                 </div>
               ))
@@ -683,6 +696,7 @@ export function GithubRoute({
                       active={selected?.url === item.url}
                       queued={queued.has(item.url)}
                       checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                      onSwipe={openSwipeLaunch}
                     />
                   </div>
                 ))}
@@ -735,11 +749,22 @@ export function GithubRoute({
                   active={selected?.url === item.url}
                   queued={queued.has(item.url)}
                   checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                  onSwipe={openSwipeLaunch}
                 />
               ))}
             </ul>
           </div>
         ) : null}
+
+        <SwipeLaunchSheet
+          item={swipeItem}
+          open={swipeOpen}
+          onOpenChange={setSwipeOpen}
+          workflows={workflows.data?.workflows ?? []}
+          skills={skillList}
+          engine={engine}
+          onQueued={markQueued}
+        />
     </>} detail={<>
         {selected ? (
           <GithubDetail
@@ -761,7 +786,7 @@ export function GithubRoute({
               engine={engine}
               onEngineChange={setEngine}
               queuedRunId={queued.get(selected.url) ?? null}
-              onQueued={(url, runId) => setQueued((current) => new Map(current).set(url, runId))}
+              onQueued={markQueued}
             />
           </GithubDetail>
         ) : (
@@ -797,6 +822,8 @@ interface GithubRowProps {
   queued: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
+  /** Touch swipe-left opens the run launcher for this row. Must be referentially stable. */
+  onSwipe?: (item: GithubItem) => void
 }
 
 /**
@@ -811,9 +838,11 @@ const GithubRow = memo(function GithubRow({
   active,
   queued,
   checks,
+  onSwipe,
 }: GithubRowProps) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
+  const swipe = useRowSwipe(() => onSwipe?.(item))
 
   // Warm the thread on hover/focus (#664) so opening the row is usually instant — best-effort,
   // deduped by React Query, and it re-uses the mounted detail's exact query key/staleTime.
@@ -837,11 +866,15 @@ const GithubRow = memo(function GithubRow({
   }
 
   return (
-    <li>
+    // Clip only mid-swipe: an always-clipped <li> would cut off the link's default focus ring.
+    <li className={cn('relative rounded-md', swipe.offset !== 0 && 'overflow-hidden')}>
+      {onSwipe ? <SwipeReveal offset={swipe.offset} /> : null}
       <Link
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
         onDragStart={onDragStart}
+        {...(onSwipe ? swipe.handlers : {})}
+        style={swipe.offset ? { transform: `translateX(${swipe.offset}px)` } : undefined}
         onMouseEnter={prefetchThread}
         onFocus={prefetchThread}
         data-slot="gh-row"
@@ -849,7 +882,7 @@ const GithubRow = memo(function GithubRow({
         aria-current={active ? 'page' : undefined}
         title="Drag into the composer to prefill a task"
         className={cn(
-          'flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted',
+          'relative flex touch-pan-y flex-col gap-1 rounded-md bg-background px-2.5 py-2 transition-colors hover:bg-muted',
           active && 'bg-muted',
         )}
       >
@@ -893,6 +926,7 @@ function sameGithubRow(previous: GithubRowProps, next: GithubRowProps): boolean 
     previous.active === next.active &&
     previous.queued === next.queued &&
     previous.checks === next.checks &&
+    previous.onSwipe === next.onSwipe &&
     next.item.labels.every((label) => previous.colors[label] === next.colors[label])
   )
 }

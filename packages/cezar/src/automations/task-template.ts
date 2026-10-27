@@ -11,6 +11,8 @@ import type { GithubCandidate } from './github-poller.ts';
 import type { ScheduleOccurrence } from './schedule-runner.ts';
 import type { TrackerAutomationCandidate } from './tracker-poller.ts';
 import { resolvePrHead, type CommandRunner } from './pr-head.ts';
+import { automationLabel, automationTaskOrigin } from '../feature-telemetry.ts';
+import { track } from '../telemetry.ts';
 import type { AutomationDefinition, GithubAutomationDefinition, ScheduleAutomationDefinition, TrackerAutomationDefinition } from './types.ts';
 
 const GITHUB_PLACEHOLDERS = new Set([
@@ -180,6 +182,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
     autonomous: definition.task.autonomous,
     generateFollowups: definition.task.generateFollowups,
     ...(intent ? { dispatchIntent: intent } : {}),
+    origin: automationTaskOrigin(definition),
   };
 }
 
@@ -262,6 +265,7 @@ async function launchRuns(
     githubUrl: candidate.url,
   };
   for (const run of runs) options.store.updateRun(run.id, { automation: provenance });
+  track('automation_fired', { label: `github:${candidate.event}`, value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
@@ -321,6 +325,8 @@ export async function launchScheduledRun(options: {
   for (const run of runs) {
     if (!persisted?.has(run.id)) options.store.updateRun(run.id, { automationTrigger: provenance });
   }
+  // A composer "schedule send" is a task (`task_origin: scheduled_task`), not an automation firing.
+  if (!definition.deferredStart) track('automation_fired', { label: automationLabel(definition), value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.
@@ -359,6 +365,7 @@ export async function launchTrackerAutomationRun(options: {
     url: candidate.url,
   };
   for (const run of runs) options.store.updateRun(run.id, { automationTracker: provenance });
+  track('automation_fired', { label: `tracker:${candidate.provider}`, value: runs.length });
   const first = runs[0];
   if (!first) throw new Error('run manager did not create a run');
   // Receipt/checkpoint acknowledgement must follow durable run provenance, not its debounce.

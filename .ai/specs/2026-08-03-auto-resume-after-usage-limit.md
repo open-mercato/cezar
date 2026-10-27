@@ -59,7 +59,7 @@ The run stays `failed` while it waits, deliberately: it IS failed, the Continue 
 
 - `scheduleAutoResumeIfLimited(runId)` — called from `dropActive`. Refuses silently (run stays plainly failed) when the setting is off, the message carries no reset, there is no session to resume, or a resume is already armed. The one loud refusal is the cap, which appends a note: a run that stops resuming has to explain itself.
 - `armAutoResume(runId, deadline)` — publishes `autoResumeAt` (the cockpit's only source) and arms the timer.
-- `fireAutoResume(runId)` — re-checks `status === 'failed'` and `autoResumeAt`, then `continueRun(runId, { text: … }, /* deferForCapacity */ true)` **and pumps**: a deferred continuation only enqueues itself, and `recover()` — the only other deferring caller — pumps once after its bulk sweep. Without that pump the resumed run parks at `queued` until an unrelated run happens to finish.
+- `fireAutoResume(runId)` — re-checks `status === 'failed'` and `autoResumeAt`, queues the saved workflow at its interrupted agent step when a durable checkpoint is available (see #1300 below), otherwise calls `continueRun(runId, { text: … }, /* deferForCapacity */ true)`, **and pumps**. Enqueuing alone leaves the resumed run parked at `queued` until an unrelated run finishes.
 - `clearAutoResume(runId, keepAttempts?)` — called at the top of `continueRun` once every refusal has passed, so a human Continue retires the schedule and starts a fresh epoch.
 - `cancelAutoResume(runId)` — the PUBLIC per-task off switch behind `DELETE /api/v1/runs/:id/auto-resume` and the archive route. Idempotent; leaves the workspace setting and every other task alone.
 - `reconcileAutoResumes()` — the self-healing sweep, run from `pump()` and once from `recover()`. Switching the setting off cancels armed timers and clears their deadlines; otherwise every `failed` record carrying an `autoResumeAt` this process is not currently holding gets armed from that record.
@@ -93,6 +93,14 @@ Two additive optional `RunRecord` fields, both carried by the existing run updat
 
 - `autoResumeAt?: string` — present ONLY while a resume is pending. `RunStore.open` keeps it on a `failed` run (that is what `recover()` reads) and drops it anywhere else; `updateRun` drops it whenever a run comes back to life, so the record cannot outlive the promise.
 - `autoResumeAttempts?: number` — the cap's counter, persisted so a restart cannot reset a loop to zero. Cleared by a human Continue and by `settleSuccess`.
+
+### Workflow recovery — #1300 (2026-10-06 addendum)
+
+The original design routed every automatic resume through `continueRun`. That completes a standalone continuation but leaves a workflow's later steps pending. A failed agent step carrying a usage-limit error and a session id, together with the saved `workflowDef`, is already a durable checkpoint: automatic recovery queues the original workflow and resumes that session in its executor, then runs the remaining steps. Completed steps stay completed. The same checkpoint survives a restart while waiting or queued; it does not depend on `autoResumeAttempts` or require a separate persisted recovery format. Only a job `fireAutoResume` queued (or that queued job revived by a restart, while its walk has no cursor elsewhere) re-enters the interrupted agent — `execute` never derives it from the record, so a restart-resume cursor keeps its node. The rebuilt input carries `readOnly` (#1597), the resumed task worktree takes the agent lease like any fresh run, and the recorded composed system prompt is reused verbatim rather than re-composed.
+
+Manual Continue keeps its existing semantics. A legacy record without a usable workflow checkpoint, or a limit during a standalone continuation, still uses `continueRun`.
+
+Checks with `onFail` gain optional `StepState.retriesUsed` (nonnegative integer), mirrored in the stored and HTTP schemas. New checks start at zero, and the executor persists each consumed retry before retrying the agent. Recovery restores this counter without parsing transcript prose, so a missing or partial NDJSON log cannot replenish the budget. For a legacy check without the counter, the walk's persisted loop count is used when present; otherwise `iterations > 0` conservatively exhausts its configured `onFail.max` on recovery; an unstarted check retains its full budget. This can forgo an unspent legacy retry, but cannot add attempts. Old records remain readable without migration or configuration.
 
 ### Configuration
 
@@ -147,3 +155,20 @@ The absolute instant is the source of truth (`<time dateTime>`), not a countdown
 ## Testability
 
 `scripts/mock-claude.mjs` grows `mock:limit`, emitting the real envelope with a reset `CEZ_MOCK_LIMIT_RESET_SECONDS` seconds out (default 60). The whole path — CLI wire shape → record `error` → parse → schedule → restart re-arm → resume — is exercised under `CEZ_DRY_RUN=1` with no login and no tokens, in `src/workflows/auto-resume.test.ts`, and is reachable by hand for QA the same way.
+
+## Addendum (2026-10-26): transient failures ride the same resume
+
+`src/core/agent-failure-class.ts` classifies an agent's terminal error as `transient`, `auth`,
+`billing`, `usage_limit`, `context_too_large` or `other` (narrow patterns from the telemetry groups
+76aa46a9, 9dd88886, a1c2fcc2, 5919c71a, 204c5e03, 9e4a95db, 7d0a1d6d, 5432183c, 13023969).
+
+- **Transient** → the same timer, record fields, cockpit hint and exits as a usage-limit resume,
+  after 30 s then 2 min (at least 60 s for Claude's OAuth refresh race), at most 2 per streak (a
+  completed turn ends it). `RunRecord.autoResumeReason: 'transient'` keeps it out of the account
+  holds — an overload says nothing about the account's window — and re-labels the hint. Same
+  switch (`autoResumeOnUsageLimit`); once spent, the run fails as before and the error is reported.
+- **Cancel** on a failed run with a booked resume (either kind) now retires it, so a cancelled
+  dispatch parent stops its children's resumes too.
+- **auth / billing / usage limit without a reset / context too large** → a lifecycle line saying
+  what to do; never an `AgentError` report, counted by `task_failed`'s kind.
+

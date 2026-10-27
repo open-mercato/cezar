@@ -96,6 +96,7 @@ import {
 
 import { WorkflowsLoading } from '../workflows/workflows-loading'
 import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -950,7 +951,11 @@ function WorkflowGraphEditor() {
                   <button
                     type="button"
                     className="hover:text-foreground"
-                    onClick={() => void navigator.clipboard?.writeText(graphYaml(name, description, graph))}
+                    onClick={() =>
+                      void writeClipboard(graphYaml(name, description, graph)).catch(() =>
+                        toast('Copy failed — select the YAML to copy it.', { tone: 'danger' }),
+                      )
+                    }
                   >
                     Copy
                   </button>

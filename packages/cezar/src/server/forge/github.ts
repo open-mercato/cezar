@@ -3355,6 +3355,44 @@ export function evictGithubProjectCaches(repoRoot: string): void {
   });
 }
 
+const ghApiErrorBodySchema = z.object({ message: z.string(), status: z.union([z.string(), z.number()]).optional() });
+
+/**
+ * A failed `PUT …/pulls/:n/merge`, as GitHub said it (telemetry a2c8474c). The old mapping read
+ * Node's `Command failed: gh api …` line — the argv — so every refusal (rules, reviews, method,
+ * a moved head) came out as one 502. GitHub's body is on stdout, `gh: <why> (HTTP n)` on stderr.
+ */
+export function ghMergeFailure(error: unknown): Extract<ForgeMergeResult, { merged: false }> {
+  const io = (error ?? {}) as { stdout?: unknown; stderr?: unknown; message?: unknown };
+  const stdout = typeof io.stdout === 'string' ? io.stdout : '';
+  const stderr = ghStderr(error) ?? '';
+  let body: z.infer<typeof ghApiErrorBodySchema> | undefined;
+  try {
+    const parsed = ghApiErrorBodySchema.safeParse(JSON.parse(stdout));
+    if (parsed.success) body = parsed.data;
+  } catch {
+    // not a GitHub error body: gh failed before or without one
+  }
+  const httpStatus = Number(body?.status ?? stderr.match(/\(HTTP (\d{3})\)/)?.[1] ?? Number.NaN);
+  // Never Node's `Command failed: <argv>` preamble: it names the command, not the reason.
+  const fallback = whyLine(stderr || (typeof io.message === 'string' ? io.message : ''));
+  const said = (body?.message ?? (/^Command failed:|^gh failed$/i.test(fallback) ? '' : fallback))
+    .replace(/^gh:\s*/, '')
+    .replace(/\s*\(HTTP \d{3}\)\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+  const reason = said ? `: ${said.replace(/[.\s]+$/, '')}.` : '.';
+  if (httpStatus === 403) return { merged: false, status: 403, error: `GitHub permission denied${reason}` };
+  if (httpStatus === 404) return { merged: false, status: 404, error: 'Pull request or repository not found.' };
+  // 409 is GitHub's "head branch was modified"; 405/422 are its precondition refusals.
+  if (httpStatus === 409) return { merged: false, status: 409, error: `GitHub refused the merge${reason}`, code: 'stale-head' };
+  if (httpStatus === 405 || httpStatus === 422) {
+    return { merged: false, status: 409, error: `GitHub refused the merge${reason}`, code: 'github-blocked' };
+  }
+  return { merged: false, status: 502, error: `GitHub could not complete the merge${reason}` };
+}
+
 async function mergePullRequest(
   repoRoot: string,
   repoRef: GithubRepoRef | null,
@@ -3391,9 +3429,7 @@ async function mergePullRequest(
     evictGithubProjectCaches(repoRoot);
     return { merged: true, number, url: current.url, method: input.method, ...(result.sha ? { mergeCommitSha: result.sha } : {}) };
   } catch (error) {
-    const message = firstLine(error instanceof Error ? error.message : String(error));
-    const status = /403|permission|forbidden/i.test(message) ? 403 : /404|not found/i.test(message) ? 404 : 502;
-    return { merged: false, status, error: status === 403 ? 'GitHub permission denied.' : status === 404 ? 'Pull request or repository not found.' : 'GitHub could not complete the merge.' };
+    return ghMergeFailure(error);
   } finally {
     mergeInflight.delete(key);
   }

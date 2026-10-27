@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { WebhookCoordinator } from './webhooks/coordinator.ts';
+import { webhooksEnabled } from './webhooks/service.ts';
+import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
+import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
@@ -42,7 +46,8 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { apiOrigin } from './api-origin.ts';
@@ -53,6 +58,7 @@ import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
+import { launchPageUrl } from './cockpit-address.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -285,7 +291,7 @@ async function serveCommand(
       })
       .then(() => {
         store.flush({ pretty: true });
-        track('app_stop', { reason });
+        track('app_stop', { label: reason });
         return flushTelemetry(reason === 'signal' ? undefined : 1_000);
       })
       .finally(() => process.exit(process.exitCode ?? 0));
@@ -304,6 +310,7 @@ async function serveCommand(
   await initTelemetry({ version: readOwnVersion() });
   installCrashReporter();
   track('app_start');
+  registerDailyInventory(collectFeatureInventory);
   startDailyPing();
 
   const checks = await detectEnvironment();
@@ -327,6 +334,18 @@ async function serveCommand(
     }
   }
 
+  let webhookPort = preferredPort;
+  const webhooks = webhooksEnabled() ? new WebhookCoordinator({
+    mode: () => resolveCapabilities(process.env, bindHost).localHandoff ? 'local' : 'hosted',
+    ports: () => [webhookPort, ...webhookServerInstances().map(instance => instance.state.primaryPort)],
+    projects: async () => listProjects(), dryRun: process.env.CEZ_DRY_RUN === '1',
+    singleProject: resolveCapabilities(process.env, bindHost).singleProject,
+  }) : undefined;
+  if (webhooks) {
+    const registry = (await loadWorkspaceConfig()).projects;
+    const publicId = bootProjectId ?? allocateProjectSlug(repoRoot, registry.map(project => project.id));
+    await webhooks.attach({ root: repoRoot, store, manager }, publicId, false, true);
+  }
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
@@ -336,6 +355,8 @@ async function serveCommand(
     providerRuntimeAuth,
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
+
+  webhooks?.ready(repoRoot);
 
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
@@ -352,7 +373,7 @@ async function serveCommand(
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });
         // The old process stops here, so it reports its own stop before handing over (bounded).
-        track('app_stop', { reason: 'restart' });
+        track('app_stop', { label: 'restart' });
         void flushTelemetry(1_000).finally(() =>
           restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
         );
@@ -382,6 +403,7 @@ async function serveCommand(
     };
   });
   const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
+  webhookPort = port;
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only
   // for a deliberate hosted setup where a reverse proxy in front provides TLS +
@@ -409,6 +431,7 @@ async function serveCommand(
     providerAuth,
     providerRuntimeAuth,
     workspaceEvents,
+    webhooks,
     selfUpdate,
   }, port);
   httpServer.once('listening', () => manager.lifecycle.start());
@@ -480,7 +503,7 @@ async function serveCommand(
   // paint is the cockpit and never a connection error.
   if (openBrowser) {
     const healthy = await waitForHealth(`${url}/api/v1/health`, 5_000);
-    if (healthy) openUrl(url);
+    if (healthy) openUrl(launchPageUrl(url));
   }
 }
 
@@ -600,7 +623,7 @@ async function runCommand(
   });
 
   await initTelemetry({ version: readOwnVersion() });
-  const run = manager.startRun(workflow, { task, model });
+  const run = manager.startRun(workflow, { task, model, origin: 'cli' });
   // No cockpit device here: the CLI's message counts under the installation's own id.
   track('message_sent', { label: 'cli' });
   // `review` is terminal here too (spec 009) — headless runs must not hang on

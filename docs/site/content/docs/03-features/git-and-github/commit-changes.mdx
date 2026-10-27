@@ -1,0 +1,26 @@
+---
+title: "Save changes in a commit"
+description: "Create a commit directly from the task view."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-git/run-git-step.tsx
+    line: 125
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+Save and publish changes through the next Git step suggested for the task.
+
+## Where to find it
+
+Task → Git action in the header
+
+## How to use it
+
+1. Review the task's Changes.
+2. Choose the available Commit, Commit and push, or Create PR step.
+3. If a commit form appears, check the message and confirm.
+4. Check the result in the session and commit history.
+
+> **Good to know**: Cezar usually delegates the step to the agent. The server-side commit form includes all worktree changes (git add -A); it does not select individual files. The available button depends on branch and PR state.

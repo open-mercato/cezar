@@ -6,28 +6,27 @@ import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { firstPackReport } from '../../src/pack-check.ts';
 
 const execFile = promisify(execFileCallback);
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+// npm supplies its JS entry point to scripts; invoking it through Node also works on Windows.
+const npmCli = process.env.npm_execpath;
 
 test('the release tarball installs and runs the dry-run CLI workflow', { timeout: 120_000 }, async () => {
+  assert.ok(npmCli, 'run this suite through npm run test:package');
   const root = await mkdtemp(join(tmpdir(), 'cezar-package-e2e-'));
 
   try {
     const packDir = join(root, 'pack');
     await mkdir(packDir);
     const packed = await execFile(
-      npm,
-      ['pack', '--json', '--ignore-scripts', '--pack-destination', packDir],
+      process.execPath,
+      [npmCli, 'pack', '--json', '--ignore-scripts', '--pack-destination', packDir],
       { cwd: repoRoot, maxBuffer: 10 * 1024 * 1024 },
     );
-    const records = JSON.parse(packed.stdout) as Array<{
-      filename: string;
-      files: Array<{ path: string }>;
-    }>;
-    const record = records[0];
-    assert.ok(record, 'npm pack should describe the generated tarball');
+    const record = firstPackReport(JSON.parse(packed.stdout));
+    assert.ok(record?.filename && record.files, 'npm pack should describe the generated tarball');
 
     const packagedPaths = new Set(record.files.map((file) => file.path));
     for (const requiredPath of ['dist/index.js', 'web/dist/index.html', 'scripts/mock-claude.mjs', 'README.md']) {
@@ -41,8 +40,8 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     await writeFile(join(consumerDir, 'package.json'), '{"private":true}\n', 'utf8');
     const tarball = join(packDir, record.filename);
     await execFile(
-      npm,
-      ['install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', tarball],
+      process.execPath,
+      [npmCli, 'install', '--ignore-scripts', '--no-audit', '--no-fund', '--no-package-lock', tarball],
       { cwd: consumerDir, maxBuffer: 10 * 1024 * 1024 },
     );
 

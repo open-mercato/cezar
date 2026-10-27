@@ -82,11 +82,31 @@ function schedule(fn: () => void, ms: number): void {
  * that asks the reader to decide something rather than telling them what already happened. Both
  * are optional and both default to exactly the previous behavior. `reported` marks a `danger`
  * toast whose failure the caller already reported with its own fingerprint, so the observers skip it.
+ * `expected` marks one that is an expected, user-actionable outcome — a validation limit, a 409
+ * guarding a precondition, a CLI that is not installed: shown, never reported as an error.
  */
+/** The browser's own words for a request that got no answer — Chromium, WebKit, Firefox. */
+const RAW_TRANSPORT_MESSAGES = new Set([
+  'Failed to fetch',
+  'network error',
+  'Load failed',
+  'The network connection was lost.',
+  'NetworkError when attempting to fetch resource.',
+])
+
+export const UNREACHABLE_TOAST = 'cannot reach the cezar server — check the connection and try again'
+
+/** A raw transport `TypeError` that escaped the client's `ApiError(0)` mapping (a body read that
+ *  failed after the headers arrived) still says something a user can act on (telemetry 2e454012). */
+export function friendlyToastMessage(message: string): string {
+  return RAW_TRANSPORT_MESSAGES.has(message.trim()) ? UNREACHABLE_TOAST : message
+}
+
 export function toast(
-  message: string,
-  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean } = {},
+  rawMessage: string,
+  opts: { tone?: ToastTone; action?: ToastAction; durationMs?: number; reported?: boolean; expected?: boolean } = {},
 ): void {
+  const message = friendlyToastMessage(rawMessage)
   const item: ToastItem = {
     id: nextId++,
     message,
@@ -96,7 +116,7 @@ export function toast(
   }
   const lifetime = opts.durationMs ?? TOAST_MS
   publish([...items, item])
-  if (item.tone === 'danger' && !opts.reported) {
+  if (item.tone === 'danger' && !opts.reported && !opts.expected) {
     for (const listener of dangerListeners) {
       try {
         listener(message)

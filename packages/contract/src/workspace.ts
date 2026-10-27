@@ -41,6 +41,9 @@ export const workspaceConfigResponseSchema = z.object({
   effectiveSkillsAutoUpdate: z.boolean(),
   /** Skills repos added in Global settings; every project loads them as team skills. */
   orgSkillsRepos: z.array(z.object({ repo: z.string(), ref: z.string() })),
+  /** Global instructions for every task in every project; `null` = none. A project's own system
+   *  prompt is appended after it and wins where they conflict. */
+  systemPrompt: z.string().nullable(),
   composerDefaults: z.object({
     autonomous: z.boolean().nullable(),
     worktree: z.boolean().nullable(),
@@ -101,6 +104,8 @@ export const setWorkspaceConfigInputSchema = z.object({
     .array(z.object({ repo: z.string().trim().min(1).max(500), ref: z.string().trim().min(1).max(200).default('main') }).passthrough())
     .max(20)
     .optional(),
+  /** Clears on `null` or `''`, like the project `systemPrompt`. */
+  systemPrompt: z.string().trim().max(20_000).nullable().optional(),
   composerDefaults: z
     .object({
       autonomous: z.boolean().nullable().optional(),

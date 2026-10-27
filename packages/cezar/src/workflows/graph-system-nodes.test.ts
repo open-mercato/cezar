@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { childSettleReport } from '../dispatch/engine.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import { graphIssues, graphRailSteps, graphToSteps, type WorkflowGraph } from './graph.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -54,6 +55,7 @@ describe('graph system nodes', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     manager.dispose();
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
@@ -127,6 +129,21 @@ describe('graph system nodes', () => {
     manager.sendMessage(id, [{ type: 'text', text: 'Reject — tests are flaky' }]);
     await until(id, terminal);
     expect(readFileSync(join(repoRoot, 'gate.txt'), 'utf8')).toBe('rejected: Reject — tests are flaky\n');
+  }, 30_000);
+
+  it('dispatched gate Finish reports success with webhooks unset', async () => {
+    vi.stubEnv('CEZ_WEBHOOKS', undefined);
+    const id = manager.startRun(def(GATE), {
+      task: 'x', worktree: false,
+      dispatch: { rootRunId: 'root-test', parentRunId: 'root-test' },
+    }).id;
+    const parked = await until(id, parkedAt('gate'));
+    expect(parked.attentionRequest?.questions[0]?.question).toBe('Ship x?');
+    expect(manager.finish(id)).toBe(true);
+    const finished = await until(id, terminal);
+    expect(['done', 'review']).toContain(finished.status);
+    expect(childSettleReport(finished).report.status).toBe('done');
+    expect(finished.dispatch?.pendingAsk).toBeUndefined();
   }, 30_000);
 
   it('Finish at a gate settles the run without running what follows; cancel cancels it', async () => {

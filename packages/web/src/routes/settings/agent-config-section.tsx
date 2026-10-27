@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { availableRunners } from '@/routes/new-task-form'
+import { formatJson } from '@/lib/format-json'
 import { cn } from '@/lib/utils'
 import { AGENT_DESCRIPTORS, descriptorFor, type AgentDescriptor } from './agent-descriptors'
 
@@ -279,8 +280,10 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
   const save = () => {
     setFormatError(null)
     setConflict(false)
+    // Plain JSON only: re-indenting JSONC/TOML would need a parser that keeps comments.
+    const body = file.format === 'json' ? (formatJson(content) ?? content) : content
     put.mutate(
-      { content, version: loadedVersion },
+      { content: body, version: loadedVersion },
       {
         onSuccess: () => {
           setDraft(null)
@@ -329,7 +332,10 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
           value={content}
           language={file.format}
           readOnly={!canWrite}
-          onChange={setDraft}
+          onChange={(next) => {
+            setDraft(next)
+            setFormatError(null) // the error described the text that was saved, not this one
+          }}
           aria-label={`${file.label} contents`}
           className="h-[26rem]"
         />
@@ -360,7 +366,10 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setDraft(null)}
+            onClick={() => {
+              setDraft(null)
+              setFormatError(null)
+            }}
             disabled={!dirty || put.isPending}
           >
             Revert

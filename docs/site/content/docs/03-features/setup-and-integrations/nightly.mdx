@@ -1,0 +1,24 @@
+---
+title: "Try a test release"
+description: "Try changes before they reach a stable release."
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: .github/workflows/nightly.yml
+    line: 116
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Nightly includes merged changes. To test a specific pull request, use its assigned preview version.
+
+## Where to find it
+
+Terminal → `npx cezar-cli@nightly`
+
+## How to use it
+
+1. Choose nightly to test merged changes.
+2. When testing a pull request, use its exact preview version.
+
+> **Good to know**: A test release may differ from the stable version. Include the exact package version when reporting a bug.

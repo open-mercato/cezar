@@ -30,6 +30,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
 import { useFinishRun } from './use-finish-run'
+import { useStartRunNow } from './use-start-run-now'
 import { E2eSetupVerdict } from './e2e-setup-verdict'
 import { useDraft } from './thread-draft'
 import { useDiffComments } from './diff-comments'
@@ -712,6 +713,7 @@ export function liveTurnStart(run: ApiRun, thread: ThreadState): string | undefi
 function QueuedPlaceholder({ run }: { run: ApiRun }) {
   const runs = useRuns()
   const position = queuePosition(runs.data ?? [], run.id)
+  const startNow = useStartRunNow(run.id)
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
@@ -721,6 +723,21 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
       <p className="text-xs text-soft-foreground">
         {run.workflow} · {run.queueWaitReason ? 'starts automatically when the account and a slot are available' : 'starts automatically when a slot frees up'}
       </p>
+      {/* A usage-limit hold still applies to a forced start, so the button would do nothing there. */}
+      {!run.queueWaitReason && (
+        <Button
+          data-slot="start-now"
+          size="sm"
+          variant="outline"
+          className="mt-2"
+          // Stays disabled after success until SSE flips the run off `queued` (a re-click would 409).
+          disabled={startNow.isPending || startNow.isSuccess}
+          onClick={() => startNow.mutate()}
+          title="Start this task now, over the parallel-task limit"
+        >
+          Start now
+        </Button>
+      )}
     </div>
   )
 }

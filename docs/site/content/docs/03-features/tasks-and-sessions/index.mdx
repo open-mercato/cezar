@@ -1,0 +1,53 @@
+---
+title: "Tasks and sessions"
+description: "Start tasks, follow agents as they work, and manage the queue."
+related:
+  links:
+    - architecture/run-lifecycle
+---
+This section describes 42 features. Each page explains what the feature does, where to find it, and how to use it.
+
+| Feature | Description | Status |
+| --- | --- | --- |
+| [The agent's current plan and TODO list](/docs/features/tasks-and-sessions/agent-plan) | Follow the agent's plan without searching the conversation. | Available |
+| [Application preview inside a task](/docs/features/tasks-and-sessions/app-preview) | Open your application beside the conversation without leaving the task. | Available |
+| [Archive a task](/docs/features/tasks-and-sessions/archive-task) | Remove completed work from the current task list. | Available |
+| [Ask: questions about the repository](/docs/features/tasks-and-sessions/ask-mode) | Ask about code without creating a branch or worktree. | Available |
+| [Images and files in a conversation](/docs/features/tasks-and-sessions/attachments) | Attach a screenshot, document, text file, or binary file. | Available |
+| [Resume after a usage limit resets](/docs/features/tasks-and-sessions/auto-resume) | Cezar can automatically resume work interrupted by a provider's usage limit. | Available |
+| [Run a task without stopping for questions](/docs/features/tasks-and-sessions/autonomous) | Autonomous mode lets the agent work without waiting for answers. | Available |
+| [Cancel automatic resume](/docs/features/tasks-and-sessions/cancel-resume) | Cancel a scheduled resume for one task. | Available |
+| [Stop a task or remove it from the queue](/docs/features/tasks-and-sessions/cancel-task) | Interrupt a running session or remove a task from the execution queue. | Available |
+| [Suggestions for /skills and @files](/docs/features/tasks-and-sessions/composer-completion) | Insert skill and file names from suggestions. | Available |
+| [Default Autonomous and worktree settings](/docs/features/tasks-and-sessions/composer-defaults) | Set initial task-form choices for all projects. | Available |
+| [Design Mode: select an element to change](/docs/features/tasks-and-sessions/design-mode) | Click an element in the preview and tell the agent what to change. | Available |
+| [Notes attached to page elements](/docs/features/tasks-and-sessions/design-notes) | Keep several preview notes and send them separately. | Available |
+| [Dictate a message](/docs/features/tasks-and-sessions/dictation) | Dictate an instruction, check the transcript, and send it. | Available |
+| [Create and report subtasks from the CLI](/docs/features/tasks-and-sessions/dispatch-cli) | Create a subtask, inspect its tree, and return a structured result. | Available |
+| [Subtask limits and models](/docs/features/tasks-and-sessions/dispatch-limits) | Limit subtask count, concurrency, and budget, and choose their agent. | Available |
+| [A subtask that reviews another branch](/docs/features/tasks-and-sessions/dispatch-review) | Ask a separate agent to assess changes and return a verdict. | Available |
+| [A workspace-wide Dispatch subtask limit](/docs/features/tasks-and-sessions/dispatch-workspace-cap) | The plan adds a shared Dispatch subtask limit for the workspace. | Planned |
+| [Continue a session in Cezar or a terminal](/docs/features/tasks-and-sessions/handoff) | Return to an earlier agent session and send another instruction. | Available |
+| [Follow the agent's work](/docs/features/tasks-and-sessions/live-sessions) | Read messages, tool calls, and results in the task thread as they arrive. | Available |
+| [Enable automatic task titles](/docs/features/tasks-and-sessions/live-titles) | A task's title can change as the conversation progresses. | Available |
+| [Change or cancel a scheduled start](/docs/features/tasks-and-sessions/manage-scheduled-task) | Inspect a pending task, run it early, or reschedule it without opening Automations. | Available |
+| [Message and attachment drafts](/docs/features/tasks-and-sessions/message-drafts) | Return to an unsent message after switching tasks or refreshing. | Available |
+| [Run several tasks at once](/docs/features/tasks-and-sessions/parallel-tasks) | Cezar runs several tasks at the same time. Others wait in the queue until a slot becomes available. | Available |
+| [Answer an agent's question](/docs/features/tasks-and-sessions/questions) | Provide missing information through a question card in the thread. | Available |
+| [Understand why a task is waiting](/docs/features/tasks-and-sessions/queue-wait-reason) | Distinguish queue capacity, account limits, and another session's automatic resume. | Available |
+| [Edit instructions before a task starts](/docs/features/tasks-and-sessions/queued-prompts) | Add, edit, and remove messages while a task waits in the queue. | Available |
+| [Start a new task after a quota reset](/docs/features/tasks-and-sessions/schedule-after-reset) | Schedule a new task for the next confirmed reset of a selected Claude or Codex account. | Available |
+| [Schedule a task to start later](/docs/features/tasks-and-sessions/schedule-task) | Write a task now and choose its start date and time. | Available |
+| [Start an application from the preview](/docs/features/tasks-and-sessions/start-app) | Start app launches services and opens the detected address. | Available |
+| [Inspect subagent activity](/docs/features/tasks-and-sessions/subagents) | See the activity and history of agents launched within a session. | Available |
+| [Copy task details](/docs/features/tasks-and-sessions/task-copy-context) | Copy a link, branch, worktree path, or resume command. | Available |
+| [Delegate subtasks with Dispatch](/docs/features/tasks-and-sessions/task-dispatch) | Let an agent split work into separate Cezar tasks. | Available |
+| [Task handoff notes](/docs/features/tasks-and-sessions/task-notes) | Read what the agent completed and what remains. | Available |
+| [Task command palette](/docs/features/tasks-and-sessions/task-palette) | Find a command, file, or task without searching through tabs. | Available |
+| [Pinning, names, and read status](/docs/features/tasks-and-sessions/task-pin-read) | Mark important tasks and results you want to revisit. | Available |
+| [Task views side by side](/docs/features/tasks-and-sessions/task-split-view) | Compare chat, changes, files, and preview in one layout. | Available |
+| [Terminal in the task worktree](/docs/features/tasks-and-sessions/task-terminal) | Run commands in a terminal assigned to the task. | Available |
+| [Project commands and detected addresses](/docs/features/tasks-and-sessions/terminal-discovery) | Run detected commands and open addresses printed by the terminal. | Available |
+| [Check session tokens and cost](/docs/features/tasks-and-sessions/usage-metrics) | See the input and output token counts and the cost reported by the agent. | Available |
+| [Compare several solutions](/docs/features/tasks-and-sessions/variants) | Run two or three variants of a task and choose the best result. | Available |
+| [Idle timeout for waiting sessions](/docs/features/tasks-and-sessions/waiting-timeout) | Choose how long an ordinary waiting session stays open. | Available |

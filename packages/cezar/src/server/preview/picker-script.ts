@@ -441,6 +441,15 @@ const PICKER_SOURCE = String.raw`(function () {
     post({ type: 'cancel' });
   }
 
+  // The cockpit's Design Mode key (Alt+D, by physical key: a Mac reports ⌥D as a typed glyph) —
+  // forwarded from here because a key pressed inside this frame never reaches the cockpit.
+  function onToggleKey(event) {
+    if (event.repeat || !event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    if (event.code ? event.code !== 'KeyD' : event.key !== 'd' && event.key !== 'D') return;
+    swallow(event);
+    post({ type: 'toggle' });
+  }
+
   function onScroll() {
     if (hovered) highlight(hovered);
     placeMarks();
@@ -472,6 +481,7 @@ const PICKER_SOURCE = String.raw`(function () {
     if (data.type === 'set-active') setActive(!!data.active);
     else if (data.type === 'set-marks' && Array.isArray(data.marks)) setMarks(data.marks.slice(0, 50));
   });
+  window.addEventListener('keydown', onToggleKey, true);
 
   // Marks outlive the picker being switched off, so they follow the page on their own listeners.
   window.addEventListener('scroll', onScroll, true);

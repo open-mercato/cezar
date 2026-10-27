@@ -1,0 +1,26 @@
+---
+title: "Connect a project to Jira"
+description: "Read issues from a selected Jira project in Cezar."
+related:
+  links:
+    - guides/common-questions
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/tracker-section.tsx
+    line: 153
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The connection belongs to a specific repository. After saving credentials, select the Jira project whose issues should appear in the sidebar.
+
+## Where to find it
+
+Settings → project → Issue tracker
+
+## How to use it
+
+1. Choose Configure Jira credentials.
+2. Enter the Jira URL, account email, and API token, then save.
+3. Choose Browse Jira, find the project, and click Connect.
+
+> **Good to know**: Cezar stores credentials locally, outside the repository, in a private `.env` file. The file is not encrypted. The Jira connection does not use the Secrets store.

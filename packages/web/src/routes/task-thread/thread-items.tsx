@@ -46,6 +46,7 @@ import type {
   ThreadNote,
   ThreadProviderAuthRequired,
 } from './thread-state'
+import { writeClipboard } from '@/lib/clipboard'
 
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
@@ -447,7 +448,7 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
   })
   const copy = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command)
+      await writeClipboard(command)
       toast('Command copied')
     } catch {
       toast('Could not copy the command', { tone: 'danger' })
@@ -743,10 +744,12 @@ function CopyCommandButton({ command }: { command: string }) {
       type="button"
       aria-label={copied ? 'Copied' : 'Copy command'}
       onClick={() => {
-        void navigator.clipboard?.writeText(command).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
+        void writeClipboard(command)
+          .then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
       }}
       className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
     >

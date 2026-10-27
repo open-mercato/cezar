@@ -1,10 +1,12 @@
+import { WebhookCard } from './webhook-card'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { useProjects, useWorkspaceConfig } from '@/api/queries'
+import { useHealth, useProjects, useWorkspaceConfig } from '@/api/queries'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
+import { withServedBootProject } from '@/lib/served-boot-project'
 import { ProjectFolderField } from './project-location'
 import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
@@ -47,9 +49,10 @@ function fullDate(iso: string): string {
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject'>> }) {
+export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'webhooks' | 'webhooksUnavailableReason'>> }) {
   const projectId = useActiveProjectId()
   const projects = useProjects()
+  const health = useHealth()
   const config = useWorkspaceConfig()
 
   if (projects.isPending) {
@@ -71,7 +74,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
       </p>
     )
   }
-  const registry = projects.data
+  const registry = withServedBootProject(projects.data, projectId, health.data)
   const project = registry?.projects.find((entry) => entry.id === projectId)
   // No registry entry for this URL (an unscoped mount, or an id the registry does not have):
   // there is nothing true to say about a project that isn't one.
@@ -86,6 +89,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
     <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
       <ProjectFolderField />
       <ProjectFacts project={project} canRemove={managesRegistry} />
+      <WebhookCard />
       {project.unregistered ? (
         <SettingsField
           title="Add to your projects"

@@ -31,11 +31,12 @@ import {
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
 import { opencodeConfigContent } from './private-mcp.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 export interface OpencodeRunnerOptions {
   /** Override the binary name/path; defaults to `opencode` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -61,9 +62,21 @@ export const KILL_GRACE_MS = 4_000;
  * from: an opencode build that does not emit it still ends its turn. Every
  * `message.*` frame re-arms the window, so a session that is genuinely working
  * — the case this whole fix is about — never trips it. This is NOT the
- * configurable agent-step wall clock (#880); that deadline is untouched.
+ * agent-step inactivity deadline (#880, cf2191f1); that deadline is untouched.
  */
 export const TURN_IDLE_GRACE_MS = 5_000;
+
+/**
+ * A `session.status` retry scheduled further out than this ends the turn as an error. OpenCode
+ * retries a refused prompt silently on its own schedule — a spent free tier until the next day —
+ * and an interactive step has no wall clock, so four runs held their slots for 11 h. A duration,
+ * not a clock time: `next` is an epoch instant, so the resume it books is zone-independent.
+ */
+export const RETRY_GIVE_UP_MS = 10 * 60_000;
+
+/** `action.reason`s that mean a spent quota — OpenCode 1.19 sends `free_tier_limit` and
+ *  `account_rate_limit`. Any other action still fails the turn, but books no auto-resume. */
+const QUOTA_REASON_RE = /limit|quota/i;
 
 /**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
@@ -189,6 +202,9 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  private deadline: InactivityDeadline = armInactivityDeadline(0, () => {});
+  /** Set once `giveUpOnLongRetry` has reported the failure — the held POST's hang-up is not news. */
+  private retryGaveUp = false;
   /** One teardown per session — see `terminate()`. */
   private signalled = false;
 
@@ -203,14 +219,10 @@ class OpencodeSession implements AgentSession {
     const urlReady = this.listen();
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    this.deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+    });
 
     this.ready = (async () => {
       this.baseUrl = await urlReady;
@@ -223,12 +235,12 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut) {
+        if (!this.timedOut && !this.retryGaveUp) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        this.deadline.clear();
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.sse.abort();
         this.serverOpen = false;
@@ -250,8 +262,7 @@ class OpencodeSession implements AgentSession {
         sessionId: this.sessionId ?? spec.sessionId,
       };
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `opencode timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('opencode', limitMs, this.deadline.expiredBy) });
       }
       this.emit({ type: 'done' });
       return base;
@@ -470,7 +481,11 @@ class OpencodeSession implements AgentSession {
           .catch(() => undefined);
       }, SERVER_PROBE_INTERVAL_MS);
       probe.unref?.();
-      const onExit = () => fail('opencode serve exited before it started listening');
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        // The stderr tail rides a local note in listen(), never this telemetry-grouped message.
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${code}`;
+        fail(`opencode serve exited before it started listening (${detail})`);
+      };
       const cleanup = () => {
         settled = true;
         clearTimeout(stall);
@@ -672,6 +687,8 @@ class OpencodeSession implements AgentSession {
     } catch {
       return;
     }
+    // The bus's own keep-alives prove the server is up, not that the agent is working.
+    if (evt.type !== 'server.heartbeat' && evt.type !== 'server.connected') this.deadline.touch();
     this.emitUi((state) => mapOpencodeEvent(evt, state));
     this.handleEvent(evt);
   }
@@ -696,7 +713,27 @@ class OpencodeSession implements AgentSession {
       // own scope, exactly as the v2 mapper reads it.
       const sid = stringField(props, 'sessionID');
       if (sid === undefined || sid === this.sessionId) this.finishTurn(true);
+    } else if (type === 'session.status') {
+      const sid = stringField(props, 'sessionID');
+      if (sid === undefined || sid === this.sessionId) this.giveUpOnLongRetry(props.status);
     }
+  }
+
+  /** Fail the turn on a retry that needs a human (`action`) or waits past `RETRY_GIVE_UP_MS`.
+   *  A quota `action` is worded as a usage limit and books the auto-resume; any other action never
+   *  does (resuming meets the same refusal). A long backoff without one auto-resumes only when
+   *  OpenCode's own text names a limit, else it waits for a manual Continue. */
+  private giveUpOnLongRetry(status: unknown): void {
+    if (!isRecord(status) || status.type !== 'retry' || !this.serverOpen) return;
+    const next = typeof status.next === 'number' && Number.isFinite(status.next) ? status.next : undefined;
+    const action = isRecord(status.action) ? status.action : undefined;
+    if (!action && (next === undefined || next - Date.now() < RETRY_GIVE_UP_MS)) return;
+    const quota = QUOTA_REASON_RE.test(action ? stringField(action, 'reason') ?? '' : '');
+    const reason = stringField(status, 'message') ?? 'the provider refused the request';
+    const at = next === undefined ? '' : ` — ${action && !quota ? 'next attempt' : 'retry at'} ${new Date(next).toISOString()}`;
+    this.retryGaveUp = true;
+    this.emit({ type: 'error', message: `opencode: ${quota ? 'usage limit reached: ' : ''}${reason}${at}` });
+    this.interrupt();
   }
 
   /** An unanswered prompt parks `opencode serve` forever — c3d30076 sat 21 h on
@@ -805,7 +842,12 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      const envelope = parseRecord(res.body);
+      const data = isRecord(envelope.data) ? envelope.data : {};
+      const name = stringField(envelope, 'name');
+      const message = stringField(data, 'message');
+      const detail = name && message ? `${name}: ${message}`.slice(0, 300) : res.body.slice(0, 200);
+      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${detail}`);
     }
     if (!res.body) return {};
     try {

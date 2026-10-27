@@ -149,9 +149,24 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   it refuses loses the frame. A selected element shows no blue frame on hover.
 - **The note.** The click opens a small window under the frame (above when there is no room),
   following the element as the page scrolls, with the cursor in it. It holds the element's name
-  (component, or e.g. `button.btn-primary`), a text field and Send. `Ctrl/Cmd+Enter` sends;
-  an empty note cannot be sent. The window is drawn by the cockpit over the page, never inside
-  it: what the user types must not live in an untrusted document.
+  (component, or e.g. `button.btn-primary`), a text field and **Add note**. `Ctrl/Cmd+Enter`
+  adds; an empty note cannot be added. The window is drawn by the cockpit over the page, never
+  inside it: what the user types must not live in an untrusted document.
+- **Sending is a batch (2026-10-24).** Like line comments on the Changes tab, notes are collected
+  first: a tray in the frame's corner counts the written drafts and sends them all, as ONE
+  message, when the user decides. The send names no session state — no "reopen" wording.
+  An ADDED note is removed only deliberately: reopened, ✕ / `Esc` just close it, and its window
+  offers **Delete**. `Esc`/✕ still throw away a draft that was never added.
+- **Key.** `⌥D` / `Alt+D` switches Design Mode on and off, shown on the button. Matched by the
+  physical key (a Mac reports ⌥D as `∂`), and from text fields too; never with ⌘/Ctrl (Ctrl+Alt
+  is AltGr off a Mac). A key pressed inside the page reaches the cockpit only through the mirror's
+  picker, which forwards it (`toggle`) — a directly framed page is another origin, so before the
+  first switch-on the key works only with the focus in the cockpit. A forwarded `toggle` only ever
+  switches Design Mode OFF: the page's own script can post it too, and switching on takes the
+  user's own key or click in the cockpit. The key is reserved, never offered for a command, and
+  the cockpit's dialogs (`role="dialog"`) keep it. Ready notes are frozen while a batch is on its
+  way, so no edit is lost to it. A batch is headed `## Note n` per note, so a leading `/skill` is
+  expanded only for a single note.
 - **Drafts.** Clicking another element leaves the first one framed WITH its unsent text and opens
   a window on the new one — several drafts at once. Clicking a framed element opens its note
   again; it is never picked twice. `Esc` or ✕ on a draft discards it and deselects the element.
@@ -163,9 +178,9 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
   is offered from a chip in the corner of the frame instead of being lost.
 - **Sending.** Session live (`running`/`waiting`) → `POST /messages`, delivered into the session
   at once — mid-turn while the agent works, as the composer's messages are. Session closed →
-  "Reopen & send" (`POST /continue`). Task not started → joins its first prompt (`POST /messages`,
+  reopened with the notes (`POST /continue`). Task not started → joins its first prompt (`POST /messages`,
   #472). A 409 means this window's run record was stale, so the other path is tried once (the
-  composer's `deliver-prompt.ts` recovery). The agent receives the user's words, then the one
+  composer's `deliver-prompt.ts` recovery). The agent receives each note's words, then its
   element.
 - **After sending.** The frame stays, lime, with the note's number (order sent), until the page
   reloads. Colour never changes; the status is in the note: *In progress → Done*, or *Agent is
