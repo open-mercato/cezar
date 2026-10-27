@@ -8,6 +8,7 @@ const HOME: AgentHomePaths = {
   cursor: '/home/u/.cursor',
   copilot: '/home/u/.copilot',
   junie: '/home/u/.junie',
+  antigravity: '/home/u/.gemini/antigravity-cli',
 };
 
 describe('agent-config catalog', () => {
@@ -27,7 +28,7 @@ describe('agent-config catalog', () => {
   it('<repo>/AGENTS.md is ONE entry read by every runner that reads it', () => {
     const agents = CONFIG_FILES.filter((f) => f.label === 'AGENTS.md' && f.scope === 'project');
     expect(agents).toHaveLength(1);
-    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot']);
+    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot', 'antigravity']);
   });
 
   it('resolves repo-relative paths under the repo root', () => {
@@ -47,6 +48,12 @@ describe('agent-config catalog', () => {
     expect(findConfigFile('cursor.project.settings')!.resolve('/repo', HOME)).toBe('/repo/.cursor/cli.json');
     expect(findConfigFile('cursor.user.mcp')!.resolve('/repo', HOME)).toBe('/home/u/.cursor/mcp.json');
     expect(findConfigFile('cursor.project.mcp')!.resolve('/repo', HOME)).toBe('/repo/.cursor/mcp.json');
+    // Antigravity's MCP and global rules sit one level up, in the shared ~/.gemini.
+    expect(findConfigFile('antigravity.user.settings')!.resolve('/repo', HOME)).toBe(
+      '/home/u/.gemini/antigravity-cli/settings.json',
+    );
+    expect(findConfigFile('antigravity.user.mcp')!.resolve('/repo', HOME)).toBe('/home/u/.gemini/config/mcp_config.json');
+    expect(findConfigFile('antigravity.user.memory')!.resolve('/repo', HOME)).toBe('/home/u/.gemini/GEMINI.md');
   });
 
   it('marks only Claude’s gitignored personal layer as seeded', () => {
@@ -66,6 +73,8 @@ describe('agent-config catalog', () => {
   it('holdsMcp is set exactly where MCP servers actually live', () => {
     const mcp = CONFIG_FILES.filter((f) => f.holdsMcp).map((f) => f.id).sort();
     expect(mcp).toEqual([
+      // Antigravity reads the shared ~/.gemini/config/mcp_config.json, apart from its settings.
+      'antigravity.user.mcp',
       // cezar's own private, per-project servers (spec 2026-10-07-private-project-mcp).
       'cezar.private.mcp',
       'claude.project.mcp',

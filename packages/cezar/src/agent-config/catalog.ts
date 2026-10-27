@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { PRIVATE_MCP_FILE, PRIVATE_MCP_RUNNERS, privateMcpPath } from '../core/private-mcp.ts';
 
@@ -40,6 +40,8 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `~/.gemini/antigravity-cli` — no relocation var documented (see `PROFILE_ENV_VAR.antigravity`) */
+  antigravity: string;
 }
 
 export interface ConfigFileDef {
@@ -87,6 +89,7 @@ const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configurat
 const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
 const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
 const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
+const ANTIGRAVITY_DOCS = 'https://antigravity.google/docs/cli';
 const COPILOT_INSTRUCTIONS_DOCS =
   'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
 
@@ -381,6 +384,66 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: COPILOT_INSTRUCTIONS_DOCS,
   },
 
+  // ---- Google Antigravity CLI ----
+  // Paths verified against agy 1.4.0 on 2026-10-18 (its embedded docs and a live install): the
+  // CLI's own settings live in ~/.gemini/antigravity-cli/settings.json (`model` holds the /model
+  // choice as its display name, which --model also accepts), MCP servers in the shared
+  // ~/.gemini/config/mcp_config.json (key: mcpServers), and rules in GEMINI.md / AGENTS.md.
+  {
+    id: 'antigravity.user.settings',
+    runners: ['antigravity'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.antigravity, 'settings.json'),
+    label: '~/.gemini/antigravity-cli/settings.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    modelKey: 'model',
+    modelPriority: 1,
+    precedence:
+      'The CLI\'s own persisted settings, including the model chosen with /model. A --model flag overrides it for one session.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.user.mcp',
+    runners: ['antigravity'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(dirname(home.antigravity), 'config', 'mcp_config.json'),
+    label: '~/.gemini/config/mcp_config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'Global Configuration: applies to all sessions. Plugin configuration (plugins/<plugin_name>/mcp_config.json) is active when the plugin is enabled. `agy mcp add|remove` edits this file.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.user.memory',
+    runners: ['antigravity'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(dirname(home.antigravity), 'GEMINI.md'),
+    label: '~/.gemini/GEMINI.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Global rules applied to every workspace.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.project.memory',
+    runners: ['antigravity'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, 'GEMINI.md'),
+    label: 'GEMINI.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Directory-based rules, read alongside AGENTS.md and .agents/rules/*.md (contextual / hierarchical). Runs read the committed copy.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+
   // ---- Cursor Agent CLI ----
   {
     id: 'cursor.user.settings',
@@ -455,10 +518,10 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: PRIVATE_MCP_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot AND Antigravity ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode', 'copilot'],
+    runners: ['codex', 'opencode', 'copilot', 'antigravity'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -466,7 +529,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex, OpenCode and Copilot CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI and Antigravity CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set; Antigravity reads it alongside GEMINI.md. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];
