@@ -2,7 +2,9 @@ import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
 import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
+  classifyAgentErrorHint,
   toolDisplay,
+  type AgentErrorHintKind,
   type PlanEntry,
   type PlanStatus,
   type StopReason,
@@ -86,6 +88,18 @@ export interface ThreadAgentUpdateRequired {
   provider: ThreadProviderAuthRequired['provider']
 }
 
+/** Follows an agent error whose fix is another runner, model or account, or needs saying plainly
+ *  (spec 2026-10-24-agent-cli-error-cooperation, improvement 4). */
+export interface ThreadAgentErrorHint {
+  kind: 'agent-error-hint'
+  id: string
+  hint: AgentErrorHintKind
+  /** The backend that failed, when the stream named one. */
+  provider?: ThreadProviderAuthRequired['provider']
+  /** `account_policy`: the vendor asks for identity verification rather than another login. */
+  identityVerification?: boolean
+}
+
 export type ThreadEntry =
   | UiItem
   | ThreadNote
@@ -93,6 +107,7 @@ export type ThreadEntry =
   | ThreadAsk
   | ThreadProviderAuthRequired
   | ThreadAgentUpdateRequired
+  | ThreadAgentErrorHint
 
 export interface ThreadTurn {
   /** Stable source-derived render key. The opening event sequence survives prepended pages;
@@ -149,6 +164,16 @@ export function latestPlanEntries(state: ThreadState): PlanEntry[] | undefined {
   for (let i = state.turns.length - 1; i >= 0; i -= 1) {
     const entries = state.turns[i]!.planEntries
     if (entries !== undefined) return entries
+  }
+  return undefined
+}
+
+/** The hint card whose actions are live: the one in the LATEST turn — a later turn means the
+ *  user already continued past it. */
+export function latestErrorHintId(state: ThreadState): string | undefined {
+  const items = state.turns.at(-1)?.items ?? []
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i]!.kind === 'agent-error-hint') return items[i]!.id
   }
   return undefined
 }
@@ -413,6 +438,26 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     })
   }
 
+  /** One hint card per turn, for the same twin reason. */
+  const offeredHint = new WeakSet<DraftTurn>()
+  const offerErrorHint = (text: string, noteId: string) => {
+    const turn = currentTurn()
+    if (offeredHint.has(turn)) return
+    const hint = classifyAgentErrorHint(text)
+    if (hint === null) return
+    offeredHint.add(turn)
+    turn.entries.push({
+      origin: 'meta',
+      entry: {
+        kind: 'agent-error-hint',
+        id: `${noteId}:hint`,
+        hint: hint.kind,
+        ...(sessionBackend !== undefined ? { provider: sessionBackend } : {}),
+        ...(hint.identityVerification ? { identityVerification: true } : {}),
+      },
+    })
+  }
+
   const itemKey = (event: RunEvent, itemId: string) => {
     return runItemKey(event.stepId, itemId)
   }
@@ -619,6 +664,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'danger' },
         })
         offerAgentUpdate(text, `v1:${event.seq}`)
+        offerErrorHint(text, `v1:${event.seq}`)
         break
       }
       case 'session.error': {
@@ -629,6 +675,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           entry: { kind: 'note', id: `v2:${event.seq}`, text, tone: 'danger' },
         })
         offerAgentUpdate(text, `v2:${event.seq}`)
+        offerErrorHint(text, `v2:${event.seq}`)
         break
       }
       case 'session.started':

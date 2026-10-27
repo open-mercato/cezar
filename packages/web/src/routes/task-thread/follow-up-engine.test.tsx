@@ -14,7 +14,10 @@ import type {
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 import { Link } from '@/lib/project-router'
 
+import { ErrorHintActionsContext } from './error-hint-actions'
 import { useContinueAction } from './follow-up-engine'
+import { AgentErrorHintCard } from './thread-items'
+import type { ThreadAgentErrorHint } from './thread-state'
 
 /**
  * The follow-up composer's Continue control (#401): the runner + model pills default to the
@@ -559,5 +562,68 @@ describe('the follow-up runner pill carries the account', () => {
     renderAction(makeRun())
     await screen.findByRole('button', { name: 'Model' })
     expect(runnerPill()).toBeNull()
+  })
+})
+
+/** The agent-error hint card presets THIS hook's pills (spec 2026-10-24-agent-cli-error-cooperation,
+ *  item 4): a click on the card, then the composer's send, must post exactly that engine. */
+function HintHarness({ run, hint }: { run: ApiRun; hint: ThreadAgentErrorHint }) {
+  const action = useContinueAction(run)
+  if (!action.available || !action.canContinue) return null
+  return (
+    <ErrorHintActionsContext.Provider value={{ activeHintId: hint.id, alternatives: action.alternatives, preset: action.preset }}>
+      <AgentErrorHintCard incident={hint} />
+      {action.pills}
+      <button type="button" onClick={() => void action.continueWith('', [])}>Send</button>
+    </ErrorHintActionsContext.Provider>
+  )
+}
+
+const renderHint = (record: ApiRun, hint: ThreadAgentErrorHint) =>
+  render(
+    <QueryClientProvider client={createQueryClient()}>
+      <MemoryRouter>
+        <HintHarness run={record} hint={hint} />
+        <Toaster />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  )
+
+describe('agent-error hint presets reach /continue', () => {
+  it('"Use the default model" clears a pinned model', async () => {
+    serve()
+    renderHint(makeRun({ model: 'openai/gpt-5.1' }), { kind: 'agent-error-hint', id: 'v1:2:hint', hint: 'model_unavailable', provider: 'claude' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Use the default model' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(continueBody()).toEqual({ model: '' }))
+    expect(await screen.findByText('The next Continue uses the default model.')).toBeTruthy()
+  })
+
+  it('"Switch to Codex" moves the Continue to the other connected runner', async () => {
+    serve()
+    renderHint(makeRun(), { kind: 'agent-error-hint', id: 'v1:2:hint', hint: 'billing', provider: 'claude' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Switch to Codex' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(continueBody()).toEqual({ runner: 'codex' }))
+  })
+
+  it('"Use account" moves the Continue to the run runner\'s other login', async () => {
+    serveAccounts()
+    renderHint(
+      makeRun({ steps: [step({ sessionId: 'sess-1', profileId: 'default' })] }),
+      { kind: 'agent-error-hint', id: 'v1:2:hint', hint: 'quota_no_reset', provider: 'claude' },
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Use account “Klaudiusz”' }))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(continueBody()).toEqual({ agentProfile: 'klaudiusz' }))
+  })
+
+  it('offers no default-model action on an unpinned run, and no runner on a single-backend host', async () => {
+    serve({ ...HEALTH_MULTI, checks: [{ name: 'claude', available: true }, { name: 'git', available: true }] })
+    renderHint(makeRun(), { kind: 'agent-error-hint', id: 'v1:2:hint', hint: 'model_unavailable', provider: 'claude' })
+    await screen.findByRole('button', { name: 'Send' })
+    expect(screen.getByRole('alert').querySelectorAll('button')).toHaveLength(0)
   })
 })
