@@ -236,13 +236,8 @@ async function configuredModelProvider(
 }
 /** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
 const CANCEL_GRACE_MS = 1_000;
-<<<<<<< HEAD
-=======
-/** How long a settled task's agent CLI gets to exit on its own before its leftovers are reaped (#1411). */
-const LEFTOVER_SETTLE_GRACE_MS = 5_000;
 /** `runs/<id><suffix>` holds how many messages `deferMessage` is holding for that run. */
 const DEFERRED_MARKER_SUFFIX = '.deferred-messages';
->>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
 /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
  *  On an idle cockpit a task starts the instant it is created, so the wait begins together with
  *  the namer call — and a cold `claude -p` alone takes more than five seconds (run 269606ac
@@ -2180,16 +2175,9 @@ export class RunManager {
     const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
     // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
     const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
-<<<<<<< HEAD
-    if (acceptReview) {
-=======
-    // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
-    // the tree is released below, through the same path as Finish on a settled review.
-    const landOnAccept = acceptReview && this.store.getRun(runId)?.worktree === false;
     // Read before the registries below forget it: why a message deferred in this window must not resume the run.
     const stoppedBy = this.deferredStopReason(runId, state, !!acceptReview, !!queuedContinue);
-    if (acceptReview && !landOnAccept) {
->>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
+    if (acceptReview) {
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
     }

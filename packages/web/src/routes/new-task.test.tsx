@@ -216,13 +216,9 @@ function serve(overrides: {
   uiState?: Record<string, unknown>
   /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
-<<<<<<< HEAD
-=======
   /** Non-2xx catalog answers, or a request that never settles (`'pending'`). */
   skillsStatus?: number | 'pending'
   workflowsStatus?: number | 'pending'
-  deferredPreview?: () => Promise<Response>
->>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
   createRun?: unknown
   /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
   createRunStatus?: number
@@ -1088,15 +1084,6 @@ describe('submit', () => {
     await startTask()
 
     expect(postedBody()).toMatchObject({ task: 'Fix it', steps: [expect.objectContaining({ skill: 'om-fix' })] })
-  })
-
-  it('Start stays disabled while the catalog is still loading', async () => {
-    serve({ workflowsStatus: 'pending' })
-    renderNewTask()
-    await waitFor(() => expect(textarea().disabled).toBe(false))
-    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
-
-    expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(true)
   })
 
   it('a WORKFLOW source posts { workflow, task }', async () => {

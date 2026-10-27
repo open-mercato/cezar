@@ -191,8 +191,6 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
-<<<<<<< HEAD
-=======
 import {
   foldedLength,
   imageChars,
@@ -202,8 +200,6 @@ import {
   queuedImageChars,
   queuedStackRefusal,
 } from '../workflows/queued-bounds.ts';
-import { checkoutGitStatus } from '../workflows/landing.ts';
->>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';

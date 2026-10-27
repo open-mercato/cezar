@@ -197,25 +197,9 @@ export function NewTaskRoute() {
   const sourcesReady = !skills.isPending && !workflows.isPending && !uiState.isPending
   // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
   // persisted `lastTask` preselection was load-bearing for, and why it is gone).
-<<<<<<< HEAD
-  const source = resolveSource(draft.source, skillList, workflowList)
-=======
-  // Trunk-based projects (spec 2026-10-20-trunk-based-projects): an in-place project offers
-  // the Ask chip, a trunk-based project asks on its own when the message is a question, and nothing
-  // picked falls back to the project's default (or Ask) skill.
-  const inPlaceByDefault = config.data?.taskWorkspace === 'in-place'
-  const askOffered = repo.data?.info != null && (inPlaceByDefault || config.data?.profile === 'trunk')
-  const askWanted =
-    askOffered &&
-    draft.variants <= 1 &&
-    draft.dispatch === null &&
-    (draft.readOnly ?? (config.data?.profile === 'trunk' && looksLikeQuestion(draft.text)))
   // Without a catalog the draft's pick cannot be checked here — send it and let the server judge,
   // rather than silently swapping the user's skill for quick-task.
-  const source =
-    (catalogFailed ? draft.source : resolveSource(draft.source, skillList, workflowList)) ??
-    projectDefaultSource(config.data, askWanted, catalogFailed ? null : skillList)
->>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
+  const source = catalogFailed ? draft.source : resolveSource(draft.source, skillList, workflowList)
   const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -608,13 +592,7 @@ export function NewTaskRoute() {
           autoFocus
           placeholder="Describe a task for the agent — / for skills…"
           ariaLabel="Describe a task for the agent"
-<<<<<<< HEAD
           sendAriaLabel="Start task"
-=======
-          sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
-          sendLabel={startChoice ? 'Schedule task' : undefined}
-          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
->>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
           disabled={!providersReady}
           disabledReason={
             providers.isPending
