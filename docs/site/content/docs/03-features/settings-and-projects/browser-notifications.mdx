@@ -1,0 +1,27 @@
+---
+title: "Enable browser notifications"
+description: "Get notified when a task needs your answer, requires review, or ends with an error."
+version: opt-in
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/notifications-section.tsx
+    line: 93
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Your browser can notify you about tasks while the Cezar tab is in the background.
+
+## Where to find it
+
+Settings → Notifications
+
+## How to use it
+
+1. Enable Notify when an agent needs you.
+2. Allow notifications in your browser.
+3. Keep the Cezar tab open in the background.
+
+> **Good to know**: Notifications are off by default. Your browser must support them and have your permission to display them. This feature does not send push notifications from a native phone app.

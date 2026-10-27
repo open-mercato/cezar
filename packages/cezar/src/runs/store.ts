@@ -92,6 +92,8 @@ const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
+  // #1300: unreadable accounting follows the same bounded fallback as legacy records.
+  retriesUsed: z.number().int().nonnegative().optional().catch(undefined),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
@@ -332,6 +334,9 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
+   *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
+  autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -496,10 +501,15 @@ export interface RunEvent {
 
 /** A layout file this young may belong to a run another process has not saved to the index yet. */
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
-const MAX_RUNS_KEPT = 300;
+const DEFAULT_RUNS_KEPT = 300;
+const DEFAULT_ARCHIVED_KEPT = 500;
+/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs the index keeps (at least 1; live runs and active dispatch trees are never pruned). */
+function keepLimit(name: string, fallback: number): number {
+  const n = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
-const MAX_ARCHIVED_KEPT = 500;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
 const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
@@ -581,6 +591,13 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+  run.autoResumeReason = undefined;
+}
+
+/** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
+function isAccessDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
 }
 
 /**
@@ -1146,7 +1163,7 @@ export class RunStore extends EventEmitter {
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
-  /** `open` could not create `runs/`: events stay live-only instead of failing every run. */
+  /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */
   private eventsUnwritable = false;
 
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
@@ -1615,10 +1632,20 @@ export class RunStore extends EventEmitter {
   private persistEvent(runId: string, event: RunEvent): void {
     const line = `${JSON.stringify(event)}\n`;
     if (!this.eventsUnwritable) {
-      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      try {
+        appendFileSync(this.eventsPath(runId), line, 'utf8');
+      } catch (err) {
+        // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
+        // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
+        // else — a removed project's ENOENT (#1105) — still throws.
+        if (!isAccessDenied(err)) throw err;
+        this.eventsUnwritable = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[cez] cannot write task history (${message}); events stay live-only until it is writable again`);
+      }
       return;
     }
-    // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    // Degraded (already warned): retry, so access granted mid-session starts persisting.
     try {
       mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
       appendFileSync(this.eventsPath(runId), line, 'utf8');
@@ -1642,8 +1669,17 @@ export class RunStore extends EventEmitter {
     this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
     if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    // A new step or Continue may run another backend: the last session's no longer names it.
+    if (full.type === 'step-start') this.sessionBackends.delete(runId);
     if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
-      reportAgentError(this.sessionBackends.get(runId) ?? run.runner, { type: full.type, message: full.message, fatal: full.fatal });
+      // The step's backend is recorded before spawn, so it names a session that failed before
+      // `session.started` too — a per-step runner or a Continue override, not `run.runner`.
+      const stepBackend = run.steps.find((s) => s.id === full.stepId)?.backend;
+      reportAgentError(stepBackend ?? this.sessionBackends.get(runId) ?? run.runner, {
+        type: full.type,
+        message: full.message,
+        fatal: full.fatal,
+      });
     }
     if (this.janitorSettled(run)) return full;
 
@@ -2087,8 +2123,8 @@ export class RunStore extends EventEmitter {
       if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
     }
     const stalePool = [
-      ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
-      ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
+      ...all.filter((r) => !r.archived).slice(keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)),
+      ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);

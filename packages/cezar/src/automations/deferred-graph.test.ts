@@ -88,6 +88,27 @@ it('uses dispatch intent then parent defaults, and project accounts rather than 
   const inherited = await resolveDeferredExecution(root, { ...task, model: 'inherited' });
   expect(inherited.models.map(m => m.model)).toEqual(['inherited', 'inherited', 'inherited', 'opus']);
 });
+it('drops an inherited model on a child whose runner differs, like dispatch() (43bdda11)', async () => {
+  graph('parent', [{ type: 'workflow', workflow: 'child', runner: 'codex' }, { type: 'dispatch', prompt: 'work', runner: 'codex' }, { type: 'dispatch', prompt: 'same' }]);
+  write('child', { steps: [{ id: 'work', prompt: 'work' }] });
+  const result = await resolveDeferredExecution(root, { ...task, model: 'opus' });
+  expect(result.models.map(({ runner, model }) => ({ runner, model }))).toEqual([
+    { runner: 'codex', model: undefined }, { runner: 'codex', model: undefined }, { runner: 'claude', model: 'opus' },
+  ]);
+  // An intent model follows the intent's runner, then the parent's model applies to its own runner.
+  const intent = await resolveDeferredExecution(root, { ...task, model: 'opus', dispatch: { runner: 'claude', model: 'sonnet' } });
+  expect(intent.models.map(m => m.model)).toEqual([undefined, undefined, 'sonnet']);
+  // The preview binds what launch will run.
+  const preview = await previewDeferredStart(root, { task: { ...task, model: 'opus' }, start }, true);
+  expect(preview.binding!.models!.map(m => m.model)).toEqual([undefined, undefined, 'opus']);
+});
+it('binds no task model to an agent step on another runner, like runAgentStep', async () => {
+  write('parent', { steps: [{ id: 'a', prompt: 'a', runner: 'codex' }, { id: 'b', prompt: 'b' }, { id: 'c', prompt: 'c', runner: 'codex', model: 'gpt-5.1' }] });
+  const result = await resolveDeferredExecution(root, { ...task, model: 'opus' });
+  expect(result.models.map(({ runner, model }) => ({ runner, model }))).toEqual([
+    { runner: 'codex', model: undefined }, { runner: 'claude', model: 'opus' }, { runner: 'codex', model: 'gpt-5.1' },
+  ]);
+});
 it.each(['missing', 'cycle', 'depth'])('refuses %s references visibly before preview', async kind => {
   graph('parent', [{ type: 'workflow', workflow: kind === 'cycle' ? 'parent' : 'child' }]);
   if (kind === 'depth') for (let i = 0; i < 35; i++) graph(i ? `child${i}` : 'child', [{ type: 'workflow', workflow: `child${i + 1}` }]);

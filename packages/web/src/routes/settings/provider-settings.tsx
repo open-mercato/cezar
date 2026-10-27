@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
+import { writeClipboard } from '@/lib/clipboard'
 
 /** The provider cards this pane renders, in order. Exported so tests count them from the
  *  source of truth rather than from a literal that a new runner silently invalidates. */
@@ -173,7 +174,7 @@ export function ProviderSettings() {
 
   const copyCommand = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command)
+      await writeClipboard(command)
       toast('Command copied')
     } catch {
       toast('Could not copy the command', { tone: 'danger' })

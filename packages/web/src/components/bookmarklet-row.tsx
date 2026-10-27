@@ -2,6 +2,7 @@ import { ZapIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 
 import { toast } from '@/components/ui/toaster'
+import { writeClipboard } from '@/lib/clipboard'
 
 export function BookmarkletRow({
   label,
@@ -23,7 +24,7 @@ export function BookmarkletRow({
   }, [url])
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(url)
+      await writeClipboard(url)
       toast('Bookmarklet URL copied.')
     } catch {
       toast('Copy failed — drag the button instead.', { tone: 'danger' })

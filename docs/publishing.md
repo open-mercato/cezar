@@ -61,7 +61,7 @@ made with that token start no workflows.
 | [`Release cut`](../.github/workflows/release-cut.yml) | `main` | With main at `X.Y.Z`: creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` / `backport main` labels, hands main's `# Unreleased` to the line, and opens the PR moving main (manifests, cockpit, lockfile) to `X.(Y+1).0`. A re-run from the same main commit finishes a half-done cut; once main has moved past it, it refuses. |
 | [`Release`](../.github/workflows/release.yml) | a `release/vX.Y.x` branch (the *Use workflow from* picker) | Picks the version (below), stamps every manifest, the lockfile and `CHANGELOG.md`, commits that to the line, verifies and builds **that commit**, then tags it `vX.Y.Z`. It publishes nothing itself. |
 | [`Release publish`](../.github/workflows/release-publish.yml) | the `vX.Y.Z` tag (started by the tag) | Runs **at the tagged commit**, so npm provenance attests the code that ships. Checks the tag names the manifests and sits on its line, skips a version already released, resolves the dist-tag, builds, publishes, opens the changelog PR to `main`, and **last** creates the GitHub Release. One publish at a time across all lines. |
-| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line (carrying its category, priority, risk and QA labels — never `qa-approved` — plus `backport`, `review`); `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. Fork PRs are skipped (no secrets on `pull_request`): port them by hand. |
+| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line (carrying its category, priority, risk and QA labels — never `qa-approved` — plus `backport`, `review`); `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. Runs from a scan of PRs merged in the last 30 days (on every push to `main`, every 15 minutes, and on same-repo PR events), so **fork PRs and labels added after a merge are covered too**. The label is the source of truth: a backport is owed until an open or merged backport PR exists — closing one with its branch deleted re-runs it; remove the label to stop it. |
 
 **How Release picks the version.** A release is *done* when its GitHub Release
 exists; the tag pins its commit.
@@ -158,15 +158,20 @@ committed and posts the commands on the original PR. Never merge the draft as is
    lists what `main` changed there that the line never got.
 2. **Decide what that commit is:**
    - **a fix the line should have too:** backport it first (label its PR
-     `backport release/v0.16.x`, merge that backport), then close the draft and re-run
-     the original's backport: remove its label and add it again. No hand edits.
+     `backport release/v0.16.x`, merge that backport), then close the draft **and delete
+     its branch** (`gh pr close <n> --delete-branch`): the next scan (within 15 minutes)
+     opens a fresh backport on top. No hand edits. A closed draft whose branch is kept is
+     left alone: the action would reopen that stale branch instead of cherry-picking again.
    - **a feature, or unrelated:** resolve on the draft's branch. Keep the line's code
      and apply only what the original PR intended. Taking `main`'s version of a whole
      file is right only when the original PR replaced that file and the leftover
      difference is harmless (#1642: a one-line test-fixture tweak from #1427).
-   - **the code moved or was refactored on `main`:** close the draft and port the fix
-     by hand in a PR against the line where the code lives, labelled `backport`, linking
-     the original.
+   - **the code moved or was refactored on `main`:** port the fix by hand **on the
+     draft's branch** (reset it to the line, write the fix where the code lives there,
+     force-push) — keeping that PR is what tells the scan the backport exists.
+
+   If the bug turns out not to exist on the line, remove the label from the original PR
+   and close the draft with `--delete-branch`.
 3. **Validate on the branch** (the release tests at least; the full gate for code),
    push, run `gh pr ready <n>`, and comment what conflicted and how it was resolved.
 4. **Review** it like any backport: CI green, and its diff changes only what the

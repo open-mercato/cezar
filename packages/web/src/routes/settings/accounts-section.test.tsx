@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { AgentProfile, AgentProfilesResponse } from '@open-mercato/cezar-api-client'
-import { Toaster, resetToasts } from '@/components/ui/toaster'
+import { Toaster, onDangerToast, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
 import { ThemeProvider } from '@/components/theme-provider'
 
@@ -68,6 +68,7 @@ function serve(
     openError?: string
     targets?: unknown
     status?: unknown
+    connect?: { status: number; body: unknown }
   } = {},
 ) {
   requests = []
@@ -126,6 +127,9 @@ function serve(
       if (url.includes('/agent-profiles/') && url.includes('/status') && method === 'GET') {
         statusReads.push(url)
         return json({ status: options.status ?? { provider: 'claude', status: 'connected' } })
+      }
+      if (url === '/api/v1/providers/connect' && options.connect) {
+        return json(options.connect.body, options.connect.status)
       }
       if (url.endsWith('/open-targets') && method === 'GET') {
         return json({ targets: options.targets ?? [
@@ -400,6 +404,57 @@ describe('the agent accounts section', () => {
       expect(requests.find((r) => r.url === '/api/v1/providers/connect')?.body).toEqual({
         provider: 'claude',
       })
+    })
+
+    // telemetry 23976d8d / 77825860 / d655679e: Connect on a CLI that is not installed could only
+    // ever 409 with the install hint, and that expected answer was reported as an error.
+    it('shows the install hint instead of Connect when the CLI is not installed', async () => {
+      serve({
+        editable: true,
+        profileCapableProviders: ['claude', 'codex'],
+        selections: {},
+        defaults: {},
+        profiles: [...DEFAULTS, profile({
+          id: 'klaudiusz',
+          status: { provider: 'claude', status: 'not-installed', hint: 'Install Claude Code, then run `claude auth login`.' },
+        })],
+      })
+      renderAccounts()
+
+      const row = await waitFor(() => {
+        const found = rowFor('klaudiusz')
+        expect(found?.querySelector('[data-slot="account-install-hint"]')).toBeTruthy()
+        return found!
+      })
+      expect(row.querySelector('[data-slot="account-install-hint"]')?.textContent).toContain('Install Claude Code')
+      expect(row.querySelector('[data-action="account-connect"]')).toBeNull()
+    })
+
+    it('shows a login it could not open, with its command, without reporting it as an error', async () => {
+      serve(
+        {
+          editable: true,
+          profileCapableProviders: ['claude', 'codex'],
+          selections: {},
+          defaults: {},
+          profiles: [...DEFAULTS, profile({ id: 'klaudiusz', status: { provider: 'claude', status: 'disconnected' } })],
+        },
+        { connect: { status: 409, body: { error: 'Run this command on the machine hosting cezar.', command: 'claude auth login' } } },
+      )
+      const reported: string[] = []
+      const off = onDangerToast((message) => reported.push(message))
+      try {
+        renderAccounts()
+        const row = await waitFor(() => {
+          expect(rowFor('klaudiusz')).not.toBeNull()
+          return rowFor('klaudiusz')!
+        })
+        fireEvent.click(row.querySelector('[data-action="account-connect"]')!)
+        await screen.findByText(/Run this command on the machine hosting cezar\. — run: claude auth login/)
+        expect(reported).toEqual([])
+      } finally {
+        off()
+      }
     })
 
     it('hides Connect once the account IS signed in, but keeps Check again', async () => {

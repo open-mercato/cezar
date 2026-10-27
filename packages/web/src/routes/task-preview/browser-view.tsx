@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
+import { formatChord } from '@/lib/keybindings'
+import { trackDesignModeEnabled } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -61,6 +63,7 @@ export function BrowserView({
   designMarks,
   renderDesignNote,
   onDesignEscape,
+  designTray,
   renderEmpty,
 }: {
   state: BrowserState
@@ -88,6 +91,9 @@ export function BrowserView({
   /** Esc was pressed in the page while the note for `mark` was open. The view closes the popup;
    *  the host decides what else that means (a draft is discarded). */
   onDesignEscape?: (mark: string) => void
+  /** The host's batch send for its notes, floated in the frame's corner while Design Mode is on;
+   *  `null` when there is nothing to send. */
+  designTray?: React.ReactNode
   /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
    *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
   renderEmpty?: (open: (url: string) => void) => React.ReactNode
@@ -203,6 +209,28 @@ export function BrowserView({
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
+  // ⌥D / Alt+D switches it — from any field too, so it works wherever the focus is in the cockpit.
+  // Inside the page only the mirror's picker can hear it (and forwards it): a directly framed
+  // page is another origin, whose keys never reach this window.
+  const toggleDesign = useRef<() => boolean>(() => false)
+  toggleDesign.current = () => {
+    if (!designAllowed || targetOrigin === null) return false
+    if (!design) trackDesignModeEnabled('shortcut')
+    setDesign((on) => !on)
+    return true
+  }
+  useEffect(() => {
+    if (!designOffered) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented || !isDesignKey(event)) return
+      // A dialog owns the keyboard (Radix sets no `aria-modal`); the note popup does not.
+      if (document.querySelector('[role="dialog"]:not([data-slot="browser-design-note"]), [role="alertdialog"]')) return
+      // Swallowed only when it switched something: unavailable, ⌥D still types its `∂`.
+      if (toggleDesign.current()) event.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [designOffered])
   const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
   // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
   // be loaded again a moment later through the mirror.
@@ -344,6 +372,9 @@ export function BrowserView({
       } | null
       if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
       if (data.type === 'ready') setPickerReady(true)
+      // Only ever OFF from the page: its own script could post this too, and switching Design
+      // Mode on takes the user's own action (spec §7a).
+      else if (data.type === 'toggle') setDesign(false)
       else if (data.type === 'cancel') {
         // Esc in the page: with a note open it closes that note (the host discards a draft);
         // with none it leaves Design Mode.
@@ -667,14 +698,24 @@ export function BrowserView({
             disabled={designUnavailable !== null || targetOrigin === null}
             title={
               designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? 'Stop selecting elements (Esc)'
-              : 'Click an element of the page to send it to the agent')
+              : designActive ? `Stop selecting elements (${formatChord(DESIGN_CHORD)} or Esc)`
+              : `Click an element of the page to send it to the agent (${formatChord(DESIGN_CHORD)})`)
             }
-            onClick={() => setDesign((on) => !on)}
+            onClick={() => {
+              if (!design) trackDesignModeEnabled('button')
+              setDesign((on) => !on)
+            }}
             className="ml-1 disabled:opacity-40"
           >
             <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
             Design Mode
+            <kbd
+              data-slot="browser-design-key"
+              aria-hidden="true"
+              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-[10px] leading-4 opacity-70"
+            >
+              {formatChord(DESIGN_CHORD)}
+            </kbd>
           </Button>
         ) : null}
       </div>
@@ -729,7 +770,10 @@ export function BrowserView({
                 ))}
               </div>
             ) : null}
-            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 ? (
+            {designAllowed && designTray ? (
+              <div className="absolute right-3 bottom-3 z-10">{designTray}</div>
+            ) : null}
+            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 && !designTray ? (
               <p
                 data-slot="browser-design-hint"
                 className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"
@@ -785,6 +829,14 @@ export function BrowserView({
       </div>
     </div>
   )
+}
+
+const DESIGN_CHORD = 'Alt+D'
+
+/** ⌥D / Alt+D, by the physical key: on a Mac ⌥D reports `∂`. Ctrl+Alt is AltGr off a Mac — typing. */
+function isDesignKey(event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>): boolean {
+  const d = event.code ? event.code === 'KeyD' : event.key === 'd' || event.key === 'D'
+  return d && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey
 }
 
 function ToolbarButton({

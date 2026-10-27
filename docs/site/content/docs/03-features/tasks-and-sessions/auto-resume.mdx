@@ -1,0 +1,29 @@
+---
+title: "Resume after a usage limit resets"
+description: "Cezar can automatically resume work interrupted by a provider's usage limit."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 2862
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-08-03-auto-resume-after-usage-limit.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The thread shows the scheduled resume time. When that time arrives, Cezar puts the task back in the normal queue.
+
+## Where to find it
+
+Settings → Resources → Auto-resume after a usage limit
+
+## How to use it
+
+1. Leave the setting enabled.
+2. Check the resume time in the thread.
+3. Let Cezar add the task back to the queue.
+
+> **Good to know**: Automatic resume requires the provider to report when the limit resets. Cezar attempts to resume 30 seconds after that time, with a maximum of 12 attempts.

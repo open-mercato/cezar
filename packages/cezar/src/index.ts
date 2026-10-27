@@ -42,7 +42,8 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
+import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { apiOrigin, pickPort } from './api-origin.ts';
@@ -285,7 +286,7 @@ async function serveCommand(
       })
       .then(() => {
         store.flush({ pretty: true });
-        track('app_stop', { reason });
+        track('app_stop', { label: reason });
         return flushTelemetry(reason === 'signal' ? undefined : 1_000);
       })
       .finally(() => process.exit(process.exitCode ?? 0));
@@ -304,6 +305,7 @@ async function serveCommand(
   await initTelemetry({ version: readOwnVersion() });
   installCrashReporter();
   track('app_start');
+  registerDailyInventory(collectFeatureInventory);
   startDailyPing();
 
   const checks = await detectEnvironment();
@@ -352,7 +354,7 @@ async function serveCommand(
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });
         // The old process stops here, so it reports its own stop before handing over (bounded).
-        track('app_stop', { reason: 'restart' });
+        track('app_stop', { label: 'restart' });
         void flushTelemetry(1_000).finally(() =>
           restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
         );
@@ -600,7 +602,7 @@ async function runCommand(
   });
 
   await initTelemetry({ version: readOwnVersion() });
-  const run = manager.startRun(workflow, { task, model });
+  const run = manager.startRun(workflow, { task, model, origin: 'cli' });
   // No cockpit device here: the CLI's message counts under the installation's own id.
   track('message_sent', { label: 'cli' });
   // `review` is terminal here too (spec 009) — headless runs must not hang on

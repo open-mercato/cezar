@@ -1,0 +1,25 @@
+---
+title: "Subtasks in automations"
+description: "Allow an automated task to delegate work to subtasks."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/editor-dispatch-row.tsx
+    line: 35
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Dispatch switch lets an automated task create subtasks with cez task create. Beside it, set the maximum number of subtasks and the review child option.
+
+## Where to find it
+
+Automations → editor → Dispatch
+
+## How to use it
+
+1. Enable Dispatch for the rule.
+2. Set Max subtasks.
+3. Optionally enable Review child and save the rule.
+
+> **Good to know**: The setting is hidden if the server has disabled Dispatch. Subtasks work in their own worktrees and report results to the parent task.

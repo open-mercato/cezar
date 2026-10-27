@@ -96,6 +96,7 @@ describe('the workspace settings API (step 2.7)', () => {
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
       orgSkillsRepos: [],
+      systemPrompt: null,
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -293,6 +294,7 @@ describe('the workspace settings API (step 2.7)', () => {
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
       orgSkillsRepos: [],
+      systemPrompt: null,
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -386,6 +388,21 @@ describe('the workspace settings API (step 2.7)', () => {
     const inherited = (await (await putConfig({ skillsAutoUpdate: null })).json()) as WorkspaceConfigResponse;
     expect(inherited).toMatchObject({ skillsAutoUpdate: null, effectiveSkillsAutoUpdate: false });
     expect(rawConfig().skillsAutoUpdate).toBeUndefined();
+  });
+
+  it('PUT stores the global system prompt trimmed; null and empty both clear it', async () => {
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).systemPrompt).toBeNull();
+
+    const saved = (await (await putConfig({ systemPrompt: '  Always add tests.  ' })).json()) as WorkspaceConfigResponse;
+    expect(saved.systemPrompt).toBe('Always add tests.');
+    expect(rawConfig().systemPrompt).toBe('Always add tests.');
+
+    await putConfig({ systemPrompt: '' });
+    expect(rawConfig().systemPrompt).toBeUndefined();
+    await putConfig({ systemPrompt: 'Again' });
+    const cleared = (await (await putConfig({ systemPrompt: null })).json()) as WorkspaceConfigResponse;
+    expect(cleared.systemPrompt).toBeNull();
+    expect(rawConfig().systemPrompt).toBeUndefined();
   });
 
   it('PUT stores and independently clears composer defaults while exposing env inheritance', async () => {

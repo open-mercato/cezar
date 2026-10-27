@@ -916,7 +916,9 @@ describe('workspace projects API', () => {
       // The exact key set: every pre-existing field (BACKWARD_COMPATIBILITY.md
       // §2 — the bookmarklet contract) plus the two new additive fields, and
       // nothing else. `latestVersion` is absent while no update is known.
-      expect(Object.keys(body).sort()).toEqual(
+      // `disk` is additive too (9cdcedc3, BACKWARD_COMPATIBILITY.md §2) and absent only where
+      // statfs cannot answer.
+      expect(Object.keys(body).filter((key) => key !== 'disk').sort()).toEqual(
         [
           'bootProject',
           'capabilities',

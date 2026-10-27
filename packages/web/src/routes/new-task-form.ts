@@ -142,12 +142,18 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
  *  on the other backends. */
 const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
 
+/** Runners whose own catalog ids ARE other vendors' bare ids (Copilot's `claude-sonnet-4`,
+ *  Cursor's `gpt-5`) — mirrors `VENDOR_ID_HOSTING_RUNNERS` in `core/model-presets.ts`. */
+const VENDOR_ID_HOSTING_RUNNERS: readonly Runner[] = ['copilot', 'cursor']
+
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).
  * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
 export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
   if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
+  // Before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id.
+  if (VENDOR_ID_HOSTING_RUNNERS.includes(runner) && Object.values(NATIVE_MODEL_ID_PREFIX).some((p) => p.test(model))) return false
   return Object.entries(MODELS_BY_RUNNER).some(
     ([other, presets]) =>
       other !== runner &&
@@ -414,15 +420,16 @@ export function buildCreateRunBody(opts: {
 
 /**
  * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
- * read-only task, else its default skill — only when that skill exists in the catalog.
+ * read-only task, else its default skill — only when that skill exists in the catalog. `null`
+ * skills means the catalog failed to load: keep the configured name and let the server judge it.
  */
 export function projectDefaultSource(
   config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
   readOnly: boolean,
-  skills: readonly Skill[],
+  skills: readonly Skill[] | null,
 ): TaskSource | null {
   const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
-  return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
+  return name && (skills === null || skills.some((skill) => skill.name === name)) ? { source: 'skill', ref: name } : null
 }
 
 /** A trunk-based project asks by default when the message reads as a question. */

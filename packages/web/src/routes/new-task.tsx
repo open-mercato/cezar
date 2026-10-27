@@ -1,4 +1,4 @@
-import { StartTimePicker, type StartChoice } from '@/components/start-time-picker'
+import { previewSettingsKey, StartTimePicker, type StartChoice } from '@/components/start-time-picker'
 import { ApiError, createDeferredStart } from '@/api/client'
 import { deferredCreateInputSchema } from '@open-mercato/cezar-api-client'
 import { markScheduledTasks } from '@/lib/scheduled-tasks-gate'
@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckIcon,
   ChevronDownIcon,
+  Clock3Icon,
   FolderOpenIcon,
   SparklesIcon,
   SquareIcon,
@@ -66,7 +67,6 @@ import {
   bumpSkillUsage,
   orderSkillsByUsage,
 } from '@/lib/skills'
-import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 import { usableRunners } from '@/lib/provider-status'
 
@@ -103,7 +103,7 @@ import {
   type TaskSource,
 } from './new-task-form'
 import { parseNewTaskParams } from './new-task-params'
-import { trackMessageSent } from '@/lib/telemetry'
+import { trackMessageSent, trackTaskScheduled } from '@/lib/telemetry'
 
 // Keep recovery across route changes and reloads in this tab. Storage can be unavailable;
 // the memory copy still protects navigation within the running cockpit.
@@ -225,8 +225,11 @@ export function NewTaskRoute() {
    */
   const scopeKeyOf = (id: string): string | null =>
     projects.data?.bootProject === id ? null : id
-  const sourcesReady =
-    skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
+  // A catalog fetch that FAILED is settled, not loading: waiting on `data` alone left a remote
+  // cockpit whose /skills or /workflows request errored saying "Still loading" forever (31eda062).
+  const catalogFailed =
+    (skills.isError && skills.data === undefined) || (workflows.isError && workflows.data === undefined)
+  const sourcesReady = !skills.isPending && !workflows.isPending && !uiState.isPending
   // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
   // persisted `lastTask` preselection was load-bearing for, and why it is gone).
   // Trunk-based projects (spec 2026-10-20-trunk-based-projects): an in-place project offers
@@ -239,9 +242,11 @@ export function NewTaskRoute() {
     draft.variants <= 1 &&
     draft.dispatch === null &&
     (draft.readOnly ?? (config.data?.profile === 'trunk' && looksLikeQuestion(draft.text)))
+  // Without a catalog the draft's pick cannot be checked here — send it and let the server judge,
+  // rather than silently swapping the user's skill for quick-task.
   const source =
-    resolveSource(draft.source, skillList, workflowList) ??
-    projectDefaultSource(config.data, askWanted, skillList)
+    (catalogFailed ? draft.source : resolveSource(draft.source, skillList, workflowList)) ??
+    projectDefaultSource(config.data, askWanted, catalogFailed ? null : skillList)
   const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -497,7 +502,7 @@ export function NewTaskRoute() {
     if (notice === null || !sourcesReady) return
     setNotice(null)
     const unknownSkill =
-      deepLink.skill !== '' && !skillList.some((s) => s.name === deepLink.skill)
+      deepLink.skill !== '' && !catalogFailed && !skillList.some((s) => s.name === deepLink.skill)
         ? deepLink.skill
         : ''
     if (unknownSkill !== '') {
@@ -517,6 +522,8 @@ export function NewTaskRoute() {
 
   const [startChoice, setStartChoice] = useState<StartChoice | null>(null)
   const [scheduleBlocked, setScheduleBlocked] = useState<string>()
+  const [scheduleLabel, setScheduleLabel] = useState<{ text: string; title: string }>()
+  const [scheduleOpen, setScheduleOpen] = useState(false)
   const recoveryKey = scheduleRecoveryKey(draftProjectId)
   const [scheduleRecovery, setScheduleRecovery] = useState(() => readScheduleRecovery(recoveryKey))
   const scheduleRequest = useRef<DeferredCreateInput | null>(scheduleRecovery)
@@ -600,7 +607,7 @@ export function NewTaskRoute() {
   }
   const schedulingDisabledReason = images.length ? 'Remove attachments to schedule this task.' : deepLink.todo ? 'Tasks linked to a todo can only start now.' : health.data?.capabilities?.automations !== true ? 'Scheduling is disabled on this server.' : undefined
   const previewTask = taskBody(draft.text, images)
-  const scheduleReady = !schedulingDisabledReason && !!startChoice?.preview && Date.parse(startChoice.preview.notBefore) > Date.now() && startChoice.taskJson === JSON.stringify(previewTask)
+  const scheduleReady = !schedulingDisabledReason && !!startChoice?.preview && Date.parse(startChoice.preview.notBefore) > Date.now() && startChoice.settingsKey === previewSettingsKey(previewTask)
   const submit = async (text: string, submitted: AttachmentEntry[]) => {
     if (scheduleRequest.current) throw new Error('Recover the original schedule before starting another task.')
     if (!providersReady || runner === null) {
@@ -622,8 +629,9 @@ export function NewTaskRoute() {
     }
     const body = taskBody(text, submitted)
     if (startChoice) {
-      if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.taskJson !== JSON.stringify(body)) throw new Error('Check the start time again after changing the task settings.')
+      if (schedulingDisabledReason || !startChoice.preview || Date.parse(startChoice.preview.notBefore) <= Date.now() || startChoice.settingsKey !== previewSettingsKey(body)) throw new Error('Check the start time again after changing the task settings.')
       await sendSchedule({ task: body, start: startChoice.start, previewRevision: startChoice.preview.previewRevision, idempotencyKey: crypto.randomUUID() })
+      trackTaskScheduled(startChoice.start.kind === 'at' ? 'at' : 'usage_reset')
       return
     }
     const created = await createRun(body)
@@ -727,7 +735,7 @@ export function NewTaskRoute() {
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
           sendLabel={startChoice ? 'Schedule task' : undefined}
-          submitDisabled={!!scheduleRecovery || recovering || (!!startChoice && !scheduleReady)}
+          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
           disabled={!providersReady}
           disabledReason={
             providers.isPending
@@ -737,11 +745,14 @@ export function NewTaskRoute() {
                 : 'Connect an agent provider before starting a task.'
           }
           autocompleteSkills
+          sendShortcut="↵"
+          sendMenu={
+            <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
+              disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked}
+              onLabelChange={setScheduleLabel} open={scheduleOpen} onOpenChange={setScheduleOpen} />
+          }
           footerStart={
             <>
-              <StartTimePicker task={previewTask} value={startChoice} onChange={setStartChoice}
-                disabledReason={schedulingDisabledReason} onBlockedChange={setScheduleBlocked} />
-
               {/* The project pill LEADS the row (mockup new-task-project.html): everything to
                   its right is resolved against it, so it reads left-to-right as "in this
                   project, run this skill, with this model". Rendered only once the workspace
@@ -908,6 +919,14 @@ export function NewTaskRoute() {
           }
           footerEnd={
             <>
+              {startChoice && scheduleLabel && !scheduleBlocked ? (
+                <button type="button" data-slot="schedule-summary" title={scheduleLabel.title}
+                  onClick={() => setScheduleOpen(true)}
+                  className="flex max-w-[16rem] items-center gap-1 truncate rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+                  <Clock3Icon aria-hidden="true" className="size-3.5 shrink-0" />
+                  <span className="truncate">{scheduleLabel.text}</span>
+                </button>
+              ) : null}
               {startChoice && scheduleBlocked ? (
                 <span role="status" data-slot="schedule-blocked" title={scheduleBlocked}
                   className="max-w-[16rem] truncate text-xs text-muted-foreground">
@@ -922,12 +941,6 @@ export function NewTaskRoute() {
                   Configure providers
                 </Link>
               ) : null}
-              <kbd
-                aria-hidden="true"
-                className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-              >
-                {submitShortcutHint()}
-              </kbd>
             </>
           }
         />

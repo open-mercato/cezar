@@ -1,0 +1,25 @@
+---
+title: "Check a specific account after sign-in"
+description: "Verify an agent account after signing in again."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/accounts-section.tsx
+    line: 534
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each profile shows its configuration directory and authentication status. Connect acts on the selected account. Check again refreshes the result without waiting for the cached check to expire.
+
+## Where to find it
+
+Settings → Global → Agent accounts → account
+
+## How to use it
+
+1. Find the account and check its directory.
+2. If sign-in is needed, choose Connect.
+3. After signing in, click Check again. Show details expands the details.
+
+> **Good to know**: In a remote environment, Cezar may provide a command to run manually instead of opening a terminal.

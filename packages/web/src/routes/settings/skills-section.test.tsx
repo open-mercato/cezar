@@ -20,6 +20,7 @@ function serve(overrides: Partial<WorkspaceConfigResponse> = {}) {
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
     orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,

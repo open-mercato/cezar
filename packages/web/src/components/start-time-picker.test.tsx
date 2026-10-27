@@ -3,14 +3,16 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { CreateRunInput, DeferredPreview } from '@open-mercato/cezar-api-client'
 import { getDeferredStartOptions, previewDeferredStart } from '@/api/client'
-import { startLabel, AUTO_PREVIEW_MS, StartTimePicker, type StartChoice } from './start-time-picker'
+import { trackScheduleMenuOpened } from '@/lib/telemetry'
+import { defaultAtStart, startLabel, startTitle, AUTO_PREVIEW_MS, StartTimePicker, type StartChoice } from './start-time-picker'
 vi.mock('@/api/client', () => ({ getDeferredStartOptions: vi.fn(), previewDeferredStart: vi.fn() }))
+vi.mock('@/lib/telemetry', () => ({ trackScheduleMenuOpened: vi.fn(), trackStartOptionPicked: vi.fn() }))
 beforeEach(() => { vi.mocked(getDeferredStartOptions).mockResolvedValue({ timeZone: 'Europe/Warsaw', usageReset: { available: true, provider: 'claude' } }) })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 const task: CreateRunInput = { task: 'Later', workflow: 'quick-task', runner: 'claude' }
-function Harness({ text = 'Later', disabledReason }: { text?: string; disabledReason?: string }) {
+function Harness({ text = 'Later', runner = 'claude', disabledReason }: { text?: string; runner?: CreateRunInput['runner']; disabledReason?: string }) {
   const [value, onChange] = useState<StartChoice | null>(null)
-  return <StartTimePicker task={{ ...task, task: text }} value={value} onChange={onChange} disabledReason={disabledReason} />
+  return <StartTimePicker task={{ ...task, task: text, runner }} value={value} onChange={onChange} disabledReason={disabledReason} />
 }
 const preview = { available: true as const, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r', observation: 'Weekly, observed yesterday' }
 it('requires a preview, shows the server zone and returns focus on Escape', async () => {
@@ -20,25 +22,36 @@ it('requires a preview, shows the server zone and returns focus on Escape', asyn
   fireEvent.click(trigger)
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
   await screen.findByText('Weekly, observed yesterday')
   expect(screen.getByText(/Earliest start:/).textContent).toContain('UTC')
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   await waitFor(() => expect(document.activeElement).toBe(trigger))
 })
-it('ignores an old in-flight preview when the task changes and requires a new check', async () => {
+it('ignores an old in-flight preview when the settings change and requires a new check', async () => {
   let finish!: (value: DeferredPreview) => void
   vi.mocked(previewDeferredStart).mockReturnValue(new Promise(resolve => { finish = resolve }))
   const view = render(<Harness />)
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
-  view.rerender(<Harness text="Different account or task" />)
+  await waitFor(() => expect(previewDeferredStart).toHaveBeenCalled())
+  view.rerender(<Harness runner="codex" />)
   await act(async () => { finish(preview) })
   expect(screen.queryByText(/Earliest start:/)).toBeNull()
-  expect(screen.getByRole('button', { name: 'Check start time' })).toBeTruthy()
+})
+
+it('keeps a checked start while the prompt is reworded, without checking again', async () => {
+  vi.mocked(previewDeferredStart).mockResolvedValue(preview)
+  const view = render(<Harness />)
+  fireEvent.click(trigger())
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  await screen.findByText(/Earliest start:/)
+  view.rerender(<Harness text="Later, with more detail" />)
+  expect(screen.getByText(/Earliest start:/)).toBeTruthy()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, AUTO_PREVIEW_MS + 100)) })
+  expect(previewDeferredStart).toHaveBeenCalledTimes(1)
 })
 it('explains disabled scheduling and exposes unavailable metadata without changing to Now', async () => {
   const view = render(<Harness disabledReason="Remove attachments to schedule this task." />)
@@ -49,8 +62,9 @@ it('explains disabled scheduling and exposes unavailable metadata without changi
   vi.mocked(previewDeferredStart).mockResolvedValue({ available: false, reason: 'no-data', message: 'No observed reset.' })
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
   expect((await screen.findByRole('alert')).textContent).toBe('No observed reset.')
+  // Missing data does not change on a retry, so none is offered.
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
   expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).checked).toBe(true)
 })
 
@@ -60,13 +74,12 @@ it.each(['unavailable', 'error'])('clears a successful preview immediately on re
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
   await screen.findByText(/Earliest start:/)
   let finish!: () => void
   vi.mocked(previewDeferredStart).mockReturnValueOnce(new Promise((resolve, reject) => {
     finish = () => outcome === 'error' ? reject(new Error('Preview failed')) : resolve({ available: false, reason: 'no-data', message: 'Preview failed' })
   }))
-  fireEvent.click(screen.getByRole('button', { name: 'Refresh preview' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
   expect(screen.queryByText(/Earliest start:/)).toBeNull()
   await act(async () => finish())
   expect((await screen.findByRole('alert')).textContent).toBe('Preview failed')
@@ -81,9 +94,8 @@ it('does not revive a checked preview after task settings change and change back
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
   await screen.findByText(/Earliest start:/)
-  view.rerender(<Harness text="Changed" />)
+  view.rerender(<Harness runner="codex" />)
   view.rerender(<Harness />)
   expect(screen.queryByText(/Earliest start:/)).toBeNull()
 })
@@ -120,7 +132,7 @@ it('rejects a stale completion after switching start choices while a newer check
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
+  await waitFor(() => expect(previewDeferredStart).toHaveBeenCalledTimes(1))
   fireEvent.click(screen.getByLabelText('Pick date & time'))
   fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2099-01-01' } })
   await waitFor(() => expect(previewDeferredStart).toHaveBeenCalledTimes(2))
@@ -138,7 +150,6 @@ it('invalidates readiness when scheduling becomes unavailable, even after it ret
   fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
   await screen.findByText(/Earliest start:/)
   view.rerender(<Harness disabledReason="Scheduling disabled" />)
   view.rerender(<Harness />)
@@ -153,22 +164,21 @@ function Reporting({ text = 'Later', disabledReason }: { text?: string; disabled
 const trigger = () => screen.getByRole('button', { name: 'Choose task start time' })
 const blocked = () => screen.getByTestId('blocked').textContent
 
-it('labels the trigger with the chosen start, authoritative once checked', async () => {
+it('titles the trigger with the chosen start, authoritative once checked', async () => {
   vi.mocked(previewDeferredStart).mockResolvedValue({ ...preview, notBefore: '2099-01-06T18:00:00Z' })
   render(<Harness />)
-  expect(trigger().textContent).toBe('Now')
+  expect(trigger().getAttribute('title')).toBe('Schedule start')
   fireEvent.click(trigger())
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
   fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  expect(trigger().textContent).toBe('After reset')
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
-  await waitFor(() => expect(trigger().textContent).toBe('After reset · Tue 6 Jan 18:00 · UTC'))
-  expect(trigger().getAttribute('title')).toContain('UTC')
+  expect(trigger().getAttribute('title')).toBe('After reset')
+  await waitFor(() => expect(trigger().getAttribute('title')).toContain('6 January 2099'))
+  expect(trigger().getAttribute('title')).toMatch(/^After the usage limit resets: .*18:00 \(UTC\)$/)
   fireEvent.click(screen.getByLabelText('Pick date & time'))
-  expect(trigger().textContent).toBe('Pick a date')
+  expect(trigger().getAttribute('title')).toMatch(/^(Today|Tomorrow), \d\d:00$/)
   fireEvent.change(screen.getByLabelText('Time (server time zone)'), { target: { value: '18:00' } })
   fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2099-01-06' } })
-  expect(trigger().textContent).toBe('Starts Tue 6 Jan 18:00')
+  expect(trigger().getAttribute('title')).toBe('Tue 6 Jan 2099, 18:00')
 })
 
 it('keeps the entered date and time when Pick date is chosen again', async () => {
@@ -189,6 +199,7 @@ it('previews a complete future date and time by itself, but not a past one', asy
   render(<Harness />)
   fireEvent.click(trigger())
   fireEvent.click(screen.getByLabelText('Pick date & time'))
+  fireEvent.change(screen.getByLabelText('Time (server time zone)'), { target: { value: '09:00' } })
   fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2000-01-01' } })
   await new Promise(resolve => setTimeout(resolve, AUTO_PREVIEW_MS + 100))
   expect(previewDeferredStart).not.toHaveBeenCalled()
@@ -204,16 +215,20 @@ it('reports why scheduling cannot submit yet, and nothing once it can', async ()
   const view = render(<Reporting />)
   expect(blocked()).toBe('')
   fireEvent.click(trigger())
-  fireEvent.click(screen.getByLabelText('Pick date & time'))
-  expect(blocked()).toBe('Pick a date to schedule this task.')
+  // Options first: the default date checks itself after AUTO_PREVIEW_MS, which a slow wait could outlast.
   await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
-  fireEvent.click(screen.getByLabelText('After usage limit resets'))
-  expect(blocked()).toBe('Check the start time to schedule this task.')
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
+  fireEvent.click(screen.getByLabelText('Pick date & time'))
   expect(blocked()).toBe('Checking the start time…')
-  await act(async () => finish({ available: false, reason: 'no-data', message: 'No observed reset.' }))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  expect(blocked()).toBe('Finding when your usage limit resets…')
+  // The auto-check fires from a timer outside act: the call can land a render before `busy` reaches the report.
+  await waitFor(() => {
+    expect(previewDeferredStart).toHaveBeenCalledTimes(1)
+    expect(blocked()).toBe('Checking the start time…')
+  })
+  await act(async () => finish({ available: false, reason: 'account-unverifiable', message: 'No observed reset.' }))
   expect(blocked()).toBe('No observed reset.')
-  fireEvent.click(screen.getByRole('button', { name: 'Check start time' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
   await act(async () => finish(preview))
   expect(blocked()).toBe('')
   view.rerender(<Reporting disabledReason="Remove attachments to schedule this task." />)
@@ -236,7 +251,7 @@ it('never offers a manual check for dates and does not turn an empty time into m
   fireEvent.change(screen.getByLabelText('Time (server time zone)'), { target: { value: '22:00' } })
   await screen.findByText(/Earliest start:/)
   expect(vi.mocked(previewDeferredStart).mock.calls[0]![0].start).toEqual({ kind: 'at', date: '2099-01-01', hour: 22, minute: 0 })
-  expect(screen.queryByRole('button', { name: 'Refresh preview' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull()
 })
 
 it('provides a safe retry for a failed automatic date check without exposing raw API errors', async () => {
@@ -267,7 +282,7 @@ it.each([
   fireEvent.click(trigger())
   fireEvent.blur(screen.getByLabelText('Date'))
   expect(screen.getByRole('alert').textContent).toBe(error)
-  expect(trigger().textContent).not.toContain('Invalid Date')
+  expect(trigger().getAttribute('title')).not.toContain('Invalid Date')
   await new Promise(resolve => setTimeout(resolve, AUTO_PREVIEW_MS + 100))
   expect(previewDeferredStart).not.toHaveBeenCalled()
 })
@@ -302,13 +317,13 @@ it.each(['at', 'usage-reset'] as const)('expires %s readiness at notBefore while
     } else {
       await act(async () => {})
       fireEvent.click(screen.getByLabelText('After usage limit resets'))
-      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Check start time' })) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_PREVIEW_MS) })
     }
     expect(blocked()).toBe('')
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
     await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
     expect(blocked()).toContain('passed')
-    expect(trigger().textContent).not.toBe('Now')
+    expect(trigger().getAttribute('title')).not.toBe('Schedule start')
     fireEvent.click(trigger())
     expect(screen.queryByText(/Earliest start:/)).toBeNull()
     if (kind === 'at') expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2099-01-01')
@@ -322,9 +337,15 @@ it('keeps an untouched date neutral while blocking incomplete submission', () =>
   expect(screen.getByLabelText('Date', { exact: true }).getAttribute('aria-invalid')).not.toBe('true')
   expect(screen.queryByRole('alert')).toBeNull()
 })
-it('includes day and server zone in a collapsed reset summary', () => {
-  expect(startLabel({ start: { kind: 'usage-reset' } }, preview)).toContain('Jan')
-  expect(startLabel({ start: { kind: 'usage-reset' } }, preview)).toContain('UTC')
+it('summarizes the start in friendly words and keeps the full date and zone for the tooltip', () => {
+  const now = Date.parse('2099-01-01T07:00:00Z')
+  const at = (notBefore: string) => ({ ...preview, notBefore })
+  expect(startLabel({ start: { kind: 'usage-reset' } }, at('2099-01-01T09:00:00Z'), undefined, now)).toBe('After reset · Today, 09:00')
+  expect(startLabel({ start: { kind: 'at', date: '2099-01-02', hour: 9, minute: 0 } }, at('2099-01-02T09:00:00Z'), undefined, now)).toBe('Tomorrow, 09:00')
+  expect(startLabel({ start: { kind: 'at', date: '2099-01-06', hour: 18, minute: 30 } }, undefined, 'UTC', now)).toBe('Tue 6 Jan, 18:30')
+  expect(startLabel({ start: { kind: 'at', date: '2100-01-06', hour: 18, minute: 30 } }, undefined, 'UTC', now)).toBe('Wed 6 Jan 2100, 18:30')
+  expect(startTitle({ start: { kind: 'usage-reset' } }, preview)).toMatch(/^After the usage limit resets: .*1 January 2099.* \(UTC\)$/)
+  expect(startTitle(null)).toBe('Schedule start')
 })
 
 it('shows resolved eligibility and server zone before any usage check', async () => {
@@ -380,4 +401,53 @@ it('resolves changed reset eligibility while the picker is closed', async () => 
   view.rerender(<StartTimePicker task={{ ...task, runner: 'codex' }} value={value} onChange={() => {}} />)
   await waitFor(() => expect(getDeferredStartOptions).toHaveBeenCalledTimes(2))
   expect(previewDeferredStart).not.toHaveBeenCalled()
+})
+
+it('defaults Pick date & time to the full hour after the next one, in the server zone', () => {
+  expect(defaultAtStart('UTC', Date.parse('2026-10-24T09:23:00Z'))).toEqual({ kind: 'at', date: '2026-10-24', hour: 11, minute: 0 })
+  expect(defaultAtStart('UTC', Date.parse('2026-10-24T09:00:00Z'))).toEqual({ kind: 'at', date: '2026-10-24', hour: 11, minute: 0 })
+  expect(defaultAtStart('UTC', Date.parse('2026-10-24T22:40:00Z'))).toEqual({ kind: 'at', date: '2026-10-25', hour: 0, minute: 0 })
+  expect(defaultAtStart('Europe/Warsaw', Date.parse('2026-10-24T09:23:00Z'))).toEqual({ kind: 'at', date: '2026-10-24', hour: 13, minute: 0 })
+  expect(defaultAtStart('Not/AZone', Date.parse('2026-10-24T09:23:00Z')).minute).toBe(0)
+})
+
+it('checks a usage reset by itself once chosen, with no manual check button', async () => {
+  vi.mocked(previewDeferredStart).mockResolvedValue(preview)
+  render(<Harness />)
+  fireEvent.click(trigger())
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  expect(screen.getByText(/waits until your Claude usage limit resets/)).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Check start time' })).toBeNull()
+  await screen.findByText(/Earliest start:/)
+  expect(previewDeferredStart).toHaveBeenCalledTimes(1)
+})
+
+it('counts a menu opened by the host, not only by the chevron', () => {
+  const view = render(<StartTimePicker task={task} value={null} onChange={() => {}} open={false} />)
+  expect(trackScheduleMenuOpened).not.toHaveBeenCalled()
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open />)
+  expect(trackScheduleMenuOpened).toHaveBeenCalledTimes(1)
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open />)
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open={false} />)
+  view.rerender(<StartTimePicker task={task} value={null} onChange={() => {}} open />)
+  expect(trackScheduleMenuOpened).toHaveBeenCalledTimes(2)
+})
+
+it.each([false, true])('redoes an early default in the server zone once it loads (edited first: %s)', async edited => {
+  let finish!: (value: Awaited<ReturnType<typeof getDeferredStartOptions>>) => void
+  vi.mocked(getDeferredStartOptions).mockReturnValue(new Promise(resolve => { finish = resolve }))
+  vi.mocked(previewDeferredStart).mockReturnValue(new Promise(() => {}))
+  render(<Harness />)
+  fireEvent.click(trigger())
+  fireEvent.click(screen.getByLabelText('Pick date & time'))
+  if (edited) fireEvent.change(screen.getByLabelText('Time (server time zone)'), { target: { value: '07:30' } })
+  // UTC+14: never the same wall clock as the test machine's zone.
+  await act(async () => finish({ timeZone: 'Pacific/Kiritimati', usageReset: { available: true, provider: 'claude' } }))
+  const expected = defaultAtStart('Pacific/Kiritimati')
+  if (edited) expect((screen.getByLabelText('Time (server time zone)') as HTMLInputElement).value).toBe('07:30')
+  else {
+    expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe(expected.date)
+    expect((screen.getByLabelText('Time (server time zone)') as HTMLInputElement).value).toBe(`${String(expected.hour).padStart(2, '0')}:00`)
+  }
 })

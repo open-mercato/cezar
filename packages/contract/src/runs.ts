@@ -6,6 +6,10 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+
+/** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
+export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
+export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
 // Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
@@ -82,6 +86,8 @@ export const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: stepStatusSchema,
   iterations: z.number(),
+  /** Consumed onFail retries (#1300); absent on older run records. */
+  retriesUsed: z.number().int().nonnegative().optional(),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
@@ -266,6 +272,9 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
+   *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
+  autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
@@ -687,8 +696,9 @@ export type AdoptPrResponse = z.infer<typeof adoptPrResponseSchema>;
 /**
  * `POST /runs/:id/messages` — one of three shapes (#472), by how far the run has got:
  * `delivered` (a live session took it), `queued` (still waiting for a slot, so it was stacked
- * onto the prompt and the stored entry rides along), `deferred` (mid-spawn, so it was buffered
- * and arrives as an ordinary follow-up turn once the session opens). Anything else is a 409.
+ * onto the prompt and the stored entry rides along), `deferred` (mid-spawn or between sessions,
+ * so it was buffered: it arrives as a follow-up turn once a session opens, else as a Continue once
+ * the run settles). Anything else is a 409.
  *
  * A union, not one object of optional flags: exactly one of the three keys is ever present, and
  * the flattened DTO shape admitted `{}`. Pre-#472 clients only ever saw `delivered`.
@@ -1231,11 +1241,31 @@ export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: attachmentListSchema.default([]),
+    /** One per message, reused by its retries: a key that already landed is not delivered again. */
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
+
+/**
+ * `POST /runs/:id/continue` ("Continue"/"Send back", spec 003 / #401): every field optional, so an
+ * empty POST reopens the last session on the run's current backend. A runner/model/account
+ * override picks the engine for the continuation; `text`/`images` bound like a live message's.
+ */
+export const continueInputSchema = z.object({
+  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
+  images: attachmentListSchema.optional(),
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
+   *  account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
+  /** One per Continue, reused by its retries: a key that already landed is not continued again. */
+  idempotencyKey: z.string().uuid().optional(),
+});
+export type ContinueInput = z.input<typeof continueInputSchema>;
 
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both
