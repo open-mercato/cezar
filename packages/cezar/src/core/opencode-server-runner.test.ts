@@ -216,7 +216,7 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
-  it('includes the early exit status and bounded stderr tail', async () => {
+  it('names the early exit status and keeps the bounded stderr tail out of the error', async () => {
     let spawns = 0;
     spawnHook.override = () => (spawns += 1, exitingChild(`${'x'.repeat(1_000)}bad config`));
     const events: AgentEvent[] = [];
@@ -228,8 +228,9 @@ describe('opencode serve startup', () => {
     expect(spawns).toBe(1);
     expect(events).toContainEqual({
       type: 'error',
-      message: `opencode: opencode serve exited before it started listening (exit code 1): ${'x'.repeat(790)}bad config`,
+      message: 'opencode: opencode serve exited before it started listening (exit code 1)',
     });
+    expect(events).toContainEqual({ type: 'note', message: `opencode serve stderr: ${'x'.repeat(790)}bad config` });
   });
 
   // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
@@ -278,7 +279,7 @@ describe('opencode serve startup', () => {
     await session.result;
     expect(spawns).toBe(1);
     expect(events.filter((e) => e.type === 'error')).toEqual([
-      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1): Error: bad config' },
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
     ]);
     expect(events).toContainEqual({ type: 'note', message: 'opencode serve stderr: Error: bad config' });
   });
@@ -294,7 +295,7 @@ describe('opencode serve startup', () => {
     await session.result;
     expect(spawns).toBe(SERVER_PORT_ATTEMPTS);
     expect(events.filter((e) => e.type === 'error')).toEqual([
-      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1): Error: Unexpected error\n\nServeError' },
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
     ]);
     expect(events.filter((e) => e.type === 'note')).toHaveLength(1);
   });
