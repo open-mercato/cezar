@@ -3,6 +3,7 @@
 > Slug: `automations-from-prompt` · Status: implemented · Gated by the existing `CEZ_AUTOMATIONS=1`
 > (→ `capabilities.automations`) plus the cockpit transport (`CEZ_API_URL`), exactly like dispatch.
 > Extends: `2026-07-25-github-automations.md` (the feature), `2026-09-10-dispatch.md` (the mechanism).
+> Amended by: `2026-09-30-system-prompt-diet.md` (the prompt part is one paragraph, composed for root tasks only).
 
 ## TLDR
 
