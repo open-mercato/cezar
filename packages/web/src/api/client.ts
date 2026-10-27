@@ -2794,6 +2794,25 @@ export async function refreshTrackerWatch(projectId: string, watchId: string, si
     { param: { projectId, watchId } }, { init: { signal } }), '/tracker/watch'))
 }
 
+// Explicit scope parameters keep late responses and mutations tied to their original project.
+export const webhookApi = {
+  list: async (projectId: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$get({ param: { projectId } }, { init: { signal } }), '/webhooks'),
+  create: async (projectId: string, json: import('@open-mercato/cezar-api-client').CreateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$post({ param: { projectId }, json }), '/webhooks'),
+  update: async (projectId: string, id: string, json: import('@open-mercato/cezar-api-client').UpdateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$patch({ param: { projectId, id }, json }), '/webhooks'),
+  remove: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$delete({ param: { projectId, id }, json: { expectedRevision } }), '/webhooks'),
+  activate: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].activate.$post({ param: { projectId, id }, json: { expectedRevision, confirmed: true } }), '/webhooks'),
+  pause: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].pause.$post({ param: { projectId, id }, json: { expectedRevision } }), '/webhooks'),
+  resume: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].resume.$post({ param: { projectId, id }, json: { expectedRevision, confirmed: true } }), '/webhooks'),
+  rotate: async (projectId: string, id: string, expectedRevision: number, mode: 'graceful' | 'revoke_now') => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id']['rotate-secret'].$post({ param: { projectId, id }, json: { expectedRevision, mode } }), '/webhooks'),
+  test: async (projectId: string, id: string, json: import('@open-mercato/cezar-api-client').WebhookOperation) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].test.$post({ param: { projectId, id }, json }), '/webhooks'),
+  retry: async (projectId: string, deliveryId: string, json: import('@open-mercato/cezar-api-client').WebhookOperation) => unwrap(await cez.api.v1.p[':projectId'].webhooks.deliveries[':deliveryId'].retry.$post({ param: { projectId, deliveryId }, json }), '/webhooks'),
+  replay: async (projectId: string, deliveryId: string, json: import('@open-mercato/cezar-api-client').WebhookOperation) => unwrap(await cez.api.v1.p[':projectId'].webhooks.deliveries[':deliveryId'].replay.$post({ param: { projectId, deliveryId }, json: { ...json, confirmed: true } }), '/webhooks'),
+  acknowledge: async (projectId: string, expectedChangeSequence: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks.notice.acknowledge.$post({ param: { projectId }, json: { expectedChangeSequence } }), '/webhooks'),
+  history: async (projectId: string, cursor?: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks.history.$get({ param: { projectId }, query: { limit: '100', ...(cursor ? { cursor } : {}) } }), '/webhooks/history'),
+  deliveries: async (projectId: string, id: string, cursor?: string, taskId?: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].deliveries.$get({ param: { projectId, id }, query: { limit: '100', ...(cursor ? { cursor } : {}), ...(taskId ? { taskId } : {}) } }), '/webhooks/deliveries'),
+  activity: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].activity.$get({ param: { projectId, id } }), '/webhooks/activity'),
+}
+
 /** Worktree lifecycle reads/actions share the existing scope and authenticated transport. */
 export async function getWorktreeLifecycle(query: z.output<typeof lifecycleListQuerySchema> = { limit: 50 }, opts?: ReadOptions): Promise<z.infer<typeof lifecycleListResponseSchema>> {
   return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].$get({

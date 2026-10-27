@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { WebhookCoordinator } from './webhooks/coordinator.ts';
+import { webhooksEnabled } from './webhooks/service.ts';
+import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
+import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
@@ -328,6 +332,18 @@ async function serveCommand(
     }
   }
 
+  let webhookPort = preferredPort;
+  const webhooks = webhooksEnabled() ? new WebhookCoordinator({
+    mode: () => resolveCapabilities(process.env, bindHost).localHandoff ? 'local' : 'hosted',
+    ports: () => [webhookPort, ...webhookServerInstances().map(instance => instance.state.primaryPort)],
+    projects: async () => listProjects(), dryRun: process.env.CEZ_DRY_RUN === '1',
+    singleProject: resolveCapabilities(process.env, bindHost).singleProject,
+  }) : undefined;
+  if (webhooks) {
+    const registry = (await loadWorkspaceConfig()).projects;
+    const publicId = bootProjectId ?? allocateProjectSlug(repoRoot, registry.map(project => project.id));
+    await webhooks.attach({ root: repoRoot, store, manager }, publicId, false, true);
+  }
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
@@ -337,6 +353,8 @@ async function serveCommand(
     providerRuntimeAuth,
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
+
+  webhooks?.ready(repoRoot);
 
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
@@ -383,6 +401,7 @@ async function serveCommand(
     };
   });
   const port = await pickPort(preferredPort, bindHost);
+  webhookPort = port;
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only
   // for a deliberate hosted setup where a reverse proxy in front provides TLS +
@@ -410,6 +429,7 @@ async function serveCommand(
     providerAuth,
     providerRuntimeAuth,
     workspaceEvents,
+    webhooks,
     selfUpdate,
   }, port);
   httpServer.once('listening', () => manager.lifecycle.start());

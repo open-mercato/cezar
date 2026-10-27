@@ -1,8 +1,8 @@
+import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
-import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -2151,10 +2151,9 @@ export class RunManager {
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
    *    settle exactly like a closed session (review/done, Continue still works),
-   *    unless `askParked` says the run stopped on an unanswered `CEZ:ASK` (#917)
-   *    or a monitor was handed over unfinished, which settles `failed` instead
-   *    so unrun steps are not reported as done, with `awaitingAnswerSince` so the
-   *    task still reads as "needs you";
+   *    unless `askParked`, native `attentionRequest`, or an unfinished monitor
+   *    records pending work, which settles `failed` instead so unrun steps are not
+   *    reported as done, with `awaitingAnswerSince` so the task still reads as "needs you";
    *  - `running` → mark interrupted, then immediately resume the last agent
    *    session via the Continue path, pointing the agent at its handoff file.
    * Call once, before the server starts taking requests.
@@ -2219,8 +2218,8 @@ export class RunManager {
         // Two different parks wear this status. The final interactive step's
         // session was open for follow-ups and the workflow had already run to
         // its end, so settling it as a success is right. A mid-workflow park on
-        // a `CEZ:ASK` (#917) had NOT run to its end — its later steps are still
-        // `pending` — so the same settlement would report a workflow that
+        // a `CEZ:ASK` (#917) or native backend question had NOT run to its end.
+        // Later steps may still be `pending`, so the same settlement would report a workflow that
         // stopped at its first question as a finished one. It ends the way any
         // interrupted run ends instead: `failed`, with the Continue button that
         // reopens the session so the question can still be answered. No
@@ -2229,7 +2228,7 @@ export class RunManager {
         // that decision on the user's behalf. A monitor handed to the user
         // (`parkMonitorAsWaiting`) carries the same marker for the same reason:
         // the agent said its work was still pending.
-        if (run.askParked) {
+        if (run.askParked || run.attentionRequest) {
           const interruptedAt = new Date().toISOString();
           for (const step of run.steps) {
             if (step.status === 'waiting' || step.status === 'running') {
@@ -2395,7 +2394,7 @@ export class RunManager {
     // Read before the registries below forget it: why a message deferred in this window must not resume the run.
     const stoppedBy = this.deferredStopReason(runId, state, !!acceptReview, !!queuedContinue);
     if (acceptReview && !landOnAccept) {
-      this.store.updateRun(runId, { status: 'done' });
+      this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
     }
     state?.releaseWorktree?.();
@@ -2791,10 +2790,11 @@ export class RunManager {
    * cost an older cezar its entire project index. The inbox message below is a markdown file under
    * no schema, so the parent still reads every question.
    */
-  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
+  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): WebhookAttentionRequest {
     const requestId = emitAskRequested(sink, ask);
+    const attention = this.recordAttention(requestId, ask.questions);
     const dispatch = this.dispatchOf(runId);
-    if (!dispatch) return;
+    if (!dispatch) return attention;
     const questions = ask.questions.map((question) => question.question.slice(0, 400));
     const recorded = questions.slice(0, PENDING_ASK_MAX_QUESTIONS);
     const omittedQuestions = questions.length - recorded.length;
@@ -2804,10 +2804,10 @@ export class RunManager {
         requestId,
         questions: recorded,
         ...(omittedQuestions > 0 ? { omittedQuestions } : {}),
-        askedAt: new Date().toISOString(),
+        askedAt: attention.askedAt,
       },
     }));
-    if (!dispatch.parentRunId) return;
+    if (!dispatch.parentRunId) return attention;
     const run = this.store.getRun(runId);
     try {
       writeInboxMessage(this.dataDir, dispatch.rootRunId, inboxName(dispatch.parentRunId, dispatch.rootRunId), {
@@ -2825,6 +2825,19 @@ export class RunManager {
     } catch {
       // best effort
     }
+    return attention;
+  }
+
+  /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
+  private recordAttention(requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
+    const attention: WebhookAttentionRequest = {
+      requestId, askedAt: new Date().toISOString(),
+      questions: input.slice(0, 20).map(q => ({
+        question: q.question.slice(0, 2000),
+        ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
+      })),
+    };
+    return attention;
   }
 
   /** The answer arrived (any message delivered into the session): the question is no longer pending. */
@@ -3898,6 +3911,11 @@ export class RunManager {
     return true;
   }
 
+  /** Process-local proof, not merely a deadline left in the run record. */
+  hasScheduledAutoResume(runId: string): boolean {
+    return this.autoResumeTimers.has(runId);
+  }
+
   /** Removal waits for the captured provider result, never merely the cancel flag. */
   async cancelAndWait(runId: string): Promise<boolean> {
     const state = this.active.get(runId);
@@ -4447,7 +4465,7 @@ export class RunManager {
       return true;
     }
     if (run?.status === 'review' && !this.isActive(runId)) {
-      this.store.updateRun(runId, { status: 'done' });
+      this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
       return true;
     }
@@ -4938,7 +4956,7 @@ export class RunManager {
             // `running`/`activity:'monitoring'` (#490). Both share the waiting
             // lifecycle (free the slot), while only plain waiting keeps the idle timer. Monitoring is
             // checked before the autonomous nudge, so it remains non-attention.
-            if (ask) this.recordAsk(runId, sink, ask);
+            const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
             if (ask) {
               state.askPark = 'waiting';
               state.monitorHandoff = false;
@@ -4952,7 +4970,7 @@ export class RunManager {
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
-              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask ? true : undefined });
+              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask ? true : undefined, attentionRequest });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
               this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
@@ -5196,7 +5214,8 @@ export class RunManager {
       // Before any branch below publishes a terminal status: the finally's autosave comes after it.
       state.turnSettled = true;
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      if (state.cancelled && this.active.get(runId) === state) {
+      if (this.active.get(runId) !== state) return;
+      if (state.cancelled) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
@@ -5206,6 +5225,8 @@ export class RunManager {
         this.settleUnansweredPark(runId, finishedAt(), state.monitorHandoff === true);
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
       } else if (this.active.get(runId) === state && (await this.idleClosedFails(runId, state))) {
+        // Review Git can outlive cancellation and retirement of this continuation.
+        if (state.cancelled || this.active.get(runId) !== state) return;
         const message = this.inactivityFailureMessage();
         const failedAt = finishedAt();
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: failedAt });
@@ -5216,11 +5237,12 @@ export class RunManager {
           currentStepId: undefined,
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${message}` });
-      } else {
+      } else if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'done', finishedAt: finishedAt() });
         this.store.appendEvent(runId, { type: 'step-end', stepId, status: 'done' });
-        await this.settleSuccess(runId);
-        appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=done`);
+        if (await this.settleSuccess(runId, state)) {
+          appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=done`);
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -5673,7 +5695,7 @@ export class RunManager {
     } else {
       // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the
       // way Finish always does, with the later steps left honestly at `pending`.
-      await this.settleSuccess(runId);
+      await this.settleSuccess(runId, state);
     }
     this.clearIdleTimer(state);
     this.dropActive(runId, state);
@@ -6638,8 +6660,10 @@ export class RunManager {
     questions: { header: string; question: string; options: { label: string }[] }[],
     timeoutMs?: number,
   ): Promise<GraphParkOutcome> {
-    this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId: randomUUID(), questions, source: 'workflow' });
-    return this.parkGraphNode(runId, state, nodeId, { askParked: true, timeoutMs }, (resolve) => {
+    const requestId = randomUUID();
+    this.makeUiSink(runId, nodeId).handle({ type: 'ask.requested', requestId, questions, source: 'workflow' });
+    const attentionRequest = this.recordAttention(requestId, questions);
+    return this.parkGraphNode(runId, state, nodeId, { askParked: true, attentionRequest, timeoutMs }, (resolve) => {
       state.graphAnswer = (text) => resolve({ kind: 'answer', text });
       return () => {
         state.graphAnswer = undefined;
@@ -6659,12 +6683,12 @@ export class RunManager {
     runId: string,
     state: ActiveRun,
     nodeId: string,
-    opts: { askParked?: boolean; activity?: 'monitoring'; timeoutMs?: number },
+    opts: { askParked?: boolean; attentionRequest?: WebhookAttentionRequest; activity?: 'monitoring'; timeoutMs?: number },
     arm: (resolve: (o: GraphParkOutcome) => void) => () => void,
   ): Promise<GraphParkOutcome> {
     if (state.cancelled) return { kind: 'cancelled' };
     this.store.updateRun(runId, opts.askParked
-      ? { status: 'waiting', askParked: true }
+      ? { status: 'waiting', askParked: true, attentionRequest: opts.attentionRequest }
       : { status: 'running', activity: opts.activity });
     this.store.updateStep(runId, nodeId, { status: 'waiting' });
     this.waiting.add(runId);
@@ -7097,7 +7121,7 @@ export class RunManager {
           // instead of raising "needs you" (#490). Lifecycle is identical: the
           // run frees its slot; only plain waiting keeps the idle timer. The autonomous nudge
           // above still wins over either.
-          if (ask) this.recordAsk(runId, sink, ask);
+          const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
           // The final interactive step already parks at `waiting` by its own
           // lifecycle; only a non-final step needs the workflow held back, so
           // `execute` does not mark it done and run the next check (#917).
@@ -7124,6 +7148,7 @@ export class RunManager {
               // read: without it `recover()` cannot tell this `waiting` from a
               // finished interactive session and settles it as a success.
               askParked: ask ? true : undefined,
+              attentionRequest,
             });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
             this.leaveMonitoring(runId);
@@ -7400,7 +7425,7 @@ export class RunManager {
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
-    this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+    this.store.updateRun(runId, { status: 'waiting', activity: undefined, attentionRequest: this.recordAttention(event.requestId, event.questions) });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
   }
@@ -7741,8 +7766,17 @@ export class RunManager {
    * OFF) AND the run is not autonomous. Autonomous runs — and runs with the gate
    * off — settle straight to `done`, leaving the diff in the worktree untouched.
    */
-  private async settleSuccess(runId: string): Promise<void> {
+  private async settleSuccess(runId: string, owner?: ActiveRun): Promise<boolean> {
+    const run = this.store.getRun(runId);
+    const status = run?.status;
+    // Recovery has no active owner. Both recovery and execution must still own the
+    // same lifecycle decision after Git yields: cancellation or a new continuation wins.
+    const canSettle = () => !!run && this.store.getRun(runId) === run && run.status === status &&
+      this.active.get(runId) === owner && !owner?.cancelled &&
+      (status === 'running' || status === 'waiting');
+    if (!canSettle()) return false;
     const landingError = await this.landBeforeSettle(runId);
+    if (!canSettle()) return false;
     if (landingError === 'review') {
       this.store.updateRun(runId, {
         status: 'review',
@@ -7755,7 +7789,7 @@ export class RunManager {
         type: 'lifecycle',
         message: 'changes ready for review — check Changes, Continue with corrections, or Commit (or Finish) to land them',
       });
-      return;
+      return true;
     }
     if (landingError) {
       this.store.updateRun(runId, {
@@ -7765,11 +7799,15 @@ export class RunManager {
         currentStepId: undefined,
       });
       this.store.appendEvent(runId, { type: 'lifecycle', message: `run failed — ${landingError}` });
-      return;
+      return true;
     }
     const review = await this.reviewGateApplies(runId);
+    if (!canSettle()) return false;
+    const resolution = !review && this.store.hasLifecycleObserver ? await completionReason(run) : 'completed';
+    if (!canSettle()) return false;
     this.store.updateRun(runId, {
       status: review ? 'review' : 'done',
+      completionReason: review ? undefined : resolution,
       finishedAt: new Date().toISOString(),
       currentStepId: undefined,
       // A run that got all the way to a settled turn is not in a limit loop, so the resume
@@ -7784,6 +7822,7 @@ export class RunManager {
         ? 'changes ready for review — send feedback, open a draft PR, or finish'
         : 'run finished',
     });
+    return true;
   }
 
   /**
@@ -7816,8 +7855,26 @@ export class RunManager {
     return this.store.getRun(runId)?.task;
   }
 
+  /**
+   * Capture the lifecycle that requested a landing before any await. Continue appends a
+   * step synchronously, even when deferred, so its step count is a durable generation
+   * fence (including a newer turn that has already returned to the same status).
+   * Owner identity alone cannot fence detached review/Commit operations.
+   */
+  private landingFence(runId: string): () => boolean {
+    const run = this.store.getRun(runId);
+    const status = run?.status;
+    const generation = run?.steps.length;
+    const owner = this.active.get(runId);
+    return () => !!run && this.store.getRun(runId) === run &&
+      run.status === status && run.steps.length === generation &&
+      this.active.get(runId) === owner && !owner?.cancelled &&
+      (!!owner || !this.isActive(runId));
+  }
+
   /** Land now and record the outcome on the run. A `nothing` never overwrites an earlier result. */
   private async landNow(runId: string, policy: NonNullable<ActiveRun['autoLand']>): Promise<LandResult> {
+    const canLand = this.landingFence(runId);
     const run = this.store.getRun(runId);
     this.store.appendEvent(runId, {
       type: 'note',
@@ -7841,6 +7898,7 @@ export class RunManager {
       checks: policy.checks,
       env,
     });
+    if (!canLand()) return outcome;
     const at = new Date().toISOString();
     if (outcome.result === 'landed') {
       this.store.updateRun(runId, {
@@ -7945,13 +8003,17 @@ export class RunManager {
    * failure reopens the task with the error so the agent fixes it. Never throws.
    */
   async land(runId: string): Promise<LandAnswer> {
+    const canLand = this.landingFence(runId);
+    const superseded: LandAnswer = { outcome: 'busy', message: 'the task changed while landing — use its current state' };
     const run = this.store.getRun(runId);
     if (!run || run.worktree !== false || run.readOnly) {
       return { outcome: 'unavailable', message: 'only a task that works in the checkout can commit to the base branch' };
     }
     const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
+    if (!canLand()) return superseded;
     if (!policy) return { outcome: 'unavailable', message: 'auto-land is not enabled for this project' };
     const base = policy.baseBranch ?? (await getRepoInfo(this.repoRoot))?.branch ?? 'the base branch';
+    if (!canLand()) return superseded;
     const state = this.active.get(runId);
     if (state?.session?.open && run.status === 'waiting') {
       if (state.repoRootParked) {
@@ -7977,11 +8039,14 @@ export class RunManager {
     const lease = this.chainRepoRoot();
     let outcome: LandResult;
     try {
-      if (!(await hasUnlanded(this.repoRoot))) return { outcome: 'nothing', message: 'nothing to commit' };
+      const pending = await hasUnlanded(this.repoRoot);
+      if (!canLand()) return superseded;
+      if (!pending) return { outcome: 'nothing', message: 'nothing to commit' };
       outcome = await this.landNow(runId, policy);
     } finally {
       lease.release();
     }
+    if (!canLand()) return superseded;
     if (outcome.result === 'failed') {
       // Help rather than refuse: the session is gone, so reopen the task with the error.
       const reopened = this.continueRun(runId, { text: landFailurePrompt(outcome) });
@@ -7990,7 +8055,7 @@ export class RunManager {
         : { outcome: 'failed', message: `${outcome.stage} failed: ${this.store.redactRunText(runId, outcome.error).split('\n')[0]}` };
     }
     if (run.status !== 'done') {
-      this.store.updateRun(runId, { status: 'done', error: undefined });
+      this.store.updateRun(runId, { status: 'done', completionReason: 'accepted', error: undefined });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'changes landed' });
     }
     return landAnswer(outcome, base, false);
@@ -7999,22 +8064,16 @@ export class RunManager {
   /** Accept an in-place run resting at `review`: land it when the project auto-lands, else the
    *  ordinary accept. */
   private async finishReview(runId: string): Promise<void> {
-    await this.landReviewed(runId);
-    const after = this.store.getRun(runId);
-    if (after?.status === 'review' && !(await this.landingPolicy(after, await loadConfig(this.repoRoot)))) {
-      this.store.updateRun(runId, { status: 'done' });
-      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
-    }
-  }
-
-  /**
-   * Finish on a run resting at `review` with unlanded in-place changes: land them, then `done`.
-   * Refused while another task works in the checkout — it would commit that task's edits too.
-   */
-  private async landReviewed(runId: string): Promise<void> {
+    const canLand = this.landingFence(runId);
     const run = this.store.getRun(runId);
-    const policy = run && (await this.landingPolicy(run, await loadConfig(this.repoRoot)));
-    if (!policy) return;
+    if (run?.status !== 'review' || !canLand()) return;
+    const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
+    if (!canLand()) return;
+    if (!policy) {
+      this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
+      this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
+      return;
+    }
     if (this.repoRootBusy > 0) {
       this.store.appendEvent(runId, {
         type: 'note',
@@ -8029,6 +8088,7 @@ export class RunManager {
     } finally {
       lease.release();
     }
+    if (!canLand()) return;
     if (outcome.result === 'failed') {
       this.store.appendEvent(runId, {
         type: 'note',
@@ -8036,7 +8096,7 @@ export class RunManager {
       });
       return;
     }
-    this.store.updateRun(runId, { status: 'done' });
+    this.store.updateRun(runId, { status: 'done', completionReason: 'accepted' });
     this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — changes landed' });
   }
 
@@ -8046,10 +8106,11 @@ export class RunManager {
    * than wearing a success badge. Answers the failure message, or undefined.
    */
   private async landBeforeSettle(runId: string): Promise<string | 'review' | undefined> {
+    const canLand = this.landingFence(runId);
     const run = this.store.getRun(runId);
     if (!run || run.worktree !== false || run.readOnly) return undefined;
     const policy = await this.landingPolicy(run, await loadConfig(this.repoRoot));
-    if (!policy || !(await hasUnlanded(this.repoRoot))) return undefined;
+    if (!canLand() || !policy || !(await hasUnlanded(this.repoRoot)) || !canLand()) return undefined;
     // Only an autonomous run or the user's Finish may land; anything else rests at review.
     const state = this.active.get(runId);
     if (run.autonomous !== true && state?.finishRequested !== true) return 'review';

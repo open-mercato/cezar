@@ -9,10 +9,19 @@ How cezar reaches npm. Two paths, deliberately separate
   moves `latest` — a push publishes nothing.
 - **Previews** are **CI-driven**: the `publish-snapshot` job in
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
-  after a fully green `verify` run — on `develop` pushes and same-repo PRs only.
+  after fully green `verify`, `vitest` and `webhooks-cross-platform` runs — on `develop`
+  pushes and same-repo PRs only.
 - **Nightlies** are **clock-driven**: [`nightly.yml`](../.github/workflows/nightly.yml)
   cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-run@nightly`
   is always the trunk. Also runnable on demand from the Actions tab.
+
+The Linux jobs run the full unit suites, typecheck, build and packaged-CLI tests.
+`webhooks-cross-platform` runs the webhook suite on Linux, macOS and Windows;
+its macOS and Windows legs also build and run `npm run test:package`, including
+installation of the tarball and a dry-run CLI workflow. Linux package checks run
+in `verify` instead of being duplicated in the matrix. A failing matrix leg blocks
+preview publication; blocking merges additionally requires branch protection.
+Developers keep using the existing local commands on their own operating system.
 
 Four packages are in the release, always at the same version; three of them ship:
 
@@ -246,7 +255,7 @@ prereleases are inert).
 | `scripts/release.mts` | publishes the release set in dependency order under `--dist-tag` (`latest` by default) |
 | `scripts/tsconfig.release.json` | strict typecheck of the `.mts` release tooling (`npm run typecheck:release`); Node runs it directly with type stripping (Node ≥ 22.18), importing `packages/cezar/src/release/*.ts` — no build step |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
-| `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
+| `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest, webhooks-cross-platform]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
 | `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
 | `npm-preview-cleanup.yml` | dist-tag removal on PR close |
 

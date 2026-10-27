@@ -11,7 +11,7 @@ import {
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -22,6 +22,8 @@ import {
   registerProject,
   type ProjectListEntry,
 } from '../workspace/projects.ts';
+import * as workspaceProjects from '../workspace/projects.ts';
+import type { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
@@ -58,6 +60,7 @@ interface HealthBody {
     singleProject: boolean;
     automations: boolean;
     tokenMetrics: boolean;
+    webhooks: boolean;
   };
   projects: { id: string; name: string }[];
   bootProject: string;
@@ -685,6 +688,57 @@ describe('workspace projects API', () => {
       expect(seen).toEqual([{ event: 'project-removed', data: { id: other.id } }]);
     });
 
+    it.each(['write failure', 'lost registry race'] as const)(
+      'keeps webhook capture and the project context operational after %s', async failure => {
+        const other = await registerProject(otherRoot);
+        const contexts = new ProjectContexts({ listProjects });
+        const context = await contexts.context(other.id);
+        const remove = vi.fn().mockResolvedValue(undefined);
+        const webhooks = {
+          attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove,
+        } as unknown as WebhookCoordinator;
+        const registryRemove = vi.spyOn(workspaceProjects, 'removeProject');
+        if (failure === 'write failure') registryRemove.mockRejectedValueOnce(new Error('read-only home'));
+        else registryRemove.mockResolvedValueOnce(false);
+        try {
+          const { status } = await del(other.id, { contexts, webhooks });
+          expect(status).toBe(failure === 'write failure' ? 500 : 404);
+          expect(remove).not.toHaveBeenCalled();
+          expect(contexts.peek(other.id)).toBe(context);
+          expect((await loadWorkspaceConfig()).projects.some(project => project.id === other.id)).toBe(true);
+          // The retained context can still accept ordinary work after the failed request.
+          const run = context.store.createRun({ title: 'still operational', workflow: 'quick-task', task: 'x', steps: [] });
+          expect(context.store.getRun(run.id)?.status).toBe('queued');
+        } finally {
+          registryRemove.mockRestore();
+          contexts.disposeAll();
+        }
+      },
+    );
+
+    it('pauses webhooks only after successful removal and returns the cleanup warning', async () => {
+      const other = await registerProject(otherRoot);
+      const contexts = new ProjectContexts({ listProjects });
+      const context = await contexts.context(other.id);
+      const remove = vi.fn(async (root: string) => {
+        expect(root).toBe(otherRoot);
+        expect((await loadWorkspaceConfig()).projects.some(project => project.id === other.id)).toBe(false);
+        // Capture is paused before its store and manager are disposed.
+        expect(contexts.peek(other.id)).toBe(context);
+        return 'Webhook cleanup could not be saved';
+      });
+      const webhooks = {
+        attach: vi.fn().mockResolvedValue(undefined), ready: vi.fn(), remove,
+      } as unknown as WebhookCoordinator;
+      try {
+        const { status, body } = await del(other.id, { contexts, webhooks });
+        expect(status).toBe(200);
+        expect(body).toEqual({ removed: true, id: other.id, warning: 'Webhook cleanup could not be saved' });
+        expect(remove).toHaveBeenCalledOnce();
+        expect(contexts.peek(other.id)).toBeUndefined();
+      } finally { contexts.disposeAll(); }
+    });
+
     it('409s while the project has running tasks, and removes nothing', async () => {
       const contexts = new ProjectContexts({ listProjects });
       const other = await registerProject(otherRoot);
@@ -947,6 +1001,7 @@ describe('workspace projects API', () => {
         automations: true,
         dispatch: true,
         tokenMetrics: true,
+      webhooks: false,
         tokenUsageMetrics: true,
         costMetrics: true,
       });

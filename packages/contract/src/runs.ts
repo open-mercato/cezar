@@ -1,5 +1,6 @@
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
 import { referenceStatusSchema } from './github.ts';
@@ -259,6 +260,8 @@ export const runRecordSchema = z.object({
    */
   dispatch: dispatchSchema.optional(),
   status: runStatusSchema,
+  attentionRequest: webhookAttentionRequestSchema.optional(),
+  completionReason: webhookCompletionReasonSchema.optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),

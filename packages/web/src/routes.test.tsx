@@ -1,5 +1,6 @@
+import { Toaster, resetToasts } from './components/ui/toaster'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -26,6 +27,7 @@ beforeEach(() => {
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
 afterEach(() => {
   cleanup()
+  resetToasts()
   localStorage.clear()
   vi.unstubAllGlobals()
 })
@@ -135,6 +137,8 @@ function renderAt(
             <ListViewProvider>
               <AppRoutes />
               <LocationProbe />
+              <WebhookNavigationProbe />
+              <Toaster />
             </ListViewProvider>
           </MemoryRouter>
         </AppearanceProvider>
@@ -843,4 +847,46 @@ describe('/new query params', () => {
     expect(document.body.textContent).not.toContain('s3cret')
     expect(textarea().value).toBe('')
   })
+})
+
+function WebhookNavigationProbe() {
+  const navigate = useNavigate()
+  return <><button onClick={() => void navigate('/p/other/')}>Webhook project switch</button><button onClick={() => void navigate('/settings/global')}>Webhook leave project</button><button onClick={() => void navigate('/p/boot/settings/webhooks')}>Webhook settings</button></>
+}
+
+it('observes webhook transitions outside Settings with one private project stream and releases it on exit', async () => {
+  class Stream extends EventTarget {
+    static opened: Stream[] = []
+    close = vi.fn()
+    constructor(readonly url: string, readonly options: EventSourceInit) { super(); Stream.opened.push(this) }
+  }
+  vi.stubGlobal('EventSource', Stream)
+  const snapshot = (state: string) => ({ receivers: [{ id: 'r', name: 'Ops', state, destination: 'PRIVATE_DESTINATION', profile: 'minimal', preset: 'attention', scope: 'every_task', graceSeconds: 180, pendingCount: 0, inFlightCount: 0, lastTest: 'none', consecutiveFailures: 0 }], history: [], webhookHealth: { status: 'ready' } })
+  const client = renderAt('/p/boot/', { health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, webhooks: true } } as typeof HEALTH })
+  await act(async () => { client.setQueryData(['boot', 'webhooks'], snapshot('inactive')) })
+  await waitFor(() => expect(Stream.opened.filter(s => s.url.includes('/webhooks/events'))).toHaveLength(1))
+  expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+  await act(async () => { client.setQueryData(['boot', 'webhooks'], snapshot('active')) })
+  await waitFor(() => expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe('Ops is now active'))
+  expect(document.body.textContent).not.toContain('PRIVATE_DESTINATION')
+  fireEvent.click(screen.getByText('Webhook settings'))
+  await waitFor(() => expect(currentPathname()).toBe('/p/boot/settings/webhooks'))
+  expect(Stream.opened.filter(s => s.url.includes('/webhooks/events'))).toHaveLength(1)
+  const first = Stream.opened.find(s => s.url.includes('/webhooks/events'))!
+  expect(first.options).toEqual({ withCredentials: true })
+  act(() => client.setQueryData(['other', 'health'], { ...HEALTH, capabilities: { ...HEALTH.capabilities, webhooks: true } }))
+  fireEvent.click(screen.getByText('Webhook project switch'))
+  await waitFor(() => expect(first.close).toHaveBeenCalledTimes(1))
+  const second = Stream.opened.find(s => s.url.includes('/p/other/webhooks/events'))!
+  expect(second).toBeTruthy()
+  act(() => resetToasts())
+  await act(async () => {
+    client.setQueryData(['other', 'webhooks'], snapshot('active'))
+    client.setQueryData(['boot', 'webhooks'], snapshot('disabled'))
+  })
+  expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+  fireEvent.click(screen.getByText('Webhook leave project'))
+  await waitFor(() => expect(second.close).toHaveBeenCalledTimes(1))
+  await act(async () => { client.setQueryData(['other', 'webhooks'], snapshot('disabled')) })
+  expect(document.querySelector('[data-slot="toast"]')).toBeNull()
 })

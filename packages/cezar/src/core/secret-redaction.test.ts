@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { collectSecretValues, redactDeep, redactSecrets, REDACTED } from './secret-redaction.ts';
 
@@ -139,4 +140,89 @@ describe('redactDeep', () => {
 it('redacts raw tracker key values from persisted task text', () => {
   const secrets = collectSecretValues({ JIRA_API_TOKEN: 'jira-token-value', LINEAR_API_KEY: 'linear-key-value' });
   expect(redactSecrets('jira-token-value linear-key-value', secrets)).toBe(REDACTED + ' ' + REDACTED);
+});
+
+describe('overlapping known values', () => {
+  it.each([false, true])('redacts receiver prefixes independently of order (%s)', reverse => {
+    const values = ['https://receiver.invalid/', 'https://receiver.invalid/?token=private-capability'];
+    expect(redactSecrets('Failed ' + values[1], reverse ? [...values].reverse() : values)).toBe('Failed ' + REDACTED);
+  });
+  it('covers crossing matches and self-overlaps in the original text', () => {
+    expect(redactSecrets('abcdefghij', ['abcdef', 'defghij'])).toBe(REDACTED);
+    expect(redactSecrets('ababa', ['aba'])).toBe(REDACTED);
+  });
+  it('ignores empty values, deduplicates and does not rewrite replacement markers', () => {
+    expect(redactSecrets('a short key z', ['', 'short key', 'short key', 'REDACTED'])).toBe('a ' + REDACTED + ' z');
+  });
+});
+
+describe('original-text coverage', () => {
+  it('keeps touching matches separate and matches original marker text', () => {
+    expect(redactSecrets('abab', ['ab'])).toBe(REDACTED.repeat(2));
+    expect(redactSecrets('[REDACTED] key', ['REDACTED', 'key'])).toBe(`[${REDACTED}] ${REDACTED}`);
+    expect(redactSecrets('😀😀😀', ['😀😀'])).toBe(REDACTED);
+  });
+
+  it('redacts whole token shapes even when known literals cover a prefix or interior', () => {
+    for (const token of [`whsec_${'A'.repeat(40)}`, `ghp_${'b'.repeat(30)}`, `sk-ant-${'c'.repeat(30)}`]) {
+      for (const value of [token.slice(0, 12), token.slice(10, 22), token.slice(-12)]) {
+        expect(redactSecrets(`before ${token} after`, [value])).toBe(`before ${REDACTED} after`);
+      }
+    }
+  });
+
+  it('unions crossing token patterns against the original text', () => {
+    const token = `whsec_${'a'.repeat(32)}ghp_${'b'.repeat(24)}`;
+    expect(redactSecrets(token, [])).toBe(REDACTED);
+  });
+
+  it('handles millions of redundant overlapping occurrences', () => {
+    const values = Array.from({ length: 32 }, (_, i) => 'x'.repeat(12 + i));
+    expect(redactSecrets('x'.repeat(128 * 1024), values)).toBe(REDACTED);
+  });
+
+  it('fits dense overlap matching in a bounded worker heap', () => {
+    const moduleUrl = new URL('./secret-redaction.ts', import.meta.url).href;
+    const worker = spawnSync(process.execPath, [
+      '--import', 'tsx', '--max-old-space-size=64', '--input-type=module', '--eval',
+      `import { redactSecrets, REDACTED } from ${JSON.stringify(moduleUrl)};
+       const values = Array.from({ length: 32 }, (_, i) => 'x'.repeat(12 + i));
+       if (redactSecrets('x'.repeat(128 * 1024), values) !== REDACTED) process.exit(1);`,
+    ], { encoding: 'utf8', timeout: 20_000 });
+    // A resource bound, not a timing assertion: retaining all four million
+    // tuples exhausts this heap; endpoint coverage needs just 512 KiB.
+    expect(worker.error).toBeUndefined();
+    expect(worker.status, worker.stderr).toBe(0);
+  });
+
+  it('agrees with an independent interval oracle for varied literal overlaps', () => {
+    let seed = 427;
+    const random = (bound: number): number => {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      return seed % bound;
+    };
+    const word = (length: number): string => Array.from({ length }, () => 'abc'[random(3)]).join('');
+    for (let trial = 0; trial < 500; trial++) {
+      const text = word(random(60));
+      const values = Array.from({ length: random(12) }, () => word(random(8)));
+      const intervals: [number, number][] = [];
+      for (let start = 0; start < text.length; start++) {
+        for (const value of values) {
+          if (value && text.startsWith(value, start)) intervals.push([start, start + value.length]);
+        }
+      }
+      intervals.sort((a, b) => a[0] - b[0]);
+      const union: [number, number][] = [];
+      for (const [start, end] of intervals) {
+        const last = union.at(-1);
+        if (last && start < last[1]) last[1] = Math.max(last[1], end);
+        else union.push([start, end]);
+      }
+      let expected = text;
+      for (const [start, end] of union.reverse()) {
+        expected = expected.slice(0, start) + REDACTED + expected.slice(end);
+      }
+      expect(redactSecrets(text, values)).toBe(expected);
+    }
+  });
 });

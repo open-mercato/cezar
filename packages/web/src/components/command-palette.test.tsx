@@ -109,7 +109,7 @@ function health(forgeAvailable: boolean | 'cold', automations = false): HealthRe
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable === 'cold' ? { kind: 'github' } : forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, webhooks: false, dispatch: false },
   }
 }
 
