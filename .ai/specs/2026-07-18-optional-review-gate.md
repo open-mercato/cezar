@@ -15,7 +15,7 @@ in the worktree exactly as it does today.
 
 ## Resolved defaults (Open Questions closed autonomously per owner direction 2026-07-18)
 
-- **Q1 — names?** Config key `reviewGate: boolean`; env `CEZ_REVIEW_GATE` (`'1'` → on; unset/`'0'`/anything-else → off). **Default OFF** — this is the deliberate inverse of `liveTitleUpdates` (which defaults ON via `!== '0'`).
+- **Q1 — names?** Config key `reviewGate: boolean`; env `CEZ_REVIEW_GATE` (`'1'` → on; unset/`'0'`/anything-else → off). **Default OFF**, the same default as `liveTitleUpdates`.
 - **Q2 — one spec or split?** One independently-deployable capability (make the gate optional, and auto-skip it when autonomous). Not split.
 - **Q3 — gate off + changes present → what status?** `done`. No new "apply"/commit step is introduced; the worktree diff is already on disk and simply stays there, unchanged from today's behavior. "Auto-applied with no user intervention" = the run finishes without parking at `review`.
 - **Q4 — Settings placement?** Settings → Agents, next to *Live title updates* (`agents-section.tsx`).

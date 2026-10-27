@@ -118,6 +118,15 @@ export async function isNonRepositoryDirectory(dir: string): Promise<boolean> {
   }
 }
 
+/** The checked-out branch (`HEAD` when detached) — the one field of `getRepoInfo` that moves often. */
+export async function getRepoBranch(root: string): Promise<string | null> {
+  try {
+    return (await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** The current commit, pinned as a full SHA. Null outside a repository or before its first commit. */
 export async function getHeadCommit(root: string): Promise<string | null> {
   try {
