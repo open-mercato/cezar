@@ -216,20 +216,23 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
-  it('names the early exit status and keeps the bounded stderr tail out of the error', async () => {
-    let spawns = 0;
-    spawnHook.override = () => (spawns += 1, exitingChild(`${'x'.repeat(1_000)}bad config`));
+  it('names the early exit status and keeps the bounded stderr tail in a local note', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
     const events: AgentEvent[] = [];
     const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
       { userPrompt: 'do it', cwd: process.cwd() },
       (event) => events.push(event),
     );
-    await session.result;
-    expect(spawns).toBe(1);
-    expect(events).toContainEqual({
-      type: 'error',
-      message: 'opencode: opencode serve exited before it started listening (exit code 1)',
-    });
+    void session.result.catch(() => undefined);
+    (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}bad config`);
+    Object.assign(child, { exitCode: 1 });
+    (child as unknown as EventEmitter).emit('exit', 1, null);
+    (child as unknown as EventEmitter).emit('close', 1, null);
+    await session.result.catch(() => undefined);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
+    ]);
     expect(events).toContainEqual({ type: 'note', message: `opencode serve stderr: ${'x'.repeat(790)}bad config` });
   });
 
