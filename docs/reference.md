@@ -553,6 +553,27 @@ platform.
 
 ---
 
+## Secret storage and recovery
+
+The vault encrypts values with AES-256-GCM. It reads the data key on each use from
+an existing private `secrets/.key` file or the OS keychain. A readable legacy shared key
+is reused, including by a new home. When initialization creates a new keychain key,
+`secrets/.keychain-account` records its separate account.
+Keep the marker with backups and when moving a home. Older versions cannot read new
+keychain identities: use a separate home for downgrade and never mix old/new writers.
+
+If the keychain is locked, unlock it and retry; do not delete secrets. Damaged account
+metadata blocks writes. Settings and `cezar secrets list` show unreadable values by name,
+without revealing their contents.
+
+For a lost key, restore the key and account marker from backup. If restoration is
+impossible, remove all unreadable values with `cezar secrets list/unset` (including
+`--workspace`) and any encrypted connections with `cez tracker-connections list/remove`.
+Remove orphaned `secrets/<project>.json` files for unregistered projects manually.
+A replacement key is created only when no ciphertext remains. If the lost key belonged
+to a keychain this environment cannot use, also remove the stale `secrets/.backend`
+hint after removing the ciphertext. Paths are relative to `CEZ_HOME` (default `~/.cezar`).
+
 ## Talking to a running cockpit
 
 The cockpit is a local HTTP server; three CLIs and any script can talk to it

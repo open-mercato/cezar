@@ -6568,7 +6568,7 @@ export function createApp(deps: ServerDeps) {
   const unregisteredSecrets = { error: 'this project is not registered; project secrets need a project id' };
   const secretsList = async (scope: SecretScopeRef): Promise<SecretsList> => {
     const [listed, keyBackend] = await Promise.all([secretStore.list(scope), secretStore.keyBackend()]);
-    return { secrets: listed.secrets, keyBackend };
+    return { secrets: listed.secrets, keyBackend, ...(listed.skipped ? { skipped: listed.skipped } : {}) };
   };
   const putSecret = async (scope: SecretScopeRef, name: string, input: SecretValueInput) => {
     try {
