@@ -483,7 +483,7 @@ class OpencodeSession implements AgentSession {
       probe.unref?.();
       const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
         const detail = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${code}`;
-        const tail = stderrChunks.join('').trim().slice(-800);
+        const tail = this.stderrChunks.join('').trim().slice(-800);
         fail(`opencode serve exited before it started listening (${detail})${tail ? `: ${tail}` : ''}`);
       };
       const cleanup = () => {
