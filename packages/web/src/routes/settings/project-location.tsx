@@ -6,6 +6,7 @@ import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { useActiveProjectId } from '@/lib/project-router'
 import { SettingsField } from './settings-field'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * "Where is this project?" — the active project's absolute root, inside project settings.
@@ -38,8 +39,7 @@ export function useActiveProjectRoot(): string | null {
 /** Copy that survives a denied/absent clipboard: the fallback toast still shows the full path,
  *  so the user can select it by hand instead of being told nothing happened. */
 function copyPath(root: string) {
-  void navigator.clipboard
-    .writeText(root)
+  void writeClipboard(root)
     .then(() => toast('Project folder copied'))
     .catch(() => toast(root))
 }

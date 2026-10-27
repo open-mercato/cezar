@@ -34,11 +34,12 @@ import {
   type JunieUiMapperState,
 } from './junie-ui-mapper.ts';
 import { acpMcpCapabilities, skippedServersNote, toAcpMcpServers } from './private-mcp.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 export interface JunieRunnerOptions {
   /** Override the binary name/path; defaults to `junie` on PATH (`CEZ_JUNIE_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -164,22 +165,18 @@ class JunieSession implements AgentSession {
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-        this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+      this.child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!this.hasExited()) {
+          this.terminatedByCezar = true;
+          this.child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     this.ready = this.bootstrap();
 
@@ -189,6 +186,7 @@ class JunieSession implements AgentSession {
         const readLoop = async () => {
           for await (const line of readNdjson(this.child.stdout)) {
             if (this.timedOut) break;
+            deadline.touch();
             let msg: JunieAcpMessage;
             try {
               msg = JSON.parse(line) as JunieAcpMessage;
@@ -205,7 +203,7 @@ class JunieSession implements AgentSession {
           this.end();
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
@@ -234,8 +232,7 @@ class JunieSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `junie timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('junie', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }

@@ -44,6 +44,7 @@ import {
   seedHandoffFile,
 } from '../handoff.ts';
 import { todosPath } from '../todos.ts';
+import { continuePromptRefusal, messageText, queuedStackRefusal } from './queued-bounds.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the attachment
 // vocabulary the routes validate with is the same one the engine stores and re-reads by, so the
 // wire and the disk can never disagree about what counts as an image (#950).
@@ -235,6 +236,13 @@ async function configuredModelProvider(
 }
 /** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
 const CANCEL_GRACE_MS = 1_000;
+<<<<<<< HEAD
+=======
+/** How long a settled task's agent CLI gets to exit on its own before its leftovers are reaped (#1411). */
+const LEFTOVER_SETTLE_GRACE_MS = 5_000;
+/** `runs/<id><suffix>` holds how many messages `deferMessage` is holding for that run. */
+const DEFERRED_MARKER_SUFFIX = '.deferred-messages';
+>>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
 /** How long a fork waits for the namer's branch (spec 2026-10-11-branch-naming-instructions).
  *  On an idle cockpit a task starts the instant it is created, so the wait begins together with
  *  the namer call — and a cold `claude -p` alone takes more than five seconds (run 269606ac
@@ -510,6 +518,9 @@ interface ActiveRun {
   idleClosed?: boolean;
   /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
   finishRequested?: boolean;
+  /** Finish pressed at a graph wait — not `finishRequested`, which would also turn the settle into
+   *  `done`; read only by `deferredStopReason` so a held message does not resume the run. */
+  finishedAtWait?: boolean;
   /** Review accepted while the engine was still tearing down; `dropActive` applies it. */
   acceptReviewOnDrop?: boolean;
   /** The session is over and only teardown (the turn-end autosave) remains, so a record that
@@ -553,7 +564,7 @@ interface ActiveRun {
    *  - `'waiting'` — live: the session is open and an answer or monitored work is still expected.
    *    `execute` sits inside `runAgentStep` for as long as that holds, so seeing
    *    this value after the step loop means the session closed WITHOUT an answer
-   *    (the idle timer, the wall clock, a crash) and the run settles `failed`.
+   *    (the idle timer, the runner timeout, a crash) and the run settles `failed`.
    *  - `'abandoned'` — the user pressed Finish instead of answering: "stop here",
    *    so the run settles like any other finished run.
    *
@@ -1956,6 +1967,7 @@ export class RunManager {
    */
   async recover(): Promise<void> {
     await this.lifecycle.reconcile();
+    this.noteDeferredLostInRestart();
     const live = this.store
       .listRuns()
       .filter((r) => ['queued', 'waiting', 'running'].includes(r.status))
@@ -2140,6 +2152,7 @@ export class RunManager {
   private abandonCancelledStart(runId: string): boolean {
     if (!this.cancelledStarting.delete(runId)) return false;
     this.starting.delete(runId);
+    this.redeliverDeferred(runId, 'the run was cancelled');
     this.reportSettledChildToParent(runId);
     this.releaseSlot();
     return true;
@@ -2167,7 +2180,16 @@ export class RunManager {
     const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
     // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
     const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
+<<<<<<< HEAD
     if (acceptReview) {
+=======
+    // An in-place run's accept lands its changes (spec 2026-10-20-trunk-based-projects) — once
+    // the tree is released below, through the same path as Finish on a settled review.
+    const landOnAccept = acceptReview && this.store.getRun(runId)?.worktree === false;
+    // Read before the registries below forget it: why a message deferred in this window must not resume the run.
+    const stoppedBy = this.deferredStopReason(runId, state, !!acceptReview, !!queuedContinue);
+    if (acceptReview && !landOnAccept) {
+>>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
       this.store.updateRun(runId, { status: 'done' });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
     }
@@ -2222,6 +2244,113 @@ export class RunManager {
       const resumed = this.continueRun(runId, queuedContinue.opts, queuedContinue.deferForCapacity);
       if (!resumed.ok) {
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue could not start — ${resumed.error}` });
+      }
+    }
+    // After `scheduleAutoResumeIfLimited`: a run parked for its usage window keeps that schedule.
+    this.redeliverDeferred(runId, stoppedBy ?? (this.autoResumeTimers.has(runId) ? 'the task is waiting for its usage limit to reset' : undefined));
+  }
+
+  /**
+   * A drop that ends the run on purpose — cancel, an accepted review, Finish, a memory-limit pause
+   * — must not be undone by a message deferred in its teardown window (`redeliverDeferred`).
+   * Undefined for an ordinary settle, which the message resumes.
+   */
+  private deferredStopReason(runId: string, state: ActiveRun | undefined, acceptReview: boolean, queuedContinue: boolean): string | undefined {
+    if (state?.cancelled) return 'the run was cancelled';
+    if (acceptReview) return 'the review was accepted';
+    // A Continue taken in the same window supersedes a Finish, and its session flushes the buffer.
+    if ((state?.finishRequested || state?.finishedAtWait) && !queuedContinue) return 'the task was finished';
+    if (this.memoryPausing.has(runId)) return 'the task was paused for exceeding the memory limit';
+    return undefined;
+  }
+
+  /**
+   * Messages `deferMessage` accepted for a session that never opened again: the run settled
+   * instead. Delivered the way the cockpit would have — stacked onto a re-queued prompt, else as
+   * a Continue — so an accepted message is never silently lost (telemetry 1408d7cb). A `stoppedBy`
+   * reason (the run was ended on purpose) or a message over the route's bounds is reported
+   * undelivered instead.
+   */
+  private redeliverDeferred(runId: string, stoppedBy?: string): void {
+    // A continuation already owns the run: its session's open flushes the buffer.
+    if (this.active.has(runId) || this.starting.has(runId)) return;
+    const pending = this.deferredMessages.get(runId);
+    this.setDeferred(runId, undefined);
+    if (!pending?.length) return;
+    const undelivered = (reason: string, count = pending.length): void => {
+      this.store.appendEvent(runId, {
+        type: 'lifecycle',
+        message: `${count === 1 ? 'a message' : `${count} messages`} sent while the session was closing could not be delivered — ${reason}`,
+      });
+    };
+    if (stoppedBy) return undelivered(stoppedBy);
+    if (this.isQueued(runId)) {
+      for (const content of pending) {
+        const run = this.store.getRun(runId);
+        const refusal = run ? queuedStackRefusal(this.dataDir, run, content) : 'the task is gone';
+        if (refusal || !this.enqueueMessage(runId, content)) undelivered(refusal ?? 'the task already started', 1);
+      }
+      return;
+    }
+    const blocks = pending.flat();
+    const text = pending.map(messageText).filter((t) => t.trim()).join('\n\n');
+    const refusal = continuePromptRefusal(text, blocks);
+    if (refusal) return undelivered(refusal);
+    const resumed = this.continueRun(runId, { text, images: blocks.filter((b) => b.type !== 'text') });
+    if (!resumed.ok) undelivered(resumed.error ?? 'continue could not start');
+  }
+
+  /**
+   * The one writer of `deferredMessages`. A marker file mirrors how many are held, so a restart —
+   * which loses the buffer itself — can still say so on the run (`noteDeferredLostInRestart`).
+   */
+  private setDeferred(runId: string, pending: PastedContent[][] | undefined): void {
+    const marker = join(this.dataDir, 'runs', `${runId}${DEFERRED_MARKER_SUFFIX}`);
+    if (pending?.length) {
+      this.deferredMessages.set(runId, pending);
+      try {
+        mkdirSync(dirname(marker), { recursive: true });
+        writeFileSync(marker, String(pending.length));
+      } catch {
+        // Best effort: the marker only explains a loss, it never decides a delivery.
+      }
+      return;
+    }
+    if (!this.deferredMessages.delete(runId)) return;
+    try {
+      rmSync(marker, { force: true });
+    } catch {
+      // Best effort, like the write: a stale marker costs one spurious note after a restart.
+    }
+  }
+
+  /** Startup: messages a previous process held for a session that never reopened are gone. */
+  private noteDeferredLostInRestart(): void {
+    let names: string[];
+    try {
+      names = readdirSync(join(this.dataDir, 'runs')).filter((name) => name.endsWith(DEFERRED_MARKER_SUFFIX));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const runId = name.slice(0, -DEFERRED_MARKER_SUFFIX.length);
+      const path = join(this.dataDir, 'runs', name);
+      let count = 1;
+      try {
+        count = Math.max(1, Number.parseInt(readFileSync(path, 'utf8'), 10) || 1);
+      } catch {
+        // Unreadable: still one lost message at least.
+      }
+      if (this.store.getRun(runId)) {
+        this.store.appendEvent(runId, {
+          type: 'lifecycle',
+          message: `${count === 1 ? 'a message' : `${count} messages`} sent while the session was closing could not be delivered — cezar restarted; send it again`,
+        });
+      }
+      try {
+        rmSync(path, { force: true });
+      } catch {
+        // A read-only data dir must not fail recovery; the note repeats on the next boot at worst.
       }
     }
   }
@@ -3640,8 +3769,8 @@ export class RunManager {
    * backend, so there is nothing left to amend and no session to deliver into —
    * without this rung the message would 409, a genuinely dropped message in the
    * feature built to stop dropping them. Flushed as an ordinary follow-up turn
-   * the instant the session opens; dropped if the run never starts, which the
-   * existing error path already surfaces.
+   * the instant the session opens; a run that settles first resumes with it
+   * (`redeliverDeferred`).
    *
    * The buffer lives on the manager rather than the `ActiveRun` because the
    * `ActiveRun` does not exist yet for part of this window.
@@ -3654,10 +3783,14 @@ export class RunManager {
     // alone would reopen exactly the drop this rung exists to close.
     const state = this.active.get(runId);
     const startingUp = (this.starting.has(runId) && !this.cancelledStarting.has(runId)) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
-    if (!startingUp) return false;
-    const pending = this.deferredMessages.get(runId) ?? [];
-    pending.push(content);
-    this.deferredMessages.set(runId, pending);
+    // A session gap on a live owner — between workflow steps, or settling after the last turn
+    // (landing, review gate: well over ten seconds on a busy Windows host) while the record still
+    // says `running`. The next session's open flushes it; `dropActive` resumes with it otherwise
+    // (telemetry 1408d7cb). A park (`waiting`: a CI or children wait, the review gate) is not a gap —
+    // nothing opens a session there soon, so the message would sit unseen; it answers 409 as before.
+    const sessionGap = state !== undefined && !state.cancelled && !state.session?.open && !this.waiting.has(runId) && !this.lifecycle.isBlocked(runId);
+    if (!startingUp && !sessionGap) return false;
+    this.setDeferred(runId, [...(this.deferredMessages.get(runId) ?? []), content]);
     return true;
   }
 
@@ -3670,8 +3803,7 @@ export class RunManager {
     // here would be precisely the failure `deferMessage` exists to prevent. Anything
     // left over is retried by the next session that opens on this run.
     const unsent = pending.filter((content) => !this.sendMessage(runId, content));
-    if (unsent.length) this.deferredMessages.set(runId, unsent);
-    else this.deferredMessages.delete(runId);
+    this.setDeferred(runId, unsent);
   }
 
   /**
@@ -3816,6 +3948,7 @@ export class RunManager {
     const state = this.active.get(runId);
     if (state?.graphFinish && !state.session?.open) {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'finished by user at a workflow wait' });
+      state.finishedAtWait = true;
       state.graphFinish();
       return true;
     }
@@ -5014,7 +5147,7 @@ export class RunManager {
         error: runError,
         finishedAt,
         currentStepId: undefined,
-        // A crash or a wall-clock timeout while parked on a question does not answer it either.
+        // A crash or a runner timeout while parked on a question does not answer it either.
         ...(askPark === 'waiting' ? { awaitingAnswerSince: finishedAt } : {}),
       });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
@@ -6583,11 +6716,12 @@ export class RunManager {
           model: backendModel,
           sessionId: launchSessionId,
           resume,
-          // Interactive sessions have no wall clock — the idle timer rules.
+          // Interactive sessions have no runner timeout — the idle timer rules.
           //
-          // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
-          // even though it may now park on a `CEZ:ASK` and sit open waiting for
-          // an answer (#917). Dropping it for every intermediate step is the
+          // A non-final step keeps the runner's timeout (`DEFAULT_RUN_TIMEOUT_MS`
+          // of silence, with a hard ceiling behind it — cf2191f1) even though it
+          // may now park on a `CEZ:ASK` and sit open waiting for an answer (#917).
+          // Dropping it for every intermediate step is the
           // wrong trade: it would leave a runaway step with nothing to stop it,
           // to buy a park that is bounded by the 15-minute idle timer first in
           // all but the longest steps. What matters is that neither expiry can

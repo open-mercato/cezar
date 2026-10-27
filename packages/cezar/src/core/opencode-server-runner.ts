@@ -31,11 +31,12 @@ import {
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
 import { opencodeConfigContent } from './private-mcp.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 export interface OpencodeRunnerOptions {
   /** Override the binary name/path; defaults to `opencode` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -61,7 +62,7 @@ export const KILL_GRACE_MS = 4_000;
  * from: an opencode build that does not emit it still ends its turn. Every
  * `message.*` frame re-arms the window, so a session that is genuinely working
  * — the case this whole fix is about — never trips it. This is NOT the
- * configurable agent-step wall clock (#880); that deadline is untouched.
+ * agent-step inactivity deadline (#880, cf2191f1); that deadline is untouched.
  */
 export const TURN_IDLE_GRACE_MS = 5_000;
 
@@ -201,6 +202,7 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  private deadline: InactivityDeadline = armInactivityDeadline(0, () => {});
   /** Set once `giveUpOnLongRetry` has reported the failure — the held POST's hang-up is not news. */
   private retryGaveUp = false;
   /** One teardown per session — see `terminate()`. */
@@ -217,14 +219,10 @@ class OpencodeSession implements AgentSession {
     const urlReady = this.listen();
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    this.deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+    });
 
     this.ready = (async () => {
       this.baseUrl = await urlReady;
@@ -242,7 +240,7 @@ class OpencodeSession implements AgentSession {
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        this.deadline.clear();
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.sse.abort();
         this.serverOpen = false;
@@ -264,8 +262,7 @@ class OpencodeSession implements AgentSession {
         sessionId: this.sessionId ?? spec.sessionId,
       };
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `opencode timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('opencode', limitMs, this.deadline.expiredBy) });
       }
       this.emit({ type: 'done' });
       return base;
@@ -686,6 +683,8 @@ class OpencodeSession implements AgentSession {
     } catch {
       return;
     }
+    // The bus's own keep-alives prove the server is up, not that the agent is working.
+    if (evt.type !== 'server.heartbeat' && evt.type !== 'server.connected') this.deadline.touch();
     this.emitUi((state) => mapOpencodeEvent(evt, state));
     this.handleEvent(evt);
   }

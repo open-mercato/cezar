@@ -248,6 +248,41 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
     });
   });
 
+  // cf2191f1: a 30-minute WALL clock killed steps that were still streaming work.
+  it('never kills a session that keeps streaming, only one that went silent for the whole window', async () => {
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    vi.useFakeTimers();
+    try {
+      const events: AgentEvent[] = [];
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 1_000 }).startSession(
+        { userPrompt: 'do it', cwd: process.cwd() },
+        (event) => events.push(event),
+      );
+      void session.result.catch(() => undefined);
+      const frame = `${JSON.stringify({ type: 'system', subtype: 'status' })}\n`;
+      for (let i = 0; i < 5; i += 1) {
+        (fake.child.stdout as PassThrough).write(frame);
+        await vi.advanceTimersByTimeAsync(800);
+      }
+      // 4 s of wall clock against a 1 s limit: still alive, because it never went quiet.
+      expect(fake.signals).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(fake.signals).toEqual(['SIGTERM']);
+      fake.exit(143);
+      await session.result;
+      const error = events.find((e) => e.type === 'error');
+      expect(error).toEqual({
+        type: 'error',
+        message: 'claude CLI timed out after 1s without any output and was killed — Continue picks the task up again',
+      });
+    } finally {
+      vi.useRealTimers();
+      spawnHook.override = null;
+    }
+  });
+
   it('stops escalating once the CLI really exits after SIGTERM', () => {
     withFakeChild((fake) => {
       const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({

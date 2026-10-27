@@ -403,6 +403,28 @@ export function buildCreateRunBody(opts: {
   }
 }
 
+<<<<<<< HEAD
+=======
+/**
+ * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
+ * read-only task, else its default skill — only when that skill exists in the catalog. `null`
+ * skills means the catalog failed to load: keep the configured name and let the server judge it.
+ */
+export function projectDefaultSource(
+  config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
+  readOnly: boolean,
+  skills: readonly Skill[] | null,
+): TaskSource | null {
+  const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
+  return name && (skills === null || skills.some((skill) => skill.name === name)) ? { source: 'skill', ref: name } : null
+}
+
+/** A trunk-based project asks by default when the message reads as a question. */
+export function looksLikeQuestion(text: string): boolean {
+  return /\?\s*$/.test(text.trim())
+}
+
+>>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
 /** The automation editor persists the exact New task serialization, with only the transport-
  * specific `task` key renamed to `prompt`. Images and inbox provenance are deliberately absent:
  * an automation is a reusable template, not one browser submission. */

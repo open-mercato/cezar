@@ -746,8 +746,10 @@ describe('a session.status retry the turn cannot outwait', () => {
 
   it("ignores another session's retry", async () => {
     const status = { message: 'Free usage exceeded', action: { reason: 'free_tier_limit' }, next: Date.now() + 60 * 60_000 };
-    // Only the wall clock ends this turn: the retry belongs to a subtask session.
-    expect(await retryErrors(status, { MOCK_RETRY_SESSION: 'ses_other' }, 1_500)).toEqual(['opencode timed out after 0m and was killed']);
+    // Only the inactivity deadline ends this turn: the retry belongs to a subtask session.
+    expect(await retryErrors(status, { MOCK_RETRY_SESSION: 'ses_other' }, 1_500)).toEqual([
+      'opencode timed out after 2s without any output and was killed — Continue picks the task up again',
+    ]);
   }, 30_000);
 
   it('rides out a short transient retry', async () => {

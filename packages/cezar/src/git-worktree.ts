@@ -219,6 +219,12 @@ export async function chooseForkBase(
   return resolved;
 }
 
+/** Does the local branch exist? False on any git failure (never throws). */
+export async function localBranchExists(repoRoot: string, branch: string): Promise<boolean> {
+  if (!isSafeGitRef(branch)) return false;
+  return (await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])).ok;
+}
+
 export function worktreePathFor(repoRoot: string, runId: string): string {
   return join(repoRoot, WORKTREES_DIR, runId);
 }

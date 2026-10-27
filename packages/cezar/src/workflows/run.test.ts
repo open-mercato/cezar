@@ -2917,12 +2917,15 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(buffer.has(r.id)).toBe(false);
   });
 
-  it('stops deferring once a session has opened (a closed session is a real 409)', () => {
+  /** A live owner between sessions defers (1408d7cb); an open session or a cancelled owner does not. */
+  it('defers across a session gap, never past an open session or a cancel', () => {
     const r = seedQueued();
-    (manager as unknown as { active: Map<string, unknown> }).active.set(r.id, {
-      cancelled: false,
-      sessionEverOpened: true,
-    });
+    const active = (manager as unknown as { active: Map<string, unknown> }).active;
+    active.set(r.id, { cancelled: false, sessionEverOpened: true });
+    expect(manager.deferMessage(r.id, text('between steps'))).toBe(true);
+    active.set(r.id, { cancelled: false, sessionEverOpened: true, session: { open: true } });
+    expect(manager.deferMessage(r.id, text('live'))).toBe(false);
+    active.set(r.id, { cancelled: true, sessionEverOpened: true });
     expect(manager.deferMessage(r.id, text('too late'))).toBe(false);
   });
 });

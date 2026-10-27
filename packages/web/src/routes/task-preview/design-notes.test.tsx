@@ -154,8 +154,16 @@ describe('sending a note', () => {
 
   it.each(['done', 'failed', 'cancelled', 'review'] as const)('reopens a %s session with the note', async (status) => {
     const { result } = notesWithDraft(run({ status }))
+<<<<<<< HEAD
     await act(() => result.current.send('abc-1'))
     expect(api.continueRun).toHaveBeenCalledWith('run-1', { text: expect.stringContaining('make it bigger') })
+=======
+    await act(() => result.current.sendAll())
+    expect(api.continueRun).toHaveBeenCalledWith('run-1', {
+      text: expect.stringContaining('make it bigger'),
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    })
+>>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
     expect(api.sendMessage).not.toHaveBeenCalled()
     expect(result.current.note('abc-1')?.phase).toBe('running')
   })

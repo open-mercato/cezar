@@ -47,6 +47,9 @@ import {
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
 
+/** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
+const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
+
 /** The one seam under test: every call must go through `fetch` and nothing else. */
 const fetchMock = vi.fn<typeof fetch>()
 
@@ -304,19 +307,19 @@ describe('request shapes', () => {
     },
     {
       name: 'sendMessage',
-      call: () => sendMessage('run-1', { text: 'hi' }),
+      call: () => sendMessage('run-1', { text: 'hi', idempotencyKey: KEY }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
       // The server's schema defaults both, but an absent `images` and `[]` are the same
       // request — send the shape the endpoint documents rather than half of it.
-      body: { text: 'hi', images: [] },
+      body: { text: 'hi', images: [], idempotencyKey: KEY },
     },
     {
       name: 'sendMessage (images only)',
-      call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }] }),
+      call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }], idempotencyKey: KEY }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
-      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }] },
+      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }], idempotencyKey: KEY },
     },
   ]
 
@@ -613,6 +616,36 @@ describe('createRunPr survives a lost response', () => {
     const error = (await createRunPr('run-1').catch((e: unknown) => e)) as ApiError
     expect(error.status).toBe(409)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+/** telemetry 2e454012: the connection dropped after the headers, while the body was read. */
+describe('a body lost mid-read', () => {
+  const headersThenDrop = () => {
+    const res = new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    vi.spyOn(res, 'text').mockRejectedValue(new TypeError('Failed to fetch'))
+    return res
+  }
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('is the same ApiError(0) as a request that never answered, not a bare TypeError', async () => {
+    fetchMock.mockResolvedValue(headersThenDrop())
+    const error = await getHealth().catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(0)
+  })
+
+  it('a message whose answer was lost is re-posted under its key, and the server dedupes it', async () => {
+    fetchMock
+      .mockResolvedValueOnce(headersThenDrop())
+      .mockResolvedValueOnce(new Response(JSON.stringify({ delivered: true }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const result = sendMessage('run-1', { text: 'hi', idempotencyKey: KEY })
+    await vi.runAllTimersAsync()
+    await expect(result).resolves.toEqual({ delivered: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastCall().body).toEqual({ text: 'hi', images: [], idempotencyKey: KEY })
   })
 })
 

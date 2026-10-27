@@ -11,7 +11,7 @@ const RUN_ERROR_PREFIX_RE = /^(?:continue failed: |step "[^"]*" failed: )/;
 /** Restart bookkeeping (`recover()`), not an agent failure — most of these runs resume at once. */
 const INTERRUPTED_RE = /^interrupted — /;
 /** A runner or ACP request killed at its timeout, or a session closed for inactivity (`run.ts`). */
-const TIMEOUT_RE = /\btimed out after [\d.]+\s?(?:m|s)\b|\bclosed after (?:\d+m of )?inactivity\b/i;
+const TIMEOUT_RE = /\btimed out after [\d.]+\s?(?:h|m|s)\b|\bclosed after (?:\d+m of )?inactivity\b/i;
 
 /** The kind of a run's failure, or undefined when the transition is not one worth counting. */
 export function failureKind(error: string | undefined): FailureKind | undefined {

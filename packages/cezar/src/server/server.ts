@@ -83,6 +83,8 @@ import {
   attachmentInputSchema,
   attachmentListSchema,
   type AttachmentEntry,
+  continueInputSchema,
+  type ContinueResponse,
   deleteUploadResponseSchema,
   isImageAttachmentName,
   isImageMediaType,
@@ -189,6 +191,19 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+<<<<<<< HEAD
+=======
+import {
+  foldedLength,
+  imageChars,
+  MAX_FOLDED_TASK_CHARS,
+  MAX_QUEUED_ATTACHMENTS,
+  QUEUED_IMAGES_TOO_LARGE,
+  queuedImageChars,
+  queuedStackRefusal,
+} from '../workflows/queued-bounds.ts';
+import { checkoutGitStatus } from '../workflows/landing.ts';
+>>>>>>> 25d4fc2 (fix: resolve 15 Cezar telemetry error groups (message delivery, cockpit, probes, runners) (#1689))
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
@@ -309,6 +324,8 @@ import {
   type TelemetryConsentPayload,
 } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
+import { MessageReceipts } from './message-receipts.ts';
+import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
   providerForActiveRun,
   providerForExistingRun,
@@ -1014,10 +1031,15 @@ const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: attachmentListSchema.default([]),
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
   });
+
+// Run ids are unique across projects, so one workspace-wide receipt book serves every mount.
+const messageReceipts = new MessageReceipts<MessageResponse>();
+const continueReceipts = new MessageReceipts<ContinueResponse>();
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
 // In particular, the cockpit edits text without re-uploading existing attachments.
@@ -1029,24 +1051,6 @@ const queuedMessagePatchSchema = z
   .refine((m) => m.text !== undefined || m.images !== undefined, {
     message: 'message edit needs text or attachments',
   });
-
-// Queued prompt stack bounds (#472). The per-message bounds mirror `messageSchema`
-// above; the one that actually matters is the FOLDED total, because 20 messages of
-// 100 000 chars each would otherwise compose a ~2 M-character {{task}}.
-const MAX_QUEUED_MESSAGES = 20;
-const MAX_QUEUED_ATTACHMENTS = 2 * MAX_ATTACHMENTS_PER_MESSAGE;
-const MAX_FOLDED_TASK_CHARS = 200_000;
-
-/** Length of the prompt a run would execute with — `task` plus its whole stack,
- *  composed exactly as `hydrateQueuedInput` composes it. Checked against the
- *  PROSPECTIVE state so the user is stopped at the write, not at dequeue where
- *  there would be no one left to tell. */
-function foldedLength(task: string, stack: Array<{ text: string }>): number {
-  return [task, ...stack.map((m) => m.text)]
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0)
-    .join('\n\n').length;
-}
 
 /** A message's attachments as engine content, staged uploads read back from the store
  *  (telemetry 7054e5f2). A string is the refusal: `ATTACHMENT_UPLOAD_MISSING` when a referenced
@@ -1068,44 +1072,8 @@ function resolveAttachments(entries: AttachmentEntry[] | undefined): PastedConte
   return out;
 }
 
-/** Base64 size of the images a queued run's OPENING turn will carry: its task images plus every
- *  stacked message's, read back from disk at dequeue and delivered together (#472). */
-function queuedImageChars(dataDir: string, runId: string, urls: readonly string[]): number {
-  let bytes = 0;
-  for (const url of urls) {
-    const name = url.split('/').pop() ?? '';
-    if (!isImageAttachmentName(name) || name.includes('..')) continue;
-    try {
-      bytes += statSync(join(dataDir, 'runs', `${runId}-images`, name)).size;
-    } catch {
-      // Gone files are dropped at dequeue too.
-    }
-  }
-  return Math.ceil(bytes / 3) * 4;
-}
-
-/** Base64 size of the image blocks among a message's resolved attachments. */
-function imageChars(content: readonly PastedContent[]): number {
-  return content.reduce((n, b) => (b.type === 'image' ? n + b.source.data.length : n), 0);
-}
-
-const QUEUED_IMAGES_TOO_LARGE = 'too many queued images — 20 MB of images across the task and its queued messages';
-
-// "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
-// the last session on the run's current backend (backward compat). A runner/model/account override
-// lets the follow-up composer choose which engine handles the continuation. `text` stays bounded
-// like the live-session message `text` (#429), and `images` like a live-session message's — the
-// follow-up composer is a full composer, so a screenshot pasted into it must reach the reopened
-// session rather than being silently dropped.
-const continueSchema = z.object({
-  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
-  images: attachmentListSchema.optional(),
-  runner: z.enum(RUNNER_IDS).optional(),
-  model: z.string().max(200).optional(),
-  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
-   *  `POST /runs`' own `agentProfile`. Omitted = keep the account the run is already on. */
-  agentProfile: z.string().max(64).optional(),
-});
+// "Continue"/"Send back" body: the contract's own schema, so the wire cannot drift from the client.
+const continueSchema = continueInputSchema;
 
 // Inbox "▶ Run" body (spec 007 / #401 / #413): every field optional, and the whole body is
 // optional too, so an empty POST — every client before the pills and the composer — starts on
@@ -4795,65 +4763,54 @@ export function createApp(deps: ServerDeps) {
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
       const parsed = { data: c.req.valid('json') };
-      // Stacking onto a queued prompt mutates an existing task and invokes no provider.
-      // Provider availability still gates live delivery after the record leaves `queued`, but
-      // must not strand prompt authoring just because an unrelated fallback provider is
-      // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
-      // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
-      if (run.status !== 'queued') {
-        const blocked = await providerActionError([providerForActiveRun(run)], {
-          repoRoot,
-          profileFor: (provider) => recordedProfileFor(run, provider),
-        });
-        if (blocked) return c.json({ error: blocked }, 409);
-      }
-      const attachments = resolveAttachments(parsed.data.images);
-      if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-      const content: PastedContent[] = [
-        ...attachments,
-        ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
-      ];
-      // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
-      // than a status read here: the handler cannot observe the dequeue safely
-      // (the record is written a tick later), the engine can.
-      //   live session → delivered · still queued → folded into the prompt
-      //   starting up  → buffered  · anything else → 409, exactly as before
-      if (manager.sendMessage(id, content)) return c.json({ delivered: true });
+      // A retried POST whose first attempt already landed answers as it did (message-receipts.ts).
+      const receipt = parsed.data.idempotencyKey ? await messageReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
+      if (receipt && 'prior' in receipt) return c.json(receipt.prior);
+      let answered: MessageResponse | undefined;
+      try {
+        // Stacking onto a queued prompt mutates an existing task and invokes no provider.
+        // Provider availability still gates live delivery after the record leaves `queued`, but
+        // must not strand prompt authoring just because an unrelated fallback provider is
+        // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
+        // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
+        if (run.status !== 'queued') {
+          const blocked = await providerActionError([providerForActiveRun(run)], {
+            repoRoot,
+            profileFor: (provider) => recordedProfileFor(run, provider),
+          });
+          if (blocked) return c.json({ error: blocked }, 409);
+        }
+        const attachments = resolveAttachments(parsed.data.images);
+        if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
+        const content: PastedContent[] = [
+          ...attachments,
+          ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
+        ];
+        // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
+        // than a status read here: the handler cannot observe the dequeue safely
+        // (the record is written a tick later), the engine can.
+        //   live session → delivered · still queued → folded into the prompt
+        //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
+        if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
 
-      const currentRun = store.getRun(id);
-      const stack = currentRun?.queuedMessages ?? [];
-      // Bounds apply only to a message that is actually about to be stacked. Without this
-      // gate an over-long message posted to a *finished* run would answer `400 prompt too
-      // long` when the truthful answer is `409 session closed`. The status read is safe
-      // here because it only decides whether to reject EARLY — `enqueueMessage` still
-      // re-checks against the engine's own queue before writing anything.
-      if (currentRun?.status === 'queued') {
-        if (stack.length >= MAX_QUEUED_MESSAGES) {
-          return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
+        const currentRun = store.getRun(id);
+        // Bounds apply only to a message that is actually about to be stacked. Without this
+        // gate an over-long message posted to a *finished* run would answer `400 prompt too
+        // long` when the truthful answer is `409 session closed`. The status read is safe
+        // here because it only decides whether to reject EARLY — `enqueueMessage` still
+        // re-checks against the engine's own queue before writing anything.
+        if (currentRun?.status === 'queued') {
+          const refusal = queuedStackRefusal(dataDir, currentRun, content, parsed.data.text);
+          if (refusal) return c.json({ error: refusal }, 400);
         }
-        const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-        if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
-          return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
-        }
-        const opening = [...(currentRun.taskImages ?? []), ...stack.flatMap((m) => m.images ?? [])];
-        if (queuedImageChars(dataDir, id, opening) + imageChars(attachments) > MAX_ATTACHMENTS_TOTAL_BASE64) {
-          return c.json({ error: QUEUED_IMAGES_TOO_LARGE }, 400);
-        }
-        const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
-        if (prospective > MAX_FOLDED_TASK_CHARS) {
-          return c.json(
-            {
-              error: `prompt too long — ${MAX_FOLDED_TASK_CHARS} character limit across the task and its queued messages (would be ${prospective})`,
-            },
-            400,
-          );
-        }
-      }
 
-      const queued = manager.enqueueMessage(id, content);
-      if (queued) return c.json({ queued: true, message: queued });
-      if (manager.deferMessage(id, content)) return c.json({ deferred: true });
-      return c.json({ error: 'session closed' }, 409);
+        const queued = manager.enqueueMessage(id, content);
+        if (queued) return c.json((answered = { queued: true as const, message: queued }));
+        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
+        return c.json({ error: 'session closed' }, 409);
+      } finally {
+        if (receipt && 'settle' in receipt) receipt.settle(answered);
+      }
     })
 
     // Edit / remove a stacked message (#472). Registered before any conflicting
@@ -4939,36 +4896,45 @@ export function createApp(deps: ServerDeps) {
       // Bounded resume text (#429); an empty/absent body still just re-runs on the
       // run's current backend, and a runner/model override reopens on that engine (#401).
       const parsed = { data: c.req.valid('json') };
-      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
-        return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      // A re-posted Continue whose first attempt landed — possibly as a Continue queued behind the
+      // run's teardown, which adds no step yet — answers as it did instead of continuing twice.
+      const receipt = parsed.data.idempotencyKey ? await continueReceipts.claim(`${id}:${parsed.data.idempotencyKey}`) : undefined;
+      if (receipt && 'prior' in receipt) return c.json(receipt.prior);
+      let answered: ContinueResponse | undefined;
+      try {
+        if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+          return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+        }
+        const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
+          repoRoot,
+          // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
+          profileFor: (provider) => parsed.data.agentProfile
+            ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
+        });
+        if (blocked) return c.json({ error: blocked }, 409);
+        // The follow-up pill names an account the user just picked, so an id that has been deleted
+        // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
+        // USER can act on "unknown account", and reopening the session on another login silently
+        // would cross the very billing boundary accounts exist to draw.
+        if (parsed.data.agentProfile !== undefined) {
+          const provider = providerForExistingRun(run, parsed.data.runner);
+          const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
+          if ('error' in account) return c.json({ error: account.error }, 400);
+        }
+        const images = resolveAttachments(parsed.data.images);
+        if (typeof images === 'string') return c.json({ error: images }, 400);
+        const result = manager.continueRun(id, {
+          text: parsed.data.text,
+          images,
+          runner: parsed.data.runner,
+          model: parsed.data.model,
+          agentProfile: parsed.data.agentProfile,
+        });
+        if (!result.ok) return c.json({ error: result.error }, 409);
+        return c.json((answered = { continued: true as const }));
+      } finally {
+        if (receipt && 'settle' in receipt) receipt.settle(answered);
       }
-      const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
-        repoRoot,
-        // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
-        profileFor: (provider) => parsed.data.agentProfile
-          ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
-      });
-      if (blocked) return c.json({ error: blocked }, 409);
-      // The follow-up pill names an account the user just picked, so an id that has been deleted
-      // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
-      // USER can act on "unknown account", and reopening the session on another login silently
-      // would cross the very billing boundary accounts exist to draw.
-      if (parsed.data.agentProfile !== undefined) {
-        const provider = providerForExistingRun(run, parsed.data.runner);
-        const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
-        if ('error' in account) return c.json({ error: account.error }, 400);
-      }
-      const images = resolveAttachments(parsed.data.images);
-      if (typeof images === 'string') return c.json({ error: images }, 400);
-      const result = manager.continueRun(id, {
-        text: parsed.data.text,
-        images,
-        runner: parsed.data.runner,
-        model: parsed.data.model,
-        agentProfile: parsed.data.agentProfile,
-      });
-      if (!result.ok) return c.json({ error: result.error }, 409);
-      return c.json({ continued: true });
     })
 
     // "Open in terminal" (spec 003): hand the session off to a real terminal —
