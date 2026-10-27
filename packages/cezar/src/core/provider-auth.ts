@@ -636,7 +636,8 @@ export function defaultRunProviderCommand(
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
           timedOut,
-          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
+          // The linger kill after an answer is cezar's own cleanup, not an interruption to re-ask over.
+          ...(!timedOut && !answered && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );

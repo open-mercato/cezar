@@ -1,0 +1,28 @@
+---
+title: "Cancel automatic resume"
+description: "Cancel a scheduled resume for one task."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 3143
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-08-03-auto-resume-after-usage-limit.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+You can cancel a pending resume in the thread. Archiving the task also cancels it.
+
+## Where to find it
+
+Task thread → Don’t resume
+
+## How to use it
+
+1. Open a task waiting for its usage limit to reset.
+2. Choose Don’t resume.
+
+> **Good to know**: This cancels only that scheduled resume. The global automatic resume setting stays unchanged.

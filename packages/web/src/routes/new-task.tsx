@@ -246,7 +246,7 @@ export function NewTaskRoute() {
   // rather than silently swapping the user's skill for quick-task.
   const source =
     (catalogFailed ? draft.source : resolveSource(draft.source, skillList, workflowList)) ??
-    projectDefaultSource(config.data, askWanted, skillList)
+    projectDefaultSource(config.data, askWanted, catalogFailed ? null : skillList)
   const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined

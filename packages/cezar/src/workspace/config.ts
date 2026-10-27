@@ -248,6 +248,9 @@ const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
+    /** Global instructions: read by every agent step in every project, merged BEFORE the
+     *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
+    systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),

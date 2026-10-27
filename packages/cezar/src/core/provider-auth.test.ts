@@ -2187,10 +2187,14 @@ describe('inconclusive probe reports', () => {
       'setInterval(() => {}, 1_000);',
     ].join('\n');
     const onInconclusive = vi.fn();
+    const results: Array<{ signal?: string; timedOut?: boolean }> = [];
     const service = new ProviderAuthService({
-      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => executable === 'copilot'
-        ? defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin)
-        : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
+      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        const result = await defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin);
+        results.push(result);
+        return result;
+      },
       onInconclusive,
     });
     const started = Date.now();
@@ -2198,6 +2202,9 @@ describe('inconclusive probe reports', () => {
     expect(row?.status).toBe('connected');
     expect(onInconclusive).not.toHaveBeenCalled();
     expect(Date.now() - started).toBeLessThan(6_000);
+    // cezar's own linger kill is not an interruption: no `signal` for wasInterrupted() to re-ask over.
+    expect(results.at(-1)).toMatchObject({ timedOut: false });
+    expect(results.at(-1)?.signal).toBeUndefined();
   }, 20_000);
 
   // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,

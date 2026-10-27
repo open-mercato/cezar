@@ -104,6 +104,18 @@ describe('a message sent while a running task settles (telemetry 1408d7cb)', () 
     expect(gate.specs[1]?.userPrompt).toContain('one more thing');
   });
 
+  it('refuses a message while the run is parked at a wait, rather than holding it unseen', async () => {
+    const runId = await settledRun();
+    gate.hold = true;
+    expect(manager!.continueRun(runId, { text: 'first' })).toEqual({ ok: true });
+    await expect.poll(() => gate.release !== undefined, { timeout: 15_000 }).toBe(true);
+    // A graph CI / children wait parks the run in `waiting` with no session — no step opens one soon.
+    (manager as unknown as { waiting: Set<string> }).waiting.add(runId);
+    expect(manager!.deferMessage(runId, text('stop, do X instead'))).toBe(false);
+    (manager as unknown as { waiting: Set<string> }).waiting.delete(runId);
+    expect(manager!.deferMessage(runId, text('stop, do X instead'))).toBe(true);
+  });
+
   it('tells the thread when a deferred message cannot be delivered because the run was cancelled', async () => {
     const runId = await settledRun();
     gate.hold = true;

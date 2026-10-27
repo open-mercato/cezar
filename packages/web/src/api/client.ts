@@ -2485,7 +2485,7 @@ export async function uploadWorkspaceBrandingLogo(file: File): Promise<string | 
   const form = new FormData()
   form.set('file', file)
   const response = await send('/workspace/branding-logo', { method: 'POST', body: form })
-  const body = await response.text()
+  const body = await readBody(response)
   if (!response.ok) throw errorFor(response.status, response.statusText, body)
   const parsed = parseJson(body)
   const result = workspaceBrandingLogoResponseSchema.safeParse(parsed)
@@ -2496,7 +2496,7 @@ export async function uploadWorkspaceBrandingLogo(file: File): Promise<string | 
 /** Remove the workspace logo through the shared API boundary. */
 export async function deleteWorkspaceBrandingLogo(): Promise<string | null> {
   const response = await send('/workspace/branding-logo', { method: 'DELETE' })
-  const body = await response.text()
+  const body = await readBody(response)
   if (!response.ok) throw errorFor(response.status, response.statusText, body)
   const result = workspaceBrandingLogoResponseSchema.safeParse(parseJson(body))
   if (!result.success) throw new ApiError(response.status, 'the cezar server answered /workspace/branding-logo with an unexpected body')

@@ -1,0 +1,27 @@
+---
+title: "Design Mode: select an element to change"
+description: "Click an element in the preview and tell the agent what to change."
+related:
+  links:
+    - guides/design-mode
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-preview/browser-view.tsx
+    line: 179
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Click an element in the preview and describe the change you want. Design Mode adds its page address, selector, HTML fragment, styles, and dimensions to your message. If the framework exposes them, the agent also receives the component name and its location in the code. This context is a text description of the page structure (DOM); the feature does not take a screenshot automatically. In selection mode, clicking selects an element without activating its button or opening its link.
+
+## Where to find it
+
+Task → Preview → Design Mode
+
+## How to use it
+
+1. Start the task application and open its local address in Preview.
+2. Turn on Design Mode and click an element on the page.
+3. Describe the change and send the note to the agent.
+
+> **Good to know**: Design Mode works in the local cockpit for http:// addresses pointing to the same computer (loopback). Selection mode starts turned off. `CEZ_DESIGN_MODE=0` disables the entire feature. It is unavailable in the hosted cockpit.
