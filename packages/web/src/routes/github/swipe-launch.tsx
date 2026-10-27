@@ -35,13 +35,14 @@ interface Gesture {
 export function useRowSwipe(onTrigger: () => void) {
   const [offset, setOffset] = useState(0)
   const gesture = useRef<Gesture | null>(null)
-  // A completed horizontal swipe must not also navigate the row's link.
+  // A completed horizontal swipe must not also navigate the row's link. Browsers often send no
+  // click after a moved touch, so any later press (pointer or key) clears the flag first.
   const swallowClick = useRef(false)
 
   const onPointerDown = (event: PointerEvent<HTMLElement>) => {
+    swallowClick.current = false
     if (event.pointerType !== 'touch') return
     gesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, axis: null }
-    swallowClick.current = false
   }
   const onPointerMove = (event: PointerEvent<HTMLElement>) => {
     const current = gesture.current
@@ -78,6 +79,9 @@ export function useRowSwipe(onTrigger: () => void) {
       onPointerUp: (event: PointerEvent<HTMLElement>) => finish(event, false),
       onPointerCancel: (event: PointerEvent<HTMLElement>) => finish(event, true),
       onClickCapture,
+      onKeyDown: () => {
+        swallowClick.current = false
+      },
     },
   }
 }

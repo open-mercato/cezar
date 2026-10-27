@@ -866,7 +866,8 @@ const GithubRow = memo(function GithubRow({
   }
 
   return (
-    <li className="relative overflow-hidden rounded-md">
+    // Clip only mid-swipe: an always-clipped <li> would cut off the link's default focus ring.
+    <li className={cn('relative rounded-md', swipe.offset !== 0 && 'overflow-hidden')}>
       {onSwipe ? <SwipeReveal offset={swipe.offset} /> : null}
       <Link
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}

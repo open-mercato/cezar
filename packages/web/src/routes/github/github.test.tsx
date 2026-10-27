@@ -3356,3 +3356,41 @@ describe('swipe a row to run (mobile)', () => {
     expect(swipeSheet()).toBeNull()
   })
 })
+
+describe('swipe a row to run (mobile) — no lasting side effects', () => {
+  it('a swipe whose click never came does not eat the next click on that row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    // No click follows (a moved touch); a later mouse click must still open the row.
+    fireEvent.pointerDown(rows()[1]!, { pointerId: 8, pointerType: 'mouse', clientX: 200, clientY: 100 })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a key press after a swipe still activates the row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.keyDown(rows()[1]!, { key: 'Enter' })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a row at rest is not clipped, so its focus ring stays visible', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows()[0]?.closest('li')?.className).not.toContain('overflow-hidden')
+  })
+})
