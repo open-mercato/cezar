@@ -1,10 +1,8 @@
 import { join } from 'node:path';
 import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
-import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
-import { pruneOrphans } from '../git-worktree.ts';
 import { armRepoHandle } from '../runs/arm-repo-handle.ts';
-import { reclaimWorktrees } from '../runs/retention.ts';
+import { sweepStartupWorktrees } from '../runs/startup-sweep.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -96,6 +94,8 @@ export class ProjectContexts {
   private readonly contexts = new Map<string, ProjectContext>();
   private shutdownPromise?: Promise<void>;
   private readonly building = new Map<string, Promise<ProjectContext>>();
+  /** Startup worktree sweeps still running; shutdown waits for them. */
+  private readonly sweeps = new Set<Promise<void>>();
   /** Live store-created subscribers; invoked before RunManager recovery. */
   private readonly storeListeners = new Set<(store: RunStore) => void>();
   /** Live `onContextBuilt` subscribers (workspace SSE, step 2.8). */
@@ -213,6 +213,7 @@ export class ProjectContexts {
       await Promise.allSettled([...this.building.values()]);
       const newlyBuilt = [...this.contexts.values()].filter(ctx => !opened.has(ctx));
       const results = [...await existing, ...await Promise.allSettled(newlyBuilt.map(ctx => ctx.manager.lifecycle.shutdown()))];
+      await Promise.all([...this.sweeps]);
       this.disposeAll();
       const failure = results.find(result => result.status === 'rejected');
       if (failure?.status === 'rejected') throw failure.reason;
@@ -237,18 +238,6 @@ export class ProjectContexts {
     const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
     try {
       const launchKey = ensureLaunchKey(dataDir);
-      // Startup reconcile (spec 006) + count-based retention (#483) — the same
-      // best-effort sweeps serveCommand runs for the boot project, gated on the
-      // root actually being a git repo.
-      if (await getRepoInfo(project.root)) {
-        await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
-          () => [] as string[],
-        );
-        const keep = await resolveWorktreeRetention(project.root).catch(
-          () => DEFAULT_WORKTREE_RETENTION,
-        );
-        await reclaimWorktrees(project.root, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
-      }
       await manager.recover();
       // Which repository this project IS (#945), so the referenced tier stops adopting another
       // repo's PR/issue as a task's subject. Fire-and-forget on purpose — it costs a `gh` spawn
@@ -259,7 +248,25 @@ export class ProjectContexts {
       // every listener, and a healed record would then `touch()` a store whose lifecycle had
       // ended — scheduling a `runs.json` write from a context nobody owns any more.
       armRepoHandle(store, project.root);
-      setImmediate(() => manager.lifecycle.start());
+      // Startup reconcile (spec 006) + count-based retention (#483) — the same best-effort sweep
+      // serveCommand runs for the boot project, gated on the root actually being a git repo.
+      // Deliberately off the build path: the first request that opened this project must not wait
+      // on a disk-only sweep. `sweepStartupWorktrees` never throws; the catch is a floor. The
+      // coordinator starts only once the sweep settles: its orphan pass and the sweep's
+      // `pruneOrphans` must not act on the same worktree at once.
+      const isRepo = Boolean(await getRepoInfo(project.root));
+      if (!this.shutdownPromise) {
+        const sweep = isRepo
+          ? sweepStartupWorktrees(project.root, store, manager.lifecycle).then(() => undefined, () => undefined)
+          : Promise.resolve();
+        this.sweeps.add(sweep);
+        void sweep.then(() => {
+          this.sweeps.delete(sweep);
+          setImmediate(() => {
+            if (!this.shutdownPromise && this.contexts.get(project.id)?.manager === manager) manager.lifecycle.start();
+          });
+        });
+      }
       return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.

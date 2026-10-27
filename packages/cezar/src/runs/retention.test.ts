@@ -106,7 +106,7 @@ describe('reclamation lifecycle gate', () => {
       const update = vi.fn((id: string, patch: {worktreeReclaimedAt?: string}) => Object.assign(records.find(record => record.id === id)!, patch));
       const gatedReclaim = vi.fn(async () => false);
       const remove = vi.fn(async (_root: string, path: string) => { rmSync(path, { recursive: true }); });
-      const reclaimed = await reclaimWorktrees(root, { listRuns: () => records, updateRun: update }, 1, {
+      const reclaimed = await reclaimWorktrees(root, { listRuns: () => records, getRun: (id: string) => records.find((record) => record.id === id), updateRun: update }, 1, {
         remove,
         lifecycle: {
           requiresGate: async id => { if (id === 'malformed') throw new Error('malformed config'); return id === 'gated'; },

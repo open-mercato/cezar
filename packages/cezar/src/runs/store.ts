@@ -499,6 +499,8 @@ export interface RunEvent {
 /** A layout file this young may belong to a run another process has not saved to the index yet. */
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
 const MAX_RUNS_KEPT = 300;
+/** Unsaved events held per run while its event file is refused; past it, events are live-only. */
+const MAX_BUFFERED_EVENTS_PER_RUN = 5_000;
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
 const MAX_ARCHIVED_KEPT = 500;
@@ -1154,8 +1156,13 @@ export class RunStore extends EventEmitter {
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
-  /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */
+  /** `open` could not create `runs/`: events stay in memory instead of failing every run. */
   private eventsUnwritable = false;
+
+  /** Runs whose own event file refused a write; every other run keeps writing to disk. */
+  private readonly unwritableEventRuns = new Set<string>();
+
+  private readonly bufferOverflowWarned = new Set<string>();
 
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
@@ -1621,29 +1628,77 @@ export class RunStore extends EventEmitter {
   }
 
   private persistEvent(runId: string, event: RunEvent): void {
-    const line = `${JSON.stringify(event)}\n`;
-    if (!this.eventsUnwritable) {
-      try {
-        appendFileSync(this.eventsPath(runId), line, 'utf8');
-      } catch (err) {
-        // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
-        // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
-        // else — a removed project's ENOENT (#1105) — still throws.
-        if (!isAccessDenied(err)) throw err;
-        this.eventsUnwritable = true;
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(`[cez] cannot write task history (${message}); events stay live-only until it is writable again`);
+    // Degraded (already warned): retry, so access granted mid-session starts persisting.
+    if (this.eventsUnwritable && !this.restoreDataDir()) {
+      this.bufferEvent(runId, event);
+      return;
+    }
+    if (this.unwritableEventRuns.has(runId) && !this.flushBufferedEvents(runId)) {
+      this.bufferEvent(runId, event);
+      return;
+    }
+    try {
+      appendFileSync(this.eventsPath(runId), `${JSON.stringify(event)}\n`, 'utf8');
+    } catch (err) {
+      // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
+      // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
+      // else — a removed project's ENOENT (#1105) — still throws. Only this run degrades; the
+      // others keep writing, and the index save is not affected.
+      if (!isAccessDenied(err)) throw err;
+      this.unwritableEventRuns.add(runId);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[cez] cannot write task history (${message}); events stay live-only (held in memory for this session) until it is writable again`);
+      this.bufferEvent(runId, event);
+    }
+  }
+
+  // Nothing reaches disk while degraded, so the transcript lives here for the session and
+  // `readEvents` serves it back; without this the replay would be missing it.
+  private bufferEvent(runId: string, event: RunEvent): void {
+    const buffered = this.memoryEvents.get(runId) ?? [];
+    if (buffered.length >= MAX_BUFFERED_EVENTS_PER_RUN) {
+      if (!this.bufferOverflowWarned.has(runId)) {
+        this.bufferOverflowWarned.add(runId);
+        console.error(`[cez] task ${runId.slice(0, 8)}: ${MAX_BUFFERED_EVENTS_PER_RUN} unsaved events held in memory; later events stay live-only`);
       }
       return;
     }
-    // Degraded (already warned): retry, so access granted mid-session starts persisting.
+    buffered.push(event);
+    this.memoryEvents.set(runId, buffered);
+  }
+
+  /** Line by line, each shifted off once it lands, so a write that fails halfway never repeats one. */
+  private flushBufferedEvents(runId: string): boolean {
+    const buffered = this.memoryEvents.get(runId);
+    try {
+      while (buffered && buffered.length > 0) {
+        appendFileSync(this.eventsPath(runId), `${JSON.stringify(buffered[0])}\n`, 'utf8');
+        buffered.shift();
+      }
+    } catch {
+      this.unwritableEventRuns.add(runId);
+      return false;
+    }
+    this.dropBufferedEvents(runId);
+    return true;
+  }
+
+  private dropBufferedEvents(runId: string): void {
+    this.memoryEvents.delete(runId);
+    this.unwritableEventRuns.delete(runId);
+    this.bufferOverflowWarned.delete(runId);
+  }
+
+  /** Whether `runs/` is writable again; buffered runs flush best-effort, one run at a time. */
+  private restoreDataDir(): boolean {
     try {
       mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
-      appendFileSync(this.eventsPath(runId), line, 'utf8');
-      this.eventsUnwritable = false;
     } catch {
-      // live-only — the SSE stream still carries it
+      return false;
     }
+    this.eventsUnwritable = false;
+    for (const id of [...this.memoryEvents.keys()]) this.flushBufferedEvents(id);
+    return true;
   }
 
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
@@ -1915,6 +1970,9 @@ export class RunStore extends EventEmitter {
 
   private readonly runSecrets = new Map<string, readonly string[]>();
 
+  /** Transcript buffered for this session only while its event file cannot be written. */
+  private readonly memoryEvents = new Map<string, RunEvent[]>();
+
   /** Memory only: register before spawn; retain through the final event drain. */
   registerRunSecrets(runId: string, values: readonly string[]): void {
     if (values.length === 0) return;
@@ -1938,9 +1996,10 @@ export class RunStore extends EventEmitter {
   }
 
   readEvents(runId: string): RunEvent[] {
+    const buffered = this.memoryEvents.get(runId) ?? [];
     try {
       const raw = readFileSync(this.eventsPath(runId), 'utf8');
-      return raw
+      const persisted = raw
         .split('\n')
         .filter(Boolean)
         .map((line) => {
@@ -1951,8 +2010,9 @@ export class RunStore extends EventEmitter {
           }
         })
         .filter((e): e is RunEvent => e !== null);
+      return buffered.length > 0 ? [...persisted, ...buffered] : persisted;
     } catch {
-      return [];
+      return [...buffered];
     }
   }
 
@@ -1970,6 +2030,7 @@ export class RunStore extends EventEmitter {
         // best effort — the index is authoritative
       }
       this.seqs.delete(id);
+      this.dropBufferedEvents(id);
       this.scheduleSave();
       this.emit('deleted', id);
     }
@@ -2119,6 +2180,8 @@ export class RunStore extends EventEmitter {
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
+      this.seqs.delete(stale.id);
+      this.dropBufferedEvents(stale.id);
       try {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
@@ -2142,6 +2205,12 @@ export class RunStore extends EventEmitter {
   }
 
   private saveNow(throwOnError = false, pretty = false): void {
+    // Only an uncreatable `runs/` skips the save, and `open` already warned about that; one
+    // refused event file never does.
+    if (this.eventsUnwritable && !this.restoreDataDir()) {
+      if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
+      return;
+    }
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = join(this.dataDir, 'runs', `.index-${process.pid}-${randomUUID()}.tmp`);
     let release: (() => void) | undefined;

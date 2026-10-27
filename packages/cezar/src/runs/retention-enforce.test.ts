@@ -4,15 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { branchFor, createWorktree } from '../git-worktree.ts';
+import { branchFor, createWorktree, removeWorktree } from '../git-worktree.ts';
 import { reclaimWorktrees, type RetentionStore } from './retention.ts';
-import type { RunRecord } from './store.ts';
+import { RunStore, type RunRecord } from './store.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const roots: string[] = [];
+const stores: RunStore[] = [];
 
 afterEach(() => {
+  for (const store of stores.splice(0)) store.flush();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -41,6 +43,7 @@ function fakeStore(runs: RunRecord[]): RetentionStore & { runs: RunRecord[] } {
   return {
     runs,
     listRuns: () => runs,
+    getRun: (id) => runs.find((x) => x.id === id),
     updateRun: (id, patch) => {
       const r = runs.find((x) => x.id === id);
       if (r) Object.assign(r, patch);
@@ -119,4 +122,59 @@ describe('reclaimWorktrees (real git, #483)', () => {
     expect(await reclaimWorktrees(repo, store, 0)).toEqual([]);
     expect(existsSync(wt.path)).toBe(true);
   });
+
+  it('keeps a continued run\'s worktree when its status flips after the retention snapshot', async () => {
+    const repo = await fixtureRepo();
+    const store = RunStore.open(join(repo, '.ai/cezar'));
+    stores.push(store);
+    const a = store.createRun({ title: 'a', workflow: 'quick-task', task: 'a', steps: [] });
+    const b = store.createRun({ title: 'b', workflow: 'quick-task', task: 'b', steps: [] });
+    const c = store.createRun({ title: 'c', workflow: 'quick-task', task: 'c', steps: [] });
+    const aWt = await createWorktree(repo, a.id, 'main');
+    const bWt = await createWorktree(repo, b.id, 'main');
+    const cWt = await createWorktree(repo, c.id, 'main');
+    store.updateRun(a.id, { status: 'done', finishedAt: '2026-07-01T00:00:00.000Z', worktreePath: aWt.path });
+    store.updateRun(b.id, { status: 'done', finishedAt: '2026-07-02T00:00:00.000Z', worktreePath: bWt.path });
+    store.updateRun(c.id, { status: 'done', finishedAt: '2026-07-03T00:00:00.000Z', worktreePath: cWt.path });
+
+    // keep=1 selects b then a (c is the newest). While b comes down the user
+    // resumes a — its worktree must survive the sweep.
+    const reclaimed = await reclaimWorktrees(repo, store, 1, {
+      remove: async (root, path) => {
+        if (path === bWt.path) store.updateRun(a.id, { status: 'running' });
+        await removeWorktree(root, path);
+      },
+    });
+
+    expect(reclaimed).toEqual([b.id]);
+    expect(existsSync(aWt.path)).toBe(true);
+    expect(store.getRun(a.id)?.worktreeReclaimedAt).toBeUndefined();
+  }, 30_000);
+
+  it('keeps a continued run\'s worktree when only its step list grew after the snapshot', async () => {
+    const repo = await fixtureRepo();
+    const store = RunStore.open(join(repo, '.ai/cezar'));
+    stores.push(store);
+    const a = store.createRun({ title: 'a', workflow: 'quick-task', task: 'a', steps: [] });
+    const b = store.createRun({ title: 'b', workflow: 'quick-task', task: 'b', steps: [] });
+    const c = store.createRun({ title: 'c', workflow: 'quick-task', task: 'c', steps: [] });
+    const aWt = await createWorktree(repo, a.id, 'main');
+    const bWt = await createWorktree(repo, b.id, 'main');
+    const cWt = await createWorktree(repo, c.id, 'main');
+    store.updateRun(a.id, { status: 'done', finishedAt: '2026-07-01T00:00:00.000Z', worktreePath: aWt.path });
+    store.updateRun(b.id, { status: 'done', finishedAt: '2026-07-02T00:00:00.000Z', worktreePath: bWt.path });
+    store.updateRun(c.id, { status: 'done', finishedAt: '2026-07-03T00:00:00.000Z', worktreePath: cWt.path });
+
+    // A Continue records its step before the status flips to running: the sweep
+    // must treat the grown step list itself as "this run is live again".
+    const reclaimed = await reclaimWorktrees(repo, store, 1, {
+      remove: async (root, path) => {
+        if (path === bWt.path) store.addStep(a.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+        await removeWorktree(root, path);
+      },
+    });
+
+    expect(reclaimed).toEqual([b.id]);
+    expect(existsSync(aWt.path)).toBe(true);
+  }, 30_000);
 });

@@ -100,6 +100,34 @@ describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
     expect(readFileSync(eventsFile, 'utf8')).toContain('"text":"three"');
   });
 
+  it.skipIf(!canDenyWrites)('one refused event file degrades only that run: other runs and the index keep saving', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const refused = store.createRun({ title: 'a', workflow: 'quick-task', task: 't', steps: [] });
+    store.appendEvent(refused.id, { type: 'note', text: 'before' });
+    store.flush();
+    const refusedFile = join(dataDir, 'runs', `${refused.id}.ndjson`);
+    chmodSync(refusedFile, 0o444);
+    store.appendEvent(refused.id, { type: 'note', text: 'refused' });
+
+    const other = store.createRun({ title: 'b', workflow: 'quick-task', task: 't', steps: [] });
+    store.appendEvent(other.id, { type: 'note', text: 'other' });
+    store.flush();
+
+    const index = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as Array<{ id: string }>;
+    expect(index.map((r) => r.id)).toContain(other.id);
+    expect(readFileSync(join(dataDir, 'runs', `${other.id}.ndjson`), 'utf8')).toContain('"text":"other"');
+    expect(() => store.flush({ throwOnError: true })).not.toThrow();
+    expect(store.readEvents(refused.id).map((e) => (e as { text?: string }).text)).toEqual(['before', 'refused']);
+
+    chmodSync(refusedFile, 0o644);
+    store.appendEvent(refused.id, { type: 'note', text: 'after' });
+    const lines = readFileSync(refusedFile, 'utf8').trim().split('\n').map((l) => (JSON.parse(l) as { text: string }).text);
+    expect(lines).toEqual(['before', 'refused', 'after']);
+    expect(error).toHaveBeenCalledTimes(1);
+  });
+
   it('still throws when the project itself is gone — only a refused write degrades (#1105)', () => {
     const dataDir = join(parent, 'cezar');
     const store = RunStore.open(dataDir);
@@ -2415,6 +2443,113 @@ describe('RunStore — a save never drops another process’s runs', () => {
     store.updateRun(kept, { status: 'running' });
     store.flush();
     expect(idsOnDisk()).toEqual([kept]);
+  });
+});
+
+describe('RunStore — read-only data dir (zero-config degradation)', () => {
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'opens as an in-memory store with one warning instead of throwing',
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'cez-ro-'));
+      chmodSync(root, 0o500);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const store = RunStore.open(join(root, 'data'));
+        const run = store.createRun({
+          title: 'read-only task',
+          workflow: 'quick-task',
+          task: 'read-only task',
+          steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+        });
+        expect(() => store.appendEvent(run.id, { type: 'text', text: 'hello' })).not.toThrow();
+        expect(() => store.appendEvent(run.id, { type: 'text', text: 'again' })).not.toThrow();
+        store.flush();
+        expect(store.getRun(run.id)?.id).toBe(run.id);
+        expect(store.readEvents(run.id).map((event) => (event as { text?: string }).text)).toEqual([
+          'hello',
+          'again',
+        ]);
+        expect(error).toHaveBeenCalledTimes(1);
+      } finally {
+        error.mockRestore();
+        chmodSync(root, 0o700);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    "drops a pruned run's buffered transcript instead of leaking it for the process lifetime",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), 'cez-ro-prune-'));
+      chmodSync(root, 0o500);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      try {
+        const store = RunStore.open(join(root, 'data'));
+        const ids: string[] = [];
+        for (let i = 0; i < 306; i++) {
+          const created = store.createRun({
+            title: `run ${i}`,
+            workflow: 'quick-task',
+            task: `run ${i}`,
+            steps: [],
+          });
+          store.appendEvent(created.id, { type: 'text', text: `event ${i}` });
+          store.updateRun(created.id, { status: 'done' });
+          ids.push(created.id);
+          vi.advanceTimersByTime(1);
+        }
+        const pruned = ids.filter((id) => store.getRun(id) === undefined);
+        expect(pruned).toHaveLength(6);
+        for (const id of pruned) expect(store.readEvents(id)).toEqual([]);
+        const kept = ids.filter((id) => store.getRun(id) !== undefined);
+        expect(store.readEvents(kept[0]!)).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        error.mockRestore();
+        chmodSync(root, 0o700);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe('RunStore — a failed index save on a writable data dir', () => {
+  it('keeps persisting on the next save', () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-save-retry-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const dataDir = join(root, 'data');
+      const store = RunStore.open(dataDir);
+      const blocker = join(dataDir, 'runs', '.index-writers');
+      writeFileSync(blocker, '');
+      const first = store.createRun({
+        title: 'first',
+        workflow: 'quick-task',
+        task: 'first',
+        steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+      });
+      store.flush();
+      expect(error).toHaveBeenCalled();
+
+      rmSync(blocker);
+      const second = store.createRun({
+        title: 'second',
+        workflow: 'quick-task',
+        task: 'second',
+        steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+      });
+      store.appendEvent(second.id, { type: 'text', text: 'hello' });
+      store.flush();
+      const saved = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[];
+      expect(saved.map((r) => r.id).sort()).toEqual([first.id, second.id].sort());
+      expect(readFileSync(join(dataDir, 'runs', `${second.id}.ndjson`), 'utf8')).toContain('hello');
+    } finally {
+      error.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

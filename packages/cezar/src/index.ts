@@ -4,55 +4,13 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detectEnvironment } from './core/backend-detect.ts';
-import {
-  ProviderAuthService,
-  providerAuthChecksDisabled,
-} from './core/provider-auth.ts';
-import { applyProviderEnablement } from './core/provider-availability.ts';
-import { ensureDataGitignore } from './data-gitignore.ts';
-import { pruneOrphans } from './git-worktree.ts';
-import { getRepoInfo } from './server/git.ts';
-import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
-import { reclaimWorktrees } from './runs/retention.ts';
-import { armRepoHandle } from './runs/arm-repo-handle.ts';
-import { RunStore } from './runs/store.ts';
-import { RunManager } from './workflows/run.ts';
-import { resolveTrackerAgentEnv } from './server/tracker/agent-credentials.ts';
-import { loadWorkflows } from './workflows/load.ts';
-import { resolveCapabilities } from './server/capabilities.ts';
-import { startServer, WorkspaceEventBus } from './server/server.ts';
-import {
-  ProviderRuntimeAuthObserver,
-  recoverWithProviderRuntimeAuthObservation,
-} from './server/provider-auth-runtime.ts';
-import {
-  providersRequiredByWorkflow,
-  unavailableProviderMessage,
-  withSelectedAccounts,
-} from './server/provider-action-gate.ts';
-import { printSkillsBanner, printStarBanner } from './skills-banner.ts';
-import { SelfUpdateService } from './self-update/service.ts';
-import { runsFromCheckout } from './self-update/layout.ts';
-import { devVersion } from './self-update/semver.ts';
-import { isSupervised, restartProcess } from './self-update/restart.ts';
-import { runSelfUpdateCommand } from './self-update/cli.ts';
-import { writeLaunchers } from './self-update/launcher.ts';
-import { initWorkspace } from './workspace/boot.ts';
-import { loadWorkspaceConfig } from './workspace/config.ts';
-import { runProjectsCommand } from './workspace/projects-cli.ts';
-import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } from './telemetry.ts';
-import { collectFeatureInventory } from './feature-telemetry.ts';
-import { runTaskCommand } from './dispatch/task-cli.ts';
-import { runAutomationCommand } from './automations/automation-cli.ts';
-import { apiOrigin, pickPort } from './api-origin.ts';
-import { runTelemetryCommand } from './telemetry-cli.ts';
-import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
-import { runRunsCommand } from './runs/runs-cli.ts';
+import type { RepoInfo } from './server/git.ts';
+import type { RunStore } from './runs/store.ts';
+import type { SelfUpdateService } from './self-update/service.ts';
 
-import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
-import { runSecretsCommand } from './workspace/secrets-cli.ts';
+// Every command body loads its own dependencies with `await import(...)`.
+// Nothing below this line is static: `cezar --help` and an unknown command
+// must not pay for the server graph.
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -113,32 +71,38 @@ workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
   if (process.argv[2] === 'tracker-connections') {
+    const { runTrackerConnectionsCommand } = await import('./server/tracker/connections-cli.ts');
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
     return;
   }
   // Local-only, like tracker-connections: `set` reads its value from stdin, never argv.
   if (process.argv[2] === 'secrets') {
+    const { runSecretsCommand } = await import('./workspace/secrets-cli.ts');
     process.exitCode = await runSecretsCommand(process.argv.slice(3));
     return;
   }
   // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
   // cockpit's parser can refuse them. It only talks to an already-running cockpit.
   if (process.argv[2] === 'task') {
+    const { runTaskCommand } = await import('./dispatch/task-cli.ts');
     process.exitCode = await runTaskCommand(process.argv.slice(3));
     return;
   }
   // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
   if (process.argv[2] === 'automation') {
+    const { runAutomationCommand } = await import('./automations/automation-cli.ts');
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
     return;
   }
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
+    const { runTelemetryCommand } = await import('./telemetry-cli.ts');
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
     return;
   }
   // `cez runs …` (#1080): the read-only twin for a person at a shell, same addressing.
   if (process.argv[2] === 'runs') {
+    const { runRunsCommand } = await import('./runs/runs-cli.ts');
     process.exitCode = await runRunsCommand(process.argv.slice(3));
     return;
   }
@@ -180,34 +144,49 @@ async function main(): Promise<void> {
 
   const command = positionals[0] ?? 'serve';
   const cwd = resolve(values.repo ?? process.cwd());
-  const repoInfo = await getRepoInfo(cwd);
-  const repoRoot = repoInfo?.root ?? cwd;
 
   switch (command) {
-    case 'serve':
-      await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
+    case 'serve': {
+      const { getRepoInfo } = await import('./server/git.ts');
+      const repoInfo = await getRepoInfo(cwd);
+      await serveCommand(repoInfo?.root ?? cwd, Number(values.port), !values['no-open'], values['bind-host'], repoInfo);
       return;
-    case 'run':
-      await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model);
+    }
+    case 'run': {
+      const { getRepoInfo } = await import('./server/git.ts');
+      const repoInfo = await getRepoInfo(cwd);
+      await runCommand(repoInfo?.root ?? cwd, positionals.slice(1).join(' ').trim(), values.workflow, values.model);
       return;
-    case 'init':
-      initCommand(repoRoot);
+    }
+    case 'init': {
+      const { getRepoInfo } = await import('./server/git.ts');
+      await initCommand((await getRepoInfo(cwd))?.root ?? cwd);
       return;
-    case 'projects':
+    }
+    case 'projects': {
       // Registry-only (no server, no HTTP) — see workspace/projects-cli.ts.
       // In single-project mode a listing is a launch-context read: register
       // the boot repo through the normal self-healing path and pin the output
       // to that explicit identity. Mutations are left to their own guards.
+      const { getRepoInfo } = await import('./server/git.ts');
+      const repoRoot = (await getRepoInfo(cwd))?.root ?? cwd;
       const projectArgs = positionals.slice(1);
       const isList = projectArgs.length === 0 || projectArgs[0] === 'list';
-      const bootProjectId = process.env.CEZ_SINGLE_PROJECT === '1' && isList
-        ? await initWorkspace(repoRoot)
-        : undefined;
-      await initTelemetry({ version: readOwnVersion() });
+      let bootProjectId: string | undefined;
+      if (process.env.CEZ_SINGLE_PROJECT === '1' && isList) {
+        const { initWorkspace } = await import('./workspace/boot.ts');
+        bootProjectId = await initWorkspace(repoRoot);
+      }
+      const { runProjectsCommand } = await import('./workspace/projects-cli.ts');
+      const { flushTelemetry, initTelemetry } = await import('./telemetry.ts');
+      await initTelemetry({ version: readOwnManifest().version });
       process.exitCode = await runProjectsCommand(projectArgs, { defaultRoot: repoRoot, bootProjectId });
       await flushTelemetry(); // `projects add` reports a new project
       return;
-    case 'server-install':
+    }
+    case 'server-install': {
+      const { getRepoInfo } = await import('./server/git.ts');
+      const repoRoot = (await getRepoInfo(cwd))?.root ?? cwd;
       await serverCommand('install', repoRoot, values.platform, {
         yes: Boolean(values.yes),
         reconfigure: values.reconfigure,
@@ -218,33 +197,34 @@ async function main(): Promise<void> {
         bindHost: values['bind-host'],
       });
       return;
+    }
     case 'server-deploy':
-      await serverCommand('deploy', repoRoot, values.platform, {
+    case 'server-uninstall': {
+      const { getRepoInfo } = await import('./server/git.ts');
+      const repoRoot = (await getRepoInfo(cwd))?.root ?? cwd;
+      await serverCommand(command === 'server-deploy' ? 'deploy' : 'uninstall', repoRoot, values.platform, {
         yes: Boolean(values.yes),
         domain: values.domain,
       });
       return;
-    case 'server-uninstall':
-      await serverCommand('uninstall', repoRoot, values.platform, {
-        yes: Boolean(values.yes),
-        domain: values.domain,
-      });
-      return;
+    }
     case 'install':
     case 'update':
     case 'versions':
     case 'use':
     case 'link':
-    case 'unlink':
+    case 'unlink': {
       // Managed install (self-update PoC): no server, no repo — only ~/.cezar and the registry.
+      const { runSelfUpdateCommand } = await import('./self-update/cli.ts');
       process.exitCode = await runSelfUpdateCommand(command, positionals.slice(1), {
-        service: buildSelfUpdateService({ restart: () => {} }),
+        service: await buildSelfUpdateService({ restart: () => {} }),
         channel: values.channel,
         version: values.version,
         modifyPath: !values['no-modify-path'],
         use: Boolean(values.use),
       });
       return;
+    }
     default:
       console.error(`unknown command: ${command}\n`);
       console.log(HELP);
@@ -259,7 +239,42 @@ async function serveCommand(
   preferredPort: number,
   openBrowser: boolean,
   bindHost?: string,
+  repoInfo?: RepoInfo | null,
 ): Promise<void> {
+  const [
+    { initWorkspace },
+    { WorkspaceSemaphore },
+    { RunManager },
+    { resolveTrackerAgentEnv },
+    { ProviderAuthService },
+    { reportInconclusiveProbe },
+    { WorkspaceEventBus, startServer },
+    { ProviderRuntimeAuthObserver, recoverWithProviderRuntimeAuthObservation },
+    { resolveCapabilities },
+    { detectEnvironment },
+    { bootInOrder, sweepStartupWorktrees },
+    { isSupervised, restartProcess },
+    { printSkillsBanner, printStarBanner },
+    { apiOrigin, pickPort },
+    { collectFeatureInventory },
+  ] = await Promise.all([
+    import('./workspace/boot.ts'),
+    import('./workspace/semaphore.ts'),
+    import('./workflows/run.ts'),
+    import('./server/tracker/agent-credentials.ts'),
+    import('./core/provider-auth.ts'),
+    import('./server/provider-telemetry.ts'),
+    import('./server/server.ts'),
+    import('./server/provider-auth-runtime.ts'),
+    import('./server/capabilities.ts'),
+    import('./core/backend-detect.ts'),
+    import('./runs/startup-sweep.ts'),
+    import('./self-update/restart.ts'),
+    import('./skills-banner.ts'),
+    import('./api-origin.ts'),
+    import('./feature-telemetry.ts'),
+  ]);
+
   const bootProjectId = await initWorkspace(repoRoot);
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
@@ -269,16 +284,19 @@ async function serveCommand(
   await semaphore.refresh();
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
-  const store = openStore(repoRoot, { keepLive: true });
+  const store = await openStore(repoRoot, { keepLive: true });
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
+  const { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInventory, registerTelemetryContext, startDailyPing, track } =
+    await import('./telemetry.ts');
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
+  let startupSweep: Promise<void> | undefined;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
   const shutdown = (reason: 'signal' | 'supervisor_gone') => {
     if (stopping) process.exit(0); // a second Ctrl-C never waits on scripts or telemetry
     stopping = true;
     store.flush({ pretty: true }); // before the drain too: a second Ctrl-C must not lose run state
-    void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown())
+    void Promise.all([httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown(), startupSweep])
       .catch((error: unknown) => {
         console.error('cezar: lifecycle shutdown failed', error);
         process.exitCode = 1;
@@ -297,185 +315,190 @@ async function serveCommand(
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
     workspaceEvents.emit('provider-status', status);
   });
+  const { name: pkgName } = readOwnManifest();
   // Shown on health and the banner; update checks compare the raw version.
-  const version = shownVersion();
+  const version = await shownVersion();
   // Opt-in telemetry: every send below is a no-op until the user agreed (docs/telemetry.md).
   // It gets the raw version (`build.version_full`) and derives `-dev` itself.
-  await initTelemetry({ version: readOwnVersion() });
+  await initTelemetry({ version: readOwnManifest().version });
   installCrashReporter();
   track('app_start');
   registerDailyInventory(collectFeatureInventory);
   startDailyPing();
 
   const checks = await detectEnvironment();
-  const repo = await getRepoInfo(repoRoot);
+  const repo = repoInfo ?? null;
 
-  // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
-  if (repo) {
-    const orphans = await pruneOrphans(repoRoot, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
-      () => [] as string[],
-    );
-    if (orphans.length > 0) {
-      console.log(`  cleaned ${orphans.length} orphaned worktree(s): ${orphans.map((id) => id.slice(0, 8)).join(', ')}`);
-    }
-    // Count-based worktree retention (#483): reclaim finished worktrees beyond
-    // the keep-limit (directory only — `cez/<id8>` branch kept, so recoverable).
-    // Best-effort; never blocks boot.
-    const keep = await resolveWorktreeRetention(repoRoot).catch(() => DEFAULT_WORKTREE_RETENTION);
-    const reclaimed = await reclaimWorktrees(repoRoot, store, keep, {lifecycle: manager.lifecycle}).catch(() => [] as string[]);
-    if (reclaimed.length > 0) {
-      console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
-    }
-  }
-
-  const recovered = store
-    .listRuns()
-    .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
-  await recoverWithProviderRuntimeAuthObservation(
-    store,
-    () => manager.recover(),
-    providerRuntimeAuth,
-  );
-  if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
-
-  // Update discovery (#368) through the self-update service (PoC): the channel's newest
-  // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
-  // chip can apply it when this cezar runs from the managed layout (`cezar install`).
-  const pkgName = readOwnName();
-  const update: { latest?: string } = {};
-  const selfUpdate = buildSelfUpdateService({
-    // Workspace-wide, every project's manager — not the boot repo's store (#1524).
-    runs: semaphore,
-    // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
-    // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
-    trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
-    restart: () => {
-      void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
-        store.flush({ pretty: true });
-        // The old process stops here, so it reports its own stop before handing over (bounded).
-        track('app_stop', { label: 'restart' });
-        void flushTelemetry(1_000).finally(() =>
-          restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
-        );
-        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
-      }).catch((error: unknown) => {
-        console.error('cezar: lifecycle shutdown failed before restart', error);
-        process.exit(1);
-      });
+  const booted = await bootInOrder({
+    recover: async () => {
+      const recovered = store
+        .listRuns()
+        .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
+      await recoverWithProviderRuntimeAuthObservation(
+        store,
+        () => manager.recover(),
+        providerRuntimeAuth,
+      );
+      if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
     },
-  });
-  void selfUpdate.updateAvailable().then((latest) => {
-    if (!latest) return;
-    update.latest = latest;
-    const how = selfUpdate.installKind === 'managed' ? 'update from the cockpit or: cezar update' : `restart with: npx ${pkgName}@latest`;
-    console.log(`\n  ⬆ cezar ${latest} is available (running ${version}) — ${how}\n`);
-  });
-  // What the process is doing, on every error report (a wide event, not a bare message).
-  registerTelemetryContext(() => {
-    const runs = store.listRuns();
-    const count = (status: string) => runs.filter((r) => r.status === status).length;
-    return {
-      'app.install_kind': selfUpdate.installKind,
-      'runs.running': count('running'),
-      'runs.waiting': count('waiting'),
-      'runs.queued': count('queued'),
-      'runs.total': runs.length,
-    };
-  });
-  const port = await pickPort(preferredPort, bindHost);
-  // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
-  // whatever can reach the interface, and cezar itself has NO auth — it is only
-  // for a deliberate hosted setup where a reverse proxy in front provides TLS +
-  // auth (see `server-install --external-proxy`). Say so, loudly, every start.
-  if (bindHost && !['127.0.0.1', 'localhost', '::1'].includes(bindHost)) {
-    console.log(
-      `\n  ⚠ binding ${bindHost}:${port} — cezar has no built-in auth.\n` +
-        `    Only do this behind a reverse proxy that enforces authentication,\n` +
-        `    and make sure this interface is not reachable from the internet.\n`,
-    );
-  }
-  // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
-  // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
-  process.env.CEZ_API_URL = apiOrigin(bindHost, port);
-  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
-  httpServer = startServer({
-    repoRoot,
-    store,
-    manager,
-    version,
-    update,
-    bootProjectId,
-    semaphore,
-    bindHost,
-    providerAuth,
-    providerRuntimeAuth,
-    workspaceEvents,
-    selfUpdate,
-  }, port);
-  httpServer.once('listening', () => manager.lifecycle.start());
-  const url = `http://localhost:${port}`;
+    serve: async () => {
+      const port = await pickPort(preferredPort, bindHost);
 
-  console.log(`\n  cezar v${version} — ${repoRoot}`);
-  console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);
-  for (const check of checks) {
-    const mark = check.available ? '✓' : '✗';
-    const detail = check.available ? (check.version ?? 'ok') : (check.hint ?? 'missing');
-    console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
-  }
-  if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
-  console.log(`\n  cockpit → ${url}\n`);
-  // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
-  await printSkillsBanner(repoRoot);
-  // The star ask's terminal line — same block, same two off switches.
-  await printStarBanner(repoRoot);
+      // Update discovery (#368) through the self-update service (PoC): the channel's newest
+      // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
+      // chip can apply it when this cezar runs from the managed layout (`cezar install`).
+      const update: { latest?: string } = {};
+      const selfUpdate = await buildSelfUpdateService({
+        // Workspace-wide, every project's manager — not the boot repo's store (#1524).
+        runs: semaphore,
+        // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
+        // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
+        trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+        restart: () => {
+          void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
+            store.flush({ pretty: true });
+            // The old process stops here, so it reports its own stop before handing over (bounded).
+            track('app_stop', { label: 'restart' });
+            void flushTelemetry(1_000).finally(() =>
+              restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
+            );
+            restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+          }).catch((error: unknown) => {
+            console.error('cezar: lifecycle shutdown failed before restart', error);
+            process.exit(1);
+          });
+        },
+      });
+      void selfUpdate.updateAvailable().then((latest) => {
+        if (!latest) return;
+        update.latest = latest;
+        const how = selfUpdate.installKind === 'managed' ? 'update from the cockpit or: cezar update' : `restart with: npx ${pkgName}@latest`;
+        console.log(`\n  ⬆ cezar ${latest} is available (running ${version}) — ${how}\n`);
+      });
+      // What the process is doing, on every error report (a wide event, not a bare message).
+      registerTelemetryContext(() => {
+        const runs = store.listRuns();
+        const count = (status: string) => runs.filter((r) => r.status === status).length;
+        return {
+          'app.install_kind': selfUpdate.installKind,
+          'runs.running': count('running'),
+          'runs.waiting': count('waiting'),
+          'runs.queued': count('queued'),
+          'runs.total': runs.length,
+        };
+      });
+      // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
+      // whatever can reach the interface, and cezar itself has NO auth — it is only
+      // for a deliberate hosted setup where a reverse proxy in front provides TLS +
+      // auth (see `server-install --external-proxy`). Say so, loudly, every start.
+      if (bindHost && !['127.0.0.1', 'localhost', '::1'].includes(bindHost)) {
+        console.log(
+          `\n  ⚠ binding ${bindHost}:${port} — cezar has no built-in auth.\n` +
+            `    Only do this behind a reverse proxy that enforces authentication,\n` +
+            `    and make sure this interface is not reachable from the internet.\n`,
+        );
+      }
+      // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
+      // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
+      process.env.CEZ_API_URL = apiOrigin(bindHost, port);
+      process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+      httpServer = startServer({
+        repoRoot,
+        store,
+        manager,
+        version,
+        update,
+        bootProjectId,
+        semaphore,
+        bindHost,
+        providerAuth,
+        providerRuntimeAuth,
+        workspaceEvents,
+        selfUpdate,
+      }, port);
+      const listening = new Promise<void>((resolveListening) => httpServer?.once('listening', () => resolveListening()));
+      const url = `http://localhost:${port}`;
 
-  // Under the desktop shell a managed install may exist without launchers (the shell installs
-  // cezar itself on first launch, spec 2026-09-25-desktop-distribution): write them so
-  // `cezar` in a terminal works too. Idempotent; never touches the shell profile.
-  if (process.env.CEZ_DESKTOP === '1' && selfUpdate.installKind === 'managed') {
-    try {
-      writeLaunchers();
-    } catch {
-      // A read-only home is not a reason to refuse to serve.
-    }
-  }
-  // A supervisor that names itself (the desktop shell sets CEZ_SUPERVISOR_PID) may die without
-  // a chance to kill us — a force-quit, a crash. Nobody would find a headless cockpit still
-  // holding the port, so follow the parent down: `kill(pid, 0)` only probes for existence.
-  const supervisorPid = Number(process.env.CEZ_SUPERVISOR_PID);
-  if (Number.isInteger(supervisorPid) && supervisorPid > 0) {
-    // Two independent signals, because either alone has a hole: `kill(pid, 0)` still succeeds
-    // for an unreaped zombie or a reused pid, and the shell exec's us so our parent IS the
-    // supervisor — when it dies we are re-parented to pid 1.
-    //
-    // Re-parenting only speaks when we HAD a parent to lose. A cockpit already at ppid 1 on
-    // boot — a detached launchd/systemd supervisor that still sets CEZ_SUPERVISOR_PID — would
-    // otherwise read its own starting state as "the supervisor is gone" on the first tick and
-    // shut down two seconds after it came up. There, `kill(pid, 0)` is the only honest signal.
-    const initialPpid = process.ppid;
-    const watchesReparenting = initialPpid > 1;
-    setInterval(() => {
-      // `!== initialPpid` already covers re-parenting to 1, because `watchesReparenting` means
-      // we did not start there.
-      let gone = watchesReparenting && process.ppid !== initialPpid;
-      if (!gone) {
+      console.log(`\n  cezar v${version} — ${repoRoot}`);
+      console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);
+      for (const check of checks) {
+        const mark = check.available ? '✓' : '✗';
+        const detail = check.available ? (check.version ?? 'ok') : (check.hint ?? 'missing');
+        console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
+      }
+      if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
+      console.log(`\n  cockpit → ${url}\n`);
+      // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
+      await printSkillsBanner(repoRoot);
+      // The star ask's terminal line — same block, same two off switches.
+      await printStarBanner(repoRoot);
+
+      // Under the desktop shell a managed install may exist without launchers (the shell installs
+      // cezar itself on first launch, spec 2026-09-25-desktop-distribution): write them so
+      // `cezar` in a terminal works too. Idempotent; never touches the shell profile.
+      if (process.env.CEZ_DESKTOP === '1' && selfUpdate.installKind === 'managed') {
+        const { writeLaunchers } = await import('./self-update/launcher.ts');
         try {
-          process.kill(supervisorPid, 0);
-        } catch (error) {
-          // Only "no such process" means gone. EPERM is a supervisor that EXISTS under another
-          // uid — reading that as dead would shut a healthy cockpit down.
-          gone = (error as NodeJS.ErrnoException).code === 'ESRCH';
+          writeLaunchers();
+        } catch {
+          // A read-only home is not a reason to refuse to serve.
         }
       }
-      if (!gone) return;
-      try {
-        process.stderr.write('  supervisor is gone — shutting down\n');
-      } catch {
-        // A closed stderr must not prevent draining scripts.
+      // A supervisor that names itself (the desktop shell sets CEZ_SUPERVISOR_PID) may die without
+      // a chance to kill us — a force-quit, a crash. Nobody would find a headless cockpit still
+      // holding the port, so follow the parent down: `kill(pid, 0)` only probes for existence.
+      const supervisorPid = Number(process.env.CEZ_SUPERVISOR_PID);
+      if (Number.isInteger(supervisorPid) && supervisorPid > 0) {
+        // Two independent signals, because either alone has a hole: `kill(pid, 0)` still succeeds
+        // for an unreaped zombie or a reused pid, and the shell exec's us so our parent IS the
+        // supervisor — when it dies we are re-parented to pid 1.
+        //
+        // Re-parenting only speaks when we HAD a parent to lose. A cockpit already at ppid 1 on
+        // boot — a detached launchd/systemd supervisor that still sets CEZ_SUPERVISOR_PID — would
+        // otherwise read its own starting state as "the supervisor is gone" on the first tick and
+        // shut down two seconds after it came up. There, `kill(pid, 0)` is the only honest signal.
+        const initialPpid = process.ppid;
+        const watchesReparenting = initialPpid > 1;
+        setInterval(() => {
+          // `!== initialPpid` already covers re-parenting to 1, because `watchesReparenting` means
+          // we did not start there.
+          let gone = watchesReparenting && process.ppid !== initialPpid;
+          if (!gone) {
+            try {
+              process.kill(supervisorPid, 0);
+            } catch (error) {
+              // Only "no such process" means gone. EPERM is a supervisor that EXISTS under another
+              // uid — reading that as dead would shut a healthy cockpit down.
+              gone = (error as NodeJS.ErrnoException).code === 'ESRCH';
+            }
+          }
+          if (!gone) return;
+          try {
+            process.stderr.write('  supervisor is gone — shutting down\n');
+          } catch {
+            // A closed stderr must not prevent draining scripts.
+          }
+          shutdown('supervisor_gone');
+        }, 2_000).unref();
       }
-      shutdown('supervisor_gone');
-    }, 2_000).unref();
-  }
+      return { listening, url };
+    },
+    sweep: repo
+      ? () =>
+          sweepStartupWorktrees(repoRoot, store, manager.lifecycle).then(({ orphans, reclaimed }) => {
+            if (orphans.length > 0) {
+              console.log(`  cleaned ${orphans.length} orphaned worktree(s): ${orphans.map((id) => id.slice(0, 8)).join(', ')}`);
+            }
+            if (reclaimed.length > 0) {
+              console.log(`  reclaimed ${reclaimed.length} old worktree(s), branch kept: ${reclaimed.map((id) => id.slice(0, 8)).join(', ')}`);
+            }
+          })
+      : undefined,
+    startLifecycle: () => manager.lifecycle.start(),
+    stopping: () => stopping,
+  });
+  startupSweep = booted.sweep;
+  const { url } = booted.served;
 
   // Open the browser only once the server actually answers, so the first
   // paint is the cockpit and never a connection error.
@@ -512,6 +535,31 @@ async function runCommand(
     process.exitCode = 1;
     return;
   }
+  const [
+    { initWorkspace },
+    { loadWorkflows },
+    { ProviderAuthService, providerAuthChecksDisabled },
+    { providersRequiredByWorkflow, unavailableProviderMessage, withSelectedAccounts },
+    { reportInconclusiveProbe },
+    { applyProviderEnablement },
+    { loadConfig },
+    { loadWorkspaceConfig },
+    { WorkspaceSemaphore },
+    { RunManager },
+    { ProviderRuntimeAuthObserver },
+  ] = await Promise.all([
+    import('./workspace/boot.ts'),
+    import('./workflows/load.ts'),
+    import('./core/provider-auth.ts'),
+    import('./server/provider-action-gate.ts'),
+    import('./server/provider-telemetry.ts'),
+    import('./core/provider-availability.ts'),
+    import('./config.ts'),
+    import('./workspace/config.ts'),
+    import('./workspace/semaphore.ts'),
+    import('./workflows/run.ts'),
+    import('./server/provider-auth-runtime.ts'),
+  ]);
   await initWorkspace(repoRoot);
   const { workflows, issues } = await loadWorkflows(repoRoot);
   for (const issue of issues) console.error(`! skipped ${issue.path}: ${issue.message}`);
@@ -549,7 +597,7 @@ async function runCommand(
     }
   }
 
-  const store = openStore(repoRoot);
+  const store = await openStore(repoRoot);
   // Headless tasks still appear in the cockpit later, so persist the same
   // task-local recovery event when a credential expires after the preflight.
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, () => {});
@@ -600,7 +648,8 @@ async function runCommand(
     }
   });
 
-  await initTelemetry({ version: readOwnVersion() });
+  const { flushTelemetry, initTelemetry, track } = await import('./telemetry.ts');
+  await initTelemetry({ version: readOwnManifest().version });
   const run = manager.startRun(workflow, { task, model, origin: 'cli' });
   // No cockpit device here: the CLI's message counts under the installation's own id.
   track('message_sent', { label: 'cli' });
@@ -794,7 +843,8 @@ async function serverCommand(
 
 // ---- init --------------------------------------------------------------------
 
-function initCommand(repoRoot: string): void {
+async function initCommand(repoRoot: string): Promise<void> {
+  const { ensureDataGitignore } = await import('./data-gitignore.ts');
   const workflowsDir = join(repoRoot, '.ai/cezar', 'workflows');
   const skillsDir = join(repoRoot, '.ai/cezar', 'skills');
   mkdirSync(workflowsDir, { recursive: true });
@@ -846,7 +896,10 @@ description: House rules the agent should follow in this repo.
 
 // ---- helpers -----------------------------------------------------------------
 
-function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
+async function openStore(repoRoot: string, opts?: { keepLive?: boolean }): Promise<RunStore> {
+  const { RunStore } = await import('./runs/store.ts');
+  const { armRepoHandle } = await import('./runs/arm-repo-handle.ts');
+  const { ensureDataGitignore } = await import('./data-gitignore.ts');
   const dataDir = join(repoRoot, '.ai/cezar');
   const store = RunStore.open(dataDir, opts);
   // Repo-scope the referenced tier (#945) — see `armRepoHandle`. Background, never awaited: a
@@ -857,46 +910,52 @@ function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
 }
 
 /** The self-update service over THIS process: its package, version and entry file. */
-function buildSelfUpdateService(
+async function buildSelfUpdateService(
   overrides: Partial<Pick<ConstructorParameters<typeof SelfUpdateService>[0], 'restart' | 'runs' | 'trimPaths'>> & {
     restart: () => void;
   },
-): SelfUpdateService {
+): Promise<SelfUpdateService> {
+  const [{ SelfUpdateService }, { isSupervised }] = await Promise.all([
+    import('./self-update/service.ts'),
+    import('./self-update/restart.ts'),
+  ]);
+  const { name: pkgName, version } = readOwnManifest();
   return new SelfUpdateService({
-    pkgName: readOwnName(),
-    version: readOwnVersion(),
-    displayVersion: shownVersion(),
+    pkgName,
+    version,
+    displayVersion: await shownVersion(),
     entry: resolve(process.argv[1] ?? fileURLToPath(import.meta.url)),
     supervised: isSupervised(),
     ...overrides,
   });
 }
 
-/** Own package name — for the npm-registry update check (#368). */
-function readOwnName(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { name?: string };
-    return pkg.name ?? '@open-mercato/cezar';
-  } catch {
-    return '@open-mercato/cezar';
-  }
-}
-
 /** The running version as shown: `-dev` when the code is a source checkout, linked or not. */
-function shownVersion(): string {
-  const version = readOwnVersion();
+async function shownVersion(): Promise<string> {
+  const [{ runsFromCheckout }, { devVersion }] = await Promise.all([
+    import('./self-update/layout.ts'),
+    import('./self-update/semver.ts'),
+  ]);
+  const { version } = readOwnManifest();
   return runsFromCheckout(resolve(process.argv[1] ?? fileURLToPath(import.meta.url))) ? devVersion(version) : version;
 }
 
-function readOwnVersion(): string {
+let ownManifest: { name: string; version: string } | undefined;
+
+/** Own package manifest — name for the npm-registry update check (#368), version for the banner. */
+function readOwnManifest(): { name: string; version: string } {
+  if (ownManifest) return ownManifest;
   try {
     const here = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as { version?: string };
-    return pkg.version ?? '0.0.0';
+    const pkg = JSON.parse(readFileSync(join(here, '..', 'package.json'), 'utf8')) as {
+      name?: string;
+      version?: string;
+    };
+    ownManifest = { name: pkg.name ?? '@open-mercato/cezar', version: pkg.version ?? '0.0.0' };
   } catch {
-    return '0.0.0';
+    ownManifest = { name: '@open-mercato/cezar', version: '0.0.0' };
   }
+  return ownManifest;
 }
 
 function openUrl(url: string): void {
