@@ -21,8 +21,10 @@ Phase 1 — compact large counts and let the Lines pair wrap instead of truncati
 
 ## Progress
 
+PR: #1715
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fit delivered counts
 
-- [ ] 1.1 Compact large counts and wrap the Lines pair
+- [x] 1.1 Compact large counts and wrap the Lines pair — 4b8ad9465
