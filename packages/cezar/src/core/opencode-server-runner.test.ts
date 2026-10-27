@@ -216,7 +216,7 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
-  it('includes the early exit status and bounded stderr tail', async () => {
+  it('names the early exit status and keeps the bounded stderr tail in a local note', async () => {
     const child = silentChild();
     spawnHook.override = () => child;
     const events: AgentEvent[] = [];
@@ -225,13 +225,15 @@ describe('opencode serve startup', () => {
       (event) => events.push(event),
     );
     void session.result.catch(() => undefined);
-    (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}EADDRINUSE`);
+    (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}bad config`);
+    Object.assign(child, { exitCode: 1 });
     (child as unknown as EventEmitter).emit('exit', 1, null);
+    (child as unknown as EventEmitter).emit('close', 1, null);
     await session.result.catch(() => undefined);
-    expect(events).toContainEqual({
-      type: 'error',
-      message: `opencode: opencode serve exited before it started listening (exit code 1): ${'x'.repeat(790)}EADDRINUSE`,
-    });
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
+    ]);
+    expect(events).toContainEqual({ type: 'note', message: `opencode serve stderr: ${'x'.repeat(790)}bad config` });
   });
 
   // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
@@ -280,7 +282,7 @@ describe('opencode serve startup', () => {
     await session.result;
     expect(spawns).toBe(1);
     expect(events.filter((e) => e.type === 'error')).toEqual([
-      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
     ]);
     expect(events).toContainEqual({ type: 'note', message: 'opencode serve stderr: Error: bad config' });
   });
@@ -296,7 +298,7 @@ describe('opencode serve startup', () => {
     await session.result;
     expect(spawns).toBe(SERVER_PORT_ATTEMPTS);
     expect(events.filter((e) => e.type === 'error')).toEqual([
-      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
     ]);
     expect(events.filter((e) => e.type === 'note')).toHaveLength(1);
   });
