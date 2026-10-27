@@ -216,8 +216,7 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
-  // The exit status names the cause; the stderr tail can name paths, so it stays a local note.
-  it('includes the early exit status, and keeps the bounded stderr tail out of the error', async () => {
+  it('names the early exit status and keeps the bounded stderr tail in a local note', async () => {
     const child = silentChild();
     spawnHook.override = () => child;
     const events: AgentEvent[] = [];
@@ -227,7 +226,9 @@ describe('opencode serve startup', () => {
     );
     void session.result.catch(() => undefined);
     (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}bad config`);
+    Object.assign(child, { exitCode: 1 });
     (child as unknown as EventEmitter).emit('exit', 1, null);
+    (child as unknown as EventEmitter).emit('close', 1, null);
     await session.result.catch(() => undefined);
     expect(events.filter((e) => e.type === 'error')).toEqual([
       { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
