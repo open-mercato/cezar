@@ -985,7 +985,7 @@ describe('a PR known only by number', () => {
     const marked = run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)
     const { unmount } = render(
       <MemoryRouter>
-        <RepoBaseContext.Provider value="https://github.com/o/shop">
+        <RepoBaseContext.Provider value={{ base: 'https://github.com/o/shop', kind: 'github' }}>
           <TaskQuickList runs={[marked]} view="active" now={NOW} onViewChange={vi.fn()} />
         </RepoBaseContext.Provider>
       </MemoryRouter>,

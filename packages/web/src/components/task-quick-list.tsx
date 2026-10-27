@@ -34,7 +34,7 @@ import {
 import { filterRunsByOrigin } from '@/lib/task-filters'
 import { useTaskOrigin } from '@/lib/task-origin'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
-import { formatCost, taskReference, taskReferences } from '@/lib/tasks-table'
+import { formatCost, taskReference, taskReferences, type ForgeRepoBase } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -49,7 +49,7 @@ import { cn } from '@/lib/utils'
  */
 /** The repo web root of the project a list of rows belongs to — what turns a reference known only
  *  by number into a link. Provided by whichever container knows the project; absent = no link. */
-export const RepoBaseContext = React.createContext<string | undefined>(undefined)
+export const RepoBaseContext = React.createContext<ForgeRepoBase | undefined>(undefined)
 
 export function TaskQuickList({
   runs,
@@ -446,7 +446,8 @@ const RunRow = React.memo(function RunRow({
   // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
   // prefix (#788, option C): the number is painted once, as a link, instead of twice as digits.
   // With the row's project repo, so a PR known only by number (`CEZ:PR=…`) is still a link.
-  const reference = taskReference(run, React.useContext(RepoBaseContext))
+  const repoBase = React.useContext(RepoBaseContext)
+  const reference = taskReference(run, repoBase?.base, repoBase?.kind)
   const title = runTitle(run)
   // Only when the two numbers are the same number — see `refPrefixMatches`. A run opened on issue
   // #788 that shipped as PR #790 keeps its prefix, because the chip is no longer saying it.
@@ -710,6 +711,8 @@ export function TaskQuickListContainer() {
   // empty state would claim "No tasks yet" before we know whether there are any.
   if (!shown) return null
 
+  // No `forge` on the provider: this list is the ACTIVE project's, whose forge the shell's
+  // `ReferenceForgeScope` already names (Step 5.10). The per-project sidebar groups name theirs.
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <RepoBaseContext.Provider value={repoBase}>

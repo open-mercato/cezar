@@ -284,9 +284,19 @@ import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveC
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
-import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { isGithubHost } from '../github-hosts.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import {
+  forgeKindOfRemote,
+  forgePrDiff,
+  forgeRefStatus,
+  listForgeChecks,
+  listForgeComments,
+  listForgeItems,
+  parseRemote,
+  resolveForge,
+  searchForgeItems,
+  type ForgeAvailability,
+} from './forge/index.ts';
+import { forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import {
@@ -378,9 +388,10 @@ export interface ServerDeps {
    *  the app (tests, future CLI hooks). */
   workspaceEvents?: WorkspaceEventBus;
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
-   *  `gh repo clone` (or the `CEZ_DRY_RUN=1` fake) — injected by tests so the
-   *  route's guards, cleanup and error surfacing are exercised for real
-   *  against real temp dirs, without a network or a `gh` binary. */
+   *  `gh repo clone` / `glab repo clone` by the source's forge (or the
+   *  `CEZ_DRY_RUN=1` fake) — injected by tests so the route's guards, cleanup
+   *  and error surfacing are exercised for real against real temp dirs,
+   *  without a network or a `gh`/`glab` binary. */
   cloneRunner?: CloneRunner;
   /** How `POST /api/projects/create` and `GET /api/projects/github-owners`
    *  run `git`/`gh` (spec 2026-09-29-create-new-project). Defaults to real
@@ -1404,6 +1415,20 @@ async function probeWritableDir(dir: string, create: boolean): Promise<string | 
   }
 }
 
+/**
+ * Why GITHUB-EVENT automations cannot serve `remote`, or null when they can: any GitHub host
+ * (github.com or Enterprise — the poller passes `--hostname`, #1426), never GitLab (spec
+ * 2026-08-10-forge-provider-adapters, Step 4.6 — automations stay GitHub-only, spec Q4). The three
+ * callers (the `/automations` availability, the manual check and the boot
+ * `registerAutomationProject`) share this single decision so they can never drift apart.
+ */
+export function githubAutomationsBlocker(remote: string | undefined): { available: false; reason: string } | null {
+  const kind = remote && parseRemote(remote) ? forgeKindOfRemote(remote) : null;
+  if (kind === 'github') return null;
+  if (kind) return { available: false, reason: 'GitHub automations need a GitHub remote' };
+  return { available: false, reason: 'No GitHub remote is configured' };
+}
+
 // The return type is INFERRED on purpose: it is the chained app type built at the bottom of
 // this function, and `AppType` (src/server/app-type.ts) is `ReturnType<typeof createApp>`.
 // Annotating it `Hono` here would erase every route from the type and leave the typed client
@@ -2101,7 +2126,6 @@ export function createApp(deps: ServerDeps) {
   // not, so tests never spawn probes here). Fire-and-forget: a probe that fails leaves that row
   // cold, which is exactly the state every reader already handles.
   if (deps.socketHub) void warmAgentKnowledge();
-
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
@@ -3130,7 +3154,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     })
 
-    .post('/projects/checkout', jsonZodValidator(() => checkoutSchema, { message: 'url must be a GitHub repository' }), async (c) => {
+    .post('/projects/checkout', jsonZodValidator(() => checkoutSchema, { message: 'url must be a git forge repository (GitHub or GitLab)' }), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('adding projects'), 409);
       }
@@ -3148,8 +3172,8 @@ export function createApp(deps: ServerDeps) {
         ...(deps.cloneRunner ? { run: deps.cloneRunner } : {}),
       });
       if (!result.ok) {
-        // `reason` rides along on the 503 (`gh` unavailable) — the spec's
-        // `{ error, reason }` degradation, mirroring the GitHub pane.
+        // `reason` rides along on the 503 (`gh`/`glab` unavailable) — the spec's
+        // `{ error, reason }` degradation, mirroring the forge pane.
         return c.json(
           'reason' in result ? { error: result.error, reason: result.reason } : { error: result.error },
           result.status,
@@ -4216,16 +4240,24 @@ export function createApp(deps: ServerDeps) {
     })
     .get('/automations', async (c) => {
       const { root, automationStore } = c.get('project');
-      const forge = resolveForge(await getRepoInfo(root));
-      // Annotated, so the two branches are ONE shape rather than a union of two: the fallback
-      // literal always carries `reason`, the cached answer only sometimes does, and the route
+      // `available` is about GITHUB-EVENT automations only — they poll github.com through `gh`
+      // (`automations/github-poller.ts`) — so the question is not "does any forge resolve" but
+      // "can that poller serve this remote" (`githubAutomationsBlocker`, spec
+      // 2026-08-10-forge-provider-adapters, Step 4.6). A GitLab remote, which since Step 3.1 does
+      // resolve to a driver, cannot; nor can a GitHub Enterprise one, and each says so in its own
+      // words. Schedule automations are unaffected — they need no forge at all.
+      const repoInfo = await getRepoInfo(root);
+      const blocker = githubAutomationsBlocker(repoInfo?.remote);
+      const forge = blocker ? null : resolveForge(repoInfo);
+      // Annotated, so the branches are ONE shape rather than a union: the fallback
+      // literals always carry `reason`, the cached answer only sometimes does, and the route
       // type is what `contract/src/automations.ts` has to describe.
       // A cold cache (first read after boot) waits for the probe instead of answering "still being
       // checked": nothing re-reads this page when the background probe lands, so that answer
       // would lock the editor's GitHub trigger off. Only `/api/health` has a latency budget.
       const availability: ForgeAvailability = forge
         ? forge.detectCached() ?? (await forge.detect())
-        : { available: false, reason: 'No GitHub remote is configured' };
+        : blocker ?? { available: false, reason: 'No GitHub remote is configured' };
       const definitions = automationStore.list();
       const logsById = new Map(definitions.map((definition) => [definition.id, automationStore.logs({ automationId: definition.id, limit: 100 })] as const));
       const timeZone = localTimeZone();
@@ -4517,8 +4549,12 @@ export function createApp(deps: ServerDeps) {
             Object.assign(check, { status: 'complete', completedAt: new Date().toISOString(), matches: result.candidates.length, truncated: result.truncated });
             return;
           }
-          const remote = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
-          if (!remote || !isGithubHost(remote.host)) throw new Error('No GitHub remote is configured');
+          // A `gh`-backed poller may only ever be armed where it can actually read
+          // (`githubAutomationsBlocker`): a GitHub host. A GitLab or unknown host refuses exactly as
+          // a remote-less repo always has — one message for the whole family, unchanged.
+          const rawRemote = (await getRepoInfo(project.root))?.remote;
+          const remote = parseRemote(rawRemote ?? '');
+          if (!remote || githubAutomationsBlocker(rawRemote)) throw new Error('No GitHub remote is configured');
           const scheduler = new ProjectAutomationScheduler({
             projectId: project.id,
             timeZone: localTimeZone(),
@@ -5649,10 +5685,19 @@ export function createApp(deps: ServerDeps) {
       let publish = prPublishes.get(key);
       if (!publish) {
         const branch = run.branch;
+        const worktreePath = run.worktreePath;
         publish = (async () => {
-          const outcome = await withWorktreeMutation(c.get('project'), id, () =>
-            createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft }),
-          );
+          // The forge that can answer this belongs to the WORKTREE's remote, not the project's — the
+          // driver's `createPR` pushes and opens the pull request from `run.worktreePath` (spec
+          // 2026-08-10-forge-provider-adapters, Step 1.8). No recognised forge keeps the pre-seam
+          // path: `createDraftPr` still runs the final autosave first — so the `git merge` hint
+          // carries the task's last edits — and still answers "no git remote — add one" and the
+          // CEZ_DRY_RUN fake PR.
+          const outcome = await withWorktreeMutation(c.get('project'), id, async () => {
+            const forge = resolveForge(await getRepoInfo(worktreePath));
+            const input = { repoRoot, run, handoffText: readHandoff(dataDir, id), draft };
+            return forge ? forge.createPR(input) : createDraftPr(input);
+          });
           if (!outcome.ok) return outcome;
           // A number the cockpit asked about BEFORE the pull request existed is cached as "this
           // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
@@ -6766,10 +6811,15 @@ export function createApp(deps: ServerDeps) {
         const { root: repoRoot } = c.get('project');
         const query = c.req.valid('query');
         const limit = Number.parseInt(query.limit ?? '', 10);
-        return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 50, {
-          issuesCursor: query.issuesCursor,
-          prsCursor: query.prsCursor,
-        }));
+        const forge = resolveForge(await getRepoInfo(repoRoot));
+        return c.json(
+          await listForgeItems(forge, {
+            refresh: query.refresh === '1',
+            limit: Number.isFinite(limit) ? limit : 50,
+            ...(query.issuesCursor ? { issuesCursor: query.issuesCursor } : {}),
+            ...(query.prsCursor ? { prsCursor: query.prsCursor } : {}),
+          }),
+        );
       },
     )
 
@@ -6780,8 +6830,9 @@ export function createApp(deps: ServerDeps) {
         number: c.req.param('number'),
       });
       if (!parsed.success) return c.json({ error: 'invalid kind or number' }, 400);
+      const forge = resolveForge(await getRepoInfo(repoRoot));
       return c.json(
-        await fetchGithubComments(repoRoot, parsed.data.kind, parsed.data.number, c.req.valid('query').refresh === '1'),
+        await listForgeComments(forge, parsed.data.kind, parsed.data.number, { refresh: c.req.valid('query').refresh === '1' }),
       );
     })
 
@@ -6803,7 +6854,8 @@ export function createApp(deps: ServerDeps) {
         if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return c.json({ error: 'invalid prs query' }, 400);
         numbers.push(n);
       }
-      return c.json(await fetchGithubChecks(repoRoot, numbers));
+      const forge = resolveForge(await getRepoInfo(repoRoot));
+      return c.json(await listForgeChecks(forge, numbers));
     })
 
     // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
@@ -6824,7 +6876,8 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const { kind, q, limit } = c.req.valid('query');
-        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+        const forge = resolveForge(await getRepoInfo(repoRoot));
+        return c.json(await searchForgeItems(forge, kind, q, { limit }));
       },
     )
 
@@ -6845,7 +6898,8 @@ export function createApp(deps: ServerDeps) {
         if (parsedPrs.length === 0 && parsedIssues.length === 0) {
           return c.json({ error: 'missing prs or issues query' }, 400);
         }
-        return c.json(await fetchGithubRefStatus(repoRoot, { prs: parsedPrs, issues: parsedIssues }));
+        const forge = resolveForge(await getRepoInfo(repoRoot));
+        return c.json(await forgeRefStatus(forge, parsedPrs, parsedIssues));
       },
     )
 
@@ -6857,7 +6911,9 @@ export function createApp(deps: ServerDeps) {
         const { root: repoRoot } = c.get('project');
         const parsed = { data: c.req.valid('param') };
         const forge = resolveForge(await getRepoInfo(repoRoot));
-        if (!forge?.prMergeState) return c.json({ available: false, reason: 'GitHub merge state is unavailable' });
+        // A GitLab driver has no merge support (spec 2026-08-10-forge-provider-adapters, Non-goals):
+        // name the forge the project is actually on; GitHub and no-forge keep the original text.
+        if (!forge?.prMergeState) return c.json({ available: false, reason: forge?.kind === 'gitlab' ? 'Merging from cezar is not supported for GitLab merge requests' : 'GitHub merge state is unavailable' });
         return c.json(await forge.prMergeState(parsed.data.number, { refresh: c.req.valid('query').refresh === '1' }));
       },
     )
@@ -6871,7 +6927,7 @@ export function createApp(deps: ServerDeps) {
         const parsedNumber = { data: c.req.valid('param') };
         const body = { data: c.req.valid('json') };
         const forge = resolveForge(await getRepoInfo(repoRoot));
-        if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
+        if (!forge?.mergePR) return c.json({ error: forge?.kind === 'gitlab' ? 'Merging from cezar is not supported for GitLab merge requests' : 'GitHub merge is unavailable' }, 409);
         const result = await forge.mergePR(parsedNumber.data.number, body.data);
         if (result.merged) {
           // We just changed this pull request, so what the ref-status cache holds about it is now
@@ -6903,9 +6959,10 @@ export function createApp(deps: ServerDeps) {
       async (c) => {
         const { root: repoRoot } = c.get('project');
         const parsed = { data: c.req.valid('param') };
+        const forge = resolveForge(await getRepoInfo(repoRoot));
         try {
           return c.json(
-            await fetchGithubPrDiff(repoRoot, parsed.data.number, c.req.valid('query').refresh === '1'),
+            await forgePrDiff(forge, parsed.data.number, { refresh: c.req.valid('query').refresh === '1' }),
           );
         } catch (err) {
           if (err instanceof GithubPrNotFoundError) return c.json({ error: err.message }, 404);
@@ -8071,15 +8128,20 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
   // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
-  // on GitHub (github.com or Enterprise) — a project without one still fires its scheduled automations.
+  // on GitHub (github.com or Enterprise — `githubAutomationsBlocker`). A project on GitLab, or with
+  // no remote at all, still fires its scheduled automations; it just never gets a GitHub-event poller.
   const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string; host: string } }>();
   // A second instance from the one the HTTP routes use (out of scope here, built inside the app
   // function) — cheap: `createTrackerService` performs no I/O at construction, only a small
   // per-connection provider cache that duplicating costs nothing correctness-wise.
   const automationTrackers = createTrackerService();
   const registerAutomationProject = async (id: string, root: string): Promise<void> => {
-    const parsed = parseRemote((await getRepoInfo(root))?.remote ?? '');
-    automationProjects.set(id, { root, ...(parsed && isGithubHost(parsed.host) ? { github: { owner: parsed.owner, repo: parsed.repo, host: parsed.host } } : {}) });
+    const remote = (await getRepoInfo(root))?.remote;
+    const parsed = parseRemote(remote ?? '');
+    const github = parsed && !githubAutomationsBlocker(remote)
+      ? { github: { owner: parsed.owner, repo: parsed.repo, host: parsed.host } }
+      : {};
+    automationProjects.set(id, { root, ...github });
   };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
@@ -8170,7 +8232,12 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
       })).then(() => { if (!shutdownPromise) automationScheduler.start(); }).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => {
+    for (const cleanup of appCleanups) cleanup();
+    unsubscribe();
+    coordinator.stop();
+    automationScheduler.stop();
+  });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return Object.assign(server, {
     shutdownLifecycle(): Promise<void> {

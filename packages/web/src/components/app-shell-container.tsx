@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, type ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
+import { useForgeKind, useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
@@ -9,10 +9,12 @@ import { TaskPalette } from '@/components/task-palette/task-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
+import { ReferenceForgeScope } from '@/components/reference-status'
 import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
+import { forgeLabel } from '@/lib/forge-display'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
 import { unreadDoneCount } from '@/lib/read-state'
@@ -113,7 +115,13 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     ? null
     : (activeProject?.name ??
       (isBootProject ? (repoChipOf(health.data)?.name ?? null) : null))
-  const pageLabel = titleLabel ?? titleContext.pageLabel
+  // The VIEWED project's own forge (spec 2026-08-10, Step 3.8-review-fix-2) — the same registry
+  // field the multi-project sidebar's per-group nav reads (`ProjectGroups`), so the document
+  // title of a GitLab project scoped under a GitHub boot project no longer says "GitHub".
+  // `forgeAvailable` below stays health-level (R6 Step 1.1): that mismatch is older and the
+  // per-group nav already gates on each entry's own `forge`.
+  const forgeKind = useForgeKind()
+  const pageLabel = titleLabel ?? (titleContext.pageLabel === 'GitHub' ? forgeLabel(forgeKind) : titleContext.pageLabel)
 
   useDocumentTitle({ projectName, pageLabel, brandName: workspaceConfig.data?.branding.name, brandLogoUrl: workspaceConfig.data?.branding.logoUrl })
 
@@ -162,53 +170,61 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const toolsMenu = useMemo(() => <ToolsMenu health={health.data} />, [health.data])
 
   return (
-    // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
-    // which renders in `children`. The provider goes here because this is the lowest node that has
-    // both of them under it — the spec requires the two sets of tabs to be one filter.
-    <ListViewProvider>
-      <AppShell
-        repo={repo}
-        brandName={workspaceConfig.data?.branding.name ?? 'cezar'}
-        brandLogoUrl={workspaceConfig.data?.branding.logoUrl ?? null}
-        version={health.data?.version ?? null}
-        latestVersion={health.data?.latestVersion ?? null}
-        // The ⭐ ask's count. Same honesty rule as the chips above: `available: false` — offline,
-        // a rate-limited IP, or promos silenced with `CEZ_NO_BANNER=1` — is `null` here, and
-        // AppShell renders no chip for it rather than a button that cannot count.
-        starCount={!customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null}
-        // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
-        // is known to be empty — AppShell renders neither for a falsy count.
-        inboxCount={todos.data?.length ?? null}
-        // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
-        // unread is 0, which AppShell also renders as no badge.
-        unreadCount={runs.data ?? null}
-        skillsUpdateAvailable={skillsUpdateAvailable}
-        // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
-        // a cold or failed probe is the GitHub page's to explain and retry (#1412).
-        forgeAvailable={health.data?.forge != null}
-        // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
-        // the nav must not offer an Inbox this server will never fill.
-        inboxAvailable={inboxAvailable}
-        // Hidden unless health reports the opt-in automations capability (#801).
-        automationsAvailable={automationsAvailable}
-        tracker={tracker}
-        banner={banner}
-        footerBanner={footerBanner}
-        singleProject={health.data?.capabilities.singleProject === true}
-        taskQuickList={taskQuickList}
-        hostWidget={hostWidget}
-        // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
-        // quick-list above whenever this slot is absent.
-        projectGroups={projectGroups}
-        toolsMenu={toolsMenu}
-      >
-        {children}
-      </AppShell>
-      {/* Global chrome, not a route: ⌘K must work on every URL. Mounted here (not in AppShell)
-          because it needs the query client and router this container already assumes. */}
-      <CommandPalette />
-      {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
-      <TaskPalette />
-    </ListViewProvider>
+    // The viewed project's forge, for every reference chip under the shell (Step 5.10). Here
+    // because this node already reads `useForgeKind()` for the title above and has both the
+    // sidebar and the routed views under it — a routed view subscribing to the registry on its
+    // own destabilizes the scope resolution the router does above it (`ForgeScopeContext`).
+    <ReferenceForgeScope forge={forgeKind}>
+      {/* The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
+          which renders in `children`. The provider goes here because this is the lowest node that
+          has both of them under it — the spec requires the two sets of tabs to be one filter. */}
+      <ListViewProvider>
+        <AppShell
+          repo={repo}
+          brandName={workspaceConfig.data?.branding.name ?? 'cezar'}
+          brandLogoUrl={workspaceConfig.data?.branding.logoUrl ?? null}
+          version={health.data?.version ?? null}
+          latestVersion={health.data?.latestVersion ?? null}
+          // The ⭐ ask's count. Same honesty rule as the chips above: `available: false` — offline,
+          // a rate-limited IP, or promos silenced with `CEZ_NO_BANNER=1` — is `null` here, and
+          // AppShell renders no chip for it rather than a button that cannot count.
+          starCount={!customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null}
+          // `?? null` rather than `?? 0`: no badge while the inbox is unknown, and no badge when it
+          // is known to be empty — AppShell renders neither for a falsy count.
+          inboxCount={todos.data?.length ?? null}
+          // Same `?? null` honesty: no badge while the list is unknown; a loaded list with none
+          // unread is 0, which AppShell also renders as no badge.
+          unreadCount={runs.data ?? null}
+          skillsUpdateAvailable={skillsUpdateAvailable}
+          // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
+          // a cold or failed probe is the GitHub page's to explain and retry (#1412).
+          forgeAvailable={health.data?.forge != null}
+          // Same source as the title above — the viewed project's kind, read from the URL (`useForgeKind`).
+          forgeKind={forgeKind}
+          // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
+          // the nav must not offer an Inbox this server will never fill.
+          inboxAvailable={inboxAvailable}
+          // Hidden unless health reports the opt-in automations capability (#801).
+          automationsAvailable={automationsAvailable}
+          tracker={tracker}
+          banner={banner}
+          footerBanner={footerBanner}
+          singleProject={health.data?.capabilities.singleProject === true}
+          taskQuickList={taskQuickList}
+          hostWidget={hostWidget}
+          // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
+          // quick-list above whenever this slot is absent.
+          projectGroups={projectGroups}
+          toolsMenu={toolsMenu}
+        >
+          {children}
+        </AppShell>
+        {/* Global chrome, not a route: ⌘K must work on every URL. Mounted here (not in AppShell)
+            because it needs the query client and router this container already assumes. */}
+        <CommandPalette />
+        {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
+        <TaskPalette />
+      </ListViewProvider>
+    </ReferenceForgeScope>
   )
 })

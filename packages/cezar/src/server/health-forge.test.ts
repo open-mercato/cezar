@@ -1,10 +1,12 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { backendCheckSchema, forgeInfoSchema } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
+import { resetGitlabHostsCache } from '../gitlab-hosts.ts';
 import { createApp, type ServerDeps } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
@@ -145,6 +147,28 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.forge).toEqual({ kind: 'github', available: true });
   });
 
+  // Classification is a read of `glab`'s own config (spec 2026-08-10-forge-provider-adapters §
+  // Forge discovery), so a self-managed host answers on the FIRST request — no warm-up, no
+  // probe, no window in which the forge is unknown.
+  it('reports the GitLab forge for a self-managed host glab is configured for, on the first request', async () => {
+    const glabDir = process.env.GLAB_CONFIG_DIR as string;
+    writeFileSync(join(glabDir, 'config.yml'), 'host: gitlab.com\nhosts:\n    gitlab.acme.internal:\n        user: me\n');
+    resetGitlabHostsCache();
+    try {
+      initRepo('git@gitlab.acme.internal:platform/api.git');
+      const body = await health();
+      expect(body.forge?.kind).toBe('gitlab');
+    } finally {
+      rmSync(join(glabDir, 'config.yml'), { force: true });
+      resetGitlabHostsCache();
+    }
+  });
+
+  it('reports no forge for an unknown self-hosted host', async () => {
+    initRepo('git@git.other.internal:platform/api.git');
+    expect((await health()).forge).toBeNull();
+  });
+
   it('reports the GitHub forge for an SSH (scp-like) origin remote', async () => {
     initRepo('git@github.com:acme/demo.git');
     const body = await health();
@@ -157,8 +181,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.forge).toEqual({ kind: 'github', available: true });
   });
 
-  it('reports forge:null for a non-GitHub remote', async () => {
+  it('reports the GitLab forge for a gitlab.com remote (spec 2026-08-10-forge-provider-adapters)', async () => {
     initRepo('git@gitlab.com:acme/demo.git');
+    const body = await health();
+    expect(body.forge).toEqual({ kind: 'gitlab', available: true });
+  });
+
+  it('reports forge:null for a remote on a host no forge claims', async () => {
+    initRepo('git@git.example.com:acme/demo.git');
     const body = await health();
     expect(body.forge).toBeNull();
   });
@@ -361,5 +391,18 @@ describe('POST /api/v1/runs/:id/open-in-cli — hosted-mode defense in depth', (
     const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
     const res = await apiRequest(app, '/api/v1/runs/nope/open-in-cli', { method: 'POST' });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('health contract — forge-neutral kinds (spec 2026-08-10-forge-provider-adapters)', () => {
+  it('accepts a gitlab forge and a glab tool check alongside github/gh', () => {
+    expect(forgeInfoSchema.parse({ kind: 'github', available: true })).toEqual({ kind: 'github', available: true });
+    expect(forgeInfoSchema.parse({ kind: 'gitlab' })).toEqual({ kind: 'gitlab' });
+    expect(backendCheckSchema.parse({ name: 'glab', available: false, hint: 'install glab' }).name).toBe('glab');
+    expect(backendCheckSchema.parse({ name: 'gh', available: true }).name).toBe('gh');
+  });
+
+  it('still rejects an unknown forge kind', () => {
+    expect(forgeInfoSchema.safeParse({ kind: 'bitbucket' }).success).toBe(false);
   });
 });

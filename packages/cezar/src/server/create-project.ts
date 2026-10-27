@@ -209,7 +209,8 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
     const rawTemplate = opts.github.template?.trim() ?? '';
     if (rawTemplate !== '') {
       const ref = parseRepoRef(rawTemplate);
-      if (!ref) return { ok: false, status: 400, stage: 'invalid_input', error: `not a GitHub template repository: ${rawTemplate.slice(0, 200)}` };
+      // `parseRepoRef` also accepts GitLab sources (checkout's job); a template is `gh`'s, GitHub only.
+      if (!ref || ref.kind !== 'github') return { ok: false, status: 400, stage: 'invalid_input', error: `not a GitHub template repository: ${rawTemplate.slice(0, 200)}` };
       template = ref.slug;
     }
   }

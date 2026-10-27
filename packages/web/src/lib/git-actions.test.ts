@@ -217,5 +217,7 @@ describe('trunkGitActionPolicy (spec 2026-10-20-trunk-based-projects)', () => {
     const action = trunkGitActionPolicy({ ...base, forge: null })
     expect(action).toMatchObject({ id: 'land', enabled: true })
     expect(action?.alternatives?.[0]).toMatchObject({ id: 'create-pr', enabled: false })
+    // Forge-neutral (spec 2026-08-10-forge-provider-adapters, Step 3.8): null means neither forge.
+    expect(action?.alternatives?.[0]?.reason).toContain('no supported forge remote (GitHub or GitLab) detected')
   })
 })

@@ -100,6 +100,10 @@ describe('a reference cezar changes itself is forgotten, not waited out', () => 
     execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktree });
     execFileSync('git', ['config', 'user.name', 'Test'], { cwd: worktree });
     execFileSync('git', ['commit', '--allow-empty', '-m', 'work'], { cwd: worktree });
+    // The route resolves the forge from the RUN'S WORKTREE (spec 2026-08-10-forge-provider-adapters,
+    // Step 1.8) — the same root `createDraftPr` pushes from — so this standalone worktree needs its
+    // own origin, even though `CEZ_DRY_RUN=1` never actually pushes to it.
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/demo.git'], { cwd: worktree });
     const run = store.createRun({ title: 'Ship it', task: 'ship it', workflow: 'quick-task', steps: [] });
     store.updateRun(run.id, { status: 'review', worktreePath: worktree, branch: 'cez/abc' });
 
@@ -113,6 +117,79 @@ describe('a reference cezar changes itself is forgotten, not waited out', () => 
       // The dry-run catalog's fake PR URL is `…/pull/777`.
       expect(forgetRefStatus).toHaveBeenCalledWith(repoRoot, 777);
     } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('opens a draft merge request for a GitLab-remote worktree (dry run fakes the MR on the instance)', async () => {
+    // Step 4.1 (spec 2026-08-10-forge-provider-adapters): the GitLab driver resolves from the
+    // worktree's remote and answers with its own `/-/merge_requests/N` URL grammar.
+    const worktree = mkdtempSync(join(tmpdir(), 'cez-refinvalidate-gitlab-'));
+    execFileSync('git', ['init', '-b', 'cez/mr1'], { cwd: worktree });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktree });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: worktree });
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'work'], { cwd: worktree });
+    execFileSync('git', ['remote', 'add', 'origin', 'git@gitlab.com:acme/demo.git'], { cwd: worktree });
+    const run = store.createRun({ title: 'Ship it on GitLab', task: 'ship it', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'review', worktreePath: worktree, branch: 'cez/mr1' });
+
+    try {
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/pr`, {
+        method: 'POST',
+        headers: { origin: 'http://127.0.0.1:4321' },
+      });
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({ url: 'https://gitlab.com/acme/demo/-/merge_requests/777', dryRun: true });
+      expect(store.getRun(run.id)?.pullRequestUrl).toBe('https://gitlab.com/acme/demo/-/merge_requests/777');
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the pre-seam draft-PR path for a worktree with no forge remote (dry run fakes the PR)', async () => {
+    const worktree = mkdtempSync(join(tmpdir(), 'cez-refinvalidate-noforge-'));
+    execFileSync('git', ['init', '-b', 'cez/def'], { cwd: worktree });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktree });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: worktree });
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'work'], { cwd: worktree });
+    // No `origin` remote at all — no driver resolves, so `createDraftPr` answers as it always did.
+    const run = store.createRun({ title: 'Ship it too', task: 'ship it too', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'review', worktreePath: worktree, branch: 'cez/def' });
+
+    try {
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/pr`, {
+        method: 'POST',
+        headers: { origin: 'http://127.0.0.1:4321' },
+      });
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({ dryRun: true });
+    } finally {
+      rmSync(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('409s with the actionable no-remote hint outside dry run when the worktree has no forge remote', async () => {
+    const worktree = mkdtempSync(join(tmpdir(), 'cez-refinvalidate-noremote-'));
+    execFileSync('git', ['init', '-b', 'cez/ghi'], { cwd: worktree });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: worktree });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: worktree });
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'work'], { cwd: worktree });
+    const run = store.createRun({ title: 'Ship it three', task: 'ship it three', workflow: 'quick-task', steps: [] });
+    store.updateRun(run.id, { status: 'review', worktreePath: worktree, branch: 'cez/ghi' });
+
+    delete process.env.CEZ_DRY_RUN;
+    try {
+      const res = await apiRequest(app, `/api/v1/runs/${run.id}/pr`, {
+        method: 'POST',
+        headers: { origin: 'http://127.0.0.1:4321' },
+      });
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'no git remote — add one (git remote add origin <url>) or merge the branch locally',
+        manual: 'git merge cez/ghi',
+      });
+    } finally {
+      process.env.CEZ_DRY_RUN = '1';
       rmSync(worktree, { recursive: true, force: true });
     }
   });

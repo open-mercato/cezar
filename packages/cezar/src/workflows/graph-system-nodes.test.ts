@@ -264,6 +264,39 @@ describe('graph system nodes', () => {
     ]);
   }, 40_000);
 
+  // Spec 2026-08-10-forge-provider-adapters: on a GitLab project the draft-PR node opens a merge
+  // request through the GitLab driver instead of running `gh`, and the nodes that driver cannot
+  // serve yet say so instead of shelling `gh` at a GitLab remote.
+  it('on a GitLab remote: the draft node opens an MR, the comment node refuses by name', async () => {
+    await run('git', ['remote', 'add', 'origin', 'git@gitlab.com:acme/demo.git'], { cwd: repoRoot });
+    const graph: WorkflowGraph = {
+      nodes: [
+        { id: 'start', type: 'start' },
+        { id: 'work', type: 'agent', prompt: '{{task}}' },
+        { id: 'pr', type: 'github.draft-pr' },
+        { id: 'comment', type: 'github.pr-comment', body: 'Opened {{nodes.pr.url}}' },
+        { id: 'fallback', type: 'end', status: 'success' },
+      ],
+      edges: [
+        { from: 'start', to: 'work' },
+        { from: 'work', to: 'pr' },
+        { from: 'pr.created', to: 'comment' },
+        { from: 'comment.failed', to: 'fallback' },
+      ],
+    };
+    const id = manager.startRun(def(graph), { task: 'ship it', worktree: true }).id;
+    const final = await until(id, terminal, 30_000);
+    expect(final.pullRequestUrl).toBe('https://gitlab.com/acme/demo/-/merge_requests/777');
+    expect(final.prRefs?.map((ref) => ref.number)).toEqual([777]);
+    expect(final.steps.map((s) => [s.id, s.status])).toEqual([
+      ['work', 'done'],
+      ['pr', 'done'],
+      ['comment', 'failed'],
+    ]);
+    const events = store.readEvents(id).map((event) => JSON.stringify(event)).join('\n');
+    expect(events).toContain('commenting on a merge request is not supported on GitLab projects yet');
+  }, 40_000);
+
   it('wait-ci with no PR takes failed, not red; the rail lists system nodes as check rows', async () => {
     const graph: WorkflowGraph = {
       nodes: [

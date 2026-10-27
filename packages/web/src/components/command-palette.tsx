@@ -3,6 +3,7 @@ import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 import {
   rememberReferenceStatuses,
+  useForgeKind,
   useHealth,
   useProjectRepoBase,
   useProjects,
@@ -16,7 +17,7 @@ import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
-import { visibleNavItems } from '@/components/nav-items'
+import { resolveForgeNavItems, visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
 import { NEXT_THEME } from '@/components/theme-toggle'
 import { useTheme } from '@/components/theme-provider'
@@ -35,7 +36,7 @@ import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { lastActivityAt, refPrefixMatches, runTitle, splitRefPrefix } from '@/lib/task-groups'
-import { taskReferences, type TaskReference, type TaskReferenceInput } from '@/lib/tasks-table'
+import { taskReferences, type ForgeRepoBase, type TaskReference, type TaskReferenceInput } from '@/lib/tasks-table'
 import { automationIdOf, ownAutomationId } from '@/lib/task-origin'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
 import {
@@ -285,11 +286,12 @@ export function searchableTasks(
   tasks: readonly PaletteTask[],
   projectNames: ReadonlyMap<string, string>,
   /** Each project's repo web root — a reference known only by number becomes a link with it. */
-  repoBases: ReadonlyMap<string, string> = new Map(),
+  repoBases: ReadonlyMap<string, ForgeRepoBase> = new Map(),
 ): SearchableTask[] {
   return tasks.map((task) => {
     const label = runTitle(task)
-    const refList = taskReferences(task, task.projectId === null ? undefined : repoBases.get(task.projectId))
+    const repoBase = task.projectId === null ? undefined : repoBases.get(task.projectId)
+    const refList = taskReferences(task, repoBase?.base, repoBase?.kind)
     const references = refList.map((reference) => `${reference.kind} #${reference.number}`).join(' ')
     const projectName = task.projectId === null ? null : (projectNames.get(task.projectId) ?? null)
     return {
@@ -503,8 +505,10 @@ export function usePaletteTasks() {
   // screen may have none registered — its remote (`useProjectRepoBase`) answers then.
   const ownRepoBase = useProjectRepoBase()
   const repoBases = React.useMemo(() => {
-    const bases = new Map<string, string>()
-    for (const project of registry?.projects ?? []) if (project.repoUrl) bases.set(project.id, project.repoUrl)
+    const bases = new Map<string, ForgeRepoBase>()
+    for (const project of registry?.projects ?? []) {
+      if (project.repoUrl) bases.set(project.id, { base: project.repoUrl, kind: project.forge })
+    }
     if (runsProjectId && ownRepoBase && !bases.has(runsProjectId)) bases.set(runsProjectId, ownRepoBase)
     return bases
   }, [registry, runsProjectId, ownRepoBase])
@@ -715,6 +719,9 @@ function PaletteContent({ close }: { close: () => void }) {
   React.useEffect(() => () => trackPaletteModes(sessionModes.current), [])
   const { theme, setTheme } = useTheme()
   const { activeProjectId, registry, health, multiProject, projectNames, repoBases, tasks } = usePaletteTasks()
+  // Which forge the Views row names — the viewed project's, from the registry (Step
+  // 3.8-review-fix-2), not `/health`'s workspace-level boot answer.
+  const forgeKind = useForgeKind()
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
@@ -836,12 +843,19 @@ function PaletteContent({ close }: { close: () => void }) {
               All tasks
             </CommandItem>
           ) : null}
-          {visibleNavItems({
-            forge: health.data?.forge != null,
-            inbox: health.data?.capabilities.followups === true,
-            automations: health.data?.capabilities.automations === true,
-            tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
-          }).map((item) => {
+          {resolveForgeNavItems(
+            visibleNavItems({
+              forge: health.data?.forge != null,
+              inbox: health.data?.capabilities.followups === true,
+              automations: health.data?.capabilities.automations === true,
+              tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
+            }),
+            // The VIEWED project's forge, not the boot project's (Step 3.8-review-fix-2): the
+            // palette navigates within the active scope, so its nav row must carry that
+            // project's label and icon. Availability above stays health-level, as the shell's
+            // flat nav does.
+            forgeKind,
+          ).map((item) => {
             const Icon = item.icon
             return (
               <CommandItem
