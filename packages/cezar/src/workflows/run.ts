@@ -91,7 +91,7 @@ import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
-import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import type { QueuedMessage, RunRecord, RunStatus, RunStore, StepState } from '../runs/store.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
@@ -482,8 +482,6 @@ export function repositoryRootLockDisabled(env: NodeJS.ProcessEnv = process.env)
 const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
   'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
-const CONTINUABLE_STATUSES: readonly string[] = ['done', 'failed', 'cancelled', 'review'];
-
 interface ContinueRunOptions {
   text?: string;
   images?: PastedContent[];
@@ -548,6 +546,9 @@ interface ActiveRun {
    *  never opened look identical. This distinguishes "still starting up, buffer
    *  the message" from "genuinely closed, 409". */
   sessionEverOpened?: boolean;
+  /** `releaseStaleActive` displaced this registration (#798): the run belongs to its next owner,
+   *  and this session's settle paths say so on the transcript instead of writing the record. */
+  released?: boolean;
   /** Autonomous mode (#autonomous): never park at `waiting` — auto-nudge the agent to keep
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
@@ -722,6 +723,19 @@ export const AUTO_RESUME_MISSED_WINDOW_MS = 24 * 60 * 60_000;
 export const QUEUE_WATCHDOG_MS = 60_000;
 /** Shared empty holds for the common "nothing is held" pump — avoids allocating per sweep. */
 const NO_HOLDS: AccountHolds = { deadline: new Set(), inFlight: new Set() };
+
+/**
+ * The statuses a run can be continued from — the record's own way of saying "this run has
+ * settled". `review` is in the list because "Send back" is a continuation (spec 009).
+ *
+ * Also one of the conditions `staleActive` reads (#798).
+ */
+const CONTINUABLE_STATUSES: readonly RunStatus[] = ['done', 'failed', 'cancelled', 'review'];
+
+/** Posted when a released session finally settles — see `releaseStaleActive` (#798). */
+const RELEASED_SESSION_SETTLED_NOTE =
+  'a previously stalled agent session finished after it had been released — the task record was'
+  + ' left to whichever session owns it now';
 
 /**
  * May this run start, given what its account is holding?
@@ -1978,7 +1992,6 @@ export class RunManager {
           this.starting.add(runId);
           if (continuation) {
             const hydrated = this.hydrateQueuedContinuation(runId, continuation);
-            const ownerToken = Symbol('run-owner');
             void this.runContinuation(
               runId,
               hydrated.stepId,
@@ -1988,13 +2001,7 @@ export class RunManager {
               hydrated.images,
               hydrated.persistedImages,
               hydrated.persistedAttachments,
-              ownerToken,
-            ).catch((err: unknown) => {
-              const message = err instanceof Error ? err.message : String(err);
-              this.failOwnedContinuation(runId, ownerToken, message);
-              // A cancel that landed before the throw still owes the parent its report.
-              if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
-            });
+            );
             continue;
           }
           if (!job) continue;
@@ -2339,7 +2346,15 @@ export class RunManager {
     // Cancellation can retire a state while its async startup/teardown is still unwinding. A
     // continuation (or another owner) may have claimed the same run id by the time that old
     // promise reaches finally; never let stale cleanup release the newer owner's slot.
-    if (expectedState !== undefined && state !== expectedState) return;
+    if (expectedState !== undefined && state !== expectedState) {
+      // Not ours any more: release what this state alone holds, and touch nothing shared —
+      // the slot, the tmp dir and the retention sweep all belong to the live registration now.
+      expectedState.releaseWorktree?.();
+      expectedState.releaseWorktree = undefined;
+      expectedState.releaseRepoRoot?.();
+      expectedState.releaseRepoRoot = undefined;
+      return;
+    }
     const queuedContinue = state && !state.cancelled ? state.continueOnDrop : undefined;
     // A Continue taken in the same teardown window sends the review back, so it supersedes an accept.
     const acceptReview = !queuedContinue && state?.acceptReviewOnDrop && !state.cancelled && this.store.getRun(runId)?.status === 'review';
@@ -2351,6 +2366,7 @@ export class RunManager {
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'review accepted — finished without a PR' });
     }
     state?.releaseWorktree?.();
+    if (state) state.releaseWorktree = undefined;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     if (state?.cancellationTimer) clearTimeout(state.cancellationTimer);
@@ -2996,6 +3012,92 @@ export class RunManager {
       this.cancelDescendants(child.id, seen);
       this.cancelOne(child.id);
     }
+  }
+
+  /**
+   * The registration Continue may release instead of refusing (#798), or `undefined`.
+   *
+   * Every terminal transition is supposed to funnel through `dropActive`, which is why
+   * `continueRun` could treat `active` as authoritative. But `dropActive` sits at the END of a
+   * session's teardown, behind `await session.result` — and a provider session that never settles
+   * once a usage window closes stalls there without bound. The record then says the run finished
+   * while the registry says it is live: the cockpit offers Continue off the record, and the engine
+   * refused it off memory, permanently.
+   *
+   * Only that shape is stale: a session that has opened, a record that has settled, and a step the
+   * record still shows `running`/`waiting` — the turn nobody closed. Anything else that holds a
+   * settled run in `active` is the engine working as designed and keeps its refusal: a
+   * continuation still in its run-up (the lease, skill discovery, the profile probe) is about to
+   * write `running` itself; a cancellation in its grace window holds the slot on purpose until
+   * the provider is reaped; and a session whose steps have all settled is inside its ordinary
+   * teardown (the closing autosave commit).
+   */
+  private staleActive(runId: string): ActiveRun | undefined {
+    const state = this.active.get(runId);
+    if (!state?.sessionEverOpened || state.cancelled || state.cancellationTimer) return undefined;
+    if (state.turnSettled || state.continueOnDrop) return undefined;
+    const run = this.store.getRun(runId);
+    if (!run || !CONTINUABLE_STATUSES.includes(run.status)) return undefined;
+    const ownSteps = state.currentStepId ? run.steps.filter((step) => step.id === state.currentStepId) : run.steps;
+    const turnLeftOpen = ownSteps.some((step) => step.status === 'running' || step.status === 'waiting');
+    return turnLeftOpen ? state : undefined;
+  }
+
+  /** Hand a `staleActive` registration's run to the next owner (#798). */
+  private releaseStaleActive(runId: string, state: ActiveRun, settledStatus: RunStatus): void {
+    console.warn(
+      `[cez] releasing a stale session registration for run ${runId} — the record settled to`
+      + ` ${settledStatus} while the engine still held it`,
+    );
+    // `cancelled` keeps the released session's handlers from writing, `released` tells its settle
+    // paths the record is no longer theirs. A stalled provider ignores `end()`, and the newcomer
+    // resumes the same session id in the same worktree, so it is hard-stopped outright rather than
+    // given the grace a cancellation gets.
+    state.released = true;
+    state.cancelled = true;
+    try {
+      state.interrupt();
+      state.session?.end();
+      state.session?.hardStop?.();
+    } catch {
+      // A wedged session may throw on teardown — releasing the run must not depend on it.
+    }
+    this.clearIdleTimer(state);
+    this.clearAutosaveTimer(state);
+    this.dropActive(runId, state);
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `released a stale session registration (the task had already settled to ${settledStatus})`,
+    });
+  }
+
+  /**
+   * Write a session's terminal outcome onto the run record — but only while that session is still
+   * the registered one. A session that lost its registration (cancelled, or released by
+   * `releaseStaleActive`) leaves the record to whoever owns the run now; a released one says so
+   * on the transcript.
+   */
+  private settleOwnedOrRelease(runId: string, state: ActiveRun, write: () => void): void {
+    if (this.active.get(runId) === state) write();
+    else if (state.released) this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+    this.dropActive(runId, state);
+  }
+
+  /**
+   * A continuation's run-up checkpoint: has this registration been displaced (a cancellation drops
+   * a session-less continuation from `active` at once) while it awaited? Then it stops its timers
+   * and lets go of what it alone holds, and the caller returns without touching the run record.
+   */
+  private bailIfDisplaced(runId: string, state: ActiveRun, stepId: string): boolean {
+    if (this.active.get(runId) === state) return false;
+    this.clearIdleTimer(state);
+    this.clearAutosaveTimer(state);
+    if (state.released) {
+      this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: new Date().toISOString() });
+      this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+    }
+    this.dropActive(runId, state);
+    return true;
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -4247,8 +4349,11 @@ export class RunManager {
     if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
+    // A registration that `staleActive` recognises as a stalled leftover is released below, once
+    // every other refusal has had its say; any other one keeps the run live (#798).
+    const stale = this.staleActive(runId);
     const run = this.store.getRun(runId);
-    if (this.active.has(runId) || this.starting.has(runId)) {
+    if ((this.active.has(runId) && !stale) || this.starting.has(runId)) {
       // The record already reads settled, but the turn-end autosave is still unwinding: take the
       // Continue now and start it from `dropActive`, the way Finish does (telemetry 77117b95).
       const unwinding = this.active.get(runId);
@@ -4295,6 +4400,14 @@ export class RunManager {
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
     const resume = sessionBackend === targetRunner && !accountSwitched;
+    // Guard the pairing before persisting anything: the model override applies to the runner
+    // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
+    // same resolution `runContinuation` reads off the record). A model that is recognizably
+    // another runner's preset would corrupt the run; free-form/custom ids pass untouched.
+    if (opts.model && modelConflictsWithRunner(opts.model, targetRunner)) {
+      return { ok: false, error: `model '${opts.model}' is not a ${targetRunner} model` };
+    }
+    if (stale) this.releaseStaleActive(runId, stale, run.status);
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -4304,13 +4417,6 @@ export class RunManager {
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
     if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined) {
-      // Guard the pairing before persisting anything: the model override applies to the runner
-      // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
-      // same resolution `runContinuation` reads off the record). A model that is recognizably
-      // another runner's preset would corrupt the run; free-form/custom ids pass untouched.
-      if (opts.model && modelConflictsWithRunner(opts.model, targetRunner)) {
-        return { ok: false, error: `model '${opts.model}' is not a ${targetRunner} model` };
-      }
       // A runner switch that carries NO explicit model must not leave the previous backend's pin
       // on the record: the guard above only sees `opts.model`, so without this an inherited
       // `opus` would survive a switch to codex and `runContinuation` would hand it to the codex
@@ -4378,7 +4484,6 @@ export class RunManager {
       });
       return { ok: true };
     }
-    const ownerToken = Symbol('run-owner');
     // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
     // registers it in `active`.
     this.starting.add(runId);
@@ -4389,21 +4494,69 @@ export class RunManager {
       targetRunner,
       prompt,
       images,
-      undefined,
-      undefined,
-      ownerToken,
-    ).catch(
-      (err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.failOwnedContinuation(runId, ownerToken, message);
-        // A cancel that landed before the throw still owes the parent its report.
-        if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
-      },
     );
     return { ok: true };
   }
 
+  /**
+   * Run one continuation turn and settle whatever escapes it, against the `ActiveRun` this turn
+   * registered: its callers cannot tell whether a newer session has taken the run over since. The
+   * record is failed only for the registered owner; a displaced turn just stops its timers and
+   * lets go of what it alone held.
+   */
   private async runContinuation(
+    runId: string,
+    stepId: string,
+    sessionId: string | undefined,
+    backend: RunnerId,
+    prompt: string,
+    images: PastedContent[] = [],
+    persistedImages: ContentBlock[] = [],
+    persistedAttachments: PersistedAttachment[] = [],
+  ): Promise<void> {
+    const owner = Symbol('run-owner');
+    let registered: ActiveRun | undefined;
+    try {
+      await this.runContinuationTurn(
+        runId,
+        stepId,
+        sessionId,
+        backend,
+        prompt,
+        images,
+        persistedImages,
+        persistedAttachments,
+        owner,
+        (state) => {
+          registered = state;
+        },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // A cancel that landed before the throw still owes the parent its report.
+      if (!this.abandonCancelledStart(runId)) this.starting.delete(runId);
+      if (!registered) {
+        this.failOwnedContinuation(runId, owner, message);
+        return;
+      }
+      this.clearIdleTimer(registered);
+      this.clearAutosaveTimer(registered);
+      if (this.active.get(runId) === registered) {
+        this.failOwnedContinuation(runId, owner, message);
+        return;
+      }
+      this.dropActive(runId, registered);
+      if (!registered.released) return;
+      try {
+        this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+      } catch {
+        // The escape may itself be the run's directory having gone away under a late teardown;
+        // there is no transcript left to annotate, and nothing awaits this promise.
+      }
+    }
+  }
+
+  private async runContinuationTurn(
     runId: string,
     stepId: string,
     sessionId: string | undefined,
@@ -4419,6 +4572,7 @@ export class RunManager {
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
     ownerToken?: symbol,
+    onRegistered?: (state: ActiveRun) => void,
   ): Promise<void> {
     const effectiveOwnerToken = ownerToken ?? Symbol('run-owner');
     // Continuation runs in the task's worktree when it still exists (spec
@@ -4495,6 +4649,7 @@ export class RunManager {
     };
     this.checkArtifactSnapshots.set(runId, state.autosaveExcludedPaths);
     this.active.set(runId, state);
+    onRegistered?.(state);
     this.starting.delete(runId);
     if (record?.worktreePath && state.cwd !== this.repoRoot) state.releaseWorktree = await this.lifecycle.acquireAgentLease(runId);
     state.readOnly = record?.readOnly === true && state.cwd === this.repoRoot;
@@ -4513,13 +4668,14 @@ export class RunManager {
           message: 'waiting for exclusive access to the repository working tree',
         });
         if (!(await this.acquireRepoRoot(runId, state))) {
-          this.store.updateRun(runId, {
-            status: 'cancelled',
-            finishedAt: new Date().toISOString(),
-            currentStepId: undefined,
+          this.settleOwnedOrRelease(runId, state, () => {
+            this.store.updateRun(runId, {
+              status: 'cancelled',
+              finishedAt: new Date().toISOString(),
+              currentStepId: undefined,
+            });
+            this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
           });
-          this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
-          this.dropActive(runId, state);
           return;
         }
       }
@@ -4531,6 +4687,9 @@ export class RunManager {
     // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
     state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    // A cancellation that landed during discovery dropped this registration; writing `running`
+    // now would revive a run the user stopped.
+    if (this.bailIfDisplaced(runId, state, stepId)) return;
     // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
     // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
@@ -4862,6 +5021,10 @@ export class RunManager {
     }
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
+    // A cancellation during the run-up above finds no session to signal, so it is only felt here:
+    // spawning now would leave an orphan turn writing into a task that has already moved on.
+    if (this.bailIfDisplaced(runId, state, stepId)) return;
+
     const runner = createRunner(continueBackend);
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
     if (state.cancelled) return;
@@ -4969,6 +5132,11 @@ export class RunManager {
       // Before any branch below publishes a terminal status: the finally's autosave comes after it.
       state.turnSettled = true;
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
+      if (state.released) {
+        this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
+        this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+        return;
+      }
       if (state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
@@ -5001,7 +5169,7 @@ export class RunManager {
           currentStepId: undefined,
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: `run stopped — ${message}` });
-      } else {
+      } else if (this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'done', finishedAt: finishedAt() });
         this.store.appendEvent(runId, { type: 'step-end', stepId, status: 'done' });
         await this.settleSuccess(runId);
@@ -5011,7 +5179,10 @@ export class RunManager {
       const message = err instanceof Error ? err.message : String(err);
       state.turnSettled = true;
       sink.sessionEnded('error', message);
-      if (!state.cancelled && this.active.get(runId) === state) {
+      if (state.released) {
+        this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
+        this.store.appendEvent(runId, { type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+      } else if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
         const failedAt = finishedAt();
@@ -5251,14 +5422,15 @@ export class RunManager {
         const message = err instanceof Error ? err.message : String(err);
         const error = `worktree creation failed: ${message}`;
         emit({ type: 'note', message: `${error} — task stopped before workflow execution` });
-        this.store.updateRun(runId, {
-          status: 'failed',
-          error,
-          finishedAt: new Date().toISOString(),
-          currentStepId: undefined,
+        this.settleOwnedOrRelease(runId, state, () => {
+          this.store.updateRun(runId, {
+            status: 'failed',
+            error,
+            finishedAt: new Date().toISOString(),
+            currentStepId: undefined,
+          });
+          emit({ type: 'lifecycle', message: `run failed — ${error}` });
         });
-        emit({ type: 'lifecycle', message: `run failed — ${error}` });
-        this.dropActive(runId, state);
         return;
       }
     } else {
@@ -5417,8 +5589,16 @@ export class RunManager {
 
     // The cancellation grace timer may have retired this owner while the async
     // workflow was unwinding, and a same-id continuation may now own the record.
-    // No settlement branch below may touch that newer owner.
-    if (this.active.get(runId) !== state) return;
+    // No settlement branch below may touch that newer owner. A workflow that stalled long enough
+    // for `releaseStaleActive` to hand the run to a newer session (#798) closes out quietly: its
+    // steps are already settled above, and the run record belongs to whoever holds the
+    // registration now.
+    if (this.active.get(runId) !== state) {
+      this.clearIdleTimer(state);
+      if (state.released) emit({ type: 'note', message: RELEASED_SESSION_SETTLED_NOTE });
+      this.dropActive(runId, state);
+      return;
+    }
 
     // Same window as `runContinuation`'s: whatever settles below is final once teardown lets go.
     state.turnSettled = true;
