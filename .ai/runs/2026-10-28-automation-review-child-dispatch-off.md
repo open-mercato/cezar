@@ -30,6 +30,8 @@ A review-child instruction never reaches an automation's run when Dispatch is in
 
 ## Progress
 
+PR: #1743
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Launcher
