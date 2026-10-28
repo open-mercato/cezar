@@ -1,3 +1,4 @@
+import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
 import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
@@ -204,6 +205,7 @@ function ProjectScopeRoute() {
       {/* React Router keeps the matched child mounted when only this parent param changes.
           Project-local queries and mount-time state must instead start from the project the URL
           now names. Key the child boundary (not the provider, whose unmount resets API scope). */}
+      <ProjectWebhookNotifications key={`webhooks:${projectId}`} projectId={projectId} />
       <Outlet key={projectId} />
     </ProjectScopeProvider>
   )

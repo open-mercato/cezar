@@ -1,0 +1,87 @@
+---
+title: "Fix a UI with Design Mode"
+nav_title: "Fix a UI"
+description: "Select an element in Preview, explain the change, and check the agent’s edits."
+related:
+  links:
+    - features/tasks-and-sessions/design-mode
+    - features/tasks-and-sessions/design-notes
+sources:
+  - label: "Preview and availability"
+    path: packages/web/src/routes/task-preview/browser-view.tsx
+    line: 174
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Starting the app"
+    path: packages/web/src/routes/task-preview/run-app.tsx
+    line: 383
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Sending a note"
+    path: packages/web/src/routes/task-preview/design-note-popup.tsx
+    line: 29
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Element context sent to the agent"
+    path: packages/web/src/routes/task-preview/design-picks.ts
+    line: 133
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Design Mode specification"
+    path: .ai/specs/2026-10-09-design-mode.md
+    line: 122
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+When you finish, you have a note attached to a page element, delivered to your task’s agent with context from the page.
+
+<Mermaid chart={"flowchart LR\n  s0[\"Select<br/><small>Point to an element</small>\"]\n  s1[\"Describe<br/><small>Send a focused note</small>\"]\n  s2[\"Check<br/><small>Inspect code and UI</small>\"]\n  s0 --> s1 --> s2"} />
+
+## Prerequisites
+
+- A task open in a local Cezar cockpit.
+- The task’s app running at a loopback HTTP address, such as `http://localhost:3000`.
+- Design Mode is available locally by default. `CEZ_DESIGN_MODE=0` disables it; hosted cockpits do not support it.
+
+## Step 1: Open the task’s app in Preview
+
+Open Preview and enter the local app address. If the app is not running, the empty Preview offers Run followed by the detected command, or Start app when a start recipe exists. Use Other command if the suggestion is wrong. The process runs in the task’s worktree.
+
+**Check**: Preview shows the page you want to change. If startup fails, open Show terminal and read the output.
+
+## Step 2: Turn on Design Mode and select an element
+
+Click Design Mode in the Preview toolbar. Hover to see the selection outline, then click the button, text, or other element you want to change. A note opens beside it. Each note refers to one element.
+
+**Check**: The selected element has an outline and a note field beside it.
+
+## Step 3: Write a specific note and send it
+
+Use the What should change here? field. Describe the intended result and anything that should stay unchanged. Click Send or press Cmd/Ctrl+Enter. If the session is closed, the action reads Reopen & send. For a queued task, the note joins its first prompt.
+
+```txt title="Example note"
+Change this heading to "Build something useful."
+Keep the font and spacing.
+Check the layout at desktop and mobile widths.
+```
+
+**Check**: The note is sent to the task and a numbered marker remains on the element.
+
+## Step 4: Check the result in the app
+
+Read the response in Chat and inspect the edits in Changes. Return to Preview to test the result. Turn Design Mode off to use the page’s buttons and links normally. A note marked Done reflects the agent’s run state; it does not prove that the page looks correct.
+
+**Check**: The element looks and behaves as requested at the screen sizes that matter to your app.
+
+## How it works
+
+The agent receives your words, the page address, selector, dimensions, visible text, selected styles, and an HTML fragment. Component names and source locations are included when the framework exposes them. No screenshot is attached automatically.
+
+## Troubleshooting
+
+### Design Mode is disabled
+
+Read the reason on the toolbar button. Use a local cockpit and a loopback http:// address. Hosted mode, external websites, local HTTPS, and `CEZ_DESIGN_MODE=0` prevent selection.
+
+### The app asks me to sign in again
+
+Design Mode uses a separate local origin. Sessions stored in `localStorage` do not carry over. Sign in within that preview if the app requires it.
+
+### The app never opens
+
+Use Show terminal to inspect startup output. The command may have exited or may not have printed an address. Check the command and dependencies, or enter the app’s working address yourself.

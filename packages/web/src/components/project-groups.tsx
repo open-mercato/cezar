@@ -610,11 +610,11 @@ function ProjectGroup({
             <span className="truncate">{project.name}</span>
             {project.unregistered ? (
               // Says what the row is without pretending it is a problem: cezar is serving this
-              // folder, it just is not in the saved list. Global settings → Projects has the
-              // one-click Add; repeating the button here would put a registry write in the nav.
+              // folder, it just is not in the saved list. The project's Settings has the one-click
+              // Add (#1432); repeating the button here would put a registry write in the nav.
               <span
                 data-slot="project-unregistered"
-                title="cezar is serving this folder — it is not in your saved projects. Add it in Global settings → Projects."
+                title="cezar is serving this folder — it is not in your saved projects. Add it from this project's Settings."
                 className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
               >
                 not saved

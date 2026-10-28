@@ -216,6 +216,26 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
+  it('names the early exit status and keeps the bounded stderr tail in a local note', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}bad config`);
+    Object.assign(child, { exitCode: 1 });
+    (child as unknown as EventEmitter).emit('exit', 1, null);
+    (child as unknown as EventEmitter).emit('close', 1, null);
+    await session.result.catch(() => undefined);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
+    ]);
+    expect(events).toContainEqual({ type: 'note', message: `opencode serve stderr: ${'x'.repeat(790)}bad config` });
+  });
+
   // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
   it('keeps waiting while the server is still printing, up to the hard cap', async () => {
     const child = silentChild();
@@ -262,7 +282,7 @@ describe('opencode serve startup', () => {
     await session.result;
     expect(spawns).toBe(1);
     expect(events.filter((e) => e.type === 'error')).toEqual([
-      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
     ]);
     expect(events).toContainEqual({ type: 'note', message: 'opencode serve stderr: Error: bad config' });
   });
@@ -278,7 +298,7 @@ describe('opencode serve startup', () => {
     await session.result;
     expect(spawns).toBe(SERVER_PORT_ATTEMPTS);
     expect(events.filter((e) => e.type === 'error')).toEqual([
-      { type: 'error', message: 'opencode: opencode serve exited before it started listening' },
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
     ]);
     expect(events.filter((e) => e.type === 'note')).toHaveLength(1);
   });
@@ -322,6 +342,19 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     expect(errors(events)).toEqual([]);
     expect(events.map((e) => e.type)).toContain('turn-end');
     expect(result.sessionId).toBe('ses_mock_1');
+  }, 30_000);
+
+  it('surfaces the OpenCode error name and message for a failed prompt POST', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: '#http-error', cwd: process.cwd() },
+      (e) => events.push(e),
+    );
+    await session.result;
+    expect(errors(events)).toContainEqual({
+      type: 'error',
+      message: 'opencode: POST /session/ses_mock_1/message → 500 InternalError: Provider rejected the configured model',
+    });
   }, 30_000);
 
   it('never adopts a server on that port that serves another directory', async () => {
@@ -746,8 +779,10 @@ describe('a session.status retry the turn cannot outwait', () => {
 
   it("ignores another session's retry", async () => {
     const status = { message: 'Free usage exceeded', action: { reason: 'free_tier_limit' }, next: Date.now() + 60 * 60_000 };
-    // Only the wall clock ends this turn: the retry belongs to a subtask session.
-    expect(await retryErrors(status, { MOCK_RETRY_SESSION: 'ses_other' }, 1_500)).toEqual(['opencode timed out after 0m and was killed']);
+    // Only the inactivity deadline ends this turn: the retry belongs to a subtask session.
+    expect(await retryErrors(status, { MOCK_RETRY_SESSION: 'ses_other' }, 1_500)).toEqual([
+      'opencode timed out after 2s without any output and was killed — Continue picks the task up again',
+    ]);
   }, 30_000);
 
   it('rides out a short transient retry', async () => {

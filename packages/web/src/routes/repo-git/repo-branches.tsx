@@ -3,12 +3,13 @@ import { CheckIcon, GitBranchIcon, GitPullRequestIcon, PlusIcon } from 'lucide-r
 import { useState, type FormEvent } from 'react'
 
 import { createRepoBranch, putConfig } from '@/api/client'
-import { queryKeys, useGithub, useHealth, useRepoSync } from '@/api/queries'
+import { queryKeys, useGithub, useRepoSync } from '@/api/queries'
 import { BranchTrackingBadge } from './repo-sync-bar'
 import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { useActiveForge } from '@/lib/active-forge'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 /**
@@ -18,13 +19,13 @@ import { cn, isHttpUrl } from '@/lib/utils'
  * danger toast. The agents' base-branch picker rides the same payload's `baseBranch` +
  * `PUT /api/config`, exactly like the legacy Repo tab did.
  *
- * Forge-specific rows (open PRs with checks badges) render ONLY when `/api/health` reports
- * the forge driver available — no driver, no PR surface, per the forge-seam doctrine. The
+ * Forge-specific rows (open PRs with checks badges) render ONLY when this project's forge
+ * (`useActiveForge`, #1410) is available — no driver, no PR surface, per the forge-seam doctrine. The
  * component gate doubles as the fetch gate: `<ForgePullRequests>` mounts (and so queries
  * `/api/github`) only behind it.
  */
 export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: RepoInfo }) {
-  const health = useHealth()
+  const forge = useActiveForge()
   const sync = useRepoSync()
   const queryClient = useQueryClient()
   const onError = (error: Error) => toast(error.message, { tone: 'danger' })
@@ -184,7 +185,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
         <p className="mt-1 text-[11px] text-soft-foreground">New task worktrees branch from this.</p>
       </div>
 
-      {health.data?.forge?.available ? <ForgePullRequests /> : null}
+      {forge?.available ? <ForgePullRequests /> : null}
     </section>
   )
 }

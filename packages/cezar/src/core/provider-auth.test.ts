@@ -916,6 +916,32 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'disconnected' } });
   });
 
+  // Telemetry f67df9d2: pi 0.73.1 with a piped stdin writes its whole answer to stderr, exit 0.
+  it.each([
+    [
+      'disconnected',
+      'No models available. Use /login to log into a provider via OAuth or API key. See:\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/providers.md\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/models.md\n',
+    ],
+    [
+      'connected',
+      'provider   model              context  max-out  thinking  images\n'
+        + 'anthropic  claude-sonnet-4-5  200K     64K      yes       yes\n',
+    ],
+  ] as const)('reads a pi 0.73 stderr-only answer as %s', async (expected, stderr) => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      onInconclusive,
+      runCommand: runner((executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: expected } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi' }));
+  });
+
   it('does not guess from unrecognized pi model output', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'pi'
@@ -2150,6 +2176,36 @@ describe('inconclusive probe reports', () => {
     expect(result).toMatchObject({ exitCode: 0, timedOut: false });
     expect(result.stdout).toContain('"sessionId":"s"');
   });
+
+  // Telemetry 5f52beba: Copilot 1.0.103 (Windows) answered session/new, then never exited on EOF;
+  // the timeout killed it and its complete answer was reported as a hang.
+  it('keeps an ACP answer whose server outlives EOF, and stops waiting for it to exit', async () => {
+    const lingering = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n'); });",
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+    const onInconclusive = vi.fn();
+    const results: Array<{ signal?: string; timedOut?: boolean }> = [];
+    const service = new ProviderAuthService({
+      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        const result = await defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin);
+        results.push(result);
+        return result;
+      },
+      onInconclusive,
+    });
+    const started = Date.now();
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(onInconclusive).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeLessThan(6_000);
+    // cezar's own linger kill is not an interruption: no `signal` for wasInterrupted() to re-ask over.
+    expect(results.at(-1)).toMatchObject({ timedOut: false });
+    expect(results.at(-1)?.signal).toBeUndefined();
+  }, 20_000);
 
   // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,
   // which read as unrecognized output and never got the longer re-ask a timeout gets.

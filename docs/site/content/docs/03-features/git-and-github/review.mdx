@@ -1,0 +1,31 @@
+---
+title: "Review changes before finishing"
+description: "Enable review to pause a completed task while it waits for your feedback."
+version: opt-in
+related:
+  links:
+    - getting-started/first-task
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/tasks-section.tsx
+    line: 80
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-18-optional-review-gate.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+If a task succeeds and changes files, you can read the diff, send feedback to the agent, accept the result, or create a draft pull request.
+
+## Where to find it
+
+Settings → project → Tasks → Review changes before finishing
+
+## How to use it
+
+1. Enable Review changes before finishing in Tasks settings or set `CEZ_REVIEW_GATE=1`.
+2. Start a non-autonomous task that changes files.
+3. Review the diff, send feedback, or accept the result.
+
+> **Good to know**: The review gate is off by default, and Autonomous mode skips it. In trunk mode, auto-land can commit changes and push them to the remote repository. The technical reference explains when this happens.

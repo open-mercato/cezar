@@ -186,7 +186,7 @@ import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
 import type { ResponseFormat } from 'hono/types'
 import type { AppType } from '@open-mercato/cezar/app-type'
-import { SID_HEADER, sid } from '@/lib/sid'
+import { SID_HEADER, sid, uuidv7 } from '@/lib/sid'
 import { noteFailedRequest } from '@/lib/failed-request'
 
 /**
@@ -364,11 +364,26 @@ const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
  * resolves to a branded error type rather than to `never`, which would have been assignable to
  * every caller's declared return type and failed only at runtime.
  */
+/**
+ * A response's body, where a connection that drops AFTER the headers is the same `ApiError(0)` as
+ * one that never answered — not the bare `TypeError: Failed to fetch` it would otherwise escape
+ * `fetchOrThrow` as (telemetry 2e454012), unreported and never retried.
+ */
+async function readBody(res: { text(): Promise<string>; url: string }): Promise<string> {
+  try {
+    return await res.text()
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError') throw cause
+    noteFailedRequest(res.url, undefined, 0, undefined, cause)
+    throw new ApiError(0, `cannot reach the cezar server (${res.url})`, { cause })
+  }
+}
+
 export async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>(
   res: R,
   label: string,
 ): Promise<OkJson<R>> {
-  const body = await res.text()
+  const body = await readBody(res)
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   const parsed = parseJson(body)
   if (parsed === undefined) {
@@ -465,7 +480,7 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
   const headers = new Headers(init.headers)
   headers.set('accept', 'text/plain')
   const res = await send(path, { ...init, headers })
-  const body = await res.text()
+  const body = await readBody(res)
   if (!res.ok) throw errorFor(res.status, res.statusText, body)
   return body
 }
@@ -584,7 +599,7 @@ export async function browseFs(
 /** The authoritative run list — sorted newest-first by the server. */
 export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
   return unwrap(
-    await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId: queryScope() } }, init(opts)),
+    await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId: queryScope() }, query: {} }, init(opts)),
     '/runs',
   )
 }
@@ -594,7 +609,7 @@ export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
  *  already-`/api/p/`-prefixed path passes through `apiPath` untouched, so this stays
  *  correct whatever scope is mounted. */
 export async function getProjectRuns(projectId: string, opts?: ReadOptions): Promise<ApiRun[]> {
-  return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId } }, init(opts)), '/runs')
+  return unwrap(await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId }, query: {} }, init(opts)), '/runs')
 }
 
 /** The cross-project task index (`GET /api/v1/workspace/runs-index`) — what lets ⌘K find a task
@@ -956,7 +971,7 @@ export async function getWorkspaceSecrets(opts?: ReadOptions): Promise<SecretsLi
 }
 /** Every write answers 204, which has no body for `unwrap` to parse — only the status matters. */
 async function expectNoContent(res: Response): Promise<void> {
-  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+  if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
 }
 export async function saveProjectSecret(name: string, input: SecretValueInput): Promise<void> {
   await expectNoContent(await cez.api.v1.p[':projectId'].secrets[':name'].$put(
@@ -1360,7 +1375,7 @@ export async function registerProject(root: string): Promise<RegisterProjectResp
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ root }),
   })
-  const body = await res.text()
+  const body = await readBody(res)
   const parsed = parseJson(body)
   const project = (parsed as { project?: unknown } | undefined)?.project
   if ((res.ok || res.status === 409) && project !== undefined && project !== null) {
@@ -1652,6 +1667,8 @@ export interface ContinueOptions {
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
    *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
   agentProfile?: string
+  /** One per Continue, reused by its retries: a key that already landed is not continued again. */
+  idempotencyKey?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1664,6 +1681,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+    ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1689,6 +1707,7 @@ export async function continueProjectRun(
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+        ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
       },
     }),
     runPath(id, '/continue'),
@@ -1919,14 +1938,45 @@ export async function pushRun(id: string): Promise<GitPushResponse> {
   )
 }
 
+/** Waits between re-posts of a message that got no answer at all (status 0). */
+export const MESSAGE_RETRY_DELAYS_MS = [250, 750, 1_500] as const
+
+const delayMessageRetry = (delayMs: number) => new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+
+/**
+ * Post one message, re-posting it while the server gives no answer (telemetry 1a212342, 29c3ba11:
+ * a remote cockpit's POST failing in ~2 ms on a socket its reverse proxy had already closed —
+ * browsers never retry a POST, and each failure retires only one of the pool's stale sockets).
+ * Every attempt carries the same `idempotencyKey`, so one that did land is never delivered twice.
+ */
+export async function postMessageWithRetry(
+  post: (json: MessageInput & { idempotencyKey: string }) => Promise<MessageResponse>,
+  message: MessageInput,
+  wait: (delayMs: number) => Promise<void> = delayMessageRetry,
+): Promise<MessageResponse> {
+  const json = { text: message.text ?? '', images: message.images ?? [], idempotencyKey: message.idempotencyKey ?? uuidv7() }
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await post(json)
+    } catch (error) {
+      const delayMs = MESSAGE_RETRY_DELAYS_MS[attempt]
+      if (!(error instanceof ApiError) || error.status !== 0 || delayMs === undefined) throw error
+      await wait(delayMs)
+    }
+  }
+}
+
 /** Deliver text and/or pasted screenshots into a run's live session. 409 once it has closed. */
 export async function sendMessage(id: string, message: MessageInput): Promise<MessageResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
-    }),
-    runPath(id, '/messages'),
+  return postMessageWithRetry(async (json) =>
+    unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        json,
+      }),
+      runPath(id, '/messages'),
+    ),
+    message,
   )
 }
 
@@ -1937,12 +1987,15 @@ export async function sendProjectRunMessage(
   id: string,
   message: MessageInput,
 ): Promise<MessageResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
-      param: { projectId, id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
-    }),
-    runPath(id, '/messages'),
+  return postMessageWithRetry(async (json) =>
+    unwrap(
+      await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+        param: { projectId, id: encodeURIComponent(id) },
+        json,
+      }),
+      runPath(id, '/messages'),
+    ),
+    message,
   )
 }
 
@@ -2277,7 +2330,7 @@ export async function deleteAutomation(id: string, expectedRevision?: number): P
     param: { projectId: queryScope(), id: encodeURIComponent(id) },
       query: expectedRevision ? { expectedRevision: String(expectedRevision) } : {},
   })
-  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+  if (!res.ok) throw errorFor(res.status, res.statusText, await readBody(res))
 }
 
 /** The other registered projects' automations, as the editor's template palette lists them
@@ -2432,7 +2485,7 @@ export async function uploadWorkspaceBrandingLogo(file: File): Promise<string | 
   const form = new FormData()
   form.set('file', file)
   const response = await send('/workspace/branding-logo', { method: 'POST', body: form })
-  const body = await response.text()
+  const body = await readBody(response)
   if (!response.ok) throw errorFor(response.status, response.statusText, body)
   const parsed = parseJson(body)
   const result = workspaceBrandingLogoResponseSchema.safeParse(parsed)
@@ -2443,7 +2496,7 @@ export async function uploadWorkspaceBrandingLogo(file: File): Promise<string | 
 /** Remove the workspace logo through the shared API boundary. */
 export async function deleteWorkspaceBrandingLogo(): Promise<string | null> {
   const response = await send('/workspace/branding-logo', { method: 'DELETE' })
-  const body = await response.text()
+  const body = await readBody(response)
   if (!response.ok) throw errorFor(response.status, response.statusText, body)
   const result = workspaceBrandingLogoResponseSchema.safeParse(parseJson(body))
   if (!result.success) throw new ApiError(response.status, 'the cezar server answered /workspace/branding-logo with an unexpected body')
@@ -2739,6 +2792,25 @@ export async function readTrackerWatch(projectId: string, watchId: string, signa
 export async function refreshTrackerWatch(projectId: string, watchId: string, signal: AbortSignal) {
   return trackerWatchSnapshotSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch[':watchId'].$post(
     { param: { projectId, watchId } }, { init: { signal } }), '/tracker/watch'))
+}
+
+// Explicit scope parameters keep late responses and mutations tied to their original project.
+export const webhookApi = {
+  list: async (projectId: string, signal?: AbortSignal) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$get({ param: { projectId } }, { init: { signal } }), '/webhooks'),
+  create: async (projectId: string, json: import('@open-mercato/cezar-api-client').CreateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks.$post({ param: { projectId }, json }), '/webhooks'),
+  update: async (projectId: string, id: string, json: import('@open-mercato/cezar-api-client').UpdateWebhook) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$patch({ param: { projectId, id }, json }), '/webhooks'),
+  remove: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].$delete({ param: { projectId, id }, json: { expectedRevision } }), '/webhooks'),
+  activate: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].activate.$post({ param: { projectId, id }, json: { expectedRevision, confirmed: true } }), '/webhooks'),
+  pause: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].pause.$post({ param: { projectId, id }, json: { expectedRevision } }), '/webhooks'),
+  resume: async (projectId: string, id: string, expectedRevision: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].resume.$post({ param: { projectId, id }, json: { expectedRevision, confirmed: true } }), '/webhooks'),
+  rotate: async (projectId: string, id: string, expectedRevision: number, mode: 'graceful' | 'revoke_now') => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id']['rotate-secret'].$post({ param: { projectId, id }, json: { expectedRevision, mode } }), '/webhooks'),
+  test: async (projectId: string, id: string, json: import('@open-mercato/cezar-api-client').WebhookOperation) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].test.$post({ param: { projectId, id }, json }), '/webhooks'),
+  retry: async (projectId: string, deliveryId: string, json: import('@open-mercato/cezar-api-client').WebhookOperation) => unwrap(await cez.api.v1.p[':projectId'].webhooks.deliveries[':deliveryId'].retry.$post({ param: { projectId, deliveryId }, json }), '/webhooks'),
+  replay: async (projectId: string, deliveryId: string, json: import('@open-mercato/cezar-api-client').WebhookOperation) => unwrap(await cez.api.v1.p[':projectId'].webhooks.deliveries[':deliveryId'].replay.$post({ param: { projectId, deliveryId }, json: { ...json, confirmed: true } }), '/webhooks'),
+  acknowledge: async (projectId: string, expectedChangeSequence: number) => unwrap(await cez.api.v1.p[':projectId'].webhooks.notice.acknowledge.$post({ param: { projectId }, json: { expectedChangeSequence } }), '/webhooks'),
+  history: async (projectId: string, cursor?: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks.history.$get({ param: { projectId }, query: { limit: '100', ...(cursor ? { cursor } : {}) } }), '/webhooks/history'),
+  deliveries: async (projectId: string, id: string, cursor?: string, taskId?: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].deliveries.$get({ param: { projectId, id }, query: { limit: '100', ...(cursor ? { cursor } : {}), ...(taskId ? { taskId } : {}) } }), '/webhooks/deliveries'),
+  activity: async (projectId: string, id: string) => unwrap(await cez.api.v1.p[':projectId'].webhooks[':id'].activity.$get({ param: { projectId, id } }), '/webhooks/activity'),
 }
 
 /** Worktree lifecycle reads/actions share the existing scope and authenticated transport. */

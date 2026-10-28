@@ -1,0 +1,27 @@
+---
+title: "Answer an agent's question"
+description: "Provide missing information through a question card in the thread."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/task-thread.tsx
+    line: 300
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-18-askuser-across-runners.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The card shows the question and available answers when an agent is waiting for a decision.
+
+## Where to find it
+
+Task thread → question card
+
+## How to use it
+
+1. Open the waiting task and read the question and its available options.
+2. Send your answer.
+
+> **Good to know**: Question cards are available when the selected agent and execution mode support questions.

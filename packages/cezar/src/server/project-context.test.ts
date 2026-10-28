@@ -1,3 +1,4 @@
+import { RunManager } from '../workflows/run.ts';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -208,4 +209,14 @@ describe('ProjectContexts', () => {
     expect(spyA).not.toHaveBeenCalled();
     expect(spyB).not.toHaveBeenCalled();
   });
+  it('awaits optional context preparation before manager recovery and announces readiness afterwards', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    const order: string[] = [];
+    const off = contexts.onBeforeRecover(async () => { await Promise.resolve(); order.push('prepared'); });
+    const recovered = vi.spyOn(RunManager.prototype, 'recover').mockImplementation(async () => { order.push('recover'); });
+    contexts.onContextBuilt(() => { order.push('ready'); });
+    try { await contexts.context('a'); expect(order).toEqual(['prepared', 'recover', 'ready']); }
+    finally { off(); contexts.disposeAll(); recovered.mockRestore(); }
+  });
+
 });

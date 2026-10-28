@@ -82,6 +82,7 @@ import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
 import { useDraft } from './thread-draft'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -592,8 +593,7 @@ function OpenInMenuForRun({
   const copyPath = () => {
     const path = run.worktreePath
     if (!path) return
-    void navigator.clipboard
-      .writeText(path)
+    void writeClipboard(path)
       .then(() => toast('Worktree path copied'))
       .catch(() => toast(`Path: ${path}`))
   }
@@ -698,12 +698,7 @@ function CopyBranchChip({ branch }: { branch: string }) {
   )
 
   const copy = () => {
-    if (!navigator.clipboard) {
-      toast(`Branch: ${branch}`)
-      return
-    }
-    void navigator.clipboard
-      .writeText(branch)
+    void writeClipboard(branch)
       .then(() => {
         setCopied(true)
         setTooltipOpen(true)

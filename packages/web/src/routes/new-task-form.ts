@@ -420,15 +420,16 @@ export function buildCreateRunBody(opts: {
 
 /**
  * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
- * read-only task, else its default skill — only when that skill exists in the catalog.
+ * read-only task, else its default skill — only when that skill exists in the catalog. `null`
+ * skills means the catalog failed to load: keep the configured name and let the server judge it.
  */
 export function projectDefaultSource(
   config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
   readOnly: boolean,
-  skills: readonly Skill[],
+  skills: readonly Skill[] | null,
 ): TaskSource | null {
   const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
-  return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
+  return name && (skills === null || skills.some((skill) => skill.name === name)) ? { source: 'skill', ref: name } : null
 }
 
 /** A trunk-based project asks by default when the message reads as a question. */

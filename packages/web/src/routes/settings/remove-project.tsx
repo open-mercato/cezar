@@ -1,4 +1,6 @@
-import { useRemoveProject } from '@/api/queries'
+import { plural } from './webhook-presentation'
+import { useWebhookList } from '@/hooks/use-webhooks'
+import { useHealth, useRemoveProject } from '@/api/queries'
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import {
   AlertDialog,
@@ -40,7 +42,8 @@ export function useProjectRemoval() {
       remove.mutate(project.id, {
         // "Removed from the workspace", not "Deleted": the toast is the last word the user reads
         // about a button they may have pressed nervously.
-        onSuccess: () => {
+        onSuccess: (result) => {
+          if (result.warning) toast(result.warning, { tone: 'danger' })
           toast(`${project.name} removed from the workspace — its files are untouched`)
           onRemoved?.()
         },
@@ -59,6 +62,11 @@ export function RemoveProjectDialog({
   onOpenChange: (open: boolean) => void
   onConfirm: () => void
 }) {
+  const health = useHealth()
+  const webhooks = useWebhookList(project?.id ?? 'default', project !== null && health.data?.capabilities?.webhooks === true)
+  const affected = webhooks.data?.receivers.filter(receiver => ['active', 'suspended'].includes(receiver.state)) ?? []
+  const pending = affected.reduce((total, receiver) => total + receiver.pendingCount, 0)
+  const inFlight = affected.reduce((total, receiver) => total + receiver.inFlightCount, 0)
   return (
     <AlertDialog open={project !== null} onOpenChange={onOpenChange}>
       <AlertDialogContent>
@@ -68,6 +76,8 @@ export function RemoveProjectDialog({
             This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
             folder, its git history and its task history all stay exactly where they are, and
             adding it back later finds everything intact.
+            {affected.length > 0 && <span className="mt-2 block">{plural(affected.length, 'receiver', 'receivers')} will be paused. {plural(pending, 'pending delivery', 'pending deliveries')} will be cancelled; {inFlight} in flight may still arrive.</span>}
+            {webhooks.error && <span className="mt-2 block">Webhook state is unavailable. Removal will report whether receivers could be paused.</span>}
             <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={project?.root}>
               {project?.root}
             </span>

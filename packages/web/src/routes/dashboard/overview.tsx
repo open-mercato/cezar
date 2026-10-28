@@ -264,7 +264,7 @@ export function Overview({
                     <td className="px-3 py-2">
                       <Link
                         className="font-medium hover:underline"
-                        to={`/p/${encodeURIComponent(project.projectId)}/tasks`}
+                        to={`/p/${encodeURIComponent(project.projectId)}`}
                       >
                         {projectName(project.projectId)}
                       </Link>

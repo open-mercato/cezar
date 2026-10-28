@@ -22,6 +22,7 @@ import { usableRunners } from '@/lib/provider-status'
 import { cliTargetResumes, cliTargetRunner, runActionFlags } from './run-actions'
 import type { RunConfirmKind } from './run-confirm-dialog'
 import { useFinishRun } from './use-finish-run'
+import { writeClipboard } from '@/lib/clipboard'
 
 /** Terminal resume spawns a terminal on the SERVER's machine, so a hosted cockpit
  *  (`localHandoff: false`) never offers it — the route 409s there (telemetry f179cc7d). Only an
@@ -167,7 +168,7 @@ export type RunActions = ReturnType<typeof useRunActions>
 
 export async function copyToClipboard(text: string, doneMessage: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
+    await writeClipboard(text)
     toast(doneMessage)
   } catch {
     // No clipboard access (permissions, http) — show the command itself; it is the payload.

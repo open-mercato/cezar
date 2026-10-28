@@ -106,6 +106,7 @@ export type RegisterProjectResponse = z.infer<typeof registerProjectResponseSche
 export const removeProjectResponseSchema = z.object({
   removed: z.literal(true),
   id: z.string(),
+  warning: z.string().optional(),
 });
 export type RemoveProjectResponse = z.infer<typeof removeProjectResponseSchema>;
 

@@ -30,6 +30,7 @@ import { useDeliverPrompt } from './deliver-prompt'
 import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The review gate (spec 009, §"Task thread" review bullet) on the new surface — cezar's core
@@ -85,7 +86,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   // recovery) sends the notes to a dead session, and only the recovery — refetch, then deliver on
   // the live path — keeps them from bouncing back as a `run is still active` toast (77117b95).
   const continueWith = useCallback(
-    (text: string) => continueRun(run.id, { text, runner: continuation.runnerOverride }),
+    (text: string, _images: unknown, idempotencyKey?: string) =>
+      continueRun(run.id, { text, runner: continuation.runnerOverride, idempotencyKey }),
     [run.id, continuation.runnerOverride],
   )
   const deliverPrompt = useDeliverPrompt(run, continueWith, { surface: 'review' })
@@ -275,8 +277,7 @@ function ManualMergeLine({ command }: { command: string }) {
       data-slot="review-manual"
       title="Copy the command"
       onClick={() => {
-        void navigator.clipboard
-          .writeText(command)
+        void writeClipboard(command)
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}

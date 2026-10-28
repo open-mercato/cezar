@@ -17,6 +17,7 @@ import { buildChildEnv } from './agent-env.js';
 import { readNdjson } from './ndjson.js';
 import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.js';
 import { V1TextCoalescer } from './v1-text-coalescer.js';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
@@ -25,7 +26,7 @@ const AUTO_END_DELAY_MS = 250;
 export interface PiRunnerOptions {
   /** Override the binary name/path; defaults to `pi` on PATH (`CEZ_PI_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -159,18 +160,15 @@ export class PiRunner implements AgentRunner {
     ]);
 
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
-    const deadline =
-      limitMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            interrupt();
-          }, limitMs)
-        : undefined;
-    deadline?.unref?.();
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      interrupt();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
+          deadline.touch();
           let value: unknown;
           try {
             value = JSON.parse(line);
@@ -236,7 +234,7 @@ export class PiRunner implements AgentRunner {
           }
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (autoEndTimer) clearTimeout(autoEndTimer);
         if (killTimer) clearTimeout(killTimer);
         if (hardKillTimer) clearTimeout(hardKillTimer);
@@ -248,7 +246,7 @@ export class PiRunner implements AgentRunner {
       const exitCode = await waitForExit(child);
       if (spawnError) throw spawnError;
       if (timedOut) {
-        const message = `pi CLI timed out after ${Math.round((limitMs / 60_000) * 10) / 10}m and was killed`;
+        const message = inactivityTimeoutMessage('pi CLI', limitMs, deadline.expiredBy);
         onEvent?.({ type: 'error', message });
         onEvent?.({ type: 'done' });
         return { text: textChunks.join('\n').trim(), toolCalls, tokensUsed, sessionId };

@@ -1495,7 +1495,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -3270,5 +3270,127 @@ describe('cross-state search fallback (#730)', () => {
       },
       { timeout: 3000 },
     )
+  })
+})
+
+// ---- swipe-to-run (mobile) --------------------------------------------------------------------
+
+/** A touch swipe on a row: down, a few moves, up. `dx` < 0 swipes left. */
+function swipeRow(row: HTMLElement, dx: number, pointerType = 'touch') {
+  const start = { pointerId: 7, pointerType, clientX: 200, clientY: 100 }
+  fireEvent.pointerDown(row, start)
+  for (const step of [0.25, 0.5, 1]) {
+    fireEvent.pointerMove(row, { ...start, clientX: 200 + dx * step })
+  }
+  fireEvent.pointerUp(row, { ...start, clientX: 200 + dx })
+  // The browser follows a touch with a click on the same target; a swipe must swallow it.
+  fireEvent.click(row)
+}
+
+const swipeSheet = () => document.querySelector('[data-slot="gh-swipe-sheet"]')
+const swipePosted = (sent: SentRequest[]) =>
+  sent.find((request) => request.method === 'POST' && request.path === '/api/v1/runs')?.body as
+    | { workflow?: string; task: string; steps?: Array<{ skill: string }> }
+    | undefined
+
+describe('swipe a row to run (mobile)', () => {
+  it('a left swipe opens the launcher without navigating, and a workflow tap starts the run', async () => {
+    const sent = stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    swipeRow(rows()[1]!, -120)
+
+    await waitFor(() => expect(swipeSheet()).not.toBeNull())
+    expect(swipeSheet()?.textContent).toContain('Run agent on issue #139')
+    // The swipe did not follow the row's link: #142 is still the open detail.
+    expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
+
+    const ship = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-slot="gh-swipe-workflow"][data-name="ship-it"]')
+      expect(button?.disabled).toBe(false)
+      return button!
+    })
+    fireEvent.click(ship)
+
+    await waitFor(() => expect(swipePosted(sent)).toBeDefined())
+    expect(swipePosted(sent)).toMatchObject({ workflow: 'ship-it' })
+    expect(swipePosted(sent)?.task).toBe(githubTaskRef(ISSUE_139))
+    await waitFor(() => expect(screen.getByText('Added to the queue — issue #139')).toBeTruthy())
+    await waitFor(() => expect(swipeSheet()).toBeNull())
+    expect(rows()[1]?.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('a skill tap runs that one skill as the chain', async () => {
+    const sent = stubFetch()
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    swipeRow(rows()[0]!, -100)
+    const skill = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-slot="gh-swipe-skill"][data-name="om-fix"]')
+      expect(button?.disabled).toBe(false)
+      return button!
+    })
+    fireEvent.click(skill)
+
+    await waitFor(() => expect(swipePosted(sent)).toBeDefined())
+    expect(swipePosted(sent)?.workflow).toBeUndefined()
+    expect(swipePosted(sent)?.steps?.map((step) => step.skill)).toEqual(['om-fix'])
+    expect(swipePosted(sent)?.task).toContain(PR_137.url)
+  })
+
+  it('a short swipe, a mouse drag or a vertical scroll never opens it', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    swipeRow(rows()[1]!, -40)
+    swipeRow(rows()[1]!, -150, 'mouse')
+    const row = rows()[1]!
+    fireEvent.pointerDown(row, { pointerId: 9, pointerType: 'touch', clientX: 200, clientY: 100 })
+    fireEvent.pointerMove(row, { pointerId: 9, pointerType: 'touch', clientX: 190, clientY: 160 })
+    fireEvent.pointerCancel(row, { pointerId: 9, pointerType: 'touch', clientX: 60, clientY: 160 })
+
+    await act(async () => {})
+    expect(swipeSheet()).toBeNull()
+  })
+})
+
+describe('swipe a row to run (mobile) — no lasting side effects', () => {
+  it('a swipe whose click never came does not eat the next click on that row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    // No click follows (a moved touch); a later mouse click must still open the row.
+    fireEvent.pointerDown(rows()[1]!, { pointerId: 8, pointerType: 'mouse', clientX: 200, clientY: 100 })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a key press after a swipe still activates the row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.keyDown(rows()[1]!, { key: 'Enter' })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a row at rest is not clipped, so its focus ring stays visible', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows()[0]?.closest('li')?.className).not.toContain('overflow-hidden')
   })
 })

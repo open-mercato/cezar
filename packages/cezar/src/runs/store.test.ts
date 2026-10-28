@@ -2661,6 +2661,23 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
     // The dispatch path's next write after creating a child: it threw `unknown run` before.
     expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
   });
+
+  it('CEZ_RUNS_KEEP lowers how many settled runs the index keeps', () => {
+    process.env.CEZ_RUNS_KEEP = '5';
+    try {
+      const store = RunStore.open(dataDir);
+      let clock = Date.parse('2026-01-01T00:00:00.000Z');
+      for (let i = 0; i < 20; i++) {
+        vi.setSystemTime((clock += 1_000));
+        store.updateRun(store.createRun({ title: `r${i}`, workflow: 'quick-task', task: 't', steps: [] }).id, {
+          status: 'done',
+        });
+      }
+      expect(store.listRuns().length).toBe(5);
+    } finally {
+      delete process.env.CEZ_RUNS_KEEP;
+    }
+  });
 });
 
 describe('RunStore — index lock failures', () => {

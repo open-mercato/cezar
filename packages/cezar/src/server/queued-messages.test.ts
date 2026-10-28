@@ -151,6 +151,41 @@ describe('queued prompt stack routes (#472)', () => {
     expect(await res.json()).toEqual({ deferred: true });
   });
 
+  /** Telemetry 1a212342: the cockpit re-posts a message that got no answer, under the same key. */
+  it('delivers a retried message once — a repeated idempotency key answers its first response', async () => {
+    rung = 'live';
+    const delivered = vi.spyOn(manager, 'sendMessage');
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f';
+    const first = await post({ text: 'once', idempotencyKey });
+    const retry = await post({ text: 'once', idempotencyKey });
+    expect(await first.json()).toEqual({ delivered: true });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ delivered: true });
+    expect(delivered).toHaveBeenCalledTimes(1);
+    // A different key is a different message.
+    await post({ text: 'twice', idempotencyKey: '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e10' });
+    expect(delivered).toHaveBeenCalledTimes(2);
+  });
+
+  it('two concurrent posts under one key deliver once — the second waits out the first', async () => {
+    // Not queued, so the route awaits the provider check before delivering: both are in flight.
+    store.updateRun(record.id, { status: 'running' });
+    rung = 'live';
+    const delivered = vi.spyOn(manager, 'sendMessage');
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e12';
+    const answers = await Promise.all([post({ text: 'once', idempotencyKey }), post({ text: 'once', idempotencyKey })]);
+    for (const res of answers) expect(await res.json()).toEqual({ delivered: true });
+    expect(delivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused key is judged afresh on retry, not answered from a cache', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e11';
+    rung = 'closed';
+    expect((await post({ text: 'x', idempotencyKey })).status).toBe(409);
+    rung = 'live';
+    expect(await (await post({ text: 'x', idempotencyKey })).json()).toEqual({ delivered: true });
+  });
+
   it('still 409s for a genuinely closed run', async () => {
     rung = 'closed';
     const res = await post({ text: 'too late' });

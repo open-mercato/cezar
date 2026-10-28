@@ -155,3 +155,20 @@ The absolute instant is the source of truth (`<time dateTime>`), not a countdown
 ## Testability
 
 `scripts/mock-claude.mjs` grows `mock:limit`, emitting the real envelope with a reset `CEZ_MOCK_LIMIT_RESET_SECONDS` seconds out (default 60). The whole path — CLI wire shape → record `error` → parse → schedule → restart re-arm → resume — is exercised under `CEZ_DRY_RUN=1` with no login and no tokens, in `src/workflows/auto-resume.test.ts`, and is reachable by hand for QA the same way.
+
+## Addendum (2026-10-26): transient failures ride the same resume
+
+`src/core/agent-failure-class.ts` classifies an agent's terminal error as `transient`, `auth`,
+`billing`, `usage_limit`, `context_too_large` or `other` (narrow patterns from the telemetry groups
+76aa46a9, 9dd88886, a1c2fcc2, 5919c71a, 204c5e03, 9e4a95db, 7d0a1d6d, 5432183c, 13023969).
+
+- **Transient** → the same timer, record fields, cockpit hint and exits as a usage-limit resume,
+  after 30 s then 2 min (at least 60 s for Claude's OAuth refresh race), at most 2 per streak (a
+  completed turn ends it). `RunRecord.autoResumeReason: 'transient'` keeps it out of the account
+  holds — an overload says nothing about the account's window — and re-labels the hint. Same
+  switch (`autoResumeOnUsageLimit`); once spent, the run fails as before and the error is reported.
+- **Cancel** on a failed run with a booked resume (either kind) now retires it, so a cancelled
+  dispatch parent stops its children's resumes too.
+- **auth / billing / usage limit without a reset / context too large** → a lifecycle line saying
+  what to do; never an `AgentError` report, counted by `task_failed`'s kind.
+
