@@ -9,14 +9,15 @@ export function normalizeProjectFolders(value: unknown): ProjectFolder[] {
   return value.flatMap((entry) => {
     if (typeof entry !== 'object' || entry === null) return []
     const folder = entry as Record<string, unknown>
-    if (typeof folder.id !== 'string' || !folder.id.trim() || ids.has(folder.id)) return []
+    const id = typeof folder.id === 'string' ? folder.id.trim() : ''
+    if (!id || ids.has(id)) return []
     if (typeof folder.name !== 'string' || !folder.name.trim()) return []
-    ids.add(folder.id)
+    ids.add(id)
     const projectIds = Array.isArray(folder.projectIds)
-      ? [...new Set(folder.projectIds.filter((id): id is string => typeof id === 'string' && !assigned.has(id)))]
+      ? [...new Set(folder.projectIds.filter((pid): pid is string => typeof pid === 'string' && !assigned.has(pid)))]
       : []
-    projectIds.forEach((id) => assigned.add(id))
-    return [{ id: folder.id, name: folder.name.trim(), projectIds }]
+    projectIds.forEach((pid) => assigned.add(pid))
+    return [{ id, name: folder.name.trim(), projectIds }]
   })
 }
 

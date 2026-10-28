@@ -68,6 +68,8 @@ export function isFolderCollapsed(
   memberProjectIds: readonly string[],
   activeProjectId: string | null,
 ): boolean {
+  const stored = collapsed?.[`folder:${folderId}`]
+  if (stored !== undefined) return stored
   if (activeProjectId !== null && memberProjectIds.includes(activeProjectId)) return false
-  return isProjectCollapsed(collapsed, `folder:${folderId}`, activeProjectId)
+  return true
 }

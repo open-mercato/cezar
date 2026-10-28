@@ -282,15 +282,43 @@ export function ProjectGroups({
   ))
   const groupsById = new Map(ordered.map((project, index) => [project.id, groups[index]]))
 
-  const folderSections = [
-    ...folders.map((folder) => ({ folder, projects: ordered.filter((project) => folder.projectIds.includes(project.id)) })),
-    { folder: null, projects: ordered.filter((project) => !folders.some((folder) => folder.projectIds.includes(project.id))) },
-  ].filter(({ folder, projects }) => folder ? projects.length > 0 : projects.length > 0 || folders.length === 0)
+  const folderSections = React.useMemo(
+    () =>
+      [
+        ...folders.map((folder) => ({
+          folder,
+          projects: ordered.filter((project) => folder.projectIds.includes(project.id)),
+        })),
+        {
+          folder: null,
+          projects: ordered.filter(
+            (project) => !folders.some((folder) => folder.projectIds.includes(project.id)),
+          ),
+        },
+      ].filter(({ folder, projects }) =>
+        folder !== null ? true : projects.length > 0 || folders.length === 0,
+      ),
+    [folders, ordered],
+  )
+
+  const renderedIds = React.useMemo(() => {
+    return folderSections.flatMap(({ folder, projects: sectionProjects }) => {
+      const memberIds = sectionProjects.map((project) => project.id)
+      if (!folder) return memberIds
+      const folderShut = isFolderCollapsed(collapsed, folder.id, memberIds, scopedProjectId)
+      return folderShut ? [] : memberIds
+    })
+  }, [folderSections, collapsed, scopedProjectId])
 
   return (
     <div data-slot="project-group-list">
       <div className="mb-1 flex justify-end">
-        <button type="button" data-slot="project-folder-create" onClick={() => setEditingFolder(null)} className="flex h-7 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground">
+        <button
+          type="button"
+          data-slot="project-folder-create"
+          onClick={() => setEditingFolder(null)}
+          className="flex h-7 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
           <FolderPlusIcon className="size-3.5" aria-hidden="true" /> New folder
         </button>
       </div>
@@ -307,7 +335,7 @@ export function ProjectGroups({
             expanded — so the vertical strategy threw collapsed neighbours hundreds of pixels out
             of place mid-drag. The rect strategy measures each item and moves it to where it will
             actually land. */}
-        <SortableContext items={orderedIds} strategy={rectSortingStrategy}>
+        <SortableContext items={renderedIds} strategy={rectSortingStrategy}>
           {folderSections.map(({ folder, projects: sectionProjects }) => {
             const memberIds = sectionProjects.map((project) => project.id)
             const folderShut =
@@ -318,21 +346,61 @@ export function ProjectGroups({
                 {folder ? (
                   <div data-slot="project-folder" data-folder={folder.id} className="mb-1">
                     <div className="flex items-center">
-                      <button type="button" aria-expanded={!folderShut} onClick={() => toggle(`folder:${folder.id}`)} className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted">
-                        <ChevronDownIcon className={cn('size-3 transition-transform', folderShut && '-rotate-90')} aria-hidden="true" />
-                        <span className="truncate">{folder.name}</span><span className="ml-auto">{sectionProjects.length}</span>
+                      <button
+                        type="button"
+                        aria-expanded={!folderShut}
+                        onClick={() => toggle(`folder:${folder.id}`)}
+                        className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                      >
+                        <ChevronDownIcon
+                          className={cn('size-3 transition-transform', folderShut && '-rotate-90')}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{folder.name}</span>
+                        <span
+                          className="ml-auto"
+                          aria-label={`${sectionProjects.length} project${sectionProjects.length === 1 ? '' : 's'}`}
+                        >
+                          {sectionProjects.length}
+                        </span>
                       </button>
-                      <button type="button" aria-label={`Edit ${folder.name}`} onClick={() => setEditingFolder(folder)} className="size-8 rounded text-xs text-muted-foreground hover:bg-muted">…</button>
+                      <button
+                        type="button"
+                        aria-label={`Edit ${folder.name}`}
+                        onClick={() => setEditingFolder(folder)}
+                        className="size-8 rounded text-xs text-muted-foreground hover:bg-muted"
+                      >
+                        …
+                      </button>
                     </div>
-                    {folderShut ? null : <div className="ml-2 border-l border-border pl-1">{sectionProjects.map((project) => groupsById.get(project.id))}</div>}
+                    {folderShut ? null : (
+                      <div className="ml-2 border-l border-border pl-1">
+                        {sectionProjects.length === 0 ? (
+                          <div className="px-2 py-1 text-xs text-muted-foreground">
+                            No projects
+                          </div>
+                        ) : (
+                          sectionProjects.map((project) => groupsById.get(project.id))
+                        )}
+                      </div>
+                    )}
                   </div>
-                ) : sectionProjects.map((project) => groupsById.get(project.id))}
+                ) : (
+                  sectionProjects.map((project) => groupsById.get(project.id))
+                )}
               </React.Fragment>
             )
           })}
         </SortableContext>
       </DndContext>
-      {editingFolder !== undefined && <ProjectFolderDialog projects={projects} folder={editingFolder} onClose={() => setEditingFolder(undefined)} onSave={saveFolder} />}
+      {editingFolder !== undefined && (
+        <ProjectFolderDialog
+          projects={projects}
+          folder={editingFolder}
+          onClose={() => setEditingFolder(undefined)}
+          onSave={saveFolder}
+        />
+      )}
     </div>
   )
 }

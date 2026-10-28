@@ -32,14 +32,17 @@ describe('isProjectCollapsed', () => {
 })
 
 describe('isFolderCollapsed', () => {
-  it('stays open while the scoped project lives inside it', () => {
-    expect(isFolderCollapsed({ 'folder:client': true }, 'client', ['cezar', 'shop'], 'cezar')).toBe(
-      false,
-    )
+  it('defaults to open when containing the active project without stored answer', () => {
+    expect(isFolderCollapsed(undefined, 'client', ['cezar', 'shop'], 'cezar')).toBe(false)
   })
 
   it('defaults shut when it does not contain the active project', () => {
     expect(isFolderCollapsed(undefined, 'client', ['shop'], 'cezar')).toBe(true)
+  })
+
+  it('lets a stored answer override the default in both directions', () => {
+    expect(isFolderCollapsed({ 'folder:client': true }, 'client', ['cezar', 'shop'], 'cezar')).toBe(true)
+    expect(isFolderCollapsed({ 'folder:client': false }, 'client', ['shop'], 'cezar')).toBe(false)
   })
 })
 

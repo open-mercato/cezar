@@ -722,5 +722,22 @@ describe('ProjectGroups', () => {
       const folder = document.querySelector('[data-slot="project-folder"][data-folder="client"]')
       expect(folder?.querySelector('button[aria-expanded="true"]')).not.toBeNull()
     })
+
+    it('renders empty folder and shows "No projects" when expanded', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'empty-folder', name: 'Empty Folder', projectIds: [] }]),
+      )
+      storeCollapsed({ 'folder:empty-folder': false })
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="empty-folder"]')
+      expect(folder).not.toBeNull()
+      expect(folder?.querySelector('span[aria-label="0 projects"]')?.textContent).toBe('0')
+      expect(folder?.textContent).toContain('No projects')
+      expect(folder?.querySelector('button[aria-label="Edit Empty Folder"]')).not.toBeNull()
+    })
   })
 })
