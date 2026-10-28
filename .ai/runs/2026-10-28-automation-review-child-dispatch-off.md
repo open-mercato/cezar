@@ -34,8 +34,8 @@ A review-child instruction never reaches an automation's run when Dispatch is in
 
 ### Phase 1: Launcher
 
-- [ ] 1.1 Gate the review-child suffix on dispatchEnabled in all three renderers
+- [x] 1.1 Gate the review-child suffix on dispatchEnabled in all three renderers — 2a6d997c3
 
 ### Phase 2: Editor
 
-- [ ] 2.1 Dispatch off also turns Review child off
+- [x] 2.1 Dispatch off also turns Review child off — 7159c90f9
