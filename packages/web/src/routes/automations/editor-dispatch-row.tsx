@@ -40,7 +40,8 @@ export function EditorDispatchRow({
       <Label className="text-[13px] font-medium text-foreground">
         <GitForkIcon aria-hidden="true" className={cn('size-3.5', enabled ? 'text-violet' : 'text-soft-foreground')} />
         Dispatch
-        <Switch aria-label="Dispatch" checked={enabled} onCheckedChange={(next) => onChange({ dispatch: next })} />
+        {/* Review child is a dispatch child: off with its parent, and not restored with it (#1742). */}
+        <Switch aria-label="Dispatch" checked={enabled} onCheckedChange={(next) => onChange(next ? { dispatch: true } : { dispatch: false, reviewChild: false })} />
       </Label>
       {enabled ? (
         <>
