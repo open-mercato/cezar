@@ -35,13 +35,15 @@ status is not checked (the rule applies to the children); no response-contract c
 
 ## Progress
 
+PR: #1754
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server cascade
 
-- [ ] 1.1 Store cascade + archivedWith field with unit tests
-- [ ] 1.2 Archive route side effects per cascaded run + contract field + route test
+- [x] 1.1 Store cascade + archivedWith field with unit tests — bcbc26c9d
+- [x] 1.2 Archive route side effects per cascaded run + contract field + route test — bcbc26c9d
 
 ### Phase 2: Cockpit
 
-- [ ] 2.1 All tasks optimistic patch cascades to finished subtasks with tests
+- [x] 2.1 All tasks optimistic patch cascades to finished subtasks with tests — c4c2e0f97
