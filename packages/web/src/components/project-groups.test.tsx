@@ -739,5 +739,35 @@ describe('ProjectGroups', () => {
       expect(folder?.textContent).toContain('No projects')
       expect(folder?.querySelector('button[aria-label="Edit Empty Folder"]')).not.toBeNull()
     })
+
+    it('creates a new folder via the dialog and moves project from previous folder', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'old-folder', name: 'Old Folder', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+
+      const newFolderBtn = screen.getByRole('button', { name: 'New folder' })
+      fireEvent.click(newFolderBtn)
+
+      const nameInput = screen.getByPlaceholderText('Client name')
+      fireEvent.change(nameInput, { target: { value: 'New Folder' } })
+
+      const shopCheckbox = screen.getByRole('checkbox', { name: 'shop' })
+      fireEvent.click(shopCheckbox)
+
+      const saveBtn = screen.getByRole('button', { name: 'Save folder' })
+      fireEvent.click(saveBtn)
+
+      const stored = JSON.parse(localStorage.getItem(PROJECT_FOLDERS_STORAGE_KEY) ?? '[]')
+      const oldFolder = stored.find((f: { id: string }) => f.id === 'old-folder')
+      const newFolder = stored.find((f: { name: string }) => f.name === 'New Folder')
+
+      expect(oldFolder?.projectIds).toEqual([])
+      expect(newFolder?.projectIds).toEqual(['shop'])
+    })
   })
 })

@@ -121,4 +121,61 @@ describe('ProjectFolderDialog', () => {
 
     expect(onSave).toHaveBeenCalledWith(null, 'f1')
   })
+
+  it('renders in edit mode and allows updating name and projects', () => {
+    const onSave = vi.fn()
+    const onClose = vi.fn()
+    const existing = { id: 'f1', name: 'Existing Folder', projectIds: ['p1'] }
+
+    render(
+      <ProjectFolderDialog
+        projects={projects}
+        folder={existing}
+        onClose={onClose}
+        onSave={onSave}
+      />,
+    )
+
+    const nameInput = screen.getByPlaceholderText('Client name') as HTMLInputElement
+    expect(nameInput.value).toBe('Existing Folder')
+
+    const p1Checkbox = screen.getByRole('checkbox', { name: 'Project 1' }) as HTMLInputElement
+    const p2Checkbox = screen.getByRole('checkbox', { name: 'Project 2' }) as HTMLInputElement
+    expect(p1Checkbox.checked).toBe(true)
+    expect(p2Checkbox.checked).toBe(false)
+
+    // Deselect p1, select p2, change name
+    fireEvent.click(p1Checkbox)
+    fireEvent.click(p2Checkbox)
+    fireEvent.change(nameInput, { target: { value: 'Renamed Folder' } })
+
+    const saveBtn = screen.getByRole('button', { name: 'Save folder' })
+    fireEvent.click(saveBtn)
+
+    expect(onSave).toHaveBeenCalledWith(
+      {
+        id: 'f1',
+        name: 'Renamed Folder',
+        projectIds: ['p2'],
+      },
+      'f1',
+    )
+  })
+
+  it('disables save button when folder name is whitespace only', () => {
+    render(
+      <ProjectFolderDialog
+        projects={projects}
+        folder={null}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    )
+
+    const nameInput = screen.getByPlaceholderText('Client name')
+    const saveBtn = screen.getByRole('button', { name: 'Save folder' })
+
+    fireEvent.change(nameInput, { target: { value: '    ' } })
+    expect(saveBtn.hasAttribute('disabled')).toBe(true)
+  })
 })

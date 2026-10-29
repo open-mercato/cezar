@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  moveProjectBetweenFolders,
   normalizeProjectFolders,
   PROJECT_FOLDERS_STORAGE_KEY,
   readProjectFolders,
+  saveProjectFolder,
   writeProjectFolders,
   type ProjectFolder,
 } from './project-folders'
@@ -100,5 +102,94 @@ describe('readProjectFolders and writeProjectFolders', () => {
     expect(readProjectFolders()).toEqual([])
     localStorage.setItem(PROJECT_FOLDERS_STORAGE_KEY, 'invalid json {')
     expect(readProjectFolders()).toEqual([])
+  })
+})
+
+describe('saveProjectFolder', () => {
+  it('adds a new folder to the list', () => {
+    const initial: ProjectFolder[] = [{ id: 'f1', name: 'Folder 1', projectIds: ['p1'] }]
+    const result = saveProjectFolder(initial, { id: 'f2', name: 'Folder 2', projectIds: ['p2'] })
+    expect(result).toEqual([
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1'] },
+      { id: 'f2', name: 'Folder 2', projectIds: ['p2'] },
+    ])
+  })
+
+  it('removes assigned projects from their previous folders', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1', 'p2'] },
+      { id: 'f2', name: 'Folder 2', projectIds: ['p3'] },
+    ]
+    // Move p1 from f1 into f2
+    const result = saveProjectFolder(
+      initial,
+      { id: 'f2', name: 'Folder 2', projectIds: ['p3', 'p1'] },
+      'f2',
+    )
+    expect(result).toEqual([
+      { id: 'f1', name: 'Folder 1', projectIds: ['p2'] },
+      { id: 'f2', name: 'Folder 2', projectIds: ['p3', 'p1'] },
+    ])
+  })
+
+  it('deletes a folder when passed null', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1'] },
+      { id: 'f2', name: 'Folder 2', projectIds: ['p2'] },
+    ]
+    const result = saveProjectFolder(initial, null, 'f1')
+    expect(result).toEqual([{ id: 'f2', name: 'Folder 2', projectIds: ['p2'] }])
+  })
+
+  it('replaces a folder when id changes', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Old Folder', projectIds: ['p1'] },
+    ]
+    const result = saveProjectFolder(
+      initial,
+      { id: 'f1-new', name: 'Renamed', projectIds: ['p1'] },
+      'f1',
+    )
+    expect(result).toEqual([
+      { id: 'f1-new', name: 'Renamed', projectIds: ['p1'] },
+    ])
+  })
+})
+
+describe('moveProjectBetweenFolders', () => {
+  it('moves a project from one folder to another', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1', 'p2'] },
+      { id: 'f2', name: 'Folder 2', projectIds: ['p3'] },
+    ]
+    const result = moveProjectBetweenFolders(initial, 'p1', 'f2')
+    expect(result).toEqual([
+      { id: 'f1', name: 'Folder 1', projectIds: ['p2'] },
+      { id: 'f2', name: 'Folder 2', projectIds: ['p3', 'p1'] },
+    ])
+  })
+
+  it('moves a project from a folder to ungrouped (null target)', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1', 'p2'] },
+    ]
+    const result = moveProjectBetweenFolders(initial, 'p1', null)
+    expect(result).toEqual([{ id: 'f1', name: 'Folder 1', projectIds: ['p2'] }])
+  })
+
+  it('moves an ungrouped project into a folder', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1'] },
+    ]
+    const result = moveProjectBetweenFolders(initial, 'ungrouped-p', 'f1')
+    expect(result).toEqual([{ id: 'f1', name: 'Folder 1', projectIds: ['p1', 'ungrouped-p'] }])
+  })
+
+  it('is a no-op when project is already in target folder', () => {
+    const initial: ProjectFolder[] = [
+      { id: 'f1', name: 'Folder 1', projectIds: ['p1'] },
+    ]
+    const result = moveProjectBetweenFolders(initial, 'p1', 'f1')
+    expect(result).toEqual(initial)
   })
 })

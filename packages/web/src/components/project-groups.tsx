@@ -30,7 +30,13 @@ import { toast } from '@/components/ui/toaster'
 import { ProjectFolderDialog } from '@/components/project-folder-dialog'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
-import { readProjectFolders, writeProjectFolders, type ProjectFolder } from '@/lib/project-folders'
+import {
+  moveProjectBetweenFolders,
+  readProjectFolders,
+  saveProjectFolder,
+  writeProjectFolders,
+  type ProjectFolder,
+} from '@/lib/project-folders'
 import {
   isFolderCollapsed,
   isProjectCollapsed,
@@ -163,14 +169,15 @@ export function ProjectGroups({
     [expand, folders],
   )
   const [editingFolder, setEditingFolder] = React.useState<ProjectFolder | null | undefined>(undefined)
-  const saveFolder = React.useCallback((folder: ProjectFolder | null, previousId?: string) => {
-    let next = folders.filter((item) => item.id !== previousId && item.id !== folder?.id)
-    if (folder) next = next.map((item) => ({ ...item, projectIds: item.projectIds.filter((id) => !folder.projectIds.includes(id)) }))
-    if (folder) next.push(folder)
-    setFolders(next)
-    writeProjectFolders(next)
-    setEditingFolder(undefined)
-  }, [folders])
+  const saveFolder = React.useCallback(
+    (folder: ProjectFolder | null, previousId?: string) => {
+      const next = saveProjectFolder(folders, folder, previousId)
+      setFolders(next)
+      writeProjectFolders(next)
+      setEditingFolder(undefined)
+    },
+    [folders],
+  )
 
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
@@ -217,14 +224,25 @@ export function ProjectGroups({
     (event: DragEndEvent) => {
       const { active, over } = event
       if (over === null || over.id === active.id) return
-      const from = orderedIds.indexOf(String(active.id))
-      const to = orderedIds.indexOf(String(over.id))
+      const activeId = String(active.id)
+      const overId = String(over.id)
+      const from = orderedIds.indexOf(activeId)
+      const to = orderedIds.indexOf(overId)
       if (from === -1 || to === -1) return
+
+      const activeFolder = folders.find((f) => f.projectIds.includes(activeId))
+      const overFolder = folders.find((f) => f.projectIds.includes(overId))
+      if (activeFolder?.id !== overFolder?.id) {
+        const nextFolders = moveProjectBetweenFolders(folders, activeId, overFolder?.id ?? null)
+        setFolders(nextFolders)
+        writeProjectFolders(nextFolders)
+      }
+
       // The WHOLE visible order is persisted, not just the moved id: after the first drag every
       // registered project is placed, so nothing re-sorts itself back to the top on the next read.
       setOrder(moveProjectId(orderedIds, from, to))
     },
-    [orderedIds, setOrder],
+    [folders, orderedIds, setOrder],
   )
 
   // dnd-kit's defaults would read out the project SLUG and a droppable's coordinates. The name

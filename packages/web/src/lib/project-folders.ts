@@ -37,3 +37,43 @@ export function writeProjectFolders(folders: ProjectFolder[]): void {
     // Private mode or full storage: folders still apply until the page reloads.
   }
 }
+
+/**
+ * Upsert or remove a folder, enforcing that projects assigned to the saved folder
+ * are removed from any other folder (the move-removes-from-previous-folder invariant).
+ */
+export function saveProjectFolder(
+  folders: ProjectFolder[],
+  folder: ProjectFolder | null,
+  previousId?: string,
+): ProjectFolder[] {
+  let next = folders.filter((item) => item.id !== previousId && item.id !== folder?.id)
+  if (folder) {
+    next = next.map((item) => ({
+      ...item,
+      projectIds: item.projectIds.filter((id) => !folder.projectIds.includes(id)),
+    }))
+    next.push(folder)
+  }
+  return next
+}
+
+/**
+ * Move a project across folder boundaries (or to ungrouped when targetFolderId is null).
+ */
+export function moveProjectBetweenFolders(
+  folders: ProjectFolder[],
+  projectId: string,
+  targetFolderId: string | null,
+): ProjectFolder[] {
+  return folders.map((folder) => {
+    if (folder.id === targetFolderId) {
+      if (folder.projectIds.includes(projectId)) return folder
+      return { ...folder, projectIds: [...folder.projectIds, projectId] }
+    }
+    if (folder.projectIds.includes(projectId)) {
+      return { ...folder, projectIds: folder.projectIds.filter((id) => id !== projectId) }
+    }
+    return folder
+  })
+}
