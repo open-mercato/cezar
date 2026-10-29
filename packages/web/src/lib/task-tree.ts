@@ -164,3 +164,40 @@ export function dispatchKindLabel(run: TaskTreeInput): DispatchKindLabel | null 
   if (run.dispatch?.parentRunId === undefined) return null
   return run.dispatch.kind ?? 'implement'
 }
+
+/** What `archivedSubtaskIds` reads of a run, beyond its place in the tree. */
+export interface ArchivableTreeInput extends TaskTreeInput {
+  status: string
+  archived: boolean
+  awaitingAnswerSince?: string | undefined
+}
+
+/**
+ * The finished subtasks an archive of `rootId` takes along (#1752) — the client's copy of
+ * `RunStore.setArchivedWithSubtasks`, so an optimistic patch moves the same rows the server will.
+ * Finished = `done`/`failed`/`cancelled` with no unanswered question; a live descendant stays
+ * and stops the walk below it, and one already archived is walked through but not returned.
+ */
+export function archivedSubtaskIds<T extends ArchivableTreeInput>(runs: readonly T[], rootId: string): Set<string> {
+  const children = new Map<string, T[]>()
+  for (const run of runs) {
+    const parent = run.dispatch?.parentRunId
+    if (parent !== undefined) children.set(parent, [...(children.get(parent) ?? []), run])
+  }
+  const taken = new Set<string>()
+  const seen = new Set([rootId])
+  const stack = [rootId]
+  while (stack.length > 0) {
+    for (const child of children.get(stack.pop()!) ?? []) {
+      if (seen.has(child.id)) continue
+      seen.add(child.id)
+      if (!child.archived) {
+        const finished = ['done', 'failed', 'cancelled'].includes(child.status) && child.awaitingAnswerSince === undefined
+        if (!finished) continue
+        taken.add(child.id)
+      }
+      stack.push(child.id)
+    }
+  }
+  return taken
+}

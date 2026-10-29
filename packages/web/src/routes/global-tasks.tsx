@@ -23,7 +23,7 @@ import {
   workspaceQueryKeys,
 } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
-import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
+import { archivedSubtaskIds, dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
 import { Segmented } from '@/components/segmented'
@@ -153,6 +153,15 @@ function useArchiveIndexedRun() {
     request: ({ task, archived }: { task: GlobalTask; archived: boolean }) =>
       archiveProjectRun(task.run.projectId, task.run.id, archived, 'all_tasks'),
     patch: ({ archived }) => (run) => ({ ...run, archived }),
+    // Finished subtasks go with their parent (#1752). A restore moves the parent only: the rows
+    // carry no `archivedWith`, and the refetch on settle brings back the ones the server restored.
+    alsoPatch: ({ task, archived }, runs) =>
+      archived
+        ? archivedSubtaskIds(
+            runs.filter((run) => run.projectId === task.run.projectId),
+            task.run.id,
+          )
+        : new Set<string>(),
   })
 }
 
@@ -194,9 +203,12 @@ function useReadIndexedRun() {
 function useIndexedRunMutation<V extends { task: GlobalTask }>({
   request,
   patch,
+  alsoPatch,
 }: {
   request: (variables: V) => Promise<unknown>
   patch: (variables: V) => (run: RunIndexEntry) => RunIndexEntry
+  /** Ids of OTHER runs in the task's project the same patch applies to. */
+  alsoPatch?: (variables: V, runs: readonly RunIndexEntry[]) => ReadonlySet<string>
 }) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -207,14 +219,16 @@ function useIndexedRunMutation<V extends { task: GlobalTask }>({
       const apply = patch(variables)
       const { task } = variables
       queryClient.setQueryData<RunsIndexResponse>(workspaceQueryKeys.runsIndex, (current) =>
-        current === undefined
-          ? current
-          : {
-              ...current,
-              runs: current.runs.map((run) =>
-                run.projectId === task.run.projectId && run.id === task.run.id ? apply(run) : run,
-              ),
-            },
+        {
+          if (current === undefined) return current
+          const also = alsoPatch?.(variables, current.runs) ?? new Set<string>()
+          return {
+            ...current,
+            runs: current.runs.map((run) =>
+              run.projectId === task.run.projectId && (run.id === task.run.id || also.has(run.id)) ? apply(run) : run,
+            ),
+          }
+        },
       )
       return { previous }
     },

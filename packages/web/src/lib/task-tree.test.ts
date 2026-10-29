@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  archivedSubtaskIds,
   buildTaskTree,
   dispatchKindLabel,
   flattenTaskTree,
@@ -212,5 +213,35 @@ describe('dispatchKindLabel', () => {
   // list says so rather than leaving one kind labelled and the other bare.
   it('reads an absent kind as implement', () => {
     expect(dispatchKindLabel(run('c', 'p'))).toBe('implement')
+  })
+})
+
+describe('archivedSubtaskIds (#1752)', () => {
+  const node = (id: string, status: string, parent?: string, extra: { archived?: boolean; awaitingAnswerSince?: string } = {}) => ({
+    id,
+    status,
+    archived: extra.archived ?? false,
+    ...(extra.awaitingAnswerSince ? { awaitingAnswerSince: extra.awaitingAnswerSince } : {}),
+    ...(parent ? { dispatch: { parentRunId: parent } } : {}),
+  })
+
+  it('takes finished descendants, stops below a live one and skips gates', () => {
+    const runs = [
+      node('root', 'done'),
+      node('a', 'done', 'root'),
+      node('a1', 'cancelled', 'a'),
+      node('live', 'running', 'root'),
+      node('live1', 'done', 'live'),
+      node('ask', 'failed', 'root', { awaitingAnswerSince: 'x' }),
+      node('rev', 'review', 'root'),
+      node('gone', 'done', 'root', { archived: true }),
+      node('gone1', 'failed', 'gone'),
+      node('other', 'done'),
+    ]
+    expect([...archivedSubtaskIds(runs, 'root')].sort()).toEqual(['a', 'a1', 'gone1'])
+  })
+
+  it('survives a cycle', () => {
+    expect([...archivedSubtaskIds([node('a', 'done', 'b'), node('b', 'done', 'a')], 'a')]).toEqual(['b'])
   })
 })
