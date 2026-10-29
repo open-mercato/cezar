@@ -115,9 +115,17 @@ export function injectPicker(html: string): string {
  * the rest of the app's CSP is left exactly as sent.
  */
 export function allowFramingBy(headers: Record<string, string | string[]>, parentOrigin: string): void {
+  const xfo = headers['x-frame-options'];
   delete headers['x-frame-options'];
   const csp = headers['content-security-policy'];
-  if (csp === undefined) return;
+  const policies = csp === undefined ? [] : Array.isArray(csp) ? csp : [csp];
+  if (!policies.some((policy) => /(^|;)\s*frame-ancestors(\s|;|$)/i.test(policy))) {
+    // `X-Frame-Options` was the only framing policy: dropping it bare would let ANY page frame the mirror.
+    if (xfo === undefined) return;
+    const self = String(xfo).trim().toUpperCase() === 'SAMEORIGIN' ? "'self' " : '';
+    headers['content-security-policy'] = [...policies, `frame-ancestors ${self}${parentOrigin}`];
+    return;
+  }
   const rewrite = (policy: string): string =>
     policy
       .split(';')
@@ -130,7 +138,8 @@ export function allowFramingBy(headers: Record<string, string | string[]>, paren
         return `${indent}frame-ancestors ${[...kept, parentOrigin].join(' ')}`;
       })
       .join(';');
-  headers['content-security-policy'] = Array.isArray(csp) ? csp.map(rewrite) : rewrite(csp);
+  const rewritten = policies.map(rewrite);
+  headers['content-security-policy'] = Array.isArray(csp) ? rewritten : rewritten[0]!;
 }
 
 export class DesignProxies {

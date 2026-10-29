@@ -276,6 +276,22 @@ describe('allowFramingBy', () => {
     allowFramingBy(headers, COCKPIT);
     expect(headers['content-security-policy']).toEqual([`frame-ancestors ${COCKPIT}`, "default-src 'self'"]);
   });
+
+  it('replaces an X-Frame-Options-only policy with one that still refuses every other parent', () => {
+    const sameOrigin: Record<string, string | string[]> = { 'x-frame-options': 'SAMEORIGIN' };
+    allowFramingBy(sameOrigin, COCKPIT);
+    expect(sameOrigin).toEqual({ 'content-security-policy': [`frame-ancestors 'self' ${COCKPIT}`] });
+
+    const deny: Record<string, string | string[]> = { 'x-frame-options': 'DENY', 'content-security-policy': "default-src 'self'" };
+    allowFramingBy(deny, COCKPIT);
+    expect(deny).toEqual({ 'content-security-policy': ["default-src 'self'", `frame-ancestors ${COCKPIT}`] });
+  });
+
+  it('leaves an app that sends no framing policy as it was', () => {
+    const headers: Record<string, string | string[]> = { 'content-security-policy': "default-src 'self'" };
+    allowFramingBy(headers, COCKPIT);
+    expect(headers).toEqual({ 'content-security-policy': "default-src 'self'" });
+  });
 });
 
 describe('injectPicker', () => {
