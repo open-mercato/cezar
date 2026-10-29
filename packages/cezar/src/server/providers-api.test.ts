@@ -80,10 +80,11 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'kimi') return executable;
+  const name = basename(executable);
+  if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'kimi') return name as ProviderId;
   // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
   // Cursor installed (#1503), so match it too or the suite fails only on such machines.
-  if (executable === 'agent' || basename(executable) === 'cursor-agent') return 'cursor';
+  if (name === 'agent' || name === 'cursor-agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
