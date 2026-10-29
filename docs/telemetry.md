@@ -33,7 +33,7 @@ from), `open_in` (which app), `add_project_opened` (which Add project dialog: `n
 `folder_exists`, `github_create` — never the error text), `diff_comment_added`,
 `task_archived` / `task_unarchived` / `task_pinned` / `task_unpinned` (which button: `sidebar`,
 `tasks_table`, `all_tasks`, `task_view`, `palette`, `shortcut`; `bulk` for Archive finished, `api` for a non-cockpit
-caller), `task_deleted` (with the task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
+caller; on the two archive events `value` is how many tasks moved — the sweep's count, or 1 plus the finished subtasks that went with the task), `task_deleted` (with the task's status), `provider_login_opened` / `provider_login_not_opened` / `provider_connected`
 (what an agent's **Connect** did — the agent and an outcome such as `unknown`, `no_terminal` or
 `already_connected` — and whether the login it opened finished within 15 minutes),
 `provider_update_opened` (what an agent's **Update** — offered next to an "X or newer is required"
