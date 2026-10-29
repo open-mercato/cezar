@@ -21,8 +21,10 @@ The "Remove <project> from the workspace?" confirm dialog stays inside its box w
 
 ## Progress
 
+PR: #1746
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix
 
-- [ ] 1.1 Bound the dialog primitives' grid column and wrap the project path
+- [x] 1.1 Bound the dialog primitives' grid column and wrap the project path — 141c5c6ca
