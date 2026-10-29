@@ -54,7 +54,8 @@ whose remote is on GitHub but `gh` is missing is offered Connect GitHub.
 /providers/connect` opens that CLI's login in a terminal (the existing Agents-pane flow), and the
 page re-probes the status every 3 s for three minutes, so it moves on by itself when the login
 lands. A refused connect (hosted cockpit, no terminal) shows the server's reason and the command
-to copy. A missing CLI shows its install command.
+to copy. A missing CLI shows its install command. With every agent turned off there is no row to
+sign in to, so the step says so and links to Settings → Agents.
 
 GitHub gets the same treatment, the way GitHub Desktop and the device flow do it: Connect GitHub
 and Publish to GitHub start `gh auth login --web` themselves (`POST /api/v1/github/login`), show the
@@ -94,6 +95,9 @@ Project, First task) derived from the state that picked the page, with the steps
 one ticked, and one line saying why the step matters. The welcome page is the goal, not a step, and
 returns in every new project, so it carries neither. No Next buttons: the rail is a thread, not a
 wizard.
+
+**Which folder.** "Pick a project" and the Initialize git dialog name the project on screen, looked
+up in the registry by its scope id; health always names the folder cezar booted in.
 
 **Layout.** Centered and minimal: a large light title, one primary control, quiet links
 or chips under it. Onboarding dialogs centre over the content column (half the desktop sidebar's

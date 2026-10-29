@@ -26,6 +26,7 @@ import {
   useGithubOwners,
   useHealth,
   useInitProjectGit,
+  useProjects,
   useProviderStatus,
   usePublishProjectGithub,
   useRefreshProviderStatus,
@@ -975,6 +976,15 @@ function SignInToAgent() {
   return (
     <Page title="Sign in to an agent" slot="sign-in" step="agent" why="cezar runs the coding agent you already use. No API key needed.">
       <div className="mt-7 flex w-full flex-col gap-3 text-left">
+        {/* Every agent switched off leaves no row to sign in to: say so, and where to turn one on. */}
+        {rows.length === 0 ? (
+          <div data-slot="agents-off" className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+            <span className="text-[14px] text-foreground">All agents are turned off.</span>
+            <Button asChild size="sm" className="font-normal">
+              <Link to="/settings/agents#providers">Turn one on</Link>
+            </Button>
+          </div>
+        ) : null}
         {rows.map((row) => {
           const waiting = waitingFor === row.provider
           const failed = fallback?.provider === row.provider ? fallback.message : null
@@ -1065,10 +1075,26 @@ const SIGN_IN_POLL_TICKS = 60
 
 // ---- B1: no git repository -------------------------------------------------------------------
 
+/**
+ * The root of the project on screen. Health is workspace-level and always names the folder cezar
+ * booted in, so a second registered folder has to be looked up in the registry by its scope id;
+ * health is only the fallback for the boot project while the registry loads.
+ */
+function useScopedProjectRoot(): string | undefined {
+  const { projectId } = useProjectScope()
+  const projects = useProjects()
+  const health = useHealth()
+  const id = projectId ?? projects.data?.bootProject
+  const entry = projects.data?.projects.find((project) => project.id === id)
+  if (entry) return entry.root
+  return projectId === null || projectId === health.data?.bootProject ? health.data?.repoRoot : undefined
+}
+
 function PickProject() {
   const health = useHealth()
   const singleProject = health.data?.capabilities.singleProject === true
-  const folder = health.data?.repoRoot ? folderName(health.data.repoRoot) : 'This folder'
+  const root = useScopedProjectRoot()
+  const folder = root ? folderName(root) : 'This folder'
   const [initOpen, setInitOpen] = React.useState(false)
   return (
     <Page
@@ -1469,7 +1495,16 @@ export function WelcomeBack({ runs }: { runs: readonly RunRecord[] }) {
           </Button>
         ) : null}
         {news.length > 0 ? (
-          <Button variant="outline" size="sm" className="w-full font-normal" data-slot="welcome-back-news" onClick={() => setShowNews(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full font-normal"
+            data-slot="welcome-back-news"
+            onClick={() => {
+              setShowNews(true)
+              write({ whatsNewSeenAt: new Date().toISOString() })
+            }}
+          >
             See what’s new
           </Button>
         ) : null}
