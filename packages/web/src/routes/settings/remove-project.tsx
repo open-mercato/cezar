@@ -78,7 +78,8 @@ export function RemoveProjectDialog({
             adding it back later finds everything intact.
             {affected.length > 0 && <span className="mt-2 block">{plural(affected.length, 'receiver', 'receivers')} will be paused. {plural(pending, 'pending delivery', 'pending deliveries')} will be cancelled; {inFlight} in flight may still arrive.</span>}
             {webhooks.error && <span className="mt-2 block">Webhook state is unavailable. Removal will report whether receivers could be paused.</span>}
-            <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={project?.root}>
+            {/* Wrapped, not truncated: the path is how the user tells which folder this is. */}
+            <span data-testid="remove-project-root" className="mt-1 block break-all font-mono text-[11px] text-foreground">
               {project?.root}
             </span>
           </AlertDialogDescription>
