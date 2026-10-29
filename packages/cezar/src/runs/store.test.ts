@@ -2798,3 +2798,122 @@ describe('RunStore — index lock failures', () => {
     expect(existsSync(leftover)).toBe(false);
   });
 });
+
+describe('RunStore — archiving a task takes its finished subtasks along (#1752)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-archive-tree-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const AT = '2026-10-29T00:00:00.000Z';
+  const task = (store: RunStore, status: RunRecord['status'], parent?: RunRecord, extra: Partial<RunRecord> = {}) => {
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(run.id, {
+      status,
+      ...(parent ? { dispatch: { rootRunId: parent.dispatch?.rootRunId ?? parent.id, parentRunId: parent.id } } : {}),
+      ...extra,
+    });
+    return store.getRun(run.id)!;
+  };
+
+  it('archives finished descendants and leaves live ones, and the subtree below them, active', () => {
+    const store = RunStore.open(dataDir);
+    const root = task(store, 'done');
+    const done = task(store, 'done', root);
+    const grandchild = task(store, 'failed', done);
+    const running = task(store, 'running', root);
+    const belowRunning = task(store, 'done', running);
+    const asking = task(store, 'failed', root, { finishedAt: AT, awaitingAnswerSince: AT });
+    const review = task(store, 'review', root);
+    const unrelated = task(store, 'done');
+
+    const result = store.setArchivedWithSubtasks(root.id, true)!;
+
+    expect(result.run.archived).toBe(true);
+    expect(result.run.archivedWith).toBeUndefined();
+    expect(result.cascaded.map((r) => r.id).sort()).toEqual([done.id, grandchild.id].sort());
+    for (const id of [done.id, grandchild.id]) {
+      expect(store.getRun(id)).toMatchObject({ archived: true, archivedWith: root.id });
+    }
+    for (const id of [running.id, belowRunning.id, asking.id, review.id, unrelated.id]) {
+      expect(store.getRun(id)?.archived).toBe(false);
+    }
+    expect(store.getRun(asking.id)?.awaitingAnswerSince).toBe(AT);
+  });
+
+  it('gives cascaded subtasks the single-archive side effects (pin cleared)', () => {
+    const store = RunStore.open(dataDir);
+    const root = task(store, 'done');
+    const child = task(store, 'done', root);
+    store.setPinned(child.id, true);
+    store.setArchivedWithSubtasks(root.id, true);
+    expect(store.getRun(child.id)?.pinned).toBeUndefined();
+  });
+
+  it('restores exactly the subtasks archived with the parent', () => {
+    const store = RunStore.open(dataDir);
+    const root = task(store, 'done');
+    const alone = task(store, 'done', root);
+    store.setArchived(alone.id, true);
+    const withParent = task(store, 'done', root);
+
+    store.setArchivedWithSubtasks(root.id, true);
+    expect(store.getRun(alone.id)?.archivedWith).toBeUndefined();
+
+    const result = store.setArchivedWithSubtasks(root.id, false)!;
+    expect(result.run.archived).toBe(false);
+    expect(result.cascaded.map((r) => r.id)).toEqual([withParent.id]);
+    expect(store.getRun(withParent.id)).toMatchObject({ archived: false });
+    expect(store.getRun(withParent.id)?.archivedWith).toBeUndefined();
+    expect(store.getRun(alone.id)?.archived).toBe(true);
+  });
+
+  it('a subtask restored or re-archived on its own no longer follows the parent', () => {
+    const store = RunStore.open(dataDir);
+    const root = task(store, 'done');
+    const child = task(store, 'done', root);
+    store.setArchivedWithSubtasks(root.id, true);
+    store.setArchived(child.id, false);
+    store.setArchived(child.id, true);
+    expect(store.getRun(child.id)?.archivedWith).toBeUndefined();
+    expect(store.setArchivedWithSubtasks(root.id, false)!.cascaded).toEqual([]);
+    expect(store.getRun(child.id)?.archived).toBe(true);
+  });
+
+  it('archiving a mid-tree subtask takes its own subtree only', () => {
+    const store = RunStore.open(dataDir);
+    const root = task(store, 'done');
+    const mid = task(store, 'done', root);
+    const leaf = task(store, 'done', mid);
+    const sibling = task(store, 'done', root);
+    expect(store.setArchivedWithSubtasks(mid.id, true)!.cascaded.map((r) => r.id)).toEqual([leaf.id]);
+    expect(store.getRun(root.id)?.archived).toBe(false);
+    expect(store.getRun(sibling.id)?.archived).toBe(false);
+  });
+
+  it('keeps archivedWith across a reload and parses records without it', () => {
+    const store = RunStore.open(dataDir);
+    const root = task(store, 'done');
+    const child = task(store, 'done', root);
+    store.setArchivedWithSubtasks(root.id, true);
+    store.flush();
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.getRun(child.id)?.archivedWith).toBe(root.id);
+    expect(reopened.getRun(root.id)?.archivedWith).toBeUndefined();
+  });
+
+  it('does not hang on a hand-edited dispatch cycle', () => {
+    const store = RunStore.open(dataDir);
+    const a = task(store, 'done');
+    const b = task(store, 'done', a);
+    store.updateRun(a.id, { dispatch: { rootRunId: a.id, parentRunId: b.id } });
+    expect(store.setArchivedWithSubtasks(a.id, true)!.cascaded.map((r) => r.id)).toEqual([b.id]);
+  });
+
+  it('answers undefined for an unknown run', () => {
+    expect(RunStore.open(dataDir).setArchivedWithSubtasks('nope', true)).toBeUndefined();
+  });
+});

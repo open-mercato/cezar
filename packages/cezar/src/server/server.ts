@@ -4775,13 +4775,17 @@ export function createApp(deps: ServerDeps) {
       // `setArchived` itself — the bulk sweep must obey it too (spec
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
-      const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
-      const run = store.setArchived(id, parsed.data.archived !== false);
-      if (run && parsed.data.archived !== false) stopTaskProcesses(id);
-      if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
-      // Labelled with the button that did it.
-      if (run) track(parsed.data.archived !== false ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
-      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+      const archiving = parsed.data.archived !== false;
+      const retiresQuestion = archiving && store.getRun(id)?.awaitingAnswerSince !== undefined;
+      // Finished subtasks go with their parent and come back with it (#1752); the cascade never
+      // takes an awaiting run, so only the parent can retire a question.
+      const result = store.setArchivedWithSubtasks(id, archiving);
+      if (!result) return c.json({ error: 'not found' }, 404);
+      if (archiving) for (const archived of [result.run, ...result.cascaded]) stopTaskProcesses(archived.id);
+      if (retiresQuestion) manager.notifyQuestionRetired?.(id);
+      // Labelled with the button that did it; `value` counts the subtasks too, like the bulk sweep.
+      track(archiving ? 'task_archived' : 'task_unarchived', { label: parsed.data.surface ?? 'api', value: 1 + result.cascaded.length }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      return c.json(result.run);
     })
 
     // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
