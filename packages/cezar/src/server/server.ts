@@ -51,6 +51,7 @@ import {
   isTrackerAutomation,
   isScheduleAutomation,
   type AutomationDefinition,
+  type AutomationRuntimeState,
 } from '../automations/types.ts';
 import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
@@ -4404,10 +4405,11 @@ export function createApp(deps: ServerDeps) {
         if (kind !== 'schedule' && automation.enabled && current.enabled) {
           const now = Date.now();
           const soonest = now + (automation.intervalSeconds ?? 300) * 1_000;
-          const state = automationStore.state(automation.id);
-          const backingOff = state?.backoffUntil !== undefined && Date.parse(state.backoffUntil) > now;
-          if (state?.nextCheckAt && Date.parse(state.nextCheckAt) > soonest && !backingOff) {
-            automationStore.setState(automation.id, (latest) => ({ ...latest, nextCheckAt: new Date(soonest).toISOString() }));
+          const pullIn = (state: AutomationRuntimeState | undefined) => !!state?.nextCheckAt
+            && Date.parse(state.nextCheckAt) > soonest
+            && !(state.backoffUntil && Date.parse(state.backoffUntil) > now);
+          if (pullIn(automationStore.state(automation.id))) {
+            automationStore.setState(automation.id, (latest) => pullIn(latest) ? { ...latest, nextCheckAt: new Date(soonest).toISOString() } : latest);
           }
         }
         if (kind !== 'tracker' && automation.enabled && !current.enabled) armAutomation(automationStore, automation);

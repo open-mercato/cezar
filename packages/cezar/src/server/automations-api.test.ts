@@ -110,12 +110,15 @@ describe('GitHub automation API', () => {
     automations.setState(created.id, (state) => ({ ...state, nextCheckAt: new Date(Date.now() + 3_600_000).toISOString() }));
     expect(await nextCheck()).toBeGreaterThan(Date.now() + 3_000_000);
 
-    await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, filters: { ...slow.filters, anyLabels: ['v2'] }, expectedRevision: created.revision }, 'PUT'));
+    const shortened = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, filters: { ...slow.filters, anyLabels: ['v2'] }, expectedRevision: created.revision }, 'PUT'));
+    expect(shortened.status).toBe(200);
     expect(await nextCheck()).toBeLessThanOrEqual(Date.now() + 60_000);
 
     const backoffUntil = new Date(Date.now() + 1_800_000).toISOString();
     automations.setState(created.id, (state) => ({ ...state, nextCheckAt: backoffUntil, backoffUntil }));
-    await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, name: 'Renamed', expectedRevision: created.revision + 1 }, 'PUT'));
+    const renamed = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, name: 'Renamed', expectedRevision: created.revision + 1 }, 'PUT'));
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as any).automation.revision).toBe(created.revision + 2);
     expect(await nextCheck()).toBe(Date.parse(backoffUntil));
   });
 

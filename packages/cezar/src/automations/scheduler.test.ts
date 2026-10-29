@@ -521,6 +521,38 @@ describe('WorkspaceAutomationScheduler', () => {
   });
 });
 
+describe('WorkspaceAutomationScheduler — a shortened interval is not held back by the old retry floor (#1736)', () => {
+  it('retries an edited poll after its new interval, not the one it failed under', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse('2026-10-28T12:00:00Z'));
+      const { store, definition } = await setup();
+      store.update(definition.id, definition.revision, { ...definition, intervalSeconds: 3600 });
+      store.setState(definition.id, (state) => ({ ...state, nextCheckAt: new Date().toISOString() }));
+      const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
+      const scheduler = new WorkspaceAutomationScheduler({
+        coordinator: { refresh: async () => undefined, enabledProjectIds: () => ['p'], store: () => store } as never,
+        handle: () => ({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) }),
+      });
+      // Another process holds the polling lease: the check is skipped and floored one old interval out.
+      const lease = store.acquireLease()!;
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1);
+      lease.release();
+      expect(poll).not.toHaveBeenCalled();
+      const latest = store.get(definition.id) as GithubAutomationDefinition;
+      store.update(latest.id, latest.revision, { ...latest, intervalSeconds: 60 });
+      store.setState(latest.id, (state) => ({ ...state, nextCheckAt: new Date(Date.now() + 60_000).toISOString() }));
+      await scheduler.reschedule();
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(poll).toHaveBeenCalledTimes(1);
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('WorkspaceAutomationScheduler — both kinds (spec 2026-09-14)', () => {
   const T0 = Date.parse('2026-09-14T03:59:00Z');
 
