@@ -4399,6 +4399,17 @@ export function createApp(deps: ServerDeps) {
             automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
           }
         }
+        // A poll's `nextCheckAt` was computed from the old interval; a shorter one takes effect
+        // now, not after the old wait (#1736). An active failure backoff is left alone.
+        if (kind !== 'schedule' && automation.enabled && current.enabled) {
+          const now = Date.now();
+          const soonest = now + (automation.intervalSeconds ?? 300) * 1_000;
+          const state = automationStore.state(automation.id);
+          const backingOff = state?.backoffUntil !== undefined && Date.parse(state.backoffUntil) > now;
+          if (state?.nextCheckAt && Date.parse(state.nextCheckAt) > soonest && !backingOff) {
+            automationStore.setState(automation.id, (latest) => ({ ...latest, nextCheckAt: new Date(soonest).toISOString() }));
+          }
+        }
         if (kind !== 'tracker' && automation.enabled && !current.enabled) armAutomation(automationStore, automation);
         if (automation.enabled !== current.enabled) {
           track('automation_toggled', { label: automation.enabled ? 'enabled' : 'paused' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });

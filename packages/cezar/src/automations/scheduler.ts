@@ -390,6 +390,10 @@ export class WorkspaceAutomationScheduler {
     due.sort((a, b) => a.at - b.at);
     const next = due[0]!;
     const wait = Math.max(0, next.at - now);
+    // A check armed under an older generation may finish but never re-arm (#1736): its
+    // `definition` is the superseded revision, and a second chain would escape `reschedule()`.
+    const generation = this.scheduleGeneration;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (wait > MAX_TIMER_WAIT_MS) {
@@ -405,7 +409,7 @@ export class WorkspaceAutomationScheduler {
         // something else moves the item forward. The floor is this workspace's own memory of the
         // failure — independent of whatever the project's store did or did not manage to persist.
         () => { this.retryAfter.set(next.key, (this.options.now?.() ?? Date.now()) + next.retryAfterMs); },
-      ).finally(() => this.schedule());
+      ).finally(() => { if (generation === this.scheduleGeneration) this.schedule(); });
     }, Math.min(MAX_TIMER_WAIT_MS, wait));
   }
 
