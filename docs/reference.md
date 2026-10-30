@@ -117,15 +117,14 @@ workspace file that also holds the global knobs
 the repo: per-project state stays exactly where it was, in that repo's
 `.ai/cezar/`.
 
-**Your first run registers the repo you start it in** — that is the whole setup.
-After that the registry is yours to curate: starting cezar somewhere else serves
-that folder as usual (its own tasks, its own `.ai/cezar/`, reachable at
-`/p/<slug>/`) and opens the browser on it, but does not add it to the list. While
-you are in it the sidebar shows it marked **not saved**; switch to another project
-and it drops out, so the sidebar keeps showing the projects you chose. A bare `/`
-opens the page you were last on, or the most recent project. Keeping the folder is
-the explicit click: **Add project** in its Settings (or `cezar projects add` from
-a terminal).
+**Every normal serve launch registers the eligible repo you start it in** — that is the whole
+setup. Starting cezar somewhere else adds that folder when needed, reuses the compatible running
+cockpit, and opens its `/p/<slug>/` page. Task worktrees and `$HOME` stay deliberately unsaved; a
+guarded or unreadable launch root is still served through its temporary boot identity without
+polluting the registry. A bare `/` opens the page you were last on, or the most recent project.
+You can also curate the registry explicitly through **Add project** in Settings or
+`cezar projects add/remove` from a terminal; launching a removed eligible project again adds it
+back by design.
 
 Project views are scoped to their repository; **Dashboard** at `/dashboard`, **All tasks**, and global settings span the workspace:
 
@@ -550,6 +549,29 @@ the disk holding the repo. `CEZ_AGENT_TMPDIR=0` turns the whole mechanism off �
 per-task directory and pre-spawn check alike — and hands agents the host
 `TMPDIR` again, which is the way out if the check itself is wrong on your
 platform.
+
+---
+
+## Starting or reusing the cockpit
+
+A plain `cezar` / `npx cezar-run` is an add-and-open gesture. It reuses the verified compatible
+cockpit already running for this user, registers the current project there when it is not known,
+and opens (or, with `--no-open`, prints) its canonical `/p/<project>/` URL. If no compatible owner
+exists, the command starts the server normally. `--port` chooses the preferred port only for that
+new-server path; it does not request a second interactive cockpit.
+
+The disposable ownership records live under `~/.cezar/runtime/cockpits/` with user-only
+permissions. A PID is never trusted by
+itself: cezar checks the process's OS start/boot identity and a random identity echoed by health.
+Stale records are reclaimed only after the exact owner is proven dead; an alive but unreachable or
+mismatched owner fails closed rather than starting duplicate schedulers. The private lease token
+authorizes only the same-user CLI's project-registration handoff (including to a hosted service);
+the public health `runtimeId` grants no authority. Deleting the runtime directory is safe only
+while all cockpits are stopped.
+
+Installed and strict remote services keep role-specific singleton slots, so named installs may
+coexist and a service manager never abandons its configured endpoint. A human launch automatically
+prefers the verified default installed service, then the ordinary interactive slot.
 
 ---
 

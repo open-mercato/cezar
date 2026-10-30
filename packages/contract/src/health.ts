@@ -110,6 +110,8 @@ export type DiskInfo = z.infer<typeof diskInfoSchema>;
  */
 export const healthResponseSchema = z.object({
   version: z.string(),
+  /** Random identity of this exact server process; stable until the process restarts. */
+  runtimeId: z.string().uuid(),
   latestVersion: z.string().optional(),
   repoRoot: z.string(),
   repo: repoInfoSchema.nullable(),

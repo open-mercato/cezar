@@ -1488,6 +1488,7 @@ async function openDetail(entry = '/github/issues/142') {
  *  (the pre-#471 shape silently rotted here until the merge fixed the inbox's copy). */
 const health = (backends: readonly Runner[]): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',

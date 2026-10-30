@@ -24,11 +24,11 @@ import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } 
  * - a corrupt file degrades to in-memory defaults plus ONE warning line, and
  *   is left in place until the next successful merge-write replaces it. What
  *   makes that survivable is the `config.json.bak` snapshot below, which the
- *   load path restores from before degrading — NOT re-registration: since boot
- *   registration became seed-once (`shouldAutoRegisterProject`), opening a
- *   project no longer writes it back, so a registry lost with its snapshot is
- *   re-added with `cezar projects add <dir>` (or the cockpit's Add project),
- *   one gesture per project. Nothing inside any repo is ever at stake.
+ *   load path restores from before degrading. A normal serve launch can
+ *   re-register its eligible project; headless/non-serve callers retain the
+ *   seed-once `shouldAutoRegisterProject` rule, and any remaining roots can be
+ *   restored with `cezar projects add <dir>` (or the cockpit's Add project).
+ *   Nothing inside any repo is ever at stake.
  */
 
 /** `id` slug rule — mirrors the spec: `^[a-z0-9][a-z0-9-]{0,63}$`. */
