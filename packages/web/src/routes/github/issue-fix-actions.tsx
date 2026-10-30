@@ -127,7 +127,9 @@ function ActiveIssueFixProvider({ items, queued, engine, onQueued, children }: {
     void queryClient.invalidateQueries({ queryKey: runsKey })
     void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
   } })
-  const engineLabel = `${resolved.runner} · ${resolved.model || 'agent default'} · ${resolved.account ?? 'project account default'}`
+  const accountLabel = resolved.account === null ? 'project account default'
+    : resolved.accounts.find((account) => account.id === resolved.account)?.label ?? 'selected account'
+  const engineLabel = `${resolved.runner} · ${resolved.modelsLocked ? 'agent settings' : resolved.model || 'agent default'} · ${accountLabel}`
   return <IssueFixContext.Provider value={{ actions, engineLabel }}>{children}</IssueFixContext.Provider>
 }
 
@@ -181,7 +183,7 @@ export function IssueFixToolbar({ actions, engineLabel }: { actions: IssueFixAct
           <DialogTitle>Queue {count} issue fixes?</DialogTitle>
           <DialogDescription>One task per issue using {ISSUE_FIX_SKILL}. The existing scheduler controls when tasks start. Agent tasks may use paid tokens.</DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">Engine: {engineLabel}</p>
+        <p className="break-words text-sm text-muted-foreground">Engine: {engineLabel}</p>
         <ul className="max-h-64 overflow-y-auto text-sm">{actions.eligible.map((item) => <li key={item.url} className="py-1 break-words">#{item.number} {item.title}</li>)}</ul>
         <p className="text-xs text-muted-foreground">{actions.selected.length - count} already queued issues skipped. Check Tasks before retrying a failed request.</p>
         <DialogFooter>
