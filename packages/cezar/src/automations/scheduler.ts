@@ -365,12 +365,13 @@ export class WorkspaceAutomationScheduler {
           if (!handle.github) continue;
           const scheduler = new ProjectAutomationScheduler(handle);
           const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: Math.max(definition.intervalSeconds * 1_000, MIN_RETRY_MS), fire: () => scheduler.check(definition) });
+          const retryAfterMs = Math.max(definition.intervalSeconds * 1_000, MIN_RETRY_MS);
+          due.push({ key, at: this.notBefore(key, at, now, retryAfterMs), retryAfterMs, fire: () => scheduler.check(definition) });
         } else if (isScheduleAutomation(definition)) {
           const runner = new ScheduleRunner({ ...handle, launch: handle.launchSchedule, now: this.options.now });
           const at = runner.dueAt(definition);
           if (at === null) continue;
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: MIN_RETRY_MS, fire: async () => {
+          due.push({ key, at: this.notBefore(key, at, now, MIN_RETRY_MS), retryAfterMs: MIN_RETRY_MS, fire: async () => {
             const outcome = await runner.fire(definition);
             // Schedules retain their due instant on contention. Use the workspace's
             // existing retry floor so a busy project cannot starve every other due item.
@@ -381,7 +382,8 @@ export class WorkspaceAutomationScheduler {
           if (!handle.tracker) continue;
           const scheduler = new ProjectTrackerAutomationScheduler(handle);
           const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
-          due.push({ key, at: this.notBefore(key, at), retryAfterMs: Math.max(definition.intervalSeconds * 1000, MIN_RETRY_MS), fire: () => scheduler.check(definition) });
+          const retryAfterMs = Math.max(definition.intervalSeconds * 1000, MIN_RETRY_MS);
+          due.push({ key, at: this.notBefore(key, at, now, retryAfterMs), retryAfterMs, fire: () => scheduler.check(definition) });
         }
       }
     }
@@ -390,6 +392,10 @@ export class WorkspaceAutomationScheduler {
     due.sort((a, b) => a.at - b.at);
     const next = due[0]!;
     const wait = Math.max(0, next.at - now);
+    // A check armed under an older generation may finish but never re-arm (#1736): its
+    // `definition` is the superseded revision, and a second chain would escape `reschedule()`.
+    const generation = this.scheduleGeneration;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       if (wait > MAX_TIMER_WAIT_MS) {
@@ -405,12 +411,17 @@ export class WorkspaceAutomationScheduler {
         // something else moves the item forward. The floor is this workspace's own memory of the
         // failure — independent of whatever the project's store did or did not manage to persist.
         () => { this.retryAfter.set(next.key, (this.options.now?.() ?? Date.now()) + next.retryAfterMs); },
-      ).finally(() => this.schedule());
+      ).finally(() => { if (generation === this.scheduleGeneration) this.schedule(); });
     }, Math.min(MAX_TIMER_WAIT_MS, wait));
   }
 
-  /** An item that just failed waits out its retry floor, however due its persisted state looks. */
-  private notBefore(key: string, at: number): number {
-    return Math.max(at, this.retryAfter.get(key) ?? 0);
+  /**
+   * An item that just failed waits out its retry floor, however due its persisted state looks —
+   * but never longer than its CURRENT retry span, so an edit that shortens the interval applies (#1736).
+   */
+  private notBefore(key: string, at: number, now: number, retryAfterMs: number): number {
+    let floor = this.retryAfter.get(key);
+    if (floor !== undefined && floor > now + retryAfterMs) this.retryAfter.set(key, floor = now + retryAfterMs);
+    return Math.max(at, floor ?? 0);
   }
 }
