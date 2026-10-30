@@ -622,6 +622,8 @@ interface ActiveRun {
   lastOverriddenAsk?: string;
   /** Normalized text of the previous turn's reply, for the near-identical-reply breaker (#1540). */
   lastReplyKey?: string;
+  /** The current turn made at least one tool call — real work, so a repeated status line is not stuck (#1809). */
+  turnToolCall?: boolean;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -4949,6 +4951,7 @@ export class RunManager {
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
+      if (event.type === 'tool-call') state.turnToolCall = true;
       this.store.appendEvent(runId, { ...event, stepId });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -5020,6 +5023,8 @@ export class RunManager {
         // not monitored; parks `waiting` below with the blocker persisted.
         const blocked = resolveBlockedTurn(turnText, Boolean(sessionOpen) && !done && !ask && !dispatchTurn.dispatched);
         const repliedText = turnText;
+        const turnProgressed = state.turnToolCall === true;
+        state.turnToolCall = false;
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         // The twin of `runAgentStep`'s rule (#1282): a turn retires the question park an earlier
@@ -5047,7 +5052,7 @@ export class RunManager {
         // needs to know whether the turn parked.
         const nudged =
           dispatchTurn.rePrompted ||
-          (!monitoring && !blocked && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn, repliedText) : false));
+          (!monitoring && !blocked && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn, repliedText, turnProgressed) : false));
         // Compaction alone never means the user owns the next action (#955). Tried LAST, so
         // every marker, the dispatch rules and the autonomous nudge keep their precedence —
         // the twin of `runAgentStep`'s call, through the one helper both sites share.
@@ -7090,6 +7095,7 @@ export class RunManager {
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
+      if (event.type === 'tool-call') state.turnToolCall = true;
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -7175,6 +7181,8 @@ export class RunManager {
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         const blocked = resolveBlockedTurn(turnText, Boolean(sessionOpen) && !done && !ask && !dispatchTurn.dispatched);
         const repliedText = turnText;
+        const turnProgressed = state.turnToolCall === true;
+        state.turnToolCall = false;
         const parksWorkflow = !interactive && (ask !== null || monitoring || blocked !== null);
         // A turn that does not park retires a park an earlier turn left standing. The park is
         // otherwise cleared only by `sendMessage`, and a parked session can wake without one:
@@ -7220,7 +7228,7 @@ export class RunManager {
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
           dispatchTurn.rePrompted ||
-          (!monitoring && !blocked && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn, repliedText) : false));
+          (!monitoring && !blocked && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn, repliedText, turnProgressed) : false));
         // The compaction continuation (#955), through the same helper `runContinuation` calls.
         // Deliberately NOT gated on `waiting`: that flag is about who the turn hands control
         // to, and an ordinary intermediate step never hands control to anyone — it is closed
@@ -8499,6 +8507,7 @@ export class RunManager {
     ask: AskRequest | null,
     dispatchTurn: DispatchTurnResult,
     turnText = '',
+    turnProgressed = false,
   ): boolean {
     if (!state.autonomous) return false;
     // Three dispatch exceptions (spec 2026-09-10-dispatch), each closing a hole the nudge would
@@ -8539,11 +8548,13 @@ export class RunManager {
     }
     // An agent without the `CEZ:BLOCKED` marker that answers a nudge with (nearly) the same reply
     // is stuck: park after one nudge round instead of burning the cap (#1540). Short or empty
-    // replies are excluded — an empty turn is a different breaker.
+    // replies are excluded — an empty turn is a different breaker. A turn that called a tool made
+    // progress, so a repeated status line alone is not "stuck" (#1809).
     // Questions have their own repeat guards above (#1227); this one covers plain replies.
     const replyText = replyKey(turnText);
     const repeated =
       !ask &&
+      !turnProgressed &&
       replyText.length >= 20 && state.lastReplyKey !== undefined && nearIdenticalReplies(state.lastReplyKey, replyText);
     if (!ask) state.lastReplyKey = replyText;
     if (repeated) {

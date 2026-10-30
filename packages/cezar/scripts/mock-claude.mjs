@@ -87,6 +87,7 @@ let autonomousArmed = false;
 let askRepeat = false;
 // `mock:vary` → sticky: every reply differs from the last (defeats the near-identical-reply breaker, #1540).
 let vary = false;
+let toolsEachTurn = false;
 let monitoringSticky = false;
 let askRewordClean = false;
 let askRewordMonitoring = false;
@@ -161,6 +162,8 @@ async function respond(userText, imageCount) {
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
   if (userText.includes('mock:vary')) vary = true;
+  // `mock:tools-each-turn` → every later turn makes a tool call before its (near-identical) reply (#1809).
+  if (userText.includes('mock:tools-each-turn')) toolsEachTurn = true;
   // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
   // CEZ:MONITORING: the watcher whose downstream work never finishes.
   if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
@@ -660,6 +663,12 @@ async function respond(userText, imageCount) {
     return;
   }
 
+  if (toolsEachTurn) {
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_mock_work_${turn}`, name: 'Bash', input: { command: 'npm test' } }], usage: { input_tokens: 60, output_tokens: 20 } } });
+    await pace(100);
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_mock_work_${turn}`, content: 'ok' }] } });
+    await pace(100);
+  }
   const imgNote = imageCount > 0 ? ` I can see ${imageCount} image(s) you attached.` : '';
   emit({
     type: 'assistant',

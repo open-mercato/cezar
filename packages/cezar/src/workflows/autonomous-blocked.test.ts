@@ -125,4 +125,11 @@ describe('autonomous external-blocked state (#1540)', () => {
     expect(notes(record.id, 'autonomous — continuing').length).toBeLessThanOrEqual(2);
     expect(notes(record.id, 'repeated its previous reply')).toHaveLength(1);
   }, 40_000);
+  it('a repeated reply WITH tool calls each turn keeps being nudged to the cap (#1809)', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:tools-each-turn cannot proceed without credentials', worktree: false, autonomous: true });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(notes(record.id, 'repeated its previous reply')).toHaveLength(0);
+    expect(notes(record.id, 'autonomous — continuing').length).toBeGreaterThan(2);
+  }, 40_000);
 });
