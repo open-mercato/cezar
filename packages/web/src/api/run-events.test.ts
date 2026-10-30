@@ -191,6 +191,49 @@ describe('useRunEvents — hidden tab releases its stream (#1753)', () => {
   }
   afterEach(() => setVisibility('visible'))
 
+  it('releases a stream opened while already hidden, without a visibilitychange event (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const { unmount } = renderHook(() => useRunEvents('run-1'))
+    const source = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(source.readyState).toBe(2)
+    unmount()
+  })
+
+  it('arms the grace timer again when runId changes while hidden (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const view = renderHook(({ runId }: { runId: string }) => useRunEvents(runId), {
+      initialProps: { runId: 'run-1' },
+    })
+    view.rerender({ runId: 'run-2' })
+    const source = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(source.readyState).toBe(2)
+    view.unmount()
+  })
+
+  it('releases a stream reopened from bfcache while the document stays hidden (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const { unmount } = renderHook(() => useRunEvents('run-1'))
+    act(() => window.dispatchEvent(new Event('pagehide')))
+    const pageshow = new Event('pageshow')
+    Object.defineProperty(pageshow, 'persisted', { value: true })
+    act(() => window.dispatchEvent(pageshow))
+    const restored = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(restored.readyState).toBe(2)
+    unmount()
+  })
+
   it('closes after the grace, reopens on return and the replay dedups', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const first = FakeEventSource.last

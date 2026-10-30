@@ -146,8 +146,11 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 /** Mount the stream and hand back the levers. */
-function mount() {
-  const view = renderHook(() => useGlobalEvents(usage), { wrapper })
+function mount(url?: string) {
+  const view = renderHook(({ currentUrl }: { currentUrl?: string }) => useGlobalEvents(usage, currentUrl), {
+    wrapper,
+    initialProps: { currentUrl: url },
+  })
   return { ...view, source: FakeEventSource.last }
 }
 
@@ -280,6 +283,56 @@ describe('useGlobalEvents — liveness watchdog', () => {
 })
 
 describe('useGlobalEvents — hidden tab releases its stream (#1753)', () => {
+  it('releases a stream opened while already hidden, without a visibilitychange event (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const { source, unmount } = mount()
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(source.closeCount).toBe(1)
+    unmount()
+  })
+
+  it('arms the grace timer again when the URL changes while hidden (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const view = mount('/first')
+    view.rerender({ currentUrl: '/second' })
+    const source = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(source.closeCount).toBe(1)
+    view.unmount()
+  })
+
+  it('keeps the stream until notification settings load when permission is granted (#1782)', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('Notification', Object.assign(function () {}, { permission: 'granted' }))
+    const { source, unmount } = mount()
+    setVisibility('hidden')
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+    expect(source.closeCount).toBe(0)
+
+    client.setQueryData(workspaceQueryKeys.uiState, { notifications: { enabled: true } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+    expect(source.closeCount).toBe(0)
+    unmount()
+  })
+
+  it('releases without waiting for notification settings when permission is not granted (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const { source, unmount } = mount()
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(source.closeCount).toBe(1)
+    unmount()
+  })
+
   it('closes the stream after the grace and reconnects with a reconcile on return', () => {
     vi.useFakeTimers()
     const { source } = mount()
@@ -354,6 +407,22 @@ describe('useGlobalEvents — back/forward cache', () => {
 
     expect(FakeEventSource.instances).toHaveLength(2)
     expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
+  })
+
+  it('releases a stream reopened from bfcache while the document stays hidden (#1782)', () => {
+    vi.useFakeTimers()
+    setVisibility('hidden')
+    const { unmount } = mount()
+    act(() => window.dispatchEvent(new Event('pagehide')))
+    const pageshow = new Event('pageshow')
+    Object.defineProperty(pageshow, 'persisted', { value: true })
+    act(() => window.dispatchEvent(pageshow))
+    const restored = FakeEventSource.last
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+
+    expect(restored.closeCount).toBe(1)
+    unmount()
   })
 
   it('does nothing on the pageshow of a normal load', () => {

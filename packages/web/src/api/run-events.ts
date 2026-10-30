@@ -353,6 +353,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
         withCredentials: true,
       })
       source = current
+      armHiddenTimer()
       const frameListener = (event: Event): void => onFrame(event, token)
       for (const name of RUN_EVENT_NAMES) {
         current.addEventListener(name, frameListener)
@@ -388,15 +389,21 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     // run status and completion arrive on the workspace stream — and the reopen below replays
     // from the high-water mark.
     let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    const releaseWhileHidden = (): void => {
+      hiddenTimer = undefined
+      if (disposed || document.visibilityState !== 'hidden') return
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      closeSource()
+    }
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState === 'hidden') {
+        hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+      }
+    }
     const onVisibilityChange = (): void => {
       if (document.visibilityState === 'hidden') {
-        hiddenTimer ??= setTimeout(() => {
-          hiddenTimer = undefined
-          if (disposed || document.visibilityState !== 'hidden') return
-          clearTimeout(reopenTimer)
-          reopenTimer = undefined
-          closeSource()
-        }, HIDDEN_STREAM_GRACE_MS)
+        armHiddenTimer()
         return
       }
       clearTimeout(hiddenTimer)
@@ -414,6 +421,8 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     const onPageHide = (): void => {
       clearTimeout(reopenTimer)
       reopenTimer = undefined
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       closeSource()
     }
     const onPageShow = (event: PageTransitionEvent): void => {

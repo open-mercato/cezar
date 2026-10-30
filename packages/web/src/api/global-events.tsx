@@ -752,6 +752,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // credentials mode (unlike WebSocket), so keep every automatic reconnect authenticated.
       const current = new Source(url, { withCredentials: true })
       source = current
+      armHiddenTimer()
 
       current.addEventListener('open', () => {
         if (disposed || source !== current) return
@@ -912,7 +913,12 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     const releaseWhileHidden = (): void => {
       hiddenTimer = undefined
       if (disposed || document.visibilityState !== 'hidden') return
-      if (hiddenTabNeedsWorkspaceStream(queryClient)) return
+      const needsWorkspaceStream = hiddenTabNeedsWorkspaceStream(queryClient)
+      if (needsWorkspaceStream === true) return
+      if (needsWorkspaceStream === undefined) {
+        armHiddenTimer()
+        return
+      }
       clearTimeout(reopenTimer)
       reopenTimer = undefined
       const current = source
@@ -920,10 +926,15 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       dashboardLive.connected(false)
       current?.close()
     }
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState === 'hidden') {
+        hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+      }
+    }
 
     const onVisibilityChange = (): void => {
       if (document.visibilityState === 'hidden') {
-        hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        armHiddenTimer()
         return
       }
       clearTimeout(hiddenTimer)
@@ -949,6 +960,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // free socket. Close eagerly; pageshow reopens if the document ever comes back.
       clearTimeout(reopenTimer)
       reopenTimer = undefined
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       const current = source
       source = null
       dashboardLive.connected(false)
