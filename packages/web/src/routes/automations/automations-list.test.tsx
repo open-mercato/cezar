@@ -1,14 +1,24 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { setApiScope, type UiState } from '@open-mercato/cezar-api-client'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AutomationsList } from './automations-list'
-import { NOW, mockActions, response, stubResizeObserver } from './automations-list.fixtures'
+import { NOW, entry, mockActions, response, stubResizeObserver } from './automations-list.fixtures'
 import type { AutomationsView } from './automations-route'
+import { putUiState } from '@/api/client'
+
+vi.mock('@/api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/client')>(),
+  putUiState: vi.fn(async (patch: UiState) => patch),
+}))
 
 beforeEach(() => {
   stubResizeObserver()
-  vi.useFakeTimers()
+  setApiScope(null)
+  vi.mocked(putUiState).mockClear()
+  vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(NOW)
 })
 afterEach(() => {
@@ -17,12 +27,16 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderList(props: Partial<Parameters<typeof AutomationsList>[0]> = {}) {
+function renderList(props: Partial<Parameters<typeof AutomationsList>[0]> = {}, prefs: UiState = {}) {
   const onViewChange = vi.fn<(view: AutomationsView) => void>()
+  const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
+  queryClient.setQueryData(['default', 'ui-state'], prefs)
   render(
+    <QueryClientProvider client={queryClient}>
     <MemoryRouter initialEntries={['/automations']}>
       <AutomationsList data={response()} actions={mockActions()} view="list" onViewChange={onViewChange} {...props} />
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   )
   return { onViewChange }
 }
@@ -92,6 +106,47 @@ describe('AutomationsList', () => {
     expect(document.querySelector('[data-slot="automations-table"]')).not.toBeNull()
     expect(document.querySelectorAll('[data-slot="automation-row"]')).toHaveLength(7)
     expect(document.querySelector('[data-slot="week-view"]')).toBeNull()
+  })
+
+  it('saves keyboard-accessible manual moves and preserves them across alternate sorts and reload', async () => {
+    renderList({}, { automationList: { sort: 'manual', order: ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7'] } })
+    const order = () => [...document.querySelectorAll('[data-slot="automation-row"]')].map((row) => row.getAttribute('data-automation'))
+    const before = order()
+    const first = document.querySelector<HTMLElement>('[data-slot="automation-row"]')
+    if (first === null) throw new Error('The fixture must render an automation row')
+    fireEvent.click(within(first as HTMLElement).getByRole('button', { name: /Move .* down/ }))
+    await waitFor(() => expect(order().slice(0, 2)).toEqual([before[1], before[0]]))
+    await waitFor(() => expect(putUiState).toHaveBeenCalled())
+    const moved = order()
+    fireEvent.click(within(screen.getByRole('group', { name: 'Sort automations' })).getByRole('button', { name: 'Name' }))
+    await waitFor(() => expect(document.querySelector('[aria-label^="Reorder "]')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Manual' }))
+    await waitFor(() => expect(order()).toEqual(moved))
+    await waitFor(() => expect(vi.mocked(putUiState).mock.calls.at(-1)?.[0].automationList?.sort).toBe('manual'))
+    const saved = vi.mocked(putUiState).mock.calls.at(-1)?.[0]
+    if (saved === undefined) throw new Error('The manual move must be persisted')
+    cleanup()
+    renderList({}, saved)
+    expect(order()).toEqual(moved)
+  })
+
+  it('keeps alphabetic order as the default and uses the saved Next run sort', () => {
+    renderList()
+    expect(screen.getByRole('button', { name: 'Name' }).getAttribute('aria-pressed')).toBe('true')
+    cleanup()
+    renderList({}, { automationList: { sort: 'nextRun' } })
+    expect(screen.getByRole('button', { name: 'Next run' }).getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('[aria-label^="Reorder "]')).toBeNull()
+  })
+
+  it('keeps every row visible and explains the manual-placement cap', () => {
+    const large = response({ automations: Array.from({ length: 201 }, (_, index) => entry({
+      id: `automation-${index}`, name: `Automation ${index}`, kind: 'schedule',
+    })) })
+    renderList({ data: large }, { automationList: { sort: 'manual' } })
+    expect(document.querySelectorAll('[data-slot="automation-row"]')).toHaveLength(201)
+    expect(screen.getByText('Manual placement supports up to 200 automations.')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: /^Move / }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true)
   })
 
   it('opens the Next runs rail from the strip', () => {
