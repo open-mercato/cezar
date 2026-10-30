@@ -3603,8 +3603,9 @@ export class RunManager {
     const revision = ++this.queueReasonRevision;
     const holds = this.semaphore.accountHolds();
     if (holds.deadline.size > 0 || holds.inFlight.size > 0) {
-      // Match admission's effective account without persisting a runner override (#1340), and
-      // resolve absent profiles against the accounts file as it is now (#1722).
+      // Publish now off the last accounts snapshot unless a queued run needs the config for its
+      // runner (#1340); the pass below corrects it against the accounts file as it is now (#1722).
+      if (!this.store.listRuns().some((run) => run.status === 'queued' && !run.runner)) this.applyQueueReasons('claude');
       void Promise.all([loadConfig(this.repoRoot), this.refreshAccounts()]).then(([config]) => {
         if (revision === this.queueReasonRevision) this.applyQueueReasons(config.defaultRunner);
       });
