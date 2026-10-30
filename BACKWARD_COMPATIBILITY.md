@@ -34,6 +34,16 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (`packages/cezar/src/server/server.ts`)
 
+Scheduled automations (#1818) optionally accept `schedules` (1–16 timed triggers), with
+the first entry mirrored in legacy `schedule`. A list alone or a matching pair is accepted;
+conflicting mirrors, event/timed mixtures, and a one-time trigger combined with others are
+refused. Existing single schedules remain readable without migration. An old client's explicit
+single-schedule update replaces the whole union, so hidden triggers cannot survive an edit.
+Coincident instants launch once; catch-up chooses one newest union instant. Downgraded readers
+see only the first trigger. If an old writer changes that mirror while retaining the unknown
+list, a newer reader refuses the conflicting definition rather than firing hidden schedules.
+No configuration, network, enabled-state default, or existing task setting changes.
+
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, and `discord.v1`.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
   format. Delivery records snapshot the format; provider rendering uses the public event schema.
