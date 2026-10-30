@@ -448,5 +448,6 @@ describe('GithubPoller', () => {
     const candidate = { eventId: 'e', event: 'pull_request.reviewed' as const, timestamp: item.created_at, tieBreaker: 'I', repo: 'acme/demo', nodeId: 'I', number: 7, title: 'x', url: item.html_url, author: 'alice', assignees: [], labels: [], reviewer: 'Carol' };
     expect(matchesFilters(candidate, { ...definition, filters: { ...definition.filters, reviewers: ['carol'] } })).toBe(true);
     expect(matchesFilters(candidate, { ...definition, filters: { ...definition.filters, reviewers: ['dave'] } })).toBe(false);
+    expect(matchesFilters(candidate, { ...definition, filters: { ...definition.filters, reviewers: ['CAROL'] } })).toBe(true);
   });
 });

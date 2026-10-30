@@ -369,22 +369,49 @@ export function cliDefinitionOf(draft: EditorDraft): CliDefinition {
 const LOGIN = '([a-z\\d](?:[a-z\\d]|-(?=[a-z\\d])){0,38})'
 const PROMPT_LOGIN = new RegExp(`\\b(?:user|author|by)\\s+(?:\`@?${LOGIN}\`|@${LOGIN}(?![\\w/-]))`, 'gi')
 
+const REVIEW_EVENTS: readonly AutomationEvent[] = ['pull_request.reviewed', 'pull_request.review_requested', 'pull_request.rereview_requested']
+// Words that follow "review requested for/from" in ordinary prose and are not a login.
+const NOT_LOGINS = new Set(
+  'a an the this that these those any all each every some me my you your it its them their us our we he she they who whom which what someone anyone everyone others other pull pr prs issue issues review reviews reviewer reviewers request requests team teams user users human humans changes code now approval merge'.split(' '),
+)
+const QUOTED_OR_AT = `(?:\`@?${LOGIN}\`|@${LOGIN}(?![\\w/-]))`
+// "review(s) requested for/from X", "review request(s) for/from X": X may be bare (prose words are filtered).
+const REVIEW_REQUEST_LOGIN = new RegExp(
+  `\\breview(?:s|\\s+requests?)?\\s+(?:(?:is|are)\\s+)?(?:requested\\s+)?(?:for|from|of)\\s+(?:${QUOTED_OR_AT}|${LOGIN}\\b(?![/@-]))`,
+  'gi',
+)
+const REQUESTED_REVIEWER_LOGIN = new RegExp(`\\b(?:requested\\s+)?reviewer\\s+${QUOTED_OR_AT}`, 'gi')
+const LOGIN_REQUESTED_AS_REVIEWER = new RegExp(`${QUOTED_OR_AT}\\s+(?:(?:is|are|gets?)\\s+)?requested\\s+as\\s+(?:a\\s+)?reviewer\\b`, 'gi')
+
+export type PromptLogin = { login: string; field: 'authors' | 'reviewers' }
+
 /**
  * GitHub logins the prompt names that no people filter enforces. Prompt text never decides which
- * items launch — "when user `x` opens a PR" with empty Authors launches for everyone.
+ * items launch — "when user `x` opens a PR" with empty Authors launches for everyone. Review-request
+ * phrasing belongs to Reviewers, and only when a review event is selected.
  */
-export function unenforcedPromptLogins(draft: Pick<EditorDraft, 'kind' | 'prompt' | 'filters'>): string[] {
+export function unenforcedPromptLogins(draft: Pick<EditorDraft, 'kind' | 'prompt' | 'filters'> & { events?: readonly AutomationEvent[] }): PromptLogin[] {
   if (draft.kind !== 'github') return []
   const enforced = new Set(
     [draft.filters.authors, draft.filters.assignees, draft.filters.reviewers]
       .flatMap(splitList)
       .map((login) => login.replace(/^@/, '').toLowerCase()),
   )
-  const found = new Map<string, string>()
-  for (const match of draft.prompt.matchAll(PROMPT_LOGIN)) {
-    const login = match[1] ?? match[2]
-    if (login && !enforced.has(login.toLowerCase()) && !found.has(login.toLowerCase())) found.set(login.toLowerCase(), login)
+  const found = new Map<string, PromptLogin>()
+  const add = (login: string | undefined, field: PromptLogin['field']) => {
+    const key = login?.toLowerCase()
+    if (!login || !key || enforced.has(key) || found.has(key)) return
+    found.set(key, { login, field })
   }
+  if (draft.events?.some((event) => REVIEW_EVENTS.includes(event))) {
+    for (const pattern of [REVIEW_REQUEST_LOGIN, REQUESTED_REVIEWER_LOGIN, LOGIN_REQUESTED_AS_REVIEWER]) {
+      for (const match of draft.prompt.matchAll(pattern)) {
+        const login = match[1] ?? match[2] ?? match[3]
+        if (login && !NOT_LOGINS.has(login.toLowerCase())) add(login, 'reviewers')
+      }
+    }
+  }
+  for (const match of draft.prompt.matchAll(PROMPT_LOGIN)) add(match[1] ?? match[2], 'authors')
   return [...found.values()]
 }
 
