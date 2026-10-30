@@ -1279,7 +1279,7 @@ function TitleCell({
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5" style={indent}>
+    <span className="@container flex min-w-0 items-center gap-1.5" style={indent}>
       {/* The one mark that says this row was ORDERED by the row above it rather than by a
           person. Padding alone reads as an accident at 13px; the tick reads as a branch. */}
       {depth > 0 ? (
@@ -1307,7 +1307,8 @@ function TitleCell({
       {dispatchKindLabel(run) ? (
         <span
           data-slot="dispatch-kind"
-          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
+          // The first thing to go when the title would be squeezed (#979): the tick still marks a child.
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground @max-[300px]:hidden"
         >
           {dispatchKindLabel(run)}
         </span>
@@ -1319,30 +1320,43 @@ function TitleCell({
           label={subtasks}
           expanded={subtasksExpanded}
           onToggle={() => onToggleSubtasks(run.id)}
+          wordClassName="@max-[260px]:hidden"
         />
       ) : null}
-      <button
-        type="button"
-        data-slot="row-rename"
-        aria-label="Rename task"
-        onClick={editor.begin}
-        className="shrink-0 rounded-sm p-0.5 text-soft-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      {/* Revealed actions take no width until revealed: reserving it left a nested title 7px at
+          1280 (#979). Still focusable while collapsed, so the keyboard reaches them. A pinned row
+          keeps them laid out, because its pin stays lit. */}
+      <span
+        data-slot="row-actions"
+        className={cn(
+          'flex shrink-0 items-center gap-1.5',
+          !run.pinned &&
+            '-ml-1.5 w-0 overflow-hidden group-hover/row:ml-0 group-hover/row:w-auto group-hover/row:overflow-visible group-focus-within/row:ml-0 group-focus-within/row:w-auto group-focus-within/row:overflow-visible no-hover:ml-0 no-hover:w-auto no-hover:overflow-visible',
+        )}
       >
-        <PencilIcon className="size-3" aria-hidden="true" />
-      </button>
-      {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
-          pinned, where it stays lit as the row's visible unpin handle under the `Pinned` header.
+        <button
+          type="button"
+          data-slot="row-rename"
+          aria-label="Rename task"
+          onClick={editor.begin}
+          className="shrink-0 rounded-sm p-0.5 text-soft-foreground opacity-0 transition-opacity group-hover/row:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <PencilIcon className="size-3" aria-hidden="true" />
+        </button>
+        {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
+            pinned, where it stays lit as the row's visible unpin handle under the `Pinned` header.
 
-          `no-hover:` covers the device this table still reaches without a pointer: it is hidden
-          below `md`, where the cards take over, but a tablet in landscape is ≥md and cannot
-          hover, so without it the pin would be invisible AND unreachable there. */}
-      {onTogglePin ? (
-        <PinToggle
-          pinned={Boolean(run.pinned)}
-          onToggle={(pinned) => onTogglePin(run, pinned)}
-          className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
-        />
-      ) : null}
+            `no-hover:` covers the device this table still reaches without a pointer: it is hidden
+            below `md`, where the cards take over, but a tablet in landscape is ≥md and cannot
+            hover, so without it the pin would be invisible AND unreachable there. */}
+        {onTogglePin ? (
+          <PinToggle
+            pinned={Boolean(run.pinned)}
+            onToggle={(pinned) => onTogglePin(run, pinned)}
+            className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
+          />
+        ) : null}
+      </span>
     </span>
   )
 }
