@@ -1,3 +1,4 @@
+import { capabilitiesSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
 import {
   agentAccountsEnabled,
@@ -234,6 +235,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       automations: true,
+      webhooks: false,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -363,5 +365,36 @@ describe('resolveCapabilities — usage presentation', () => {
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('resolveCapabilities — lifecycle webhooks', () => {
+  it.each([undefined, '', '0', 'true', 'yes'])('is off unless explicitly opted in (%s)', value => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: value, CEZ_WORKFLOW_WEBHOOKS: '1' }).webhooks).toBe(false);
+  });
+  it('enables lifecycle delivery independently of workflow graph webhooks', () => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: '1', CEZ_WORKFLOW_WEBHOOKS: '0' }).webhooks).toBe(true);
+  });
+});
+
+describe('webhook platform availability', () => {
+  it.each(['linux', 'darwin', 'win32', 'freebsd'])('reports platform support independently of opt-in on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const supported = ['linux', 'darwin', 'win32'].includes(platform);
+      for (const flag of [undefined, '0', 'true', '1']) {
+        const capabilities = resolveCapabilities({ CEZ_WEBHOOKS: flag });
+        expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
+        expect(capabilities.webhooks).toBe(supported && flag === '1');
+        expect(capabilities).toEqual({
+          localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true,
+          dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          webhooks: supported && flag === '1',
+          ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
+        });
+        if (supported) expect(capabilities).not.toHaveProperty('webhooksUnavailableReason');
+      }
+    } finally { Object.defineProperty(process, 'platform', original); }
   });
 });

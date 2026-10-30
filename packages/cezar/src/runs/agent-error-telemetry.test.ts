@@ -149,15 +149,34 @@ describe('reportAgentError', () => {
     expect(reported()).toEqual([]);
   });
 
-  it('reports a usage limit with no readable reset under one code — a parser gap to close', () => {
+  it('skips account and conversation state — task_failed counts it, the thread explains it', () => {
+    reportAgentError('claude', { type: 'error', message: 'Credit balance is too low' });
+    reportAgentError('codex', { type: 'session.error', message: 'ENOSPC: no space left on device, write' });
+    reportAgentError('claude', { type: 'error', message: 'Failed to authenticate: OAuth session expired and could not be refreshed' });
+    reportAgentError('claude', { type: 'error', message: 'Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit.' });
+    expect(reported()).toEqual([]);
+  });
+
+  it('still reports a usage limit with no readable reset, in one coded group (a parser gap)', () => {
     reportAgentError('codex', { type: 'error', message: 'You have hit your usage limit. Upgrade to continue.' });
-    expect(reported()[0]?.message).toBe('codex: You have hit your usage limit. Upgrade to continue.');
-    expect(vi.mocked(reportError).mock.calls[0]?.[2]).toEqual({ code: 'usage_limit_unparsed' });
+    reportAgentError('cursor', { type: 'error', message: "cursor agent exited with code 1 — ActionRequiredError: You've hit your usage limit Get Cursor Pro for more Agent usage, unlimited Tab, and more." });
+    expect(vi.mocked(reportError).mock.calls.map((call) => call[2]?.code)).toEqual(['usage_limit_unparsed', 'usage_limit_unparsed']);
+  });
+
+  it('holds a transient failure back until the run engine says it will not be retried', () => {
+    reportAgentError('claude', { type: 'error', message: 'API Error: 529 Overloaded' });
+    expect(reported()).toEqual([]);
+    reportAgentError('claude', { type: 'error', message: 'step "task" failed: API Error: 529 Overloaded' }, { transientOutcome: 'retries_exhausted' });
+    expect(reported()).toEqual([{
+      name: 'AgentError',
+      message: 'claude: API Error: 529 Overloaded',
+      context: { 'agent.backend': 'claude', 'agent.event': 'error', 'agent.outdated': false, 'agent.transient': 'retries_exhausted' },
+    }]);
   });
 
   it('gives an ordinary agent error no code, so it keeps grouping by its own message', () => {
-    reportAgentError('claude', { type: 'error', message: 'API Error: 529 Overloaded' });
-    expect(vi.mocked(reportError).mock.calls[0]?.[2]).toEqual({});
+    reportAgentError('claude', { type: 'error', message: 'exit code 1' });
+    expect(vi.mocked(reportError).mock.calls[0]?.[2]?.code).toBeUndefined();
   });
 });
 

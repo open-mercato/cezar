@@ -1,0 +1,25 @@
+---
+title: "Default agent and models for new projects"
+description: "Set shared defaults instead of configuring each repository from scratch."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/accounts-section.tsx
+    line: 397
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Defaults for new projects sets the runner, account, and models used when a project has no saved choice of its own. Project-specific settings take precedence.
+
+## Where to find it
+
+Settings → Global → Agent accounts → Defaults for new projects
+
+## How to use it
+
+1. Select the default agent and account.
+2. Choose models under Default model per agent.
+3. A new project without its own settings inherits these values.
+
+> **Good to know**: Changing these defaults does not overwrite an explicit choice in an existing project.

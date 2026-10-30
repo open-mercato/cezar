@@ -1,0 +1,84 @@
+---
+title: "Run your first task"
+nav_title: "Your first task"
+description: "Start Cezar in a project, give an agent a small change, and inspect the result."
+related:
+  links:
+    - guides/design-mode
+    - guides/parallel-tasks
+sources:
+  - label: "Quick start and prerequisites"
+    path: README.md
+    line: 123
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "New task defaults"
+    path: packages/web/src/routes/new-task-form.ts
+    line: 310
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Task workspace views"
+    path: packages/web/src/routes/task-workspace/task-workspace.test.tsx
+    line: 174
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+When you finish, you have a task you can follow in Chat and a set of edits you can inspect in Changes.
+
+<Mermaid chart={"flowchart LR\n  s0[\"Project<br/><small>Open its folder</small>\"]\n  s1[\"Agent<br/><small>Make one change</small>\"]\n  s2[\"Changes<br/><small>Inspect the result</small>\"]\n  s0 --> s1 --> s2"} />
+
+## Prerequisites
+
+- Node.js 20 or later.
+- An installed agent CLI, such as Claude Code or Codex, with an active login.
+- A project folder. Use a Git repository if you want an isolated worktree.
+
+## Step 1: Open Cezar in your project
+
+In a terminal, change to the project folder and run the command below. Cezar opens a browser cockpit, normally at `http://localhost:4321`. If that port is busy, it chooses the next available port.
+
+```bash title="Terminal"
+cd your-project
+npx cezar-run
+```
+
+**Check**: The cockpit opens for the project you intend to change.
+
+## Step 2: Describe one small change
+
+Open New task. Name the behavior you want and explain how to check it. Start with something you can review in a few minutes. The example below assumes your project has a signup form; adapt it to your app.
+
+```txt title="Example task"
+On the signup form, show an inline error when the email field is empty.
+Keep the existing layout and validation for other fields.
+Run the relevant tests and tell me how to check the change.
+```
+
+**Check**: Your request identifies the place to edit, the desired behavior, and a check.
+
+## Step 3: Choose an agent and start
+
+Choose an agent you have already signed into. You can leave the skill or workflow selection empty: Cezar uses its built-in quick-task workflow. For an isolated checkout in a Git project, enable Worktree. Start the task using the composer’s send control (Start task).
+
+**Check**: The task appears in the task list. It may queue while another task holds the available capacity.
+
+## Step 4: Read the response and inspect the edits
+
+Open Chat to follow the agent’s messages and respond if it needs input. Open Changes to inspect the diff. Run or inspect the relevant checks and verify the behavior in your app before accepting the result.
+
+**Check**: The diff matches the requested scope, and the behavior works when you try it.
+
+## How it works
+
+Cezar coordinates your installed agent. The agent reads the project and makes changes; Cezar displays its messages and the resulting diff. Task completion and acceptance of the work are separate checks.
+
+## Troubleshooting
+
+### The agent cannot start
+
+Check that its CLI is installed and signed in on the machine running Cezar. Review the task error and the Agent accounts settings.
+
+### The task is queued
+
+Check the other running tasks and your concurrency limits. A queued task has not necessarily failed.
+
+### The agent finished, but the result is wrong
+
+Describe what you observed in Chat, including the steps to reproduce it. Inspect the next diff and test the behavior again.

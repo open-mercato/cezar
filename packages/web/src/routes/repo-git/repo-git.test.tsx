@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { queryKeys } from '@/api/queries'
 import type {
   ChangesPayload,
@@ -48,7 +49,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const CHANGES: ChangesPayload = {
@@ -148,7 +149,8 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const path = String(input)
+      // A project-scoped read (`/api/v1/p/<id>/…`) is served the same fixture as its boot alias.
+      const path = String(input).replace(/^\/api\/v1\/p\/[^/]+\//, '/api/v1/')
       const method = init.method ?? 'GET'
       sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
       const override = overrides[`${method} ${path}`]
@@ -167,11 +169,9 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
 }
 
 /** Cold-load the repo view at a URL, with the same route map routes.tsx registers. */
-function renderAt(entry: string) {
+function renderAt(entry: string, projectId?: string) {
   const client = createQueryClient()
-  render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
+  const routes = (
         <Routes>
           <Route path="/git" element={<RepoGitRoute tab="changes" />} />
           <Route path="/git/commits" element={<RepoGitRoute tab="commits" />} />
@@ -180,6 +180,11 @@ function renderAt(entry: string) {
           <Route path="/git/files" element={<RepoGitRoute tab="files" />} />
           <Route path="/git/files/*" element={<RepoGitRoute tab="files" />} />
         </Routes>
+  )
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[entry]}>
+        {projectId ? <ProjectScopeProvider projectId={projectId}>{routes}</ProjectScopeProvider> : routes}
         <Toaster />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -505,6 +510,23 @@ describe('the repo view Branches segment', () => {
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/health')).toBe(true))
     expect(document.querySelector('[data-slot="repo-prs"]')).toBeNull()
     expect(sent.some((r) => r.path.startsWith('/api/v1/github'))).toBe(false)
+  })
+
+  // #1410: health describes the boot folder. A cloned GitHub project served from a non-repo boot
+  // (health `forge: null`) must still list its PRs — the gate is the PROJECT's registry entry.
+  it('a non-boot GitHub project lists its PRs even when the boot folder has no forge', async () => {
+    stubFetch({
+      'GET /api/v1/health': () =>
+        jsonResponse({ ...HEALTH, bootProject: 'home', forge: null, checks: [{ name: 'gh', available: true }] }),
+      'GET /api/v1/projects': () =>
+        jsonResponse({
+          bootProject: 'home',
+          projectsDir: '/repos',
+          projects: [{ id: 'shop', name: 'shop', root: '/repo', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok', forge: 'github' }],
+        }),
+    })
+    renderAt('/git/branches', 'shop')
+    await waitFor(() => expect(document.querySelector('[data-slot="pr-row"]')).not.toBeNull())
   })
 
   it('forge detected but unreachable: the section renders the reason instead of rows', async () => {

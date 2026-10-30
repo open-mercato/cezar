@@ -120,6 +120,8 @@ interface ProviderDescriptor {
    * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
    */
   foreign?: (executable: string, version: ProviderCommandResult) => boolean;
+  /** What `foreign` reports instead of the generic "not a working CLI" text. */
+  foreignHint?: (result: ProviderCommandResult) => string | undefined;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -359,7 +361,9 @@ function parseJunieStatus(_result: ProviderCommandResult): ProviderConnectionSta
 
 function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  const lines = normalizedLines(result.stdout);
+  // pi ≥ 0.73 reroutes stdout to stderr whenever stdin is not a TTY (`takeOverStdout` in its
+  // main.js), so the probe's whole answer arrives on stderr (telemetry f67df9d2, after #1548).
+  const lines = normalizedLines(result.stdout, result.stderr);
   if (lines.some((line) => /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/.test(line))) {
     return 'connected';
   }
@@ -506,6 +510,11 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     stdin: copilotAcpProbeStdin,
     // The version of the binary the probe ran, not a cached newer package.
     versionArgs: ['--no-auto-update', '--version'],
+    // No ACP frame and no semver on stdout or stderr: not a Copilot CLI that can run here, so a
+    // status of its own, not a crash report on every boot (telemetry 298c2e1f, #1580).
+    foreign: (_executable, version) => !process.env.CEZ_COPILOT_BIN
+      && (version.exitCode !== 0 || (cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)) === null),
+    foreignHint: copilotUnrecognizedHint,
     unrecognizedHint: copilotUnrecognizedHint,
   },
 ];
@@ -598,7 +607,9 @@ export function defaultRunProviderCommand(
   const cwd = probeCwdFallback();
   return new Promise((resolve) => {
     let closeTimer: NodeJS.Timeout | undefined;
+    let lingerTimer: NodeJS.Timeout | undefined;
     let closedUnanswered = false;
+    let answered = false;
     const child = execFile(
       file,
       argv,
@@ -614,6 +625,7 @@ export function defaultRunProviderCommand(
       },
       (error, stdout, stderr) => {
         clearTimeout(closeTimer);
+        clearTimeout(lingerTimer);
         const commandError = error as (NodeJS.ErrnoException & {
           killed?: boolean;
           signal?: string | null;
@@ -621,16 +633,18 @@ export function defaultRunProviderCommand(
         const code = commandError?.code;
         // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
         // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
-        const timedOut = commandError?.code === 'ETIMEDOUT'
+        // An answer in hand is not a hang, however the CLI then failed to exit (telemetry 5f52beba).
+        const timedOut = !answered && (commandError?.code === 'ETIMEDOUT'
           || (commandError?.killed === true && commandError.signal === 'SIGTERM')
-          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout)));
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout))));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
           timedOut,
-          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
+          // The linger kill after an answer is cezar's own cleanup, not an interruption to re-ask over.
+          ...(!timedOut && !answered && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );
@@ -652,7 +666,12 @@ export function defaultRunProviderCommand(
     };
     const onData = (chunk: Buffer | string): void => {
       seen += String(chunk);
-      if (closeWhen(seen)) close();
+      if (!closeWhen(seen)) return;
+      answered = true;
+      close();
+      // Copilot 1.0.103 on Windows answered session/new and then outlived EOF until cezar's
+      // timeout killed it, twice, and the answer was reported as a hang (telemetry 5f52beba).
+      lingerTimer = setTimeout(() => child.kill(), STDIN_CLOSE_MARGIN_MS);
     };
     output.on('data', onData);
     closeTimer = setTimeout(() => {
@@ -1371,8 +1390,9 @@ export class ProviderAuthService {
         return {
           provider: descriptor.id,
           status: 'not-installed',
-          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
-            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+          hint: descriptor.foreignHint?.(result)
+            ?? `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+              + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
         };
       }
     }

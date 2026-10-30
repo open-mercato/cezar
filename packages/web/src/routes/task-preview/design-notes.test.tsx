@@ -164,7 +164,10 @@ describe('sending a note', () => {
   it.each(['done', 'failed', 'cancelled', 'review'] as const)('reopens a %s session with the note', async (status) => {
     const { result } = notesWithDraft(run({ status }))
     await act(() => result.current.sendAll())
-    expect(api.continueRun).toHaveBeenCalledWith('run-1', { text: expect.stringContaining('make it bigger') })
+    expect(api.continueRun).toHaveBeenCalledWith('run-1', {
+      text: expect.stringContaining('make it bigger'),
+      idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    })
     expect(api.sendMessage).not.toHaveBeenCalled()
     expect(result.current.note('abc-1')?.phase).toBe('running')
   })

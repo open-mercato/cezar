@@ -1,0 +1,25 @@
+---
+title: "Conditions and branching"
+description: "Choose a path based on code changes, a node result, or a branch."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/graph.ts
+    line: 131
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+If evaluates a condition and directs work to true or false. Conditions can check diff size, changed file paths, another node's result, or the base branch.
+
+## Where to find it
+
+Workflows → Add node → If
+
+## How to use it
+
+1. Add If.
+2. Select a condition: diff size, file paths, node result, or base branch.
+3. Connect true and false.
+
+> **Good to know**: In path patterns, \* matches names within one directory and \*\* matches across directories.

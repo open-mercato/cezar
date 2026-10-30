@@ -1,0 +1,26 @@
+---
+title: "Automate Jira and Linear events"
+description: "Start tasks after selected changes in your issue tracker."
+related:
+  links:
+    - guides/common-questions
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/editor-tracker-fields.tsx
+    line: 37
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Select a project connection, the events to watch, and the interval between checks. For status changes, specify the destination states. For label additions or removals, select the relevant labels.
+
+## Where to find it
+
+Automations → New automation → When Jira / Linear changes
+
+## How to use it
+
+1. Connect the tracker in project settings first.
+2. Select events and the required states or labels.
+3. Describe the task, choose its agent, save, and enable the rule.
+
+> **Good to know**: Available events depend on the connected provider. Once enabled, the rule tracks new changes; earlier matches do not create tasks.

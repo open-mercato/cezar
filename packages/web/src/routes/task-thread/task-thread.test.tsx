@@ -281,6 +281,22 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
   })
 
+  it('failed by a transient provider error → the dock says it retries, not that a limit was hit', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: API Error: 529 Overloaded',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+          autoResumeReason: 'transient',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Temporary provider failure — this task retries automatically at')
+    expect(hint?.textContent).not.toContain('Usage limit')
+  })
+
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
     renderView(
       <ThreadView

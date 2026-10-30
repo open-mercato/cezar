@@ -1,8 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, promises as fsp, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { readFileWithRetry, renameSyncWithRetry } from '../fs-rename.ts';
+import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
@@ -248,6 +248,9 @@ const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
+    /** Global instructions: read by every agent step in every project, merged BEFORE the
+     *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
+    systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -475,6 +478,44 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
   }
 }
 
+/** Async twin of {@link atomicWriteJsonSync} for files a request may be READING concurrently: the
+ *  sync retry blocks the event loop, so a reader's open handle — which is what makes a win32
+ *  rename fail EPERM — can never close until the budget is spent (telemetry 4a7c9f6c). */
+export async function atomicWriteJson(path: string, value: unknown): Promise<void> {
+  assertCezarHomeWriteIsSandboxed(path);
+  await fsp.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = atomicTmpPath(path);
+  try {
+    const handle = await fsp.open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await renameWithRetry(tmp, path);
+  } catch (error) {
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+  await fsp.chmod(path, 0o600).catch(() => {});
+}
+
+const pathQueues = new Map<string, Promise<unknown>>();
+
+/** Runs `task` after every earlier one queued for `path` in this process has settled, so one
+ *  request's read-modify-write never reads the file while another's rename replaces it. */
+export function serializedByPath<T>(path: string, task: () => Promise<T>): Promise<T> {
+  const previous = pathQueues.get(path) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  const settled = next.catch(() => {});
+  pathQueues.set(path, settled);
+  void settled.then(() => {
+    if (pathQueues.get(path) === settled) pathQueues.delete(path);
+  });
+  return next;
+}
+
 /**
  * Read-modify-write merge: re-read the file, apply `mutator`, atomic-rename
  * write (`0600`, dir `0700`). Because every writer re-reads immediately before
@@ -499,20 +540,22 @@ export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
 ): Promise<WorkspaceConfig> {
   const path = workspaceConfigPath();
-  const current = await readWorkspaceConfig(path, true);
-  const next = mutator(current) ?? current;
-  atomicWriteJsonSync(path, next);
-  // Refresh the snapshot after EVERY successful write, including an emptied
-  // registry (#731). Skipping the empty case left a stale non-empty backup:
-  // removing the last project, then losing config.json, resurrected the project
-  // the user had deliberately unregistered. An empty snapshot is not restored on
-  // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
-  // registry the user intended rather than the old projects.
-  try {
-    atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
-  } catch {
-    // Best-effort: the registry itself is already safely on disk, and a
-    // failed snapshot must never turn a successful write into an error.
-  }
-  return next;
+  return serializedByPath(path, async () => {
+    const current = await readWorkspaceConfig(path, true);
+    const next = mutator(current) ?? current;
+    await atomicWriteJson(path, next);
+    // Refresh the snapshot after EVERY successful write, including an emptied
+    // registry (#731). Skipping the empty case left a stale non-empty backup:
+    // removing the last project, then losing config.json, resurrected the project
+    // the user had deliberately unregistered. An empty snapshot is not restored on
+    // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
+    // registry the user intended rather than the old projects.
+    try {
+      await atomicWriteJson(workspaceConfigBackupPath(path), next);
+    } catch {
+      // Best-effort: the registry itself is already safely on disk, and a
+      // failed snapshot must never turn a successful write into an error.
+    }
+    return next;
+  });
 }

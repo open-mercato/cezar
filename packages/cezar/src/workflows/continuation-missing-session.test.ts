@@ -54,7 +54,8 @@ vi.mock('../core/runner-factory.ts', () => ({
   }),
 }));
 
-describe('Continue on a Claude session whose transcript is gone', () => {
+// Real runs with the mock CLI; the polls below already allow 15 s: well under a second alone, past the 5 s default under the full parallel suite.
+describe('Continue on a Claude session whose transcript is gone', { timeout: 20_000 }, () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager | undefined;

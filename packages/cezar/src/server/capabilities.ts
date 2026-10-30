@@ -52,6 +52,7 @@
  * changes collection, persistence, events, or API run records.
  */
 
+import { webhookPlatformSupported } from '../webhooks/platform.ts';
 import { followupsEnabled } from '../handoff.ts';
 import type { Capabilities } from '@open-mercato/cezar-contract';
 
@@ -244,6 +245,8 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
+    webhooks: webhookPlatformSupported() && env.CEZ_WEBHOOKS === '1',
+    ...(!webhookPlatformSupported() ? { webhooksUnavailableReason: 'unsupported_platform' as const } : {}),
     dispatch: env.CEZ_DISPATCH !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,

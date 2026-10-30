@@ -476,6 +476,7 @@ query ($owner: String!, $name: String!, $issuesLimit: Int!, $prsLimit: Int!, $is
 }`;
 
 type GithubListPage = ReturnType<typeof parseGithubListPage>;
+type GithubListCursors = { issuesCursor?: string; prsCursor?: string; issuesDone?: boolean; prsDone?: boolean };
 
 /** Walks both open connections up to `limit` rows each, at most `GH_GRAPHQL_PAGE_MAX` per request,
  *  keeping each side's cursor exact so the returned next cursors resume where the rows stop. */
@@ -484,12 +485,13 @@ export async function fetchGithubListPages(
   owner: string,
   name: string,
   limit: number,
-  cursors: { issuesCursor?: string; prsCursor?: string } = {},
+  cursors: GithubListCursors = {},
 ): Promise<GithubListPage> {
   let issuesCursor = cursors.issuesCursor;
   let prsCursor = cursors.prsCursor;
-  let issuesDone = false;
-  let prsDone = false;
+  // An exhausted side must stay exhausted: a missing cursor alone means "first page" (#1750).
+  let issuesDone = cursors.issuesDone === true;
+  let prsDone = cursors.prsDone === true;
   let result: GithubListPage | null = null;
   while (!result || !issuesDone || !prsDone) {
     const issuesSize = issuesDone ? 0 : Math.min(GH_GRAPHQL_PAGE_MAX, limit - (result?.issues.nodes.length ?? 0));
@@ -522,6 +524,9 @@ export async function fetchGithubListPages(
     }
     result = acc;
   }
+  // A side skipped from the start fetched `first: 0`; its pageInfo says nothing about exhaustion.
+  if (cursors.issuesDone) result.issues.pageInfo = { ...result.issues.pageInfo, hasNextPage: false };
+  if (cursors.prsDone) result.pullRequests.pageInfo = { ...result.pullRequests.pageInfo, hasNextPage: false };
   return result;
 }
 
@@ -529,11 +534,11 @@ export async function fetchGithub(
   repoRoot: string,
   refresh = false,
   limit = 30,
-  cursors: { issuesCursor?: string; prsCursor?: string } = {},
+  cursors: GithubListCursors = {},
 ): Promise<GithubData> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubPage(limit, cursors);
   const capped = Math.min(Math.max(limit, 1), GH_MAX_LIMIT);
-  const cacheKey = `${repoRoot}\0${cursors.issuesCursor ?? ''}\0${cursors.prsCursor ?? ''}`;
+  const cacheKey = `${repoRoot}\0${cursors.issuesCursor ?? ''}\0${cursors.prsCursor ?? ''}\0${cursors.issuesDone ? 1 : 0}${cursors.prsDone ? 1 : 0}`;
   const hit = listCache.get(cacheKey);
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS && hit.limit >= capped) {
     return hit.data;
@@ -684,12 +689,14 @@ const ghSearchHitSchema = ghIssueSchema.extend({
   commentsCount: z.number().default(0),
 });
 
-/** `gh {issue,pr} view <n> --json …` — the exact-number path. Shares `ghIssueSchema`'s core;
- *  `isDraft`/`additions`/`deletions` are PR-only and default harmlessly for issues. */
-const ghViewHitSchema = ghIssueSchema.extend({
+/** The bounded metadata shape returned by the exact-number REST lookup. GitHub's REST issue and
+ * pull-request resources expose `comments` as a numeric count, unlike `gh view --json comments`,
+ * which serializes every comment body. */
+const ghNumericHitSchema = ghIssueSchema.extend({
   isDraft: z.boolean().default(false),
   additions: z.number().default(0),
   deletions: z.number().default(0),
+  commentsCount: z.number().int().nonnegative().default(0),
 });
 
 function urlKind(url: string): 'issue' | 'pr' | null {
@@ -699,11 +706,12 @@ function urlKind(url: string): 'issue' | 'pr' | null {
 }
 
 /** Flatten one validated hit into the `ForgeItem` the tab's rows already render. `checks: null`
- *  is what the list tier ships too since #664 — the glyph hydrates lazily via `/api/github/checks`
- *  — so a searched row and a listed row are indistinguishable to the UI. */
+ *  is what the list tier ships too since #664 — the glyph hydrates lazily via `/api/github/checks`.
+ *  Both search paths carry comment counts now; text-search PR rows intentionally omit additions /
+ *  deletions because supplying them would require one expensive view lookup per result. */
 function toSearchItem(
   kind: 'issue' | 'pr',
-  hit: z.infer<typeof ghSearchHitSchema> | z.infer<typeof ghViewHitSchema>,
+  hit: z.infer<typeof ghSearchHitSchema> | z.infer<typeof ghNumericHitSchema>,
   labelColors: Record<string, string>,
 ): ForgeItem {
   for (const label of hit.labels) {
@@ -718,7 +726,7 @@ function toSearchItem(
     labels: hit.labels.map((l) => l.name),
     body: (hit.body ?? '').slice(0, 8_000),
     url: hit.url,
-    comments: 'commentsCount' in hit ? hit.commentsCount : 0,
+    comments: hit.commentsCount,
   };
   if (kind === 'pr') {
     item.isDraft = hit.isDraft;
@@ -780,15 +788,20 @@ export async function searchGithubItems(
       // user input reaching an argv, so it is normalized rather than passed through verbatim.
       const number = Number(numeric);
       try {
+        // Use the REST resource's numeric `comments` field. `gh issue/pr view --json comments`
+        // returns every comment body, so a popular issue would turn this one-result lookup into
+        // an unbounded response. jq reshapes the bounded REST metadata to the shared schema while
+        // retaining one subprocess for the numeric lookup.
+        const jq =
+          '{number,title,author:{login:.user.login},createdAt:.created_at,labels,url:.html_url,body,commentsCount:(.comments // 0),isDraft:(.draft // false),additions:(.additions // 0),deletions:(.deletions // 0)}';
         const out = await gh(repoRoot, [
-          kind === 'pr' ? 'pr' : 'issue',
-          'view',
-          String(number),
-          '--json',
-          kind === 'pr' ? `${SEARCH_FIELDS},isDraft,additions,deletions` : SEARCH_FIELDS,
+          'api',
+          `repos/{owner}/{repo}/${kind === 'pr' ? 'pulls' : 'issues'}/${number}`,
+          '--jq',
+          jq,
         ]);
-        const hit = ghViewHitSchema.parse(JSON.parse(out));
-        // GitHub's `issue view` endpoint accepts a PR number because PRs are issues too. The
+        const hit = ghNumericHitSchema.parse(JSON.parse(out));
+        // GitHub's issues endpoint accepts a PR number because PRs are issues too. The
         // requested tab kind is still part of the search contract, so verify the canonical URL
         // before flattening; a wrong-kind hit falls through to the normal text search.
         const actualKind = urlKind(hit.url);
@@ -883,20 +896,20 @@ function mockGithub(): GithubData {
   };
 }
 
-function mockGithubPage(limit: number, cursors: { issuesCursor?: string; prsCursor?: string }): GithubData {
+function mockGithubPage(limit: number, cursors: GithubListCursors): GithubData {
   const full = mockGithub();
   const issueStart = Number(cursors.issuesCursor ?? 0);
   const prStart = Number(cursors.prsCursor ?? 0);
-  const issues = full.issues.slice(issueStart, issueStart + limit);
-  const prs = full.prs.slice(prStart, prStart + limit);
+  const issues = cursors.issuesDone ? [] : full.issues.slice(issueStart, issueStart + limit);
+  const prs = cursors.prsDone ? [] : full.prs.slice(prStart, prStart + limit);
   return {
     ...full,
     issues,
     prs,
     issuesTotal: full.issues.length,
     prsTotal: full.prs.length,
-    issuesNextCursor: issueStart + issues.length < full.issues.length ? String(issueStart + issues.length) : null,
-    prsNextCursor: prStart + prs.length < full.prs.length ? String(prStart + prs.length) : null,
+    issuesNextCursor: !cursors.issuesDone && issueStart + issues.length < full.issues.length ? String(issueStart + issues.length) : null,
+    prsNextCursor: !cursors.prsDone && prStart + prs.length < full.prs.length ? String(prStart + prs.length) : null,
   };
 }
 
@@ -3355,6 +3368,44 @@ export function evictGithubProjectCaches(repoRoot: string): void {
   });
 }
 
+const ghApiErrorBodySchema = z.object({ message: z.string(), status: z.union([z.string(), z.number()]).optional() });
+
+/**
+ * A failed `PUT …/pulls/:n/merge`, as GitHub said it (telemetry a2c8474c). The old mapping read
+ * Node's `Command failed: gh api …` line — the argv — so every refusal (rules, reviews, method,
+ * a moved head) came out as one 502. GitHub's body is on stdout, `gh: <why> (HTTP n)` on stderr.
+ */
+export function ghMergeFailure(error: unknown): Extract<ForgeMergeResult, { merged: false }> {
+  const io = (error ?? {}) as { stdout?: unknown; stderr?: unknown; message?: unknown };
+  const stdout = typeof io.stdout === 'string' ? io.stdout : '';
+  const stderr = ghStderr(error) ?? '';
+  let body: z.infer<typeof ghApiErrorBodySchema> | undefined;
+  try {
+    const parsed = ghApiErrorBodySchema.safeParse(JSON.parse(stdout));
+    if (parsed.success) body = parsed.data;
+  } catch {
+    // not a GitHub error body: gh failed before or without one
+  }
+  const httpStatus = Number(body?.status ?? stderr.match(/\(HTTP (\d{3})\)/)?.[1] ?? Number.NaN);
+  // Never Node's `Command failed: <argv>` preamble: it names the command, not the reason.
+  const fallback = whyLine(stderr || (typeof io.message === 'string' ? io.message : ''));
+  const said = (body?.message ?? (/^Command failed:|^gh failed$/i.test(fallback) ? '' : fallback))
+    .replace(/^gh:\s*/, '')
+    .replace(/\s*\(HTTP \d{3}\)\s*$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+  const reason = said ? `: ${said.replace(/[.\s]+$/, '')}.` : '.';
+  if (httpStatus === 403) return { merged: false, status: 403, error: `GitHub permission denied${reason}` };
+  if (httpStatus === 404) return { merged: false, status: 404, error: 'Pull request or repository not found.' };
+  // 409 is GitHub's "head branch was modified"; 405/422 are its precondition refusals.
+  if (httpStatus === 409) return { merged: false, status: 409, error: `GitHub refused the merge${reason}`, code: 'stale-head' };
+  if (httpStatus === 405 || httpStatus === 422) {
+    return { merged: false, status: 409, error: `GitHub refused the merge${reason}`, code: 'github-blocked' };
+  }
+  return { merged: false, status: 502, error: `GitHub could not complete the merge${reason}` };
+}
+
 async function mergePullRequest(
   repoRoot: string,
   repoRef: GithubRepoRef | null,
@@ -3391,9 +3442,7 @@ async function mergePullRequest(
     evictGithubProjectCaches(repoRoot);
     return { merged: true, number, url: current.url, method: input.method, ...(result.sha ? { mergeCommitSha: result.sha } : {}) };
   } catch (error) {
-    const message = firstLine(error instanceof Error ? error.message : String(error));
-    const status = /403|permission|forbidden/i.test(message) ? 403 : /404|not found/i.test(message) ? 404 : 502;
-    return { merged: false, status, error: status === 403 ? 'GitHub permission denied.' : status === 404 ? 'Pull request or repository not found.' : 'GitHub could not complete the merge.' };
+    return ghMergeFailure(error);
   } finally {
     mergeInflight.delete(key);
   }

@@ -11,7 +11,7 @@ import { useProjects } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { StatusDot } from '@/components/status-dot'
-import { shortAge } from '@/lib/format'
+import { compactTokens, shortAge } from '@/lib/format'
 import { useAutomationsGate } from '@/routes/automations/use-automations'
 import { useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
@@ -90,6 +90,18 @@ export function OutcomeInsights({ period, active }: { period: Period; active: bo
   )
 }
 
+/** A quarter-width stat cell fits ~7 digits; past 10k show `193.7k` and keep the exact count in the tooltip. */
+function Count({ value, prefix = '', className }: { value: number; prefix?: string; className?: string }) {
+  const exact = `${prefix}${value.toLocaleString('en-US')}`
+  if (value < 10_000) return <span className={className}>{exact}</span>
+  return (
+    <span className={className} title={exact}>
+      {prefix}
+      {compactTokens(value)}
+    </span>
+  )
+}
+
 function Delivered({ data }: { data: DashboardInsights }) {
   const d = data.delivered
   const stats: { label: string; value: ReactNode; note?: string }[] = [
@@ -97,14 +109,14 @@ function Delivered({ data }: { data: DashboardInsights }) {
     {
       label: 'Lines',
       value: (
-        <>
-          <span className="text-success">+{d.additions.toLocaleString('en-US')}</span>{' '}
-          <span className="text-danger">−{d.deletions.toLocaleString('en-US')}</span>
-        </>
+        <span className="flex flex-wrap gap-x-1.5">
+          <Count value={d.additions} prefix="+" className="text-success" />
+          <Count value={d.deletions} prefix="−" className="text-danger" />
+        </span>
       ),
     },
-    { label: 'Files', value: d.files.toLocaleString('en-US') },
-    { label: 'Issues', value: d.issues },
+    { label: 'Files', value: <Count value={d.files} /> },
+    { label: 'Issues', value: <Count value={d.issues} /> },
   ]
   return (
     <section className={panel} aria-label="Delivered">

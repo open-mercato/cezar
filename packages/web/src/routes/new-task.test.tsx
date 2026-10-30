@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -168,6 +168,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   skillsAutoUpdate: null,
   effectiveSkillsAutoUpdate: true,
   orgSkillsRepos: [],
+  systemPrompt: null,
   composerDefaults: {
     autonomous: null,
     worktree: null,
@@ -218,6 +219,9 @@ function serve(overrides: {
   uiState?: Record<string, unknown>
   /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
+  /** Non-2xx catalog answers, or a request that never settles (`'pending'`). */
+  skillsStatus?: number | 'pending'
+  workflowsStatus?: number | 'pending'
   deferredPreview?: () => Promise<Response>
   createRun?: unknown
   /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
@@ -241,6 +245,8 @@ function serve(overrides: {
     repo: REPO,
     uiState: {},
     uiStateStatus: 200,
+    skillsStatus: 200 as number | 'pending',
+    workflowsStatus: 200 as number | 'pending',
     createRun: { id: 'r1' },
     createRunStatus: 201,
     launchKey: 'k-real',
@@ -272,8 +278,14 @@ function serve(overrides: {
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
-      if (url === '/api/v1/skills') return json(data.skills)
-      if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
+      if (url === '/api/v1/skills') {
+        if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.skills, data.skillsStatus)
+      }
+      if (url === '/api/v1/workflows' && method === 'GET') {
+        if (data.workflowsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.workflows, data.workflowsStatus)
+      }
       if (url === '/api/v1/repo') return json(data.repo)
       if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
@@ -1054,6 +1066,42 @@ describe('submit', () => {
     expect(put?.body).not.toHaveProperty('skillUsage')
   })
 
+  // Telemetry 31eda062: a failed catalog fetch left `sourcesReady` false forever, so every
+  // Start answered "Still loading workflows and skills". 404s land errored at once (no retry).
+  it('a FAILED skills fetch still starts the drafted workflow — never "Still loading"', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve({ skillsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'fix-and-verify' })
+    expect(screen.queryByText(/Still loading workflows and skills/)).toBeNull()
+  })
+
+  it('a FAILED catalog keeps the drafted skill instead of swapping in quick-task', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ skillsStatus: 404, workflowsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Fix it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ task: 'Fix it', steps: [expect.objectContaining({ skill: 'om-fix' })] })
+  })
+
+  it('Start stays disabled while the catalog is still loading', async () => {
+    serve({ workflowsStatus: 'pending' })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+
+    expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(true)
+  })
+
   it('a WORKFLOW source posts { workflow, task }', async () => {
     draftSource({ source: 'workflow', ref: 'fix-and-verify' })
     serve()
@@ -1337,7 +1385,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')

@@ -15,6 +15,8 @@ import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
+import { withServedBootProject } from '@/lib/served-boot-project'
+import { useActiveForge } from '@/lib/active-forge'
 import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { pageTitleContext } from '@/routes'
@@ -77,7 +79,11 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
   const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
-  const registry = useProjects().data
+  const projectsData = useProjects().data
+  const registry = useMemo(
+    () => withServedBootProject(projectsData, projectId, health.data),
+    [projectsData, projectId, health.data],
+  )
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
   // Unread done items (#unread-done-items) for the Tasks badge. This shell sits ABOVE the routed
@@ -159,7 +165,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       skillsUpdateAvailable,
     ],
   )
-  const toolsMenu = useMemo(() => <ToolsMenu health={health.data} />, [health.data])
+  // The active project's forge, not the boot folder's (#1410) — feeds the flat nav and the note.
+  const activeForge = useActiveForge()
+  const toolsMenu = useMemo(() => <ToolsMenu health={health.data} forge={activeForge} />, [health.data, activeForge])
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -185,7 +193,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         skillsUpdateAvailable={skillsUpdateAvailable}
         // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
         // a cold or failed probe is the GitHub page's to explain and retry (#1412).
-        forgeAvailable={health.data?.forge != null}
+        forgeAvailable={activeForge != null}
         // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
         // the nav must not offer an Inbox this server will never fill.
         inboxAvailable={inboxAvailable}

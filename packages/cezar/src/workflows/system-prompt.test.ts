@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -12,7 +13,10 @@ import { CLAUDE_HEADLESS_GUIDANCE } from '../core/claude-cli-runner.ts';
 import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
+  GLOBAL_INSTRUCTIONS_HEADING,
+  PROJECT_INSTRUCTIONS_HEADING,
   composeSystemPrompt,
+  dispatchPromptPart,
   makeRunTitle,
   resolveExtraSystemPrompt,
   skillSystemPrompt,
@@ -33,6 +37,33 @@ describe('resolveExtraSystemPrompt', () => {
     ['both blank', '', '   ', undefined],
   ] as const)('%s', (_name, override, configDefault, expected) => {
     expect(resolveExtraSystemPrompt(override, configDefault)).toBe(expected);
+  });
+
+  it('global instructions alone ride along unlabelled', () => {
+    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe('Global rule');
+    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe('Global rule');
+  });
+
+  it('merges global FIRST and the project prompt after it, labelled as winning', () => {
+    const merged = resolveExtraSystemPrompt(undefined, 'Project rule', 'Global rule');
+    expect(merged).toBe(
+      `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule\n\n---\n\n${PROJECT_INSTRUCTIONS_HEADING}\n\nProject rule`,
+    );
+  });
+
+  it('a per-run override replaces the project prompt but keeps the global one', () => {
+    const merged = resolveExtraSystemPrompt('Override', 'Project rule', 'Global rule');
+    expect(merged).toContain('Global rule');
+    expect(merged).toContain('Override');
+    expect(merged).not.toContain('Project rule');
+  });
+
+  it('a dispatched child keeps ONE copy of the dispatch prompt when global instructions wrap it', () => {
+    const seed = composeDispatchPrompt('implement');
+    const extra = resolveExtraSystemPrompt(seed, 'Project rule', 'Global rule');
+    expect(dispatchPromptPart(seed, extra)).toBeUndefined();
+    expect(composeSystemPrompt(dispatchPromptPart(seed, extra), extra)!.split(seed).length - 1).toBe(1);
+    expect(dispatchPromptPart(seed, 'Unrelated extra')).toBe(seed);
   });
 });
 

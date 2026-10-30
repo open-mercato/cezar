@@ -916,6 +916,32 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'disconnected' } });
   });
 
+  // Telemetry f67df9d2: pi 0.73.1 with a piped stdin writes its whole answer to stderr, exit 0.
+  it.each([
+    [
+      'disconnected',
+      'No models available. Use /login to log into a provider via OAuth or API key. See:\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/providers.md\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/models.md\n',
+    ],
+    [
+      'connected',
+      'provider   model              context  max-out  thinking  images\n'
+        + 'anthropic  claude-sonnet-4-5  200K     64K      yes       yes\n',
+    ],
+  ] as const)('reads a pi 0.73 stderr-only answer as %s', async (expected, stderr) => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      onInconclusive,
+      runCommand: runner((executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: expected } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi' }));
+  });
+
   it('does not guess from unrecognized pi model output', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'pi'
@@ -2052,6 +2078,42 @@ describe('inconclusive probe reports', () => {
     expect(await probe.cliVersion()).toBe('1.34.1');
   });
 
+  // #1580 (telemetry 298c2e1f): exit 0, 36 bytes of non-frame stdout, and `--version` with no semver.
+  describe('a `copilot` that is not a working Copilot CLI', () => {
+    const rowFor = async (version: ProviderCommandResult, onInconclusive = vi.fn()) => {
+      const service = new ProviderAuthService({
+        runCommand: async (executable, args) => {
+          if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+          if (args.includes('--version')) return version;
+          return { stdout: 'x'.repeat(36), stderr: 'y'.repeat(103), exitCode: 0 };
+        },
+        onInconclusive,
+      });
+      return (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    };
+
+    it('is not-installed with the update hint and sends no report when --version has no semver', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: 'hello\n', stderr: '', exitCode: 0 }, onInconclusive);
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('npm i -g @github/copilot') });
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('is not-installed when an old CLI rejects --no-auto-update', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: "error: unknown option '--no-auto-update'", exitCode: 1 }, onInconclusive);
+      expect(row?.status).toBe('not-installed');
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('guards: a version printed on stderr only still counts as a Copilot CLI', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: 'GitHub Copilot CLI 1.0.98.\n', exitCode: 0 }, onInconclusive);
+      expect(row?.status).toBe('unknown');
+      expect(onInconclusive).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // Telemetry f67df9d2: an asdf shim named `pi`, exit 1, nothing on stdout, Python's version on stderr.
   it('reports a version-manager shim with no version behind it as not-installed, not inconclusive', async () => {
     const onInconclusive = vi.fn();
@@ -2121,8 +2183,10 @@ describe('inconclusive probe reports', () => {
 
   it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {
     const service = new ProviderAuthService({
-      runCommand: async (executable) => executable === 'copilot'
-        ? { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
+      runCommand: async (executable, args) => executable === 'copilot'
+        ? args.includes('--version')
+          ? { stdout: 'GitHub Copilot CLI 1.0.98.\n', stderr: '', exitCode: 0 }
+          : { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
         : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
     });
     const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
@@ -2150,6 +2214,36 @@ describe('inconclusive probe reports', () => {
     expect(result).toMatchObject({ exitCode: 0, timedOut: false });
     expect(result.stdout).toContain('"sessionId":"s"');
   });
+
+  // Telemetry 5f52beba: Copilot 1.0.103 (Windows) answered session/new, then never exited on EOF;
+  // the timeout killed it and its complete answer was reported as a hang.
+  it('keeps an ACP answer whose server outlives EOF, and stops waiting for it to exit', async () => {
+    const lingering = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n'); });",
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+    const onInconclusive = vi.fn();
+    const results: Array<{ signal?: string; timedOut?: boolean }> = [];
+    const service = new ProviderAuthService({
+      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        const result = await defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin);
+        results.push(result);
+        return result;
+      },
+      onInconclusive,
+    });
+    const started = Date.now();
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(onInconclusive).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeLessThan(6_000);
+    // cezar's own linger kill is not an interruption: no `signal` for wasInterrupted() to re-ask over.
+    expect(results.at(-1)).toMatchObject({ timedOut: false });
+    expect(results.at(-1)?.signal).toBeUndefined();
+  }, 20_000);
 
   // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,
   // which read as unrecognized output and never got the longer re-ask a timeout gets.

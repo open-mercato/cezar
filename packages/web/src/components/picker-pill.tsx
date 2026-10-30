@@ -1,5 +1,6 @@
 import { SearchIcon } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Virtualizer } from 'virtua'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
 import {
@@ -22,6 +23,9 @@ import { RUNNERS } from '@/routes/new-task-form'
 import { chipChevron as chevron, chipClass } from '@/components/chip'
 
 export { chevron, chipClass }
+
+/** Searchable lists past this many rows go through virtua — a repo can carry thousands of branches. */
+export const PICKER_VIRTUALIZE_THRESHOLD = 100
 
 /** A generic single-choice pill (runner / model / variants): DropdownMenu radio semantics,
  *  two-line items (label + quiet description), disabled state carries its reason as `title`. */
@@ -60,9 +64,13 @@ export function PickerPill({
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const visibleOptions = searchPlaceholder
-    ? options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
-    : options
+  const listRef = useRef<HTMLDivElement>(null)
+  const visibleOptions = useMemo(() => {
+    const needle = search.trim().toLowerCase()
+    return searchPlaceholder && needle
+      ? options.filter((option) => option.label.toLowerCase().includes(needle))
+      : options
+  }, [options, search, searchPlaceholder])
 
   useEffect(() => {
     if (!open || !searchPlaceholder) return
@@ -82,6 +90,18 @@ export function PickerPill({
       </span>
     )
   }
+  const renderOption = (option: { value: string; label: string; desc?: string }) => (
+    <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
+      <span className="flex min-w-0 flex-col">
+        <span className="text-[12.5px] font-medium">{option.label}</span>
+        {option.desc ? (
+          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
+            {option.desc}
+          </span>
+        ) : null}
+      </span>
+    </DropdownMenuRadioItem>
+  )
   const trigger = (
     <button
       type="button"
@@ -145,18 +165,24 @@ export function PickerPill({
           </div>
         ) : null}
         <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
-          {visibleOptions.map((option) => (
-            <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
-              <span className="flex min-w-0 flex-col">
-                <span className="text-[12.5px] font-medium">{option.label}</span>
-                {option.desc ? (
-                  <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
-                    {option.desc}
-                  </span>
-                ) : null}
-              </span>
-            </DropdownMenuRadioItem>
-          ))}
+          {searchPlaceholder ? (
+            // Its own scroller under the search row, so virtua can window the rows.
+            <div
+              ref={listRef}
+              className="max-h-[min(20rem,calc(var(--radix-dropdown-menu-content-available-height)-3.5rem))] overflow-y-auto overscroll-contain"
+            >
+              {visibleOptions.length > PICKER_VIRTUALIZE_THRESHOLD ? (
+                // `data` + a render function: only the windowed rows are ever built as elements.
+                <Virtualizer scrollRef={listRef} itemSize={30} data={visibleOptions}>
+                  {renderOption}
+                </Virtualizer>
+              ) : (
+                visibleOptions.map(renderOption)
+              )}
+            </div>
+          ) : (
+            visibleOptions.map(renderOption)
+          )}
         </DropdownMenuRadioGroup>
         {searchPlaceholder && visibleOptions.length === 0 ? (
           <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>

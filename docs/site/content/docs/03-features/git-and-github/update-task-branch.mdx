@@ -1,0 +1,25 @@
+---
+title: "Update a task branch from its base"
+description: "Ask the task agent to bring in changes from the base branch."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/lib/git-actions.ts
+    line: 182
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+When the task branch is behind its base, Update branch asks the agent to bring in the missing changes. Before a PR exists, find this option in the Create PR menu. After execution, inspect the agent result and new changes.
+
+## Where to find it
+
+Task → Git action → Update branch
+
+## How to use it
+
+1. Check whether the task branch is behind its base.
+2. Choose Update branch. Before creating a PR, look in the Create PR menu.
+3. Review the agent result and new changes.
+
+> **Good to know**: The button depends on Git state and agent readiness. This is separate from repository Pull, which only permits fast-forward.

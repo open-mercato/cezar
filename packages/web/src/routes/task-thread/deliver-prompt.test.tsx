@@ -2,6 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { MESSAGE_RETRY_DELAYS_MS } from '@/api/client'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 
@@ -193,14 +194,14 @@ describe('useDeliverPrompt', () => {
     expect(client.getQueryData<ApiRun>(['default', 'runs', 'detail', 'r1'])?.status).toBe('running')
   })
 
-  it('a fresh record with no session to resume keeps the original error', async () => {
+  it('a fresh record with no session to resume explains the refusal instead of a bare "session closed"', async () => {
     const { sent, deliver } = await renderDeliver(run('running'), {
       'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
       'GET /api/v1/runs/r1': () =>
         jsonResponse(run('failed', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0 }] as ApiRun['steps'] })),
     })
 
-    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    await expect(deliver('carry on')).rejects.toThrow(/not taking messages right now/)
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
@@ -246,7 +247,7 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
-  it('the wait is bounded: a run that never settles reports the refusal', async () => {
+  it('the wait is bounded: a run that never settles reports an actionable refusal', async () => {
     const waits: number[] = []
     const { sent, deliver } = await renderDeliver(
       run('running'),
@@ -259,7 +260,7 @@ describe('useDeliverPrompt', () => {
       },
     )
 
-    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    await expect(deliver('carry on')).rejects.toThrow(/not taking messages right now/)
     expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
     expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
@@ -323,6 +324,33 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(2)
   })
 
+  it('a lost Continue that landed behind the teardown is not delivered a second time', async () => {
+    // The first Continue reached the server as a continueOnDrop: no step yet, so the record still
+    // reads `review`; the server refuses any OTHER Continue while the run unwinds, and the
+    // refetch after that refusal would find the run live and post the text again as a message.
+    let landedKey: string | undefined
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': () => {
+        const body = sent[sent.length - 1]?.body as { idempotencyKey?: string }
+        if (landedKey === undefined) {
+          landedKey = body.idempotencyKey ?? ''
+          return unreachable()
+        }
+        return body.idempotencyKey && body.idempotencyKey === landedKey
+          ? jsonResponse({ continued: true })
+          : jsonResponse({ error: 'run is still active' }, 409)
+      },
+      'GET /api/v1/runs/r1': sequence(() => jsonResponse(run('review')), () => jsonResponse(run('running'))),
+    })
+
+    await expect(deliver('one more fix')).resolves.toEqual({ continued: true })
+    const attempts = posts(sent, '/api/v1/runs/r1/continue').map((r) => r.body as { idempotencyKey?: string })
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/)
+    expect(attempts[1]?.idempotencyKey).toBe(attempts[0]?.idempotencyKey)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
   it('a lost Continue the record shows as landed is never re-posted', async () => {
     const landed = run('review', {
       steps: [
@@ -350,15 +378,46 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
   })
 
-  it('a lost live message is never re-posted — nothing proves it did not land', async () => {
+  it('telemetry 1a212342: a live message that got no answer is re-posted under the same idempotency key', async () => {
+    const { sent, deliver } = await renderDeliver(run('waiting'), {
+      'POST /api/v1/runs/r1/messages': sequence(unreachable, () => jsonResponse({ delivered: true })),
+    })
+
+    await expect(deliver('hello')).resolves.toEqual({ delivered: true })
+    const attempts = posts(sent, '/api/v1/runs/r1/messages').map((r) => r.body as { idempotencyKey?: string })
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/)
+    // The server delivers a key once, so the re-post cannot double the message.
+    expect(attempts[1]?.idempotencyKey).toBe(attempts[0]?.idempotencyKey)
+  })
+
+  it('a live message the server never answers is reported after a bounded number of re-posts', async () => {
     const { sent, deliver } = await renderDeliver(run('waiting'), {
       'POST /api/v1/runs/r1/messages': unreachable,
       'GET /api/v1/runs/r1': () => jsonResponse(run('waiting')),
     })
 
     await expect(deliver('hello')).rejects.toThrow('cannot reach the cezar server')
-    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(MESSAGE_RETRY_DELAYS_MS.length + 1)
     expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(0)
+  })
+
+  it('telemetry f3d02411: a Continue that keeps hitting dead sockets is re-posted while the record proves it never landed', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('review'),
+      {
+        'POST /api/v1/runs/r1/continue': sequence(unreachable, unreachable, () => jsonResponse({ continued: true })),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('one more fix')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(3)
+    expect(waits).toEqual(MESSAGE_RETRY_DELAYS_MS.slice(0, 2))
   })
 
   it('a different live 409 the fresh record agrees with is not retried', async () => {
