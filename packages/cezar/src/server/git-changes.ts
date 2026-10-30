@@ -905,8 +905,11 @@ export async function baseDivergence(
 
 /** `--force-with-lease` pinned to the remote tip this branch once HELD (found in its own reflog),
  *  for a push the remote refused as non-fast-forward because the branch was rebased (#1758).
- *  null when the remote tip was never ours — someone else's commit — so it is never overwritten. */
+ *  null when the remote tip was never ours — someone else's commit — or the branch is the remote's
+ *  default, which is never rewritten without the user typing it. */
 export async function rewriteLeaseArg(dir: string, remote: string, branch: string): Promise<string | null> {
+  const remoteHead = await git(dir, ['symbolic-ref', '-q', '--short', `refs/remotes/${remote}/HEAD`]);
+  if (branch === 'main' || branch === 'master' || remoteHead.stdout.trim() === `${remote}/${branch}`) return null;
   const tip = await git(dir, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${branch}`]);
   if (!tip.ok) return null;
   const sha = tip.stdout.trim();
@@ -920,7 +923,7 @@ export type PushResult =
 
 /** Push the current branch, setting upstream when it has none. No remote,
  *  detached HEAD and rejected pushes all degrade to `{ ok:false, error }`. */
-export async function pushCurrentBranch(dir: string): Promise<PushResult> {
+export async function pushCurrentBranch(dir: string, opts: { leaseRewrites?: boolean } = {}): Promise<PushResult> {
   const branchRes = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   if (!branchRes.ok) return { ok: false, error: gitReason(branchRes, 'not a git repository') };
   const branch = branchRes.stdout.trim();
@@ -936,7 +939,8 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   let push = await git(dir, args);
-  if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
+  // Only a task's own branch: the repo-root Push must keep refusing, it may be on the user's main.
+  if (opts.leaseRewrites && !push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     const lease = await rewriteLeaseArg(dir, remote, branch);
     if (lease) push = await git(dir, ['push', lease, ...(upstream.ok ? [] : ['-u']), remote, branch]);
   }
