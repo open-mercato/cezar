@@ -5,9 +5,9 @@
     "prNumber": 1832,
     "title": "Explain the browse-root boundary and link to Settings",
     "branch": "feat/issue-1688-browse-root",
-    "headSha": "e26d8594f0827d5f660a9de8d8a6f90feb56df55"
+    "headSha": "499072df851edb509340d113699c80232c44890d"
   },
-  "verdict": "PARTIAL",
+  "verdict": "PASS",
   "environment": {
     "baseUrl": "http://127.0.0.1:63104",
     "role": "local cockpit, disposable CEZ_HOME",
@@ -81,18 +81,28 @@
     {
       "step": 8,
       "priority": "P1",
-      "action": "Initial pending and permission-denied browse states",
-      "expected": "No premature root hint, existing permission guidance retained",
-      "observed": "Covered by component tests, including cached-root refresh failure; not separately forced in browser",
-      "result": "not exercised",
-      "screenshot": ""
+      "action": "Delay browse response5s through a task-only loopback QA proxy",
+      "expected": "Loading with no false root hint; hint appears on successful response",
+      "observed": "Loading screenshot has no hint; after response the root hint appears",
+      "result": "PASS",
+      "screenshot": "step-08-loading.png"
+    },
+    {
+      "step": 9,
+      "priority": "P1",
+      "action": "Return a controlled403 browse response through the QA proxy",
+      "expected": "Permission error, Privacy Settings and retry controls; no root hint",
+      "observed": "Controlled permission message, existing privacy/retry guidance, root hint absent",
+      "result": "PASS",
+      "screenshot": "step-09-forbidden.png"
     }
   ],
   "hasUiTest": false,
   "notes": [
-    "Seven browser scenarios passed; pending/403 states exercised only by component tests.",
-    "Native CLI ref midpoint landed between wrapped text lines; direct mouse click on visible link text and keyboard Enter both reached Settings.",
-    "Add-agent-account caller inspected for shared root semantics; not separately exercised in browser.",
-    "No QA approval labels granted. Full local validation blocked outside this UI scope."
+    "Scenarios1–7 exercised the code at e26d8594; subsequent commits change only the issue plan. Scenarios8–9 exercised the identical source at final499072df.",
+    "Loading/403 were controlled network conditions using a task-specific loopback proxy, not a real OS permission denial.",
+    "Add-agent-account caller source-inspected, not separately browser-driven; dark theme exercised.",
+    "Native ref midpoint landed between wrapped link lines; direct mouse text click and keyboard Enter both navigated successfully.",
+    "No QA approval labels granted. Native full validation has reproduced baseline Windows failures, with green supported-platform CI accepted by parent."
   ]
 }
