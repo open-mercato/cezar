@@ -155,6 +155,7 @@ import { skillLabel, taskOriginOf, workflowLabel, type TaskOrigin } from '../fea
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
+  agentStepTimeoutMs,
   chainStepNote,
   DEFAULT_ALLOWED_TOOLS,
   retryableExit,
@@ -5703,6 +5704,7 @@ export class RunManager {
       emit,
       taskBackend,
       extraSystemPrompt,
+      agentTimeoutMs: config.agentTimeoutMs,
       startImages,
       startAttachments,
       // #1300: a usage-limit resume re-enters the walk at its interrupted agent node.
@@ -5809,6 +5811,8 @@ export class RunManager {
       emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void;
       taskBackend: RunnerId;
       extraSystemPrompt: string | undefined;
+      /** The repo's `agentTimeoutMs` (#880), the fallback for an agent node without its own. */
+      agentTimeoutMs: number | undefined;
       startImages: ContentBlock[] | undefined;
       startAttachments: PersistedAttachment[];
       /** The walk so far, when this run is being RESUMED after a restart (`graphState.cursor`). */
@@ -5817,7 +5821,7 @@ export class RunManager {
       usageLimitResume?: StepState;
     },
   ): Promise<string | null> {
-    const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
+    const { input, skills, emit, taskBackend, extraSystemPrompt, agentTimeoutMs } = ctx;
     let { startImages, startAttachments } = ctx;
     // Resume only onto a node this graph still has; anything else starts the walk afresh.
     const resumeNode = ctx.resume?.cursor
@@ -5996,6 +6000,7 @@ export class RunManager {
           startImages,
           taskBackend,
           extraSystemPrompt,
+          agentStepTimeoutMs(rendered, agentTimeoutMs, isTerminalAgent(graph, node.id)),
           stepIdx >= 0 ? chainStepNote(workflow.steps, stepIdx) : undefined,
           startAttachments,
           resuming && ctx.usageLimitResume?.id === node.id
@@ -6043,6 +6048,7 @@ export class RunManager {
               undefined,
               taskBackend,
               extraSystemPrompt,
+              agentStepTimeoutMs(rendered, agentTimeoutMs, false),
               undefined,
               [],
               { resumeSessionId: own, lastTurn },
@@ -6946,6 +6952,9 @@ export class RunManager {
     images: ContentBlock[] | undefined,
     taskBackend: RunnerId,
     extraSystemPrompt: string | undefined,
+    /** The step's resolved time limit (`agentStepTimeoutMs`, #880): `0` for the
+     *  interactive step, `undefined` to keep the runner's built-in default. */
+    timeoutMs: number | undefined,
     /** The chain-boundary note for this step (#410), or undefined when the
      *  workflow has a single agent step and there is no boundary to explain. */
     chainNote: string | undefined,
@@ -7394,17 +7403,18 @@ export class RunManager {
           resume,
           // Interactive sessions have no runner timeout — the idle timer rules.
           //
-          // A non-final step keeps the runner's timeout (`DEFAULT_RUN_TIMEOUT_MS`
-          // of silence, with a hard ceiling behind it — cf2191f1) even though it
-          // may now park on a `CEZ:ASK` and sit open waiting for an answer (#917).
-          // Dropping it for every intermediate step is the
+          // A non-final step keeps the runner's timeout - the step's `timeoutMs`,
+          // else the repo's `agentTimeoutMs`, else `DEFAULT_RUN_TIMEOUT_MS` (#880),
+          // as a window of silence with a hard ceiling behind it (cf2191f1) -
+          // even though it may now park on a `CEZ:ASK` and sit open waiting for
+          // an answer (#917). Dropping it for every intermediate step is the
           // wrong trade: it would leave a runaway step with nothing to stop it,
           // to buy a park that is bounded by the 15-minute idle timer first in
           // all but the longest steps. What matters is that neither expiry can
           // strand the run — both close the session, and a park whose session
           // closed unanswered settles as `failed` with a Continue button (see
           // the `askPark` branch in `execute`), never as a run stuck `waiting`.
-          timeoutMs: interactive ? 0 : undefined,
+          timeoutMs,
         },
         onEvent,
         {
