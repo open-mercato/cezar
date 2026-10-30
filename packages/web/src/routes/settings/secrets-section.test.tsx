@@ -14,13 +14,13 @@ const DEFAULT: Stored[] = [
   { name: 'STAGING_TOKEN', audiences: ['checks', 'cezar'], updatedAt: '2026-10-10T00:00:00Z' },
 ]
 
-function setup(options: { secrets?: Stored[]; putStatus?: number; keyBackend?: 'keychain' | 'file'; scope?: 'project' | 'workspace' } = {}) {
-  const { secrets = DEFAULT, putStatus = 204, keyBackend = 'keychain', scope = 'project' } = options
+function setup(options: { secrets?: Stored[]; putStatus?: number; keyBackend?: 'keychain' | 'file'; scope?: 'project' | 'workspace'; skipped?: string } = {}) {
+  const { secrets = DEFAULT, putStatus = 204, keyBackend = 'keychain', scope = 'project', skipped } = options
   const calls: { method: string; url: string; body?: string }[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
     calls.push({ method, url: String(input), body: typeof init?.body === 'string' ? init.body : undefined })
-    if (method === 'GET') return new Response(JSON.stringify({ secrets, keyBackend }), { status: 200 })
+    if (method === 'GET') return new Response(JSON.stringify({ secrets, keyBackend, ...(skipped ? { skipped } : {}) }), { status: 200 })
     if (method === 'PUT' && putStatus !== 204) return new Response(JSON.stringify({ error: 'storage failed' }), { status: putStatus })
     return new Response(null, { status: 204 })
   }))
@@ -40,6 +40,12 @@ describe('Secrets settings', () => {
     expect(screen.queryAllByDisplayValue(/.+/).every((el) => (el as HTMLInputElement).type === 'checkbox')).toBe(true)
     expect((screen.getByLabelText('Value') as HTMLInputElement).value).toBe('')
     expect(screen.getByLabelText('Value').getAttribute('type')).toBe('password')
+  })
+
+  it('says why listed secrets cannot be read', async () => {
+    setup({ skipped: 'the data key is gone' })
+    await screen.findByText('OPENAI_API_KEY')
+    expect(screen.getByRole('alert').textContent).toContain('the data key is gone')
   })
 
   it('says plainly when the data key is a file, not a keychain item', async () => {

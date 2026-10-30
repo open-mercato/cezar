@@ -17,7 +17,8 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  * `CEZ:DONE` lands what it left, a failing required check goes back to the agent, and a
  * read-only task runs beside a write task that holds the working-tree lease.
  */
-describe('trunk-based projects', () => {
+// Real runs: well under a second alone, past the 5 s default under the full parallel suite.
+describe('trunk-based projects', { timeout: 20_000 }, () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;

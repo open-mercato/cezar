@@ -40,6 +40,8 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `$PI_CODING_AGENT_DIR` or `~/.pi/agent` */
+  pi: string;
   /** `$KIMI_CODE_HOME` or `~/.kimi-code` */
   kimi: string;
 }
@@ -92,6 +94,7 @@ const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli
 const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
 const COPILOT_INSTRUCTIONS_DOCS =
   'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
+const PI_CONFIG_DOCS = 'https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md';
 
 /**
  * The table. Order is presentation order: per runner, then user → project →
@@ -384,6 +387,55 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: COPILOT_INSTRUCTIONS_DOCS,
   },
 
+  // ---- Pi coding agent ----
+  // Pi keeps editable preferences in the global agent directory and project .pi directory.
+  // Credentials (auth.json/oauth.json), custom model definitions, sessions and packages are
+  // intentionally not catalogued: they are sensitive or runtime state, not settings.
+  {
+    id: 'pi.user.settings',
+    runners: ['pi'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.pi, 'settings.json'),
+    label: '~/.pi/agent/settings.json',
+    format: 'jsonc',
+    tracked: 'outside-repo',
+    modelKey: 'defaultModel',
+    modelKeys: ['defaultModel', 'model'],
+    modelPriority: 1,
+    precedence:
+      'Global Pi settings for all projects. The project .pi/settings.json overrides it by key; PI_CODING_AGENT_DIR relocates this agent directory.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+  {
+    id: 'pi.project.settings',
+    runners: ['pi'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.pi', 'settings.json'),
+    label: '.pi/settings.json',
+    format: 'jsonc',
+    tracked: 'tracked',
+    modelKey: 'defaultModel',
+    modelKeys: ['defaultModel', 'model'],
+    modelPriority: 2,
+    precedence:
+      'Project settings override the global Pi settings by key and are suitable for sharing with the repository.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+  {
+    id: 'pi.user.memory',
+    runners: ['pi'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.pi, 'AGENTS.md'),
+    label: '~/.pi/agent/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Global instructions loaded by Pi for every project.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+
   // ---- Cursor Agent CLI ----
   {
     id: 'cursor.user.settings',
@@ -487,10 +539,10 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: KIMI_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot AND Kimi ----
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot, Pi AND Kimi ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode', 'copilot', 'kimi'],
+    runners: ['codex', 'opencode', 'copilot', 'pi', 'kimi'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -498,7 +550,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex, OpenCode, Copilot CLI and Kimi (Claude ignores it). Codex and Kimi concatenate it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI, Pi and Kimi (Claude ignores it). Codex and Kimi concatenate it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set; Pi loads it as project context. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

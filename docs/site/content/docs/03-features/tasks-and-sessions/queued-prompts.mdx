@@ -1,0 +1,29 @@
+---
+title: "Edit instructions before a task starts"
+description: "Add, edit, and remove messages while a task waits in the queue."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 3598
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-21-queued-session-prompt-stacking.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+You can add details to the request before the agent starts working on it.
+
+## Where to find it
+
+Queued task thread
+
+## How to use it
+
+1. Open a waiting task.
+2. Add further instructions.
+3. Edit or remove messages before work begins.
+
+> **Good to know**: The agent receives queued messages when the task starts. Adding instructions to a running session is a separate feature.

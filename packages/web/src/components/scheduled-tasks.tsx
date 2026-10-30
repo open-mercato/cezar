@@ -7,6 +7,7 @@ import { automationsQueryKey, useAutomationsGate, useAutomationsQuery } from '@/
 import { Link, useNavigate } from '@/lib/project-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { writeClipboard } from '@/lib/clipboard'
 
 /** Task-facing view of composer starts. The implementation's automation terminology stays hidden. */
 export function ScheduledTasks({ compact = false, enabled = true }: { compact?: boolean; enabled?: boolean }) {
@@ -75,7 +76,7 @@ function ScheduledTask({ item, onAlreadyStarted }: { item: AutomationListEntry; 
       {ambiguous && <p>Check the runs below. Start missing runs creates only the ones that do not exist yet — a run you deleted starts again. Dismiss removes this entry and starts nothing.</p>}
       {state.runIds.map((id, index) => <Link key={id} to={`/tasks/${id}`} className="mr-3 underline">Check run {index + 1}</Link>)}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => navigator.clipboard.writeText(item.task.prompt))}>Copy prompt</Button>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act(() => writeClipboard(item.task.prompt))}>Copy prompt</Button>
         <Button size="sm" variant="outline" disabled={busy || (claimed && !ambiguous)} onClick={() => void act(async () => { const result = await runAutomationNow(item.id, item.revision); navigate(`/tasks/${result.runId}`) })}>{ambiguous ? 'Start missing runs' : state.status === 'failed' ? 'Retry' : 'Run now'}</Button>
         <Button size="sm" variant="ghost" disabled={busy || claimed || bindingInvalid} onClick={toggleEditing}>Change time</Button>
         <Button size="sm" variant="ghost" disabled={busy || (claimed && !ambiguous)} onClick={() => void act(() => deleteAutomation(item.id, item.revision))}>{ambiguous ? 'Dismiss' : 'Cancel'}</Button>

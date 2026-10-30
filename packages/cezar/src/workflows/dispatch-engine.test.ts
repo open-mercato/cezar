@@ -41,7 +41,8 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-dispatch-'));
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_WEBHOOKS', 'CEZ_CODEX_BIN']) savedEnv[key] = process.env[key];
+    delete process.env.CEZ_WEBHOOKS;
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_DISPATCH = '1';
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
@@ -558,6 +559,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       const child = start('mock:ask which library?', childOf(parent.id), { autonomous: true });
       await waitFor(child.id, (r) => r?.status === 'waiting');
       expect(store.getRun(child.id)?.dispatch?.pendingAsk?.questions).toHaveLength(1);
+      expect(store.getRun(child.id)?.attentionRequest?.requestId).toBe(store.getRun(child.id)?.dispatch?.pendingAsk?.requestId);
       const rootInbox = join(treeDirOf(parent.id), 'inbox', 'root');
       const blocked = readdirSync(rootInbox).find((name) => name.includes('blocked-on-a-guard'));
       expect(blocked).toBeTruthy();
@@ -569,6 +571,24 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
   // ---- the pending question (the Guard) ------------------------------------------------------
 
   describe('pendingAsk', () => {
+    it('native attention persists a snapshot without Guard routing or waking the parent', async () => {
+      const parent = await parkedRoot();
+      delete process.env.CEZ_DRY_RUN;
+      process.env.CEZ_CODEX_BIN = join(import.meta.dirname, '../core/__fixtures__/codex/mock-codex-app-server.mjs');
+      const child = start('mock:native-codex-ask choose a library', childOf(parent.id), { runner: 'codex' });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+      // Any later parent wake/continuation must still use the bundled dry-run runner.
+      process.env.CEZ_DRY_RUN = '1';
+      const parked = store.getRun(child.id);
+      expect(parked?.attentionRequest?.questions.length).toBeGreaterThan(0);
+      expect(parked?.dispatch?.pendingAsk).toBeUndefined();
+      const rootInbox = join(treeDirOf(parent.id), 'inbox', 'root');
+      expect(existsSync(rootInbox) && readdirSync(rootInbox).some((name) => name.includes('blocked-on-a-guard'))).toBe(false);
+      expect(store.getRun(parent.id)?.activity).toBe('monitoring');
+      expect(manager.sendMessage(child.id, [{ type: 'text', text: 'Library: Vitest' }])).toBe(true);
+      expect(store.getRun(child.id)?.attentionRequest).toBeUndefined();
+    }, 40_000);
+
     it('records a dispatched run’s question when it parks and clears it when an answer is delivered', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
       const record = start('mock:ask which library?', rootOf('m8'), { autonomous: true });

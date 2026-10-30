@@ -5,7 +5,7 @@ import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderAuthService } from '../core/provider-auth.ts';
 import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.ts';
-import { attachmentLibraryDir, type RunManager } from '../workflows/run.ts';
+import { attachmentLibraryDir, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
 import { createApp } from './server.ts';
@@ -28,6 +28,7 @@ describe('queued prompt stack routes (#472)', () => {
   let record: RunRecord;
   /** Which rung the fake engine answers on. */
   let rung: 'live' | 'queued' | 'starting' | 'closed';
+  let queuedContent: PastedContent[] | undefined;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-472-routes-'));
@@ -37,11 +38,13 @@ describe('queued prompt stack routes (#472)', () => {
     // rather than a bounds 400), so the fixture must look queued as well as answer on that rung.
     store.updateRun(record.id, { status: 'queued' });
     rung = 'queued';
+    queuedContent = undefined;
 
     manager = {
       sendMessage: () => rung === 'live',
-      enqueueMessage: (id: string, content: Array<{ type: string; text?: string }>): QueuedMessage | null => {
+      enqueueMessage: (id: string, content: PastedContent[]): QueuedMessage | null => {
         if (rung !== 'queued') return null;
+        queuedContent = content;
         const message: QueuedMessage = {
           id: `msg-${(store.getRun(id)?.queuedMessages?.length ?? 0) + 1}`,
           text: content.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n'),
@@ -125,6 +128,25 @@ describe('queued prompt stack routes (#472)', () => {
     expect(store.getRun(record.id)?.queuedMessages?.map((m) => m.text)).toEqual(['stack me']);
   });
 
+  /** #926 — the browser posts screenshots through this route while the run waits for a slot.
+   * Keep this at the HTTP boundary: a route that accidentally strips image blocks would still
+   * pass the text-only queued-stack test and the UI would only report the generic Load failed.
+   * The original filename is metadata for attachment-library persistence; it is intentionally
+   * not part of the vendor image block delivered to the queued manager. */
+  it('passes a queued screenshot through the message route', async () => {
+    const res = await post({
+      text: 'inspect this screenshot',
+      images: [{ mediaType: 'image/png', data: 'aW1hZ2U=', name: 'evidence.png' }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ queued: true });
+    expect(queuedContent).toEqual([
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' } },
+      { type: 'text', text: 'inspect this screenshot' },
+    ]);
+  });
+
   it('does not probe or require provider credentials to amend a queued prompt', async () => {
     const status = vi.fn(() => Promise.reject(new Error('provider status must not be read')));
     app = createApp({
@@ -149,6 +171,41 @@ describe('queued prompt stack routes (#472)', () => {
     const res = await post({ text: 'mid-spawn' });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ deferred: true });
+  });
+
+  /** Telemetry 1a212342: the cockpit re-posts a message that got no answer, under the same key. */
+  it('delivers a retried message once — a repeated idempotency key answers its first response', async () => {
+    rung = 'live';
+    const delivered = vi.spyOn(manager, 'sendMessage');
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f';
+    const first = await post({ text: 'once', idempotencyKey });
+    const retry = await post({ text: 'once', idempotencyKey });
+    expect(await first.json()).toEqual({ delivered: true });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ delivered: true });
+    expect(delivered).toHaveBeenCalledTimes(1);
+    // A different key is a different message.
+    await post({ text: 'twice', idempotencyKey: '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e10' });
+    expect(delivered).toHaveBeenCalledTimes(2);
+  });
+
+  it('two concurrent posts under one key deliver once — the second waits out the first', async () => {
+    // Not queued, so the route awaits the provider check before delivering: both are in flight.
+    store.updateRun(record.id, { status: 'running' });
+    rung = 'live';
+    const delivered = vi.spyOn(manager, 'sendMessage');
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e12';
+    const answers = await Promise.all([post({ text: 'once', idempotencyKey }), post({ text: 'once', idempotencyKey })]);
+    for (const res of answers) expect(await res.json()).toEqual({ delivered: true });
+    expect(delivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused key is judged afresh on retry, not answered from a cache', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e11';
+    rung = 'closed';
+    expect((await post({ text: 'x', idempotencyKey })).status).toBe(409);
+    rung = 'live';
+    expect(await (await post({ text: 'x', idempotencyKey })).json()).toEqual({ delivered: true });
   });
 
   it('still 409s for a genuinely closed run', async () => {

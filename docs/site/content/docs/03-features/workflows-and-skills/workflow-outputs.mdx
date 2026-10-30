@@ -1,0 +1,25 @@
+---
+title: "Use node results in later steps"
+description: "Insert an answer, summary, PR URL, or check result into the next prompt."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/graph.ts
+    line: 199
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+A later prompt can use an answer, summary, PR URL, or check result from an earlier node. Use \{\{nodes.ID.field\}\}, for example \{\{nodes.tests.output\}\}. The node providing the data must come earlier in the connected execution path.
+
+## Where to find it
+
+Workflow YAML / node text fields
+
+## How to use it
+
+1. Check the node name and its available outputs.
+2. Insert \{\{nodes.ID.field\}\}, for example \{\{nodes.tests.output\}\}.
+3. Connect the source node before the node that uses its result.
+
+> **Good to know**: Available fields depend on the node type. `{{task}}` still refers to the task text.

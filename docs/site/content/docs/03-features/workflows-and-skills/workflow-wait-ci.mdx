@@ -1,0 +1,25 @@
+---
+title: "Wait for CI results"
+description: "Pause the flow until pull request checks finish."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5926
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Wait for CI waits for pull request checks to finish. Place it after a step that creates or identifies a PR, then set a timeout and polling interval. The green, red, timeout, and failed outputs handle each outcome.
+
+## Where to find it
+
+Workflows → Add node → Wait for CI
+
+## How to use it
+
+1. Add Wait for CI after a step that creates or identifies a PR.
+2. Set the timeout and polling interval.
+3. Connect green, red, timeout, and failed.
+
+> **Good to know**: If the task has no PR, the workflow takes failed. Waiting does not occupy a `maxParallel` slot.

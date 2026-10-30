@@ -96,6 +96,31 @@ describe('a teardown cezar initiated (codex app-server)', () => {
   }, 15_000);
 });
 
+describe('a model the ChatGPT-plan login cannot use (1350055f)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  it('names the model cezar sent and where to change it', async () => {
+    const events: AgentEvent[] = [];
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'mock:chatgpt-model', cwd: process.cwd(), model: 'gpt-5.1-codex' },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    const error = events.find((e) => e.type === 'error');
+    expect(error).toEqual({
+      type: 'error',
+      message:
+        "400 invalid_request_error: The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account."
+        + ' — "gpt-5.1-codex" needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default),'
+        + ' check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key',
+    });
+  }, 15_000);
+});
+
 /** Telemetry 4c9de01a: Continue resumed a thread a still-live app-server held the writer lock for. */
 describe('resuming a thread another Codex process still holds', () => {
   const mockBin = fileURLToPath(

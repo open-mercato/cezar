@@ -44,8 +44,9 @@ installed — never a skill name), `skill_missing_in_session` (the agent's backe
 when its Skill tool still answered "Unknown skill"), `session_resume_fallback` (whether the fresh
 session that replaced a pruned conversation ended without a session error — `recovered` —, or
 `fresh_failed`, or was `cancelled`), `task_failed` (the agent's backend and a kind —
-`missing_session`, `usage_limit`, `auth`, `timeout` or `other` — never the error text; once per
-transition into failed, not for runs a restart interrupted nor for an auto-resume failing again),
+`missing_session`, `usage_limit`, `auth`, `billing`, `context_too_large`, `disk_full`, `transient`, `timeout` or
+`other` — never the error text; once per transition into failed, not for runs a restart interrupted
+nor for an automatic resume or retry failing again),
 `skills_update_apply_dropped` (a skills update whose request lost its connection, and whether
 following the server then found it `recovered`, `not_applied`, `unreachable` or `timed_out`),
 `attachments_sent` (how many attachments a sent message carried, as a bucket —
@@ -101,8 +102,11 @@ Every error an agent shows in a task's thread is reported the same way, as an `A
 by the agent (`opencode: OpenCode 1.18.0 or newer is required to use the free tier`), with whether
 it ended the session and whether it asks for a newer CLI. The text is masked first: quoted values,
 emails, URLs and slash-bearing names (paths, branches, `owner/repo`) become placeholders, and
-times, dates and delays become `<time>` / `<n>`. A provider usage limit whose reset cezar can read
-is not reported — auto-resume handles it; one it cannot read is, under the code `usage_limit_unparsed`.
+times, dates and delays become `<time>` / `<n>`. Failures that are not bugs are not reported
+(`src/core/agent-failure-class.ts`): account and conversation state — a usage limit, a dead login,
+an empty credit balance, a conversation too large to send — is counted by `task_failed`'s kind and
+explained in the thread instead, and a transient provider failure (an overload, no response) is
+reported only once cezar stops retrying it, tagged with why (`agent.transient`).
 
 When cezar cannot read whether an agent's CLI is signed in, it reports why (timed out, could not
 start, unexpected exit, unrecognised output) with the shape of the answer only: exit code, Node's

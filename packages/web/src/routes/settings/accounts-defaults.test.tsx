@@ -84,6 +84,7 @@ function serve({
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
     orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,

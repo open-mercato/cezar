@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { WebhookCoordinator } from './webhooks/coordinator.ts';
+import { webhooksEnabled } from './webhooks/service.ts';
+import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
+import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
@@ -46,13 +50,15 @@ import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInven
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
-import { apiOrigin, pickPort } from './api-origin.ts';
+import { apiOrigin } from './api-origin.ts';
+import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
+import { launchPageUrl } from './cockpit-address.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -328,6 +334,18 @@ async function serveCommand(
     }
   }
 
+  let webhookPort = preferredPort;
+  const webhooks = webhooksEnabled() ? new WebhookCoordinator({
+    mode: () => resolveCapabilities(process.env, bindHost).localHandoff ? 'local' : 'hosted',
+    ports: () => [webhookPort, ...webhookServerInstances().map(instance => instance.state.primaryPort)],
+    projects: async () => listProjects(), dryRun: process.env.CEZ_DRY_RUN === '1',
+    singleProject: resolveCapabilities(process.env, bindHost).singleProject,
+  }) : undefined;
+  if (webhooks) {
+    const registry = (await loadWorkspaceConfig()).projects;
+    const publicId = bootProjectId ?? allocateProjectSlug(repoRoot, registry.map(project => project.id));
+    await webhooks.attach({ root: repoRoot, store, manager }, publicId, false, true);
+  }
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
@@ -337,6 +355,8 @@ async function serveCommand(
     providerRuntimeAuth,
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
+
+  webhooks?.ready(repoRoot);
 
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
@@ -382,7 +402,8 @@ async function serveCommand(
       'runs.total': runs.length,
     };
   });
-  const port = await pickPort(preferredPort, bindHost);
+  const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
+  webhookPort = port;
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only
   // for a deliberate hosted setup where a reverse proxy in front provides TLS +
@@ -410,6 +431,7 @@ async function serveCommand(
     providerAuth,
     providerRuntimeAuth,
     workspaceEvents,
+    webhooks,
     selfUpdate,
   }, port);
   httpServer.once('listening', () => manager.lifecycle.start());
@@ -481,7 +503,7 @@ async function serveCommand(
   // paint is the cockpit and never a connection error.
   if (openBrowser) {
     const healthy = await waitForHealth(`${url}/api/v1/health`, 5_000);
-    if (healthy) openUrl(url);
+    if (healthy) openUrl(launchPageUrl(url));
   }
 }
 

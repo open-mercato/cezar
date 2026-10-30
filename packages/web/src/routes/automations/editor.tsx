@@ -123,6 +123,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const baseBranch = repo.data?.baseBranch ?? repo.data?.info?.branch ?? undefined
   const cli = useMemo(() => cliDefinitionOf(draft), [draft])
   const unenforcedLogins = useMemo(() => unenforcedPromptLogins(draft), [draft])
+  const loginsFor = (field: 'authors' | 'reviewers') => unenforcedLogins.filter((entry) => entry.field === field).map((entry) => entry.login)
   const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving && (draft.kind !== 'tracker' || trackerValid)
 
   const insertPrompt = (snippet: string) => {
@@ -276,15 +277,20 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
               {unenforcedLogins.length > 0 ? (
                 <div role="status" data-slot="editor-prompt-condition" className="flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px] text-foreground">
                   <span className="min-w-0 flex-1">
-                    The prompt names {unenforcedLogins.map((login) => `@${login}`).join(', ')}, but prompt text does not decide what launches — without a filter every matching event starts a task.
+                    The prompt names {unenforcedLogins.map(({ login }) => `@${login}`).join(', ')}, but prompt text does not decide what launches — without a filter every matching event starts a task.
                   </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => patch({ filters: { ...draft.filters, authors: [...splitList(draft.filters.authors), ...unenforcedLogins].join(', ') } })}
-                  >
-                    Add to Authors
-                  </Button>
+                  {(['authors', 'reviewers'] as const).map((field) =>
+                    loginsFor(field).length > 0 ? (
+                      <Button
+                        key={field}
+                        variant="outline"
+                        size="sm"
+                        onClick={() => patch({ filters: { ...draft.filters, [field]: [...splitList(draft.filters[field]), ...loginsFor(field)].join(', ') } })}
+                      >
+                        {field === 'authors' ? 'Add to Authors' : 'Add to Reviewers'}
+                      </Button>
+                    ) : null,
+                  )}
                 </div>
               ) : null}
               <EditorRunAs

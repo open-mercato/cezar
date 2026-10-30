@@ -1,0 +1,92 @@
+---
+title: "Run two tasks in parallel"
+nav_title: "Work in parallel"
+description: "Give two independent jobs their own worktrees and review each result separately."
+related:
+  links:
+    - features/git-and-github/worktrees
+    - features/tasks-and-sessions/variants
+    - architecture/run-lifecycle
+sources:
+  - label: "Workspace task limit"
+    path: packages/web/src/routes/settings/resources-section.tsx
+    line: 142
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Project task limit"
+    path: packages/web/src/routes/settings/project-general.tsx
+    line: 100
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Worktree control"
+    path: packages/web/src/routes/new-task.tsx
+    line: 1002
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Queue admission and capacity"
+    path: packages/cezar/src/workflows/run.ts
+    line: 1837
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Worktree creation and failure handling"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5051
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+When you finish, you have two tasks running independently, each with its own conversation, worktree, and diff, when capacity is available.
+
+<Mermaid chart={"flowchart LR\n  s0[\"Task A<br/><small>Settings UI</small>\"]\n  s1[\"Task B<br/><small>Importer tests</small>\"]\n  s0 --> s1"} />
+
+## Prerequisites
+
+- A Git repository open in Cezar. Non-Git folders run tasks sequentially.
+- An installed, authenticated agent.
+- Capacity for two tasks at both the workspace and project level. Other projects share the workspace limit.
+
+## Step 1: Check the task limits
+
+Open Settings → Resources and check Max parallel tasks. Set it to at least 2. Check the project’s Max parallel tasks field too: leave it empty to inherit, or use a value of at least 2. Increasing a limit allows more concurrent work and can increase resource use.
+
+**Check**: Both limits allow two tasks, with enough free capacity for them to start.
+
+## Step 2: Start the first job in a worktree
+
+Choose New task and enter a focused request. Keep Worktree checked and Parallel variants at ×1. Select an authenticated agent and start the task. This example assumes your app has a settings menu.
+
+```txt title="Example task A"
+Add keyboard navigation to the settings menu.
+Keep the changes inside the settings UI and its tests.
+```
+
+**Check**: Task A has its own worktree and begins running, or shows why it is waiting.
+
+## Step 3: Start a second, independent job
+
+Create another task in the same project without waiting for the first to finish. Keep Worktree checked and ×1 selected. Choose work that does not depend on task A. Adapt this example to a separate part of your project.
+
+```txt title="Example task B"
+Add tests for invalid dates in the CSV importer.
+Keep the changes inside the importer and its tests.
+```
+
+**Check**: Task B runs in a different worktree when a second execution slot is available.
+
+## Step 4: Review the two results separately
+
+Open each task’s Chat and Changes views. Inspect its diff and test results, then follow the project’s configured review and completion process. Worktrees separate files during execution; changes can still conflict when you combine them.
+
+**Check**: Each task has a reviewed diff and checks appropriate to its own change.
+
+## How it works
+
+Create separate tasks for different jobs. Use ×2 variants when you want two approaches to the same prompt instead. Variants also use separate worktrees. Neither option makes independent edits automatically compatible.
+
+## Troubleshooting
+
+### The second task stays queued
+
+Check the global and project limits, plus tasks running in other projects. An agent account waiting for its usage limit to reset can also delay a task.
+
+### The tasks run one after another
+
+Confirm the project is a Git repository and Worktree is checked. Non-Git folders run sequentially. Tasks using the main checkout are serialized by a repository lock.
+
+### A task fails before the agent starts
+
+Read the worktree error in the task conversation. If Cezar cannot create the isolated worktree, it stops rather than silently editing the main checkout. Resolve the reported Git or setup error before retrying.

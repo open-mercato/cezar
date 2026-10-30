@@ -28,15 +28,15 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id'>): A
 }
 
 describe('AGENT_DESCRIPTORS', () => {
-  // `pi` has no entry on purpose — no pi-owned config file is cataloged yet, so its pane would
-  // be three empty groups (see the descriptor table's header comment).
-  it('has one entry per config-owning runner; Cursor has settings+mcp (no memory group yet)', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'opencode', 'cursor', 'kimi'])
-    for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor' && d.id !== 'kimi')) {
+  it('has one entry per config-owning runner; Cursor has settings+mcp, Pi and Kimi have settings+memory', () => {
+    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'opencode', 'cursor', 'pi', 'kimi'])
+    for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor' && d.id !== 'pi' && d.id !== 'kimi')) {
       expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
       expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()
     }
     expect(descriptorFor('cursor').groups.map((g) => g.id)).toEqual(['settings', 'mcp'])
+    expect(descriptorFor('pi').groups.map((g) => g.id)).toEqual(['settings', 'memory'])
+    expect(descriptorFor('kimi').groups.map((g) => g.id)).toEqual(['settings', 'memory'])
   })
 
   it('membership uses runners[] inclusion — shared files belong to every reader', () => {
@@ -64,6 +64,6 @@ describe('AGENT_DESCRIPTORS', () => {
   })
 
   it('descriptorFor throws on an unknown agent id', () => {
-    expect(() => descriptorFor('pi' as never)).toThrow(/no agent descriptor/)
+    expect(() => descriptorFor('unknown' as never)).toThrow(/no agent descriptor/)
   })
 })

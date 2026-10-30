@@ -1,0 +1,25 @@
+---
+title: "Disable a provider in Cezar"
+description: "Prevent Cezar from using a selected provider."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/provider-settings.tsx
+    line: 255
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Use switch records whether Cezar may use that provider. A disabled provider cannot be selected as the default model in this panel.
+
+## Where to find it
+
+Settings → project → Agents → Providers
+
+## How to use it
+
+1. Find the provider card.
+2. Turn off Use beside its name.
+3. Choose another available agent for new tasks.
+
+> **Good to know**: This does not uninstall the CLI or sign the account out of its provider.
