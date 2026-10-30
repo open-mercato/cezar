@@ -24,3 +24,7 @@ Phase 1 commit: aa35ade1. Targeted 264/264; red two menu tests fail without sour
 
 Final verification: 266/266 targeted tests, web typecheck, and final dialog10/10 pass. Browser desktop/mobile320x568: confirm/cancel, dirty/missing/in-place refusal, legacy hook-free reclaim, durable recovery/Retry, and unchanged unpushed branch + record/transcript after directory removal. Fixed clipped small-phone controls during review. Exact final-head CI outcome is posted on PR #1857 after publication; local full gate is NOT green (baseline failures above). No real task worktree/branch removed. Private artifacts remain ignored. Engine: om-auto-create-pr (steps: 4, --loop: no).
 
+
+## Parent review follow-up
+
+Parent found and reproduced a cross-project navigation race in reclaim preflight and success cache updates. Three new scope tests failed on48a9855d (wrong-project POST, wrong-project cache write, confirmation carried into a cloned run ID), then passed after capturing the submitted project/run/cache keys and binding the dialog to its target. Targeted total269/269 and web typecheck pass. Optional explicit scopes in existing web helpers preserve default calls; no public wire shape changes. Parent full-gate/new-head CI and browser scope smoke are pending before final re-approval.
