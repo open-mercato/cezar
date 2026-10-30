@@ -270,6 +270,10 @@ function str(value: unknown): string | undefined {
 }
 
 /** Build the ApiError for a non-2xx, preferring the server's own message. */
+/** A 413 with no `{ error }` is a proxy's page — cezar's own answers are JSON (#1735). */
+const PAYLOAD_TOO_LARGE_MESSAGE =
+  'the request was too large for the server, or for a proxy in front of it — attach fewer or smaller files, or raise the proxy body limit (nginx: client_max_body_size 32m)'
+
 function errorFor(status: number, statusText: string, body: string): ApiError {
   const parsed = parseJson(body)
   const json: Json = parsed && typeof parsed === 'object' ? (parsed as Json) : {}
@@ -277,7 +281,7 @@ function errorFor(status: number, statusText: string, body: string): ApiError {
     str(json.error) ??
     // No `{ error }` — a proxy error page, an empty body, a crash. Say what we know rather
     // than leak a page of HTML into a toast.
-    `${status} ${statusText || 'request failed'}`.trim()
+    (status === 413 ? PAYLOAD_TOO_LARGE_MESSAGE : `${status} ${statusText || 'request failed'}`.trim())
   const started = status === 409 ? deferredAlreadyStartedSchema.safeParse(parsed) : undefined
   return new ApiError(status, message, {
     ...(started?.success ? { runIds: started.data.runIds } : {}),
