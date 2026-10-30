@@ -16,7 +16,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
@@ -72,7 +72,7 @@ const CHECK_POLL_MS = 500;
 const CHECK_TIMEOUT_MS = 120_000;
 
 /** The keys `PUT /automations/:id` accepts besides `enabled` and `expectedRevision`. */
-const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'trackerTrigger', 'task'] as const;
+const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'schedules', 'trackerTrigger', 'task'] as const;
 
 function base(env: AutomationCliEnv): { url: string; scope: string; projectId?: string } | null {
   const url = env.CEZ_API_URL?.replace(/\/+$/, '');
@@ -258,8 +258,8 @@ export async function runAutomationCommand(
   const createFrom = async (body: Record<string, unknown>): Promise<number> => {
     const response = await json(`${api.scope}/automations`, { method: 'POST', body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
-    const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean; kind?: string; schedule?: AutomationSchedule } };
-    const schedule = automation.kind === 'schedule' && automation.schedule ? ` — ${scheduleLabel(automation.schedule)}, in the cockpit's time zone` : '';
+    const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean; kind?: string; schedule?: AutomationSchedule; schedules?: AutomationSchedule[] } };
+    const schedule = automation.kind === 'schedule' ? ` — ${schedulesOf(automation).map(scheduleLabel).join('; ')}, in the cockpit's time zone` : '';
     io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? (automation.kind === 'schedule' ? 'ENABLED, next occurrence armed' : 'ENABLED from a current-time baseline') : 'paused'}${schedule}`);
     io.log(`cockpit: ${pageUrl(api, automation.id)}`);
     if (!automation.enabled) {
@@ -353,6 +353,10 @@ export async function runAutomationCommand(
           const value = key in patch ? patch[key] : automation[key];
           if (value !== undefined) body[key] = value;
         }
+        // #1818: timing explicitly supplied by this patch replaces inherited timing. A prompt-only
+        // partial update retains the entire union, while a legacy --file with schedule replaces it.
+        if ('schedule' in patch && !('schedules' in patch)) delete body.schedules;
+        if ('schedules' in patch && !('schedule' in patch)) delete body.schedule;
         // A PUT restates `enabled` (an edit may not silently pause a running automation) and
         // echoes the revision it read, so a concurrent edit in the cockpit is a 409, not a clobber.
         body.enabled = 'enabled' in patch ? patch.enabled : automation.enabled;
@@ -405,7 +409,7 @@ export async function runAutomationCommand(
           available: boolean;
           reason?: string;
           automations: Array<{
-            id: string; name: string; enabled: boolean; kind?: string; events?: string[]; intervalSeconds?: number; schedule?: AutomationSchedule;
+            id: string; name: string; enabled: boolean; kind?: string; events?: string[]; intervalSeconds?: number; schedule?: AutomationSchedule; schedules?: AutomationSchedule[];
             counts: { launched: number; duplicates: number; errors: number };
             nextRunAt?: string;
             trackerTrigger?: { events: string[]; association: { kind: string } };
@@ -421,7 +425,7 @@ export async function runAutomationCommand(
           const nextAt = item.nextRunAt ?? item.state?.nextCheckAt;
           const next = item.enabled && nextAt ? `  next ${nextAt}` : '';
           const trigger = item.kind === 'schedule' && item.schedule
-            ? scheduleLabel(item.schedule)
+            ? schedulesOf(item).map(scheduleLabel).join('; ')
             : item.kind === 'tracker'
               ? `${item.trackerTrigger?.association.kind ?? 'tracker'} every ${item.intervalSeconds ?? 1800}s  ${item.trackerTrigger ? shortEvents(item.trackerTrigger.events) : 'select an event to complete setup'}`
               : `every ${item.intervalSeconds ?? 300}s  ${shortEvents(item.events)}`;

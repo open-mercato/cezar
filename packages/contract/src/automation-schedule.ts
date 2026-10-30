@@ -44,6 +44,51 @@ export const automationScheduleSchema = z.object({
 });
 export type AutomationSchedule = z.infer<typeof automationScheduleSchema>;
 
+/** #1818: one task, bounded timed triggers; a once retains its whole-automation retirement. */
+export const MAX_AUTOMATION_SCHEDULES = 16;
+export const automationSchedulesSchema = z.array(automationScheduleSchema).min(1).max(MAX_AUTOMATION_SCHEDULES)
+  .superRefine((schedules, ctx) => {
+    if (schedules.length > 1 && schedules.some(schedule => schedule.type === 'once')) {
+      ctx.addIssue({ code: 'custom', message: 'a one-time schedule cannot be combined with other schedules' });
+    }
+    schedules.forEach((schedule, index) => {
+      if (schedule.type === 'once' && !schedule.date) ctx.addIssue({ code: 'custom', path: [index, 'date'], message: 'a one-time schedule needs a date' });
+    });
+  });
+
+type ScheduleSelection = { schedule?: AutomationSchedule; schedules?: AutomationSchedule[] };
+
+/** Legacy single definitions stay unchanged; a present list is authoritative. */
+export function schedulesOf(selection: ScheduleSelection): AutomationSchedule[] {
+  return selection.schedules ?? (selection.schedule ? [selection.schedule] : []);
+}
+
+/** Shared storage/HTTP boundary rule: never silently choose between conflicting mirrors. */
+export function automationScheduleIssue(selection: ScheduleSelection, kind = 'schedule'): string | null {
+  if (kind !== 'schedule') return selection.schedule || selection.schedules ? 'an event automation has no schedule' : null;
+  const schedules = schedulesOf(selection);
+  const parsed = automationSchedulesSchema.safeParse(schedules);
+  if (!parsed.success) return parsed.error.issues[0]?.message ?? 'a scheduled automation needs a schedule';
+  if (selection.schedule && selection.schedules && JSON.stringify(normalizeSchedule(selection.schedule)) !== JSON.stringify(normalizeSchedule(selection.schedules[0]!))) {
+    return 'schedule must match the first entry of schedules';
+  }
+  return null;
+}
+
+/** Union instants, sorted and deduplicated before the caller's cap is applied. */
+export function scheduleOccurrencesBetween(selection: ScheduleSelection, fromMs: number, toMs: number, timeZone: string, limit = 1_000): number[] {
+  if (limit <= 0) return [];
+  return [...new Set(schedulesOf(selection).flatMap(schedule => occurrencesBetween(schedule, fromMs, toMs, timeZone, limit)))].sort((a, b) => a - b).slice(0, limit);
+}
+
+export function nextScheduleOccurrence(selection: ScheduleSelection, afterMs: number, timeZone: string): number | null {
+  const next = schedulesOf(selection).flatMap(schedule => {
+    const at = nextOccurrence(schedule, afterMs, timeZone);
+    return at === null ? [] : [at];
+  });
+  return next.length ? Math.min(...next) : null;
+}
+
 /** The same shape with every default filled — what the math and the labels read. */
 export interface NormalizedSchedule {
   type: ScheduleType;
