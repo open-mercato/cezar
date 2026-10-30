@@ -182,6 +182,20 @@ Breaking: removing/renaming a route; making a previously optional body field req
 
 ## 3. `.ai/cezar/` state files (`packages/cezar/src/runs/store.ts` and friends)
 
+Independent Codex access mode (#1700, additive): optional
+`accessMode: standard | daybreak-blue` is accepted on create-run and Inbox-start,
+persisted run/session-step state, workflow agent steps and `AgentRunSpec`.
+Omission preserves native Codex treatment. Continue omission retains the session
+choice; explicit `null` clears it. Old records, workflows, CLIs and arbitrary
+model aliases still parse. Native model lock clears the override, and other
+backends receive no mode. `/models` adds an optional Codex `agentProfile` query
+and optional per-model `supportedAccessModes`, with caches isolated by resolved
+account. Absent or malformed capability metadata grants nothing. Only the
+Codex adapter maps the neutral selection to the locally verified 0.164.0
+`turn/start.cyberAccessProgram`; explicit modes require fresh model-list
+capability on that same authenticated connection. No migration, entitlement
+grant or default behavior change is introduced.
+
 - `webhooks/` is private opt-in state, covered by `ensureDataGitignore` in boot and lazy project
   contexts and verified ignored/untracked before secrets are written. Files include root-bound
   installation identity, endpoints/keys/revisions/activation fences, ownership proof, bounded outbox

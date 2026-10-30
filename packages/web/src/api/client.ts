@@ -1,5 +1,6 @@
 import type { z } from 'zod'
 import type {
+  ExecutionAccessMode,
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
@@ -529,8 +530,9 @@ export async function putTelemetryConsent(input: SetTelemetryConsentInput): Prom
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
   opts?: ReadOptions,
+  agentProfile?: string,
 ): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
+  return unwrap(await cez.api.v1.models.$get({ query: { runner, ...(agentProfile !== undefined ? { agentProfile } : {}) } }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
@@ -1670,6 +1672,7 @@ export interface ContinueOptions {
   images?: AttachmentEntry[]
   runner?: Runner
   model?: string
+  accessMode?: ExecutionAccessMode | null
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
    *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
   agentProfile?: string
@@ -1686,6 +1689,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.accessMode !== undefined ? { accessMode: opts.accessMode } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
   }
@@ -1712,6 +1716,7 @@ export async function continueProjectRun(
         ...(opts.images !== undefined ? { images: opts.images } : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.accessMode !== undefined ? { accessMode: opts.accessMode } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
         ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
       },
@@ -1801,6 +1806,7 @@ export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
 export interface StartTodoOptions {
   runner?: Runner
   model?: string
+  accessMode?: ExecutionAccessMode
   prompt?: string
 }
 
@@ -1816,6 +1822,7 @@ export async function startTodo(
   const body = {
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.accessMode !== undefined ? { accessMode: opts.accessMode } : {}),
     ...(opts.prompt !== undefined ? { prompt: opts.prompt } : {}),
   }
   // No override → no body at all, exactly the bodyless POST this endpoint has always sent

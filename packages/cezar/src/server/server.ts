@@ -1,4 +1,5 @@
 import { createWebhookRoutes } from './webhooks.ts';
+import { executionAccessModeSchema, runnerModelsQuerySchema } from '@open-mercato/cezar-contract';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -100,7 +101,6 @@ import {
   MAX_ATTACHMENTS_TOTAL_BASE64,
   stagedUploadSchema,
   uploadIdParamSchema,
-  modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
@@ -812,6 +812,7 @@ const startRunSchema = z
     // task (telemetry 18c930de) — the refine below requires one or the other.
     task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    accessMode: executionAccessModeSchema.optional(),
     // Agent backend for this task (falls back to config `defaultRunner`).
     runner: z.enum(RUNNER_IDS).optional(),
     // Agent account for this task (spec 2026-07-29-agent-profiles). Falls back to the project's
@@ -1115,6 +1116,7 @@ const startTodoSchema = z
   .object({
     runner: z.enum(RUNNER_IDS).optional(),
     model: z.string().max(200).optional(),
+    accessMode: executionAccessModeSchema.optional(),
     prompt: z
       .string()
       .trim()
@@ -1395,7 +1397,7 @@ export function createApp(deps: ServerDeps) {
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
-      codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
+      codex: { discover: (context) => discoverCodexModels({ cwd: bootRoot, env: context?.env }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
@@ -2106,12 +2108,21 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
-    // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
+    // `runnerModelsQuerySchema` uses the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
-      const query = { data: c.req.valid('query') };
-      return c.json(await modelCatalog.get(query.data.runner));
+    .get('/models', queryZodValidator(runnerModelsQuerySchema, { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
+      const query = c.req.valid('query');
+      if (query.runner !== 'codex' || query.agentProfile === undefined) return c.json(await modelCatalog.get(query.runner));
+      const resolved = await resolveWorkspaceProfile('codex', query.agentProfile);
+      if ('error' in resolved) return c.json({ error: resolved.error }, 400);
+      const { profile } = resolved;
+      if (profile.isDefault) return c.json(await modelCatalog.get('codex'));
+      if (!(await profileDirState('codex', profile.path)).exists) return c.json({ error: 'Codex account directory is unavailable' }, 409);
+      return c.json(await modelCatalog.get('codex', {
+        cacheKey: JSON.stringify([profile.id, profile.path]),
+        env: profileEnv('codex', profile.path),
+      }));
     });
 
   /**
@@ -4897,6 +4908,7 @@ export function createApp(deps: ServerDeps) {
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
+        ...(parsed.data.accessMode !== undefined ? { accessMode: parsed.data.accessMode } : {}),
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,
@@ -5212,6 +5224,7 @@ export function createApp(deps: ServerDeps) {
           images,
           runner: parsed.data.runner,
           model: parsed.data.model,
+          ...(parsed.data.accessMode !== undefined ? { accessMode: parsed.data.accessMode } : {}),
           agentProfile: parsed.data.agentProfile,
         });
         if (!result.ok) return c.json({ error: result.error }, 409);
@@ -6275,6 +6288,7 @@ export function createApp(deps: ServerDeps) {
           task,
           runner: parsed.data?.runner,
           model: parsed.data?.model,
+          ...(parsed.data?.accessMode !== undefined ? { accessMode: parsed.data.accessMode } : {}),
           origin: 'inbox',
           deviceSid: deviceSid(c.req.header('x-cezar-sid')),
         });
