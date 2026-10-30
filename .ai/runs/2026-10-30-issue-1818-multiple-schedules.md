@@ -35,5 +35,8 @@ entry. No base merges or pushes. Local Windows full-suite/platform limits must r
 ### Phase 2: editor and verification
 
 - [x] 2.1 Editor groups and all union/copy/template consumers — b16b5926, 3ca31821
-- [ ] 2.2 Full validation, review, browser QA and exact-head CI
+- [x] 2.2 Full validation, review, browser QA and exact-head CI — evidence: .ai/qa/2026-10-30-issue-1818.md; exact-head result posted on PR after this evidence commit
+
+
+Validation commands all executed. Local full-suite timeout and Windows node:test failures are disclosed in the QA report; no local green gate is claimed. Author review and browser evidence are complete. Final PR-head CI follow-up is recorded separately on the PR after publishing this evidence commit; until it settles the PR status remains in-progress.
 
