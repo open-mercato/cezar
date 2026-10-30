@@ -54,7 +54,7 @@ describe('automation list ordering', () => {
 
   it('uses an earlier secondary schedule from a newer response when no next instant is supplied', () => {
     const scheduled = { ...entry({ id: 's', name: 'Scheduled', kind: 'schedule', schedule: { type: 'daily', hour: 16 } }),
-      schedules: [{ type: 'daily', hour: 16 }, { type: 'daily', hour: 11 }] }
+      schedules: [{ type: 'daily' as const, hour: 16 }, { type: 'daily' as const, hour: 11 }] }
     expect(nextAutomationRun(scheduled, TIME_ZONE, NOW)).toBe(Date.parse('2026-09-16T11:00:00Z'))
   })
 
