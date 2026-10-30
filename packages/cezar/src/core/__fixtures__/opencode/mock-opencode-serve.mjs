@@ -290,6 +290,19 @@ const server = createServer((req, res) => {
         return;
       }
 
+      // #1756: the turn's message fails on a spent free quota yet carries a list-price cost.
+      if (promptText.includes('#quota-fail')) {
+        const failed = { cost: 0.0003, tokens: { input: 400, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } };
+        send({
+          type: 'message.updated',
+          properties: { info: info({ ...failed, error: { name: 'APIError', data: { message: 'Free usage exceeded', statusCode: 429 } } }) },
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({ ...failed, error: { name: 'APIError', data: { message: 'Free usage exceeded', statusCode: 429 } } }), parts: [] }));
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 60);
+        return;
+      }
+
       send({ type: 'message.updated', properties: { info: info({}) } });
       send({
         type: 'message.part.updated',

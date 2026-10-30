@@ -799,6 +799,29 @@ describe('a session.status retry the turn cannot outwait', () => {
   }, 30_000);
 });
 
+/** #1756: a free model's daily limit must not land in Reported USD. */
+describe('#1756 cost on a message refused for quota', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const costs = async (prompt: string) => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: prompt, cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    return events.filter((e) => e.type === 'cost').reduce((sum, e) => sum + (e as { usd: number }).usd, 0);
+  };
+
+  it('books no cost for a message that failed with a 429', async () => {
+    expect(await costs('review it #quota-fail')).toBe(0);
+  }, 30_000);
+
+  it('still books the cost of a normal turn', async () => {
+    expect(await costs('do it')).toBeCloseTo(0.0021, 6);
+  }, 30_000);
+});
+
 /** #1652: OpenCode's native `question` tool blocks the session until /question/:id/reply. */
 describe('#1652 a native question.asked', () => {
   const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');

@@ -80,6 +80,14 @@ export const RETRY_GIVE_UP_MS = 10 * 60_000;
  *  `account_rate_limit`. Any other action still fails the turn, but books no auto-resume. */
 const QUOTA_REASON_RE = /limit|quota/i;
 
+/** An assistant message's `error` that is a spent quota or rate limit (HTTP 429, or worded as one). */
+function isQuotaFailure(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const data = isRecord(error.data) ? error.data : {};
+  const text = `${stringField(error, 'name') ?? ''} ${stringField(data, 'message') ?? ''}`;
+  return data.statusCode === 429 || QUOTA_REASON_RE.test(text) || /exceeded/i.test(text);
+}
+
 /**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
  * the opencode TUI talks to) with an SSE event stream. One server per session,
@@ -874,6 +882,8 @@ class OpencodeSession implements AgentSession {
       }
     }
     const cost = info.cost;
+    // A message the provider refused for quota is not spend (#1756); a paid turn's other errors keep theirs.
+    if (this.retryGaveUp || isQuotaFailure(info.error)) return;
     if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && (this.lastCost === undefined || cost > this.lastCost)) {
       this.emit({ type: 'cost', usd: cost - (this.lastCost ?? 0) });
       this.lastCost = cost;
