@@ -815,6 +815,57 @@ export async function* streamRunEvents(filePath: string): AsyncGenerator<RunHist
   }
 }
 
+/**
+ * The newest events past `afterSeq`, found by reading the file backwards in chunks so the cost is
+ * the bytes returned, not the file size (#882). `truncated` reports a gap: the byte budget ran out
+ * before reaching `afterSeq` (or the start of the file) and `firstSeq` is the oldest event kept.
+ */
+export async function readEventsTail(
+  filePath: string,
+  options: { afterSeq: number; maxBytes: number },
+): Promise<{ events: RunHistoryEvent[]; truncated: boolean }> {
+  const CHUNK = 256 * 1024;
+  let handle;
+  try {
+    handle = await open(filePath, 'r');
+  } catch {
+    return { events: [], truncated: false };
+  }
+  try {
+    const size = (await handle.stat()).size;
+    let end = size;
+    let carry = Buffer.alloc(0);
+    const collected: RunHistoryEvent[] = [];
+    let reachedBoundary = false;
+    while (end > 0 && !reachedBoundary) {
+      const start = Math.max(0, end - CHUNK);
+      const chunk = Buffer.alloc(end - start);
+      await handle.read(chunk, 0, chunk.length, start);
+      end = start;
+      let buf = Buffer.concat([chunk, carry]);
+      const firstNl = start > 0 ? buf.indexOf(0x0a) : -1;
+      if (start > 0) {
+        if (firstNl === -1) { carry = buf; if (size - start > options.maxBytes) break; continue; }
+        carry = buf.subarray(0, firstNl);
+        buf = buf.subarray(firstNl + 1);
+      } else carry = Buffer.alloc(0);
+      const lines = buf.toString('utf8').split('\n');
+      for (let i = lines.length - 1; i >= 0; i -= 1) {
+        const event = lines[i] ? parseLine(lines[i]!) : null;
+        if (!event) continue;
+        if (event.seq <= options.afterSeq) { reachedBoundary = true; break; }
+        collected.push(event);
+      }
+      if (size - end >= options.maxBytes) break;
+    }
+    const complete = reachedBoundary || end === 0 && carry.length === 0;
+    collected.reverse();
+    return { events: collected, truncated: !complete };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readEventsAfterLiveCursor(filePath: string, cursor: string): Promise<{
   events: RunHistoryEvent[];
   boundarySeq: number;
