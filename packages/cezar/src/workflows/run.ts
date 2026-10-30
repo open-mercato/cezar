@@ -1914,12 +1914,13 @@ export class RunManager {
    * construction site of a shared in-memory object").
    *
    * `spawnParked` says WHY it parked: `true` only when this turn dispatched children.
-   * A commander that parks again on a plain `CEZ:MONITORING` after its children reported is an
-   * ordinary watcher again, which is why the flag is rewritten on every park, never OR-ed.
+   * A commander that parks again after some children reported is still waiting on the
+   * unfinished ones, so it stays slot-exempt while any direct child is in flight (#1697);
+   * once all have settled it is an ordinary watcher again. Re-evaluated on every park, never sticky.
    */
   private enterMonitoring(runId: string, spawnParked: boolean): void {
     this.monitoring.add(runId);
-    if (spawnParked) this.unitParents.add(runId);
+    if (spawnParked || this.hasInFlightChildren(runId)) this.unitParents.add(runId);
     else this.unitParents.delete(runId);
     const state = this.active.get(runId);
     if (state) this.armMonitoringLivenessTimer(runId, state);
