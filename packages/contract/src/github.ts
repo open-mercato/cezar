@@ -68,6 +68,9 @@ export const githubListQuerySchema = z.object({
   refresh: z.string().optional(),
   issuesCursor: z.string().max(2_000).optional(),
   prsCursor: z.string().max(2_000).optional(),
+  /** `1` = that side is exhausted: skip it instead of restarting it from page one (#1750). */
+  issuesDone: z.string().optional(),
+  prsDone: z.string().optional(),
 });
 export type GithubListQuery = z.infer<typeof githubListQuerySchema>;
 

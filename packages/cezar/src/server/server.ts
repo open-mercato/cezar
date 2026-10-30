@@ -6822,6 +6822,8 @@ export function createApp(deps: ServerDeps) {
         return c.json(await fetchGithub(repoRoot, query.refresh === '1', Number.isFinite(limit) ? limit : 50, {
           issuesCursor: query.issuesCursor,
           prsCursor: query.prsCursor,
+          issuesDone: query.issuesDone === '1',
+          prsDone: query.prsDone === '1',
         }));
       },
     )
