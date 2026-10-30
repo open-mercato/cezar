@@ -78,7 +78,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  optional (#490), so status-only callers keep working unchanged. */
 export type AttentionInput = Pick<
   RunRecord,
-  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'worktreeLifecycle'
+  'status' | 'activity' | 'fallbackEpisode' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'worktreeLifecycle'
 >
 
 export type BudgetStop = {
@@ -169,6 +169,9 @@ export function deriveAttention(run: AttentionInput): Attention {
   }
   if (isUnseen(run)) {
     return { bucket: 'unseen', tone: 'violet', pulse: false, label: 'unseen' }
+  }
+  if (run.status === 'queued' && run.fallbackEpisode?.pending) {
+    return { bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' }
   }
   if (run.status === 'queued') {
     return { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }

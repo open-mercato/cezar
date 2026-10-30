@@ -41,7 +41,8 @@ export interface ThreadNote {
   kind: 'note'
   id: string
   text: string
-  tone: 'dim' | 'danger'
+  /** `info`: an event the user should notice without alarm — another agent taking a task over. */
+  tone: 'dim' | 'danger' | 'info'
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -604,7 +605,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // `tone: 'danger'` when it reports something the user actually lost, so
         // it does not render as the dimmest line in the thread (#936). Events
         // written before that field exists carry no `tone` and stay dim.
-        const tone = event.tone === 'danger' ? 'danger' : 'dim'
+        const tone = event.tone === 'danger' ? 'danger' : event.tone === 'info' ? 'info' : 'dim'
         currentTurn().entries.push({
           origin: 'meta',
           entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },

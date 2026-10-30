@@ -19,6 +19,8 @@ import {
   getAgentAccountDetails,
   getAgentAccountStatus,
   getAgentProfiles,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
   getConfig,
   getGithub,
   getGithubChecks,
@@ -127,6 +129,7 @@ import type {
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
+  AgentFallbackCandidate,
   SelectAgentProfileInput,
   SetAgentConfigInput,
   TaskActionSurface,
@@ -444,6 +447,7 @@ export const workspaceQueryKeys = {
   /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
    *  Workspace-led like the registry: an account describes the machine, not a repo. */
   agentProfiles: ['workspace', 'agent-profiles'] as const,
+  agentFallbackPolicy: (projectId: string) => ['workspace', 'agent-profiles', 'fallback-policy', projectId] as const,
   /** One account's identity, keyed by its route id. A child of `agentProfiles` so removing an
    *  account drops any details cached for it in the same invalidation. */
   agentAccountDetails: (routeId: string) =>
@@ -1573,6 +1577,25 @@ export function useAgentProfiles() {
   return useQuery({
     queryKey: workspaceQueryKeys.agentProfiles,
     queryFn: ({ signal }) => getAgentProfiles({ signal }),
+  })
+}
+
+export function useAgentFallbackPolicy(projectId: string | null) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'),
+    queryFn: ({ signal }) => getAgentFallbackPolicy({ projectId: projectId ?? 'default' }, { signal }),
+    enabled: projectId !== null,
+    retry: false,
+  })
+}
+
+export function useSaveAgentFallbackPolicy(projectId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { expectedRevision: number; expectedIncarnation: string | null; enabled: boolean; candidates: AgentFallbackCandidate[] }) =>
+      putAgentFallbackPolicy({ projectId: projectId ?? 'default', ...input }),
+    retry: false,
+    onSuccess: (data) => queryClient.setQueryData(workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'), data),
   })
 }
 
