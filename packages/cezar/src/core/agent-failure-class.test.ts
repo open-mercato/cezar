@@ -3,6 +3,7 @@ import {
   accountStateHint,
   classifyAgentFailure,
   MAX_TRANSIENT_RETRIES,
+  transientRetryCap,
   transientRetryDelayMs,
 } from './agent-failure-class.ts';
 
@@ -63,8 +64,21 @@ describe('transientRetryDelayMs', () => {
 
   it('waits at least the minute the CLI asks for on the OAuth refresh race', () => {
     const race = 'Failed to refresh OAuth token: another Claude Code process is refreshing it';
-    expect(transientRetryDelayMs(1, race)).toBe(60_000);
-    expect(transientRetryDelayMs(2, race)).toBe(120_000);
+    expect(transientRetryDelayMs(1, race, () => 0)).toBe(60_000);
+    expect(transientRetryDelayMs(2, race, () => 0)).toBe(120_000);
+  });
+
+  it('spreads the OAuth refresh race by up to 45 s so runs that lost it together do not retry together (#1480)', () => {
+    const race = 'Failed to refresh OAuth token: another Claude Code process is refreshing it';
+    expect(transientRetryDelayMs(1, race, () => 0.999999)).toBe(60_000 + 44_999);
+    expect(transientRetryDelayMs(1, race, () => 0.5)).toBe(60_000 + 22_500);
+    // Other transient failures keep their fixed backoff.
+    expect(transientRetryDelayMs(1, 'API Error: 529 Overloaded', () => 0.9)).toBe(30_000);
+  });
+
+  it('gives the OAuth refresh race three retries and every other transient failure two (#1480)', () => {
+    expect(transientRetryCap('Failed to refresh OAuth token: another Claude Code process is refreshing it')).toBe(3);
+    expect(transientRetryCap('API Error: 529 Overloaded')).toBe(2);
   });
 });
 

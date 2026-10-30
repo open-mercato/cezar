@@ -124,6 +124,64 @@ describe('a run stopped by a transient provider failure retries itself', () => {
     expect(deferredReports()).toEqual([{ transientOutcome: 'retries_exhausted' }]);
   }, 90_000);
 
+  it('the OAuth refresh race waits 60–105 s, retries 3 times, then fails with a clear cause (#1480)', async () => {
+    manager = new RunManager(store, repoRoot);
+    const before = Date.now();
+    const record = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:oauthrace ship it', worktree: false });
+    await settle(record.id);
+    const wait = Date.parse(store.getRun(record.id)?.autoResumeAt ?? '') - before;
+    expect(wait).toBeGreaterThanOrEqual(60_000);
+    expect(wait).toBeLessThan(105_000 + 5_000);
+    expect(messages(record.id).some((m) => m.endsWith('(1/3)'))).toBe(true);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
+      fireNow(record.id);
+      await expect.poll(() => store.getRun(record.id)?.autoResumeAttempts, { timeout: 5_000 }).toBe(attempt);
+      await expect
+        .poll(() => store.getRun(record.id)?.status === 'failed' && !manager!.isActive(record.id), { timeout: 20_000 })
+        .toBe(true);
+    }
+    const spent = store.getRun(record.id)!;
+    expect(spent.status).toBe('failed');
+    expect(spent.autoResumeAt).toBeUndefined();
+    expect(spent.error).toMatch(/Failed to refresh OAuth token/);
+    expect(messages(record.id)).toContain(
+      "Claude Code's login refresh kept colliding with another Claude Code process after 3 automatic retries — continue this task manually",
+    );
+    expect(deferredReports()).toEqual([{ transientOutcome: 'retries_exhausted' }]);
+  }, 120_000);
+
+  it('Cancel during the refresh-race wait retires the booked retry (#1480)', async () => {
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:oauthrace ship it', worktree: false });
+    await settle(record.id);
+    expect(store.getRun(record.id)?.autoResumeAt).toBeDefined();
+    expect(manager.cancel(record.id)).toBe(true);
+    expect(store.getRun(record.id)?.autoResumeAt).toBeUndefined();
+    expect((manager as unknown as Scheduler).autoResumeTimers.has(record.id)).toBe(false);
+  }, 30_000);
+
+  it('a restart keeps the third refresh-race retry armed (#1480)', async () => {
+    manager = new RunManager(store, repoRoot);
+    const record = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:oauthrace ship it', worktree: false });
+    await settle(record.id);
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      fireNow(record.id);
+      await expect.poll(() => store.getRun(record.id)?.autoResumeAttempts, { timeout: 5_000 }).toBe(attempt);
+      await expect
+        .poll(() => store.getRun(record.id)?.status === 'failed' && !manager!.isActive(record.id), { timeout: 20_000 })
+        .toBe(true);
+    }
+    const deadline = store.getRun(record.id)?.autoResumeAt;
+    expect(deadline).toBeDefined();
+    // A new process re-arms from the persisted deadline instead of retiring it at the old cap of 2.
+    clearTimeout((manager as unknown as Scheduler).autoResumeTimers.get(record.id));
+    (manager as unknown as Scheduler).autoResumeTimers.delete(record.id);
+    (manager as unknown as { reconcileAutoResumes(): void }).reconcileAutoResumes();
+    expect(store.getRun(record.id)?.autoResumeAt).toBe(deadline);
+    expect((manager as unknown as Scheduler).autoResumeTimers.has(record.id)).toBe(true);
+  }, 120_000);
+
   it('Cancel on the failed run retires the booked retry', async () => {
     manager = new RunManager(store, repoRoot);
     const record = manager.startRun(QUICK_TASK_WORKFLOW, { task: 'mock:overloaded ship it', worktree: false });
