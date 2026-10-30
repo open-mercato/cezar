@@ -295,6 +295,15 @@ export const runRecordSchema = z.object({
    *  parked. Invariant: only a `waiting` run carries it — `updateRun` and
    *  `reconcileLoadedRun` retire it on any other status, so no caller has to. */
   askParked: z.boolean().optional(),
+  /** The agent declared an external blocker with `CEZ:BLOCKED` (#1540) and the run is parked on
+   *  it. Persisted before the park so a restart still knows; retired when the run resumes. */
+  blocked: z
+    .object({
+      category: z.enum(['credential', 'permission', 'environment', 'external-service', 'other']),
+      resume: z.string(),
+      at: z.string(),
+    })
+    .optional(),
   /**
    * When the run's session ended — the inactivity timer, a crash, a cezar restart — while a
    * `CEZ:ASK` question was still unanswered. The run is `failed` on the record (no process, no
@@ -1403,6 +1412,11 @@ export class RunStore extends EventEmitter {
     // enforcing the invariant here spares every one of those callers the bookkeeping.
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
+    }
+    // The blocker survives the park, a restart's `failed` and Continue's `queued` hand-off, and
+    // is retired only by an actual resume or a settlement that is not a failure (#1540).
+    if (normalized.status && ['running', 'done', 'review', 'cancelled'].includes(normalized.status)) {
+      normalized.blocked = undefined;
     }
     // An unanswered question belongs to the `failed` run its closed session left behind: the
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.

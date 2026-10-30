@@ -1,3 +1,4 @@
+import { endsWithBlockedKeyword, nearIdenticalReplies, parseBlockedMarker, replyKey, stripBlockedMarker, type BlockedSignal } from '../core/blocked.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -460,12 +461,25 @@ function markerlessTurn(turnText: string): boolean {
   // that ends `CEZ:MONITORING` followed by a `CEZ:PR=` line spoke, and must not be continued.
   const markerText = turnEndMarkerText(turnText);
   if (DONE_MARKER_RE.test(markerText) || MONITORING_MARKER_RE.test(markerText)) return false;
+  if (endsWithBlockedKeyword(markerText)) return false;
   // `parseAskMarkerResult`, not `ASK_MARKER_RE`: the strict regex only matches a marker whose
   // payload is a complete `{…}`, so `CEZ:ASK not-json` — a question the user still needs to
   // see — would read as ordinary prose and authorize a continuation. The parser's looser
   // `none` test is the right question here, and its known over-reach (an earlier PROSE mention
   // of the keyword also counts as spoken) errs towards parking, which is today's behavior.
   return parseAskMarkerResult(markerText).kind === 'none';
+}
+/**
+ * The validated `CEZ:BLOCKED` signal of this turn, or null (#1540). Shared by both turn-end
+ * handlers; `enabled` is their "session open, not done, no ask, no dispatch" gate. Prose is never
+ * read as a blocker: only the explicit, schema-valid marker line counts.
+ */
+function resolveBlockedTurn(turnText: string, enabled: boolean): BlockedSignal | null {
+  return enabled ? parseBlockedMarker(turnEndMarkerText(turnText)) : null;
+}
+/** Park a run on the agent's declared blocker: persisted first, shown once (#1540). */
+function blockedNote(signal: BlockedSignal): string {
+  return `blocked (${signal.category}) — parked until you resume it. Resume when: ${signal.resume}`;
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -606,6 +620,8 @@ interface ActiveRun {
    *  cannot answer (a disabled capability, a missing credential), and parks instead of burning
    *  the remaining nudges — the live-session lesson behind `tryAutonomousNudge`. */
   lastOverriddenAsk?: string;
+  /** Normalized text of the previous turn's reply, for the near-identical-reply breaker (#1540). */
+  lastReplyKey?: string;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -4929,7 +4945,7 @@ export class RunManager {
         // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
-        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
+        const text = stripAskMarker(stripBlockedMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text)))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -5000,6 +5016,10 @@ export class RunManager {
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        // `CEZ:BLOCKED` (#1540): the agent says only an outside change unblocks it. Not nudged,
+        // not monitored; parks `waiting` below with the blocker persisted.
+        const blocked = resolveBlockedTurn(turnText, Boolean(sessionOpen) && !done && !ask && !dispatchTurn.dispatched);
+        const repliedText = turnText;
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         // The twin of `runAgentStep`'s rule (#1282): a turn retires the question park an earlier
@@ -5027,7 +5047,7 @@ export class RunManager {
         // needs to know whether the turn parked.
         const nudged =
           dispatchTurn.rePrompted ||
-          (!monitoring && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false));
+          (!monitoring && !blocked && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn, repliedText) : false));
         // Compaction alone never means the user owns the next action (#955). Tried LAST, so
         // every marker, the dispatch rules and the autonomous nudge keep their precedence —
         // the twin of `runAgentStep`'s call, through the one helper both sites share.
@@ -5044,10 +5064,11 @@ export class RunManager {
             // lifecycle (free the slot), while only plain waiting keeps the idle timer. Monitoring is
             // checked before the autonomous nudge, so it remains non-attention.
             const attentionRequest = ask ? this.recordAsk(runId, sink, ask) : undefined;
-            if (ask) {
+            if (ask || blocked) {
               state.askPark = 'waiting';
               state.monitorHandoff = false;
             }
+            if (blocked) this.persistBlocked(runId, stepId, blocked);
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
               this.store.updateStep(runId, stepId, { status: 'running' });
@@ -5057,7 +5078,7 @@ export class RunManager {
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
-              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask ? true : undefined, attentionRequest });
+              this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: ask || blocked ? true : undefined, attentionRequest });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
               this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
@@ -7064,7 +7085,7 @@ export class RunManager {
         // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
         // they saw those references and left the protocol marker in the transcript.
         const text = stripVerdictMarker(
-          stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text)))),
+          stripAskMarker(stripBlockedMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))))),
         );
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
@@ -7152,7 +7173,9 @@ export class RunManager {
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
-        const parksWorkflow = !interactive && (ask !== null || monitoring);
+        const blocked = resolveBlockedTurn(turnText, Boolean(sessionOpen) && !done && !ask && !dispatchTurn.dispatched);
+        const repliedText = turnText;
+        const parksWorkflow = !interactive && (ask !== null || monitoring || blocked !== null);
         // A turn that does not park retires a park an earlier turn left standing. The park is
         // otherwise cleared only by `sendMessage`, and a parked session can wake without one:
         // Claude Code re-invokes the model itself when a background command or sub-agent it
@@ -7197,7 +7220,7 @@ export class RunManager {
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
           dispatchTurn.rePrompted ||
-          (!monitoring && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false));
+          (!monitoring && !blocked && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn, repliedText) : false));
         // The compaction continuation (#955), through the same helper `runContinuation` calls.
         // Deliberately NOT gated on `waiting`: that flag is about who the turn hands control
         // to, and an ordinary intermediate step never hands control to anyone — it is closed
@@ -7225,10 +7248,11 @@ export class RunManager {
           // Inside the `!autoContinued` branch on purpose: a nudged autonomous
           // turn did not park, so it must not leave a park behind for `execute`
           // to settle.
-          if (ask) {
+          if (ask || blocked) {
             state.askPark = 'waiting';
             state.monitorHandoff = false;
           }
+          if (blocked) this.persistBlocked(runId, step.id, blocked);
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
@@ -7244,7 +7268,7 @@ export class RunManager {
               // The durable half of the park, and the only thing a restart can
               // read: without it `recover()` cannot tell this `waiting` from a
               // finished interactive session and settles it as a success.
-              askParked: ask ? true : undefined,
+              askParked: ask || blocked ? true : undefined,
               attentionRequest,
             });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
@@ -8474,6 +8498,7 @@ export class RunManager {
     stepId: string,
     ask: AskRequest | null,
     dispatchTurn: DispatchTurnResult,
+    turnText = '',
   ): boolean {
     if (!state.autonomous) return false;
     // Three dispatch exceptions (spec 2026-09-10-dispatch), each closing a hole the nudge would
@@ -8512,6 +8537,23 @@ export class RunManager {
       });
       return false;
     }
+    // An agent without the `CEZ:BLOCKED` marker that answers a nudge with (nearly) the same reply
+    // is stuck: park after one nudge round instead of burning the cap (#1540). Short or empty
+    // replies are excluded — an empty turn is a different breaker.
+    // Questions have their own repeat guards above (#1227); this one covers plain replies.
+    const replyText = replyKey(turnText);
+    const repeated =
+      !ask &&
+      replyText.length >= 20 && state.lastReplyKey !== undefined && nearIdenticalReplies(state.lastReplyKey, replyText);
+    if (!ask) state.lastReplyKey = replyText;
+    if (repeated) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: 'autonomous — the agent repeated its previous reply after a nudge, so the run parks instead of continuing',
+      });
+      return false;
+    }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
@@ -8534,6 +8576,12 @@ export class RunManager {
       });
     }
     return true;
+  }
+
+  /** Record the agent's `CEZ:BLOCKED` on the run BEFORE it parks, and say so once in the thread (#1540). */
+  private persistBlocked(runId: string, stepId: string, signal: BlockedSignal): void {
+    this.store.updateRun(runId, { blocked: { ...signal, at: new Date().toISOString() } });
+    this.store.appendEvent(runId, { type: 'note', stepId, message: blockedNote(signal) });
   }
 
   /**

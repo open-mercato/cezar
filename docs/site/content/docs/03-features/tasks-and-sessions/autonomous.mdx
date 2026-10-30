@@ -25,3 +25,5 @@ New task → Autonomous
 3. Review the final diff and result.
 
 > **Good to know**: Autonomous continues work on its own and skips the optional review gate. In a project with auto-land explicitly enabled, it can also save changes to the base branch. Default worktree tasks are not merged automatically.
+
+> **Good to know**: If the agent cannot continue until something outside the session changes (a credential, a permission), it ends its turn with a `CEZ:BLOCKED` line naming the category and what must change. The task parks once, with that note in the thread, and is not nudged again until you reply or press Continue; a restart keeps it parked. An agent that never sends the marker but repeats the same reply after a nudge also stops being nudged and waits for you.
