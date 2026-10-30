@@ -36,7 +36,7 @@
     {
       "step": 3,
       "priority": "P1",
-      "action": "Focus Settings link and press Enter",
+      "action": "Activate Settings link with keyboard and a direct mouse click",
       "expected": "Settings → Projects opens and picker dismisses",
       "observed": "URL /settings/global/projects, Default browse folder textbox visible, picker absent",
       "result": "PASS",
@@ -91,7 +91,7 @@
   "hasUiTest": false,
   "notes": [
     "Seven browser scenarios passed; pending/403 states exercised only by component tests.",
-    "Native CLI ref midpoint click on the wrapped multiline link did not navigate; keyboard Enter did. A text click was not separately re-tested.",
+    "Native CLI ref midpoint landed between wrapped text lines; direct mouse click on visible link text and keyboard Enter both reached Settings.",
     "Add-agent-account caller inspected for shared root semantics; not separately exercised in browser.",
     "No QA approval labels granted. Full local validation blocked outside this UI scope."
   ]
