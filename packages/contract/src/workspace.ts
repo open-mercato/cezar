@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { executionAccessModeSchema } from './access-mode.ts';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema } from './health.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
@@ -632,6 +633,11 @@ export type ProviderUpdateResponse = z.infer<typeof providerUpdateResponseSchema
  */
 export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
+export const runnerModelsQuerySchema = z.object({
+  runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema),
+  /** Omitted means the discovered default account, preserving the original host catalog. */
+  agentProfile: z.string().max(64).optional(),
+});
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;
 
@@ -644,6 +650,8 @@ export const runnerModelOptionSchema = z.object({
   id: z.string(),
   label: z.string(),
   description: z.string(),
+  /** Caller-specific accepted explicit selections. Absent means unknown, never eligible. */
+  supportedAccessModes: z.array(executionAccessModeSchema).optional(),
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 

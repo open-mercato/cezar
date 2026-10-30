@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RunnerModelCatalog, type ModelOption } from './runner-model-catalog.ts';
+import { RunnerModelCatalog, type ModelCatalogContext, type ModelOption } from './runner-model-catalog.ts';
 
 const models: ModelOption[] = [
   { id: 'gpt-latest', label: 'GPT Latest', description: 'Latest model' },
 ];
 
 describe('RunnerModelCatalog', () => {
+  it('isolates capability caches and in-flight requests by account context', async () => {
+    const discover = vi.fn(async (context?: ModelCatalogContext): Promise<ModelOption[]> => [{
+      id: context?.env.CODEX_HOME ?? 'native', label: 'Model', description: '',
+      supportedAccessModes: context?.cacheKey === 'blue' ? ['daybreak-blue'] : [],
+    }]);
+    const catalog = new RunnerModelCatalog({ adapters: { codex: { discover } } });
+    const [blue, standard] = await Promise.all([
+      catalog.get('codex', { cacheKey: 'blue', env: { CODEX_HOME: '/blue' } }),
+      catalog.get('codex', { cacheKey: 'standard', env: { CODEX_HOME: '/standard' } }),
+    ]);
+    expect(blue.models[0]).toMatchObject({ id: '/blue', supportedAccessModes: ['daybreak-blue'] });
+    expect(standard.models[0]).toMatchObject({ id: '/standard', supportedAccessModes: [] });
+    await catalog.get('codex', { cacheKey: 'standard', env: { CODEX_HOME: '/standard' } });
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
   it('returns a live discovery, then a cached value for five minutes', async () => {
     let now = 1_000;
     const discover = vi.fn(async () => models);

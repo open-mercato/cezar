@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -14,6 +14,63 @@ import { RunStore } from '../runs/store.ts';
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning the real mock app-server through the untouched `spawn`. */
 const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+
+describe('independent Codex execution access mode', () => {
+  const mockBin = fileURLToPath(new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url));
+  it.each([
+    [undefined, undefined, false],
+    ['standard', 'standard', false],
+    ['daybreak-blue', 'daybreakBlue', false],
+    ['daybreak-blue', 'daybreakBlue', true],
+  ] as const)('sends %s on every new turn (resume=%s)', async (mode, wire, resume) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-access-wire-'));
+    const log = join(dir, 'wire.ndjson');
+    let session: ReturnType<CodexAppServerRunner['startSession']> | undefined;
+    let turns = 0;
+    try {
+      session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 5_000 }).startSession({
+        userPrompt: 'hello', cwd: dir, model: 'gpt-eligible-b', accessMode: mode,
+        ...(resume ? { resume: true, sessionId: 'stored-thread' } : {}),
+        env: { MOCK_CODEX_WIRE_FILE: log },
+      }, (event) => {
+        if (event.type !== 'turn-end') return;
+        turns += 1;
+        if (turns === 1) session!.sendMessage([{ type: 'text', text: 'another turn' }]);
+        else session!.end();
+      });
+      await session.result;
+      const requests = readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      const starts = requests.filter((request) => request.method === 'turn/start');
+      expect(starts).toHaveLength(2);
+      for (const request of starts) {
+        if (wire) expect(request.params.cyberAccessProgram).toBe(wire);
+        else expect(request.params).not.toHaveProperty('cyberAccessProgram');
+      }
+      expect(requests.some((request) => request.method === 'model/list')).toBe(mode !== undefined);
+      expect(requests.filter((request) => request.method.startsWith('thread/')).every((request) => !('daybreakEnabled' in request.params))).toBe(true);
+    } finally {
+      session?.interrupt();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it.each([
+    ['gpt-standard', {}], ['daybreak-latest', {}], ['gpt-eligible-a', { MOCK_CODEX_OLD_CATALOG: '1' }], ['', {}],
+  ])('refuses Blue on unknown/incompatible %s without opening a turn', async (model, env) => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-access-denied-'));
+    const log = join(dir, 'wire.ndjson');
+    try {
+      const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 5_000 }).startSession({
+        userPrompt: 'hello', cwd: dir, model, accessMode: 'daybreak-blue',
+        env: { ...env, MOCK_CODEX_WIRE_FILE: log },
+      });
+      await expect(session.result).rejects.toThrow('Choose Native default');
+      expect(readFileSync(log, 'utf8')).not.toContain('turn/start');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();

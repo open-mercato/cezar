@@ -1,9 +1,12 @@
 import type { RunnerId } from './agent-runner.ts';
+import type { RunnerModelOption } from '@open-mercato/cezar-contract';
 
-export interface ModelOption {
-  id: string;
-  label: string;
-  description: string;
+export type ModelOption = RunnerModelOption;
+
+export interface ModelCatalogContext {
+  /** Resolved account identity/path; never exposed on the wire. */
+  cacheKey: string;
+  env: Record<string, string>;
 }
 
 export type ModelCatalogSource = 'live' | 'cache' | 'unavailable';
@@ -17,7 +20,7 @@ export interface RunnerModelCatalogResult {
 }
 
 export interface RunnerModelCatalogAdapter {
-  discover(): Promise<ModelOption[]>;
+  discover(context?: ModelCatalogContext): Promise<ModelOption[]>;
 }
 
 export interface RunnerModelCatalogOptions {
@@ -44,8 +47,8 @@ export class RunnerModelCatalog {
   readonly #now: () => number;
   readonly #ttlMs: number;
   readonly #usableTtlMs: number;
-  readonly #cache = new Map<RunnerId, CachedCatalog>();
-  readonly #inFlight = new Map<RunnerId, Promise<RunnerModelCatalogResult>>();
+  readonly #cache = new Map<string, CachedCatalog>();
+  readonly #inFlight = new Map<string, Promise<RunnerModelCatalogResult>>();
 
   constructor(options: RunnerModelCatalogOptions) {
     this.#adapters = options.adapters;
@@ -54,8 +57,9 @@ export class RunnerModelCatalog {
     this.#usableTtlMs = options.usableTtlMs ?? DEFAULT_USABLE_TTL_MS;
   }
 
-  get(runner: RunnerId): Promise<RunnerModelCatalogResult> {
-    const cached = this.#cache.get(runner);
+  get(runner: RunnerId, context?: ModelCatalogContext): Promise<RunnerModelCatalogResult> {
+    const key = JSON.stringify([runner, context?.cacheKey ?? '']);
+    const cached = this.#cache.get(key);
     const now = this.#now();
     if (cached && now < cached.refreshAfter) {
       if (cached.failureReason) {
@@ -72,26 +76,26 @@ export class RunnerModelCatalog {
 
     // Keep discovery latency off the picker path while a healthy answer is still usable.
     if (cached && !cached.failureReason && cached.models.length > 0 && now < cached.expiresAt) {
-      this.#refreshInBackground(runner, cached);
+      this.#refreshInBackground(runner, key, cached, context);
       return Promise.resolve({ runner, models: cached.models, source: 'cache', stale: false });
     }
 
-    const pending = this.#inFlight.get(runner);
+    const pending = this.#inFlight.get(key);
     if (pending) return pending;
 
-    const refresh = this.#refresh(runner, cached).finally(() => {
-      this.#inFlight.delete(runner);
+    const refresh = this.#refresh(runner, key, cached, context).finally(() => {
+      this.#inFlight.delete(key);
     });
-    this.#inFlight.set(runner, refresh);
+    this.#inFlight.set(key, refresh);
     return refresh;
   }
 
-  #refreshInBackground(runner: RunnerId, cached: CachedCatalog): void {
-    if (this.#inFlight.has(runner)) return;
-    const refresh = this.#refresh(runner, cached).finally(() => {
-      this.#inFlight.delete(runner);
+  #refreshInBackground(runner: RunnerId, key: string, cached: CachedCatalog, context?: ModelCatalogContext): void {
+    if (this.#inFlight.has(key)) return;
+    const refresh = this.#refresh(runner, key, cached, context).finally(() => {
+      this.#inFlight.delete(key);
     });
-    this.#inFlight.set(runner, refresh);
+    this.#inFlight.set(key, refresh);
     // #refresh handles adapter failures, but keep this detached path safe if an
     // unexpected implementation error escapes it.
     void refresh.catch(() => undefined);
@@ -99,24 +103,26 @@ export class RunnerModelCatalog {
 
   async #refresh(
     runner: RunnerId,
+    key: string,
     cached: CachedCatalog | undefined,
+    context?: ModelCatalogContext,
   ): Promise<RunnerModelCatalogResult> {
     try {
       const adapter = this.#adapters[runner];
       if (!adapter) throw new Error('adapter unavailable');
-      const models = await adapter.discover();
+      const models = await adapter.discover(context);
       const now = this.#now();
       const value = {
         models: [...models],
         refreshAfter: now + this.#ttlMs,
         expiresAt: now + this.#usableTtlMs,
       };
-      this.#cache.set(runner, value);
+      this.#cache.set(key, value);
       return { runner, models: value.models, source: 'live', stale: false };
     } catch {
       const reason = unavailableReason(runner);
       if (cached) {
-        this.#cache.set(runner, {
+        this.#cache.set(key, {
           models: cached.models,
           refreshAfter: this.#now() + this.#ttlMs,
           expiresAt: cached.expiresAt,
@@ -125,7 +131,7 @@ export class RunnerModelCatalog {
         return { runner, models: cached.models, source: 'cache', stale: true, reason };
       }
       const now = this.#now();
-      this.#cache.set(runner, {
+      this.#cache.set(key, {
         models: [],
         refreshAfter: now + this.#ttlMs,
         expiresAt: now,

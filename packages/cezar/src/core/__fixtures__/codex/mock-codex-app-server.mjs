@@ -9,6 +9,7 @@
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
 import { createInterface } from 'node:readline';
+import { appendFileSync } from 'node:fs';
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
@@ -100,6 +101,7 @@ rl.on('line', (line) => {
   let msg;
   try {
     msg = JSON.parse(line);
+    if (process.env.MOCK_CODEX_WIRE_FILE) appendFileSync(process.env.MOCK_CODEX_WIRE_FILE, `${line}\n`);
   } catch {
     return;
   }
@@ -111,6 +113,16 @@ rl.on('line', (line) => {
       : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
+  } else if (msg.method === 'model/list') {
+    if (process.env.MOCK_CODEX_OLD_CATALOG === '1') {
+      emit({ id: msg.id, result: { data: [{ model: 'gpt-eligible-a' }], nextCursor: null } });
+    } else {
+      emit({ id: msg.id, result: { data: [
+        { model: 'gpt-eligible-a', availableAccessPrograms: { cyber: ['standard', 'daybreakBlue'] } },
+        { model: 'gpt-eligible-b', availableAccessPrograms: { cyber: ['standard', 'daybreakBlue'] } },
+        { model: 'gpt-standard', availableAccessPrograms: { cyber: ['standard'] } },
+      ], nextCursor: null } });
+    }
   } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
     const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {

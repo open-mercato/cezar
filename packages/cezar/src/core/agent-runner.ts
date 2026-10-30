@@ -16,7 +16,7 @@
  *                 `junie --acp=true`), JSON-RPC 2.0 (JSONL) over stdin/stdout.
  */
 
-import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { ExecutionAccessMode, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
 import type { PrivateMcpServer } from './private-mcp.ts';
 
@@ -66,6 +66,8 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
+  /** Optional execution treatment; only a supporting adapter translates it to vendor fields. */
+  accessMode?: ExecutionAccessMode;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**

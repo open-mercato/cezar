@@ -1,5 +1,6 @@
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { executionAccessModeSchema } from './access-mode.ts';
 import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
@@ -112,6 +113,8 @@ export const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
+  /** Actual explicit treatment used by this session; absent on native/older steps. */
+  accessMode: executionAccessModeSchema.optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -175,6 +178,7 @@ export const runRecordSchema = z.object({
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  accessMode: executionAccessModeSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
@@ -1170,6 +1174,7 @@ export const createRunInputBaseSchema = z
     /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
     task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    accessMode: executionAccessModeSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
@@ -1262,6 +1267,8 @@ export const continueInputSchema = z.object({
   images: attachmentListSchema.optional(),
   runner: runnerSchema.optional(),
   model: z.string().max(200).optional(),
+  /** Omit to retain; null restores native automatic behavior. */
+  accessMode: executionAccessModeSchema.nullable().optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
    *  account the run is already on. */
   agentProfile: z.string().max(64).optional(),

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { stepSecretsSchema } from '@open-mercato/cezar-contract';
+import { executionAccessModeSchema, stepSecretsSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { WorkflowStepDef } from './types.ts';
 
@@ -57,6 +57,7 @@ export const graphNodeSchema = z.discriminatedUnion('type', [
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
+    accessMode: executionAccessModeSchema.optional(),
     runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),

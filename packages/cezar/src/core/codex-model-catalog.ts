@@ -14,7 +14,8 @@ export interface CodexModelDiscoveryOptions {
   cwd: string;
   bin?: string;
   timeoutMs?: number;
-  spawn?: (bin: string, cwd: string) => ChildProcessWithoutNullStreams;
+  env?: Record<string, string>;
+  spawn?: (bin: string, cwd: string, env?: Record<string, string>) => ChildProcessWithoutNullStreams;
 }
 
 const modelSchema = z.object({
@@ -22,6 +23,7 @@ const modelSchema = z.object({
   displayName: z.string().optional(),
   description: z.string().optional(),
   hidden: z.boolean().optional(),
+  availableAccessPrograms: z.unknown().optional(),
 }).passthrough();
 
 const pageSchema = z.object({
@@ -38,6 +40,7 @@ export async function discoverCodexModels(options: CodexModelDiscoveryOptions): 
   const child = (options.spawn ?? spawnCodexAppServer)(
     resolveCodexExecutable(options.bin),
     options.cwd,
+    options.env,
   );
   const rpc = new CodexAppServerRpc(child);
   let readerError: Error | undefined;
@@ -94,6 +97,11 @@ export async function discoverCodexModels(options: CodexModelDiscoveryOptions): 
 
 async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
   await rpc.initialize();
+  return readCodexModels(rpc);
+}
+
+/** Also used on the executing connection: a different account's cached list cannot grant access. */
+export async function readCodexModels(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
   const models: ModelOption[] = [];
   const ids = new Set<string>();
   const cursors = new Set<string>();
@@ -113,6 +121,7 @@ async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
         id,
         label: model.displayName?.trim() || id,
         description: model.description ?? '',
+        ...accessCapabilities(model.availableAccessPrograms),
       });
     }
 
@@ -126,4 +135,13 @@ async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
   }
 
   throw new Error('Codex model discovery exceeded the page limit');
+}
+
+function accessCapabilities(raw: unknown): Pick<ModelOption, 'supportedAccessModes'> {
+  const parsed = z.object({ cyber: z.array(z.string()) }).safeParse(raw);
+  if (!parsed.success) return {};
+  const supportedAccessModes: NonNullable<ModelOption['supportedAccessModes']> = [];
+  if (parsed.data.cyber.includes('standard')) supportedAccessModes.push('standard');
+  if (parsed.data.cyber.includes('daybreakBlue')) supportedAccessModes.push('daybreak-blue');
+  return { supportedAccessModes };
 }

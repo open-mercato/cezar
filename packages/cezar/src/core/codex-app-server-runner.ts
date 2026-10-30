@@ -1,5 +1,6 @@
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { readCodexModels } from './codex-model-catalog.ts';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -421,6 +422,26 @@ class CodexSession implements AgentSession {
 
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
+    if (this.spec.accessMode !== undefined) {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        const models = await Promise.race([
+          readCodexModels(this.rpc),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('capability discovery timed out')), 5_000);
+            timer.unref?.();
+          }),
+        ]);
+        const model = models.find((option) => option.id === this.spec.model);
+        if (!model?.supportedAccessModes?.includes(this.spec.accessMode)) {
+          throw new Error('the selected account/model does not advertise this access mode');
+        }
+      } catch (error) {
+        throw new Error(`Codex access mode ${this.spec.accessMode} cannot be used with ${this.spec.model || 'auto'}: ${error instanceof Error ? error.message : 'capabilities unavailable'}. Choose Native default or an advertised account/model combination.`);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
 
     const overrides = {
       model: this.spec.model,
@@ -503,6 +524,9 @@ class CodexSession implements AgentSession {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.accessMode !== undefined
+        ? { cyberAccessProgram: this.spec.accessMode === 'daybreak-blue' ? 'daybreakBlue' : 'standard' }
+        : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }

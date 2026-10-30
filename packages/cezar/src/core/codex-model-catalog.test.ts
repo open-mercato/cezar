@@ -61,6 +61,29 @@ function fakeChild(responses: unknown[] = []): {
 }
 
 describe('Codex model discovery', () => {
+  it('preserves caller-advertised modes independently of model ids and never grants on unknown metadata', async () => {
+    const fake = fakeChild(fixture('model-list-access-modes'));
+    const models = await discoverCodexModels({ cwd: '/repo', spawn: () => fake.child });
+    expect(models.map(({ id, supportedAccessModes }) => ({ id, supportedAccessModes }))).toEqual([
+      { id: 'gpt-eligible-a', supportedAccessModes: ['standard', 'daybreak-blue'] },
+      { id: 'gpt-eligible-b', supportedAccessModes: ['standard', 'daybreak-blue'] },
+      { id: 'gpt-standard', supportedAccessModes: ['standard'] },
+      { id: 'daybreak-latest', supportedAccessModes: undefined },
+      { id: 'gpt-null', supportedAccessModes: undefined },
+      { id: 'gpt-malformed', supportedAccessModes: undefined },
+      { id: 'gpt-red', supportedAccessModes: [] },
+    ]);
+    expect(models[3]).not.toHaveProperty('supportedAccessModes');
+  });
+
+  it('uses the selected account environment for discovery', async () => {
+    const fake = fakeChild(fixture('model-list-success'));
+    const spawn = (bin: string, cwd: string, env?: Record<string, string>) => {
+      expect(env).toEqual({ CODEX_HOME: '/profiles/work' });
+      return fake.child;
+    };
+    await discoverCodexModels({ cwd: '/repo', env: { CODEX_HOME: '/profiles/work' }, spawn });
+  });
   it('validates a wire response and keeps the first visible, non-blank model in server order', async () => {
     const fake = fakeChild(fixture('model-list-success'));
     await expect(discoverCodexModels({ cwd: '/repo', spawn: () => fake.child })).resolves.toEqual([

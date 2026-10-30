@@ -499,6 +499,7 @@ interface ContinueRunOptions {
   images?: PastedContent[];
   runner?: RunnerId;
   model?: string;
+  accessMode?: RunRecord['accessMode'] | null;
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
    *  account the run is already on. */
   agentProfile?: string;
@@ -890,6 +891,7 @@ export interface StartRunInput {
   /** Where the task came from (telemetry only, `task_origin`); unset = derived in `taskOriginOf`. */
   origin?: TaskOrigin;
   model?: string;
+  accessMode?: RunRecord['accessMode'];
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
@@ -1761,7 +1763,7 @@ export class RunManager {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
-      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined } : input),
+      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined, accessMode: undefined } : input),
       // A root started with the composer's Dispatch toggle always gets a worktree: children fork
       // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
       // what `execute()` reads, not only on the record.
@@ -1775,6 +1777,7 @@ export class RunManager {
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
+      ...(effectiveInput.accessMode !== undefined ? { accessMode: effectiveInput.accessMode } : {}),
       runner: input.runner,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
@@ -3022,6 +3025,7 @@ export class RunManager {
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
+      ...(childRunner === 'codex' && sameRunner(parent.runner) && parent.accessMode ? { accessMode: parent.accessMode } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,
@@ -3425,6 +3429,7 @@ export class RunManager {
     return this.hydrateQueuedInput(run.id, {
       task: run.task,
       model: run.model,
+      ...(run.accessMode !== undefined ? { accessMode: run.accessMode } : {}),
       runner: run.runner,
       agentProfile: run.agentProfile,
       // No `systemPrompt`: the record keeps only the COMPOSED prompt, never the bare override, so
@@ -4567,7 +4572,7 @@ export class RunManager {
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
     if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
-    if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
+    if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.accessMode)) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
@@ -4626,7 +4631,7 @@ export class RunManager {
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
-    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined) {
+    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined || opts.accessMode !== undefined || sessionStep.accessMode !== undefined) {
       // Guard the pairing before persisting anything: the model override applies to the runner
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
@@ -4657,6 +4662,13 @@ export class RunManager {
         run.agentProfile !== undefined &&
         targetRunner !== (run.runner ?? 'claude');
       this.store.updateRun(runId, {
+        ...(opts.accessMode !== undefined
+          ? { accessMode: targetRunner === 'codex' ? opts.accessMode ?? undefined : undefined }
+          : opts.runner !== undefined && opts.runner !== run.runner
+            ? { accessMode: undefined }
+            : targetRunner === 'codex' && sessionStep.accessMode !== undefined
+              ? { accessMode: sessionStep.accessMode }
+              : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
@@ -5220,6 +5232,7 @@ export class RunManager {
     state.grantedAttachmentLibrary = this.prepareAttachmentLibrary();
     const launch = (launchSessionId: string, resume: boolean, context: string | undefined): AgentSession => {
       const contextualOpeningPrompt = withContext(context);
+      this.store.updateStep(runId, stepId, { accessMode: continueBackend === 'codex' && !agentModelsLocked(this.repoRoot) ? record?.accessMode : undefined });
       const started = runner.startSession(
         {
           // The Continue step is a fresh agent session on the same run — the
@@ -5248,6 +5261,9 @@ export class RunManager {
           onUsageWindows: continueProfile.onUsageWindows,
           mcpServers: continueMcp,
           model: continueModel,
+          ...(continueBackend === 'codex' && !agentModelsLocked(this.repoRoot) && record?.accessMode !== undefined
+            ? { accessMode: record.accessMode }
+            : {}),
           sessionId: launchSessionId,
           resume,
           timeoutMs: 0,
@@ -6242,6 +6258,7 @@ export class RunManager {
                   id: 'task',
                   name: a.name ?? a.id,
                   prompt: '{{task}}',
+                  ...(a.accessMode ? { accessMode: a.accessMode } : {}),
                   ...(a.skill ? { skill: a.skill } : {}),
                   ...(a.allowedTools ? { allowedTools: a.allowedTools } : {}),
                   ...(a.bashAllowlist ? { bashAllowlist: a.bashAllowlist } : {}),
@@ -7358,6 +7375,10 @@ export class RunManager {
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
     if (state.cancelled) return 'cancelled';
+    const accessMode = stepBackend === 'codex' && !agentModelsLocked(this.repoRoot)
+      ? step.accessMode ?? (stepBackend === taskBackend ? input.accessMode : undefined)
+      : undefined;
+    this.store.updateStep(runId, step.id, { accessMode });
     const launch = (launchSessionId: string, resume: boolean, prompt: string): AgentSession =>
       runner.startSession(
         {
@@ -7390,6 +7411,7 @@ export class RunManager {
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepMcp,
           model: backendModel,
+          ...(accessMode !== undefined ? { accessMode } : {}),
           sessionId: launchSessionId,
           resume,
           // Interactive sessions have no runner timeout — the idle timer rules.

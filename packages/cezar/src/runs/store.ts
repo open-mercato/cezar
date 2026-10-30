@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, executionAccessModeSchema, queueWaitReasonSchema, type ExecutionAccessMode } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -120,6 +120,7 @@ const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
+  accessMode: executionAccessModeSchema.optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -182,6 +183,7 @@ export const runRecordSchema = z.object({
    *  (#image-display) — persisted like agent screenshots, served from `/images/`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  accessMode: executionAccessModeSchema.optional(),
   /** Canonical provider/model identity (#405) — the normalised `provider/model`
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
@@ -1325,6 +1327,7 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
+    accessMode?: ExecutionAccessMode;
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
@@ -1347,6 +1350,7 @@ export class RunStore extends EventEmitter {
       workflow: input.workflow,
       task: input.task,
       model: input.model,
+      ...(input.accessMode !== undefined ? { accessMode: input.accessMode } : {}),
       runner: input.runner,
       agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,

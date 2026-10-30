@@ -1,0 +1,2 @@
+{"id":1,"result":{}}
+{"id":2,"result":{"data":[{"model":"gpt-eligible-a","availableAccessPrograms":{"cyber":["standard","daybreakBlue"]}},{"model":"gpt-eligible-b","availableAccessPrograms":{"cyber":["daybreakBlue","standard","futureProgram"]}},{"model":"gpt-standard","availableAccessPrograms":{"cyber":["standard"]}},{"model":"daybreak-latest"},{"model":"gpt-null","availableAccessPrograms":null},{"model":"gpt-malformed","availableAccessPrograms":{"cyber":true}},{"model":"gpt-red","availableAccessPrograms":{"cyber":["daybreakRed"]}}],"nextCursor":null}}
