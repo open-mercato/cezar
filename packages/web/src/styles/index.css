@@ -665,3 +665,34 @@
 .thread-markdown [data-streamdown='mermaid'] [role='img'] {
   width: 100%;
 }
+
+/* ---------- first-run onboarding (spec 2026-10-26-first-run-onboarding) ----------
+ * The onboarding surfaces use the violet accent whatever the user's accent is: the `--primary`
+ * family swap `[data-accent='violet']` makes, scoped to the first-run container. */
+[data-onboarding] {
+  /* Darker than --violet so white button text reaches AA (5.2:1); the button itself stays over
+   * 3:1 on the dark card. The violet text tokens keep #8f86e8 here (5.8:1 on the dark card). */
+  --primary: #6457e8;
+  --primary-foreground: #ffffff;
+  --ring: var(--violet);
+}
+/* On white, #8f86e8 text is only 3.1:1 — the darker violet carries the labels and links too. */
+.light [data-onboarding] {
+  --violet: #6457e8;
+}
+
+/* The feature announcement: a violet wash fading into the card, a border that catches it. */
+.onboarding-announcement {
+  border-color: color-mix(in srgb, var(--violet) 35%, var(--border));
+  background:
+    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--violet) 22%, transparent), transparent 55%),
+    var(--card);
+  box-shadow: 0 24px 60px -36px color-mix(in srgb, var(--violet) 70%, transparent);
+}
+
+/* The stage a "What's new" miniature stands on: the same violet light, from below. */
+.onboarding-preview {
+  background:
+    radial-gradient(90% 120% at 50% 100%, color-mix(in srgb, var(--violet) 24%, transparent), transparent 70%),
+    var(--card);
+}

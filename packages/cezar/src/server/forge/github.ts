@@ -455,6 +455,14 @@ export function parseOwnerName(nameWithOwner: string): { owner: string; name: st
 const listCache = new Map<string, { at: number; limit: number; data: GithubData }>();
 const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
+
+/** A sign-in changes what every cached `unavailable` answer means: a GitHub tab that cached "gh is
+ *  not authenticated" would keep saying so for a minute after the user just signed in. Called by
+ *  the login route the moment `gh` exits 0; the signed-in state is the only thing that moves. */
+export function forgetGithubListCache(): void {
+  listCache.clear();
+  enterpriseHostByRoot.clear();
+}
 export const GH_MAX_LIMIT = 1000;
 /** GitHub GraphQL rejects `first` above 100 (EXCESSIVE_PAGINATION); larger limits page. */
 const GH_GRAPHQL_PAGE_MAX = 100;

@@ -32,6 +32,7 @@ import { useRunUsage } from '@/api/global-events'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRepo, useRuns, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { FirstRun, SetupPill, WelcomeBack } from '@/components/first-run'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -142,12 +143,22 @@ export function TasksOverview({
   gitRepo = true,
   scheduledTasks,
   hasScheduledTasks = !!scheduledTasks,
+  firstRun,
+  setupPill,
+  welcomeBack,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
   scheduledTasks?: React.ReactNode
   hasScheduledTasks?: boolean
+  /** First-run onboarding (spec 2026-10-26-first-run-onboarding): replaces the plain
+   *  "No tasks yet" state when the route supplies it. Absent, the old state renders. */
+  firstRun?: React.ReactNode
+  /** What is left of setup once tasks exist — rendered above the filter bar. */
+  setupPill?: React.ReactNode
+  /** After a long absence: what the user left and what changed — above the setup pill. */
+  welcomeBack?: React.ReactNode
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -202,6 +213,7 @@ export function TasksOverview({
   // Session-local like the facets; Recent on every fresh visit.
   const [sortBy, setSortBy] = React.useState<SortBy>('recent')
   const all = runs ?? NO_RUNS
+  const viewHasRuns = React.useMemo(() => all.some((run) => (view === 'archived') === run.archived), [all, view])
   const automations = React.useMemo(() => automationIndex(all), [all])
   // Origin and facets narrow BEFORE everything else, so the tab counts, the queue-free rows and
   // the compare strips all describe the same list the table shows.
@@ -331,8 +343,11 @@ export function TasksOverview({
       {scheduledTasks}
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
-        {/* No bar over the first-run hero: with nothing to narrow, filters are noise. */}
-        {all.length > 0 ? (
+        {/* No bar over the first-run hero: with nothing in this view to narrow, filters are noise —
+            archived history alone must not bring the chrome back over the welcome page. */}
+        {viewHasRuns ? welcomeBack : null}
+        {viewHasRuns ? setupPill : null}
+        {viewHasRuns ? (
           <TasksFilterBar
             runs={all}
             view={view}
@@ -358,6 +373,7 @@ export function TasksOverview({
               filterTaskTable(sortRuns(all, view), 'all', filters, automations).length > 0
             }
             onShowAll={() => onOriginChange('all')}
+            firstRun={firstRun}
           />
         ) : (
           <>
@@ -573,6 +589,7 @@ function TasksEmptyState({
   origin = 'all',
   hiddenByOrigin = false,
   onShowAll = () => undefined,
+  firstRun,
 }: {
   view: ListView
   query: string
@@ -583,6 +600,7 @@ function TasksEmptyState({
   /** The origin split is the only reason this view is empty: switching to All would show rows. */
   hiddenByOrigin?: boolean
   onShowAll?: () => void
+  firstRun?: React.ReactNode
 }) {
   const needle = query.trim()
   const kind = needle
@@ -641,6 +659,8 @@ function TasksEmptyState({
           title="Nothing archived yet"
           subtitle="Finished tasks you archive land here."
         />
+      ) : firstRun ? (
+        firstRun
       ) : (
         <CenteredState
           heading="h2"
@@ -1640,6 +1660,11 @@ export function TasksOverviewRoute() {
         onOriginChange={setOrigin}
         gitRepo={gitRepo}
         automationNames={automationNames}
+        // The first run waits for the git answer (a failed read falls back to "git", like the
+        // table does) instead of guessing, so it never shows the welcome page to a plain folder.
+        firstRun={view === 'active' ? <FirstRun gitRepo={repo.data ? repo.data.info !== null : repo.isError ? true : undefined} /> : undefined}
+        setupPill={view === 'active' ? <SetupPill /> : undefined}
+        welcomeBack={view === 'active' ? <WelcomeBack runs={runs.data ?? NO_RUNS} /> : undefined}
       />
     </ReferenceStatusProvider>
   )

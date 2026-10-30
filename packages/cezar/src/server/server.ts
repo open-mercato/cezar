@@ -24,6 +24,8 @@ import {
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
 import { runsListQuerySchema, workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
+import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
+import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
 import { discoverCommands, installCommand } from './terminal/commands.ts';
 import { effectiveStartApp, readStartApp, writeStartApp } from '../start-app.ts';
@@ -290,6 +292,10 @@ import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/u
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { createProjectInputSchema } from '@open-mercato/cezar-contract';
 import { createProject, listGithubOwners, type CommandRunner } from './create-project.ts';
+import { initGitInFolder } from './init-git.ts';
+import { publishToGithub } from './publish-github.ts';
+import { GH_LOGIN_MISSING, createDryRunGithubLogin, createGithubLogin, type GithubLogin } from './github-login.ts';
+import { suggestRepositories } from './repo-suggestions.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { fetchRepo, pullRepo, pushRepo, repoSyncStatus, syncRepo, type SyncActionResult } from './repo-sync.ts';
 import type { RepoSync } from '@open-mercato/cezar-contract';
@@ -303,7 +309,7 @@ import { applyKeepAlive } from './keep-alive.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
 import { isGithubHost } from '../github-hosts.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import {
@@ -431,6 +437,12 @@ export interface ServerDeps {
    *  reaches `openInTerminal`. Injected for the same reason as the two above: a test that reaches
    *  this for real opens a window on the developer's machine (#820). */
   openApp?: typeof openInApp;
+  /** The GitHub device flow behind `/github/login` (spec 2026-10-26-first-run-onboarding). Tests
+   *  inject a fake; `CEZ_DRY_RUN=1` gets one that approves itself. */
+  githubLogin?: GithubLogin;
+  /** Hand the device-flow page to the default browser. Injected so the route is testable without
+   *  opening a window on the developer's machine. */
+  openUrl?: typeof openFileInDefaultApp;
   /** Process-wide Open Mercato skills update detector. Injected in tests and
    * shared by every workspace route/project; createApp owns the default. */
   skillsUpdate?: SkillsUpdateService;
@@ -1462,6 +1474,8 @@ export function createApp(deps: ServerDeps) {
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
+  const githubLogin = deps.githubLogin ?? (process.env.CEZ_DRY_RUN === '1' ? createDryRunGithubLogin() : createGithubLogin());
+  const openUrl = deps.openUrl ?? openFileInDefaultApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
   // No injected updater (tests, embedded callers): a READ-ONLY service over the running entry.
   // It has no way to restart the process, so it must not install either — an install that
@@ -1570,7 +1584,14 @@ export function createApp(deps: ServerDeps) {
     detectedUrls.forget(runId);
   };
   const singleProjectRefusal = (
-    action: 'adding projects' | 'editing projects' | 'removing projects' | 'folder browsing',
+    action:
+      | 'adding projects'
+      | 'editing projects'
+      | 'removing projects'
+      | 'folder browsing'
+      | 'initializing git'
+      | 'publishing to GitHub'
+      | 'signing in to GitHub',
   ) => ({ error: `single-project mode is enabled; ${action} is disabled` });
   // Inbox live updates (spec 007). Opt-in (#471): no capability, no watcher —
   // and since step 2.3 the per-dataDir watch is created lazily by the first
@@ -2913,6 +2934,22 @@ export function createApp(deps: ServerDeps) {
     }
   };
 
+  /** The root folder a project-registry route names: a registry row, or the boot folder when it
+   *  was never registered (spec 2026-10-26-first-run-onboarding). `default` is the boot alias. */
+  const registryProjectRoot = async (raw: string): Promise<{ id: string; root?: string }> => {
+    if (!projectIdSchema.safeParse(raw).success) return { id: raw };
+    const bootId = await resolveBootProject();
+    const id = raw === 'default' ? bootId : raw;
+    let root: string | undefined;
+    try {
+      root = (await loadWorkspaceConfig()).projects.find((p) => p.id === id)?.root;
+    } catch {
+      // unreadable workspace — only the boot folder can still be named
+    }
+    if (root === undefined && id === bootId) root = await realpath(bootRoot).catch(() => bootRoot);
+    return { id, ...(root === undefined ? {} : { root }) };
+  };
+
   // ---- chained family: project registry (workspace-level) ----
   const projectsRoutes = new Hono<ProjectApiEnv>()
     .get('/projects', async (c) => {
@@ -2978,6 +3015,44 @@ export function createApp(deps: ServerDeps) {
       // Only a genuinely new project: a re-add answers 409 above and is not an event.
       track('project_added', { label: 'local' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json(registered.body, 200);
+    })
+
+    // "Initialize git here" (spec 2026-10-26-first-run-onboarding): a `not-git` project becomes a
+    // repository with its files committed, so the next task gets a real worktree.
+    .post('/projects/:projectId/git-init', async (c) => {
+      // Gated like every other registry mutator: a constrained workspace changes no project.
+      if (capabilities().singleProject) return c.json(singleProjectRefusal('initializing git'), 409);
+      const { id, root } = await registryProjectRoot(c.req.param('projectId'));
+      if (root === undefined) return c.json({ error: `unknown project: ${id}` }, 404);
+      const result = await initGitInFolder({
+        root,
+        signal: c.req.raw.signal,
+        ...(deps.projectCommandRunner ? { run: deps.projectCommandRunner } : {}),
+      });
+      if (!result.ok) return c.json({ error: result.error }, result.status);
+      clearProjectProbeCache();
+      const body: InitProjectGitResponse = { root, branch: result.branch };
+      return c.json(body, 200);
+    })
+
+    // "Publish to GitHub" (spec 2026-10-26-first-run-onboarding): a local repository with no
+    // remote becomes a new private GitHub repository, pushed. Always private, like `create`.
+    .post('/projects/:projectId/publish-github', jsonZodValidator(publishProjectGithubInputSchema), async (c) => {
+      if (capabilities().singleProject) return c.json(singleProjectRefusal('publishing to GitHub'), 409);
+      const { id, root } = await registryProjectRoot(c.req.param('projectId'));
+      if (root === undefined) return c.json({ error: `unknown project: ${id}` }, 404);
+      const { owner, name } = c.req.valid('json');
+      const result = await publishToGithub({
+        root,
+        owner,
+        name,
+        signal: c.req.raw.signal,
+        ...(deps.projectCommandRunner ? { run: deps.projectCommandRunner } : {}),
+      });
+      if (!result.ok) return c.json({ error: result.error }, result.status);
+      clearProjectProbeCache();
+      const body: PublishProjectGithubResponse = { slug: result.slug, url: result.url };
+      return c.json(body, 200);
     })
 
     .delete('/projects/:projectId', async (c) => {
@@ -3795,6 +3870,54 @@ export function createApp(deps: ServerDeps) {
   // Partial updates only — absent keys stay untouched. Bounds mirror the
   // workspace schema (src/workspace/config.ts, step 1.2) exactly, so a value
   // this route accepts can never be degraded away by the next load's `.catch`.
+  // ---- chained family: GitHub sign-in run by cezar (workspace-level) ----
+  // Spec 2026-10-26-first-run-onboarding, "Sign in does the work": the GitHub device flow with no
+  // terminal in it. POST spawns `gh auth login --web` (or answers the login already waiting) and
+  // resolves once `gh` printed its one-time code, which the cockpit shows with a Copy button; the
+  // page the code goes on is opened here, on the machine the user is at, once per code. GET is
+  // what the dialog polls while `gh` waits for GitHub's approval; DELETE kills the process.
+  let githubLoginOpenedFor: string | null = null;
+  // Through a function so the answer keeps the whole union: a narrowed `state` (or an `idle`
+  // literal) would make Hono infer a narrower 200 than the contract schema promises.
+  const loginBody = (state: GithubLoginState): GithubLoginState => state;
+  // Signing the server's `gh` in changes credentials on the host, so it follows the provider
+  // login: never from a hosted cockpit, and never in a constrained single-project workspace.
+  const githubLoginRefusal = () =>
+    capabilities().singleProject
+      ? singleProjectRefusal('signing in to GitHub')
+      : !capabilities().localHandoff
+        ? { error: 'Sign in to GitHub on the machine hosting cezar: run gh auth login there.' }
+        : null;
+  const githubLoginRoutes = new Hono()
+    .post('/github/login', async (c) => {
+      const refusal = githubLoginRefusal();
+      if (refusal) return c.json(refusal, 409);
+      const state = await githubLogin.start();
+      if (state.status === 'failed') {
+        if (state.notFound) return c.json({ error: GH_LOGIN_MISSING, notFound: true }, 503);
+        return c.json({ error: state.error }, 500);
+      }
+      if (state.status === 'pending' && githubLoginOpenedFor !== state.code && process.env.CEZ_DRY_RUN !== '1') {
+        githubLoginOpenedFor = state.code;
+        void openUrl(state.url);
+      }
+      return c.json(loginBody(state), 200);
+    })
+    .get('/github/login', (c) => {
+      const state = githubLogin.read();
+      if (state.status === 'done') {
+        forgetGithubListCache();
+        clearProjectProbeCache();
+      }
+      return c.json(loginBody(state), 200);
+    })
+    .delete('/github/login', (c) => {
+      const refusal = githubLoginRefusal();
+      if (refusal) return c.json(refusal, 409);
+      githubLogin.cancel();
+      return c.json(loginBody({ status: 'idle' }), 200);
+    });
+
   // ---- chained family: filesystem browse (workspace-level) ----
   const fsBrowseRoutes = new Hono<ProjectApiEnv>()
     .get(
@@ -3814,7 +3937,27 @@ export function createApp(deps: ServerDeps) {
         if (!result.ok) return c.json({ error: result.error }, result.status);
         return c.json(result.body);
       },
-    );
+    )
+
+    // First-run "Pick a project" list (spec 2026-10-26-first-run-onboarding). Read-only and
+    // never an error: an unreadable workspace or history is just fewer suggestions.
+    .get('/fs/repos', async (c) => {
+      if (capabilities().singleProject) {
+        return c.json(singleProjectRefusal('folder browsing'), 409);
+      }
+      let registered: ProjectListEntry[] = [];
+      try {
+        registered = await listProjects();
+      } catch {
+        // unreadable workspace — suggest from history and the scan alone
+      }
+      const body: RepoSuggestionsResponse = await suggestRepositories({
+        browseRoot: resolveBrowseRoot(await workspaceBrowseRoot()),
+        projectsDir: expandTilde(await workspaceProjectsDir()),
+        registered,
+      });
+      return c.json(body);
+    });
 
   // ---- chained family: launch-key (project-scoped) ----
   const launchKeyRoutes = new Hono<ProjectApiEnv>()
@@ -8039,6 +8182,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', previewRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', workspaceSecretsRoutes)
+    .route('/', githubLoginRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)

@@ -64,6 +64,8 @@ export type AppShellProps = {
   unreadCount?: number | null
   /** A quiet, accessible marker on Skills when a checked update remains actionable. */
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started and is not opened yet. */
+  newNavItems?: ReadonlySet<string>
   /** cezar version for the footer chip. Null until Step 3.1 reads it from `/api/health`. */
   version?: string | null
   /** The npm registry's newer version, when the server's update check found one (#368). The
@@ -80,6 +82,8 @@ export type AppShellProps = {
    *  SLOT because `AppShell` stays presentational and QueryClient-free - the container supplies a
    *  node whose own viewport/transport gate decides whether anything mounts at all. */
   hostWidget?: ReactNode
+  /** The footer's "What's new" row (spec 2026-10-26-first-run-onboarding, "Coming back"). */
+  whatsNew?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
@@ -146,6 +150,8 @@ export function useSidebarNavigate(): (() => void) | undefined {
 }
 
 /** The main transcript owns cached/tail arrival; every other routed surface uses shell-top. */
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function routeOwnsScrollArrival(pathname: string): boolean {
   return matchPath({ path: '/tasks/:id', end: true }, stripProjectPrefix(pathname)) !== null
 }
@@ -177,11 +183,13 @@ export const AppShell = React.memo(function AppShell({
   inboxCount = null,
   unreadCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
   version = null,
   latestVersion = null,
   starCount = null,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
@@ -261,11 +269,13 @@ export const AppShell = React.memo(function AppShell({
     inboxCount: inboxAvailable ? inboxCount : null,
     unreadCount,
     skillsUpdateAvailable,
+    newNavItems,
     version,
     latestVersion,
     starCount,
     taskQuickList,
     hostWidget,
+    whatsNew,
     toolsMenu,
     projectGroups,
     singleProject,
@@ -377,11 +387,13 @@ type NavProps = {
   inboxCount: number | null
   unreadCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   version: string | null
   latestVersion: string | null
   starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
+  whatsNew?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   brandName: string
@@ -427,11 +439,13 @@ function SidebarContent({
   inboxCount,
   unreadCount,
   skillsUpdateAvailable,
+  newNavItems,
   version,
   latestVersion,
   starCount,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   projectGroups,
   singleProject,
@@ -583,6 +597,12 @@ function SidebarContent({
                       <span className="sr-only">Skills update available</span>
                     </span>
                   ) : null}
+                  {newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
+                    </span>
+                  ) : null}
                 </Link>
               )
             })}
@@ -608,6 +628,7 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        {whatsNew}
         {hostWidget}
         <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">

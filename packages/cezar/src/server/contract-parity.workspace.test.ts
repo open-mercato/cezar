@@ -15,7 +15,11 @@ import type {
 } from '@open-mercato/cezar-contract';
 import type {
   fsBrowseResponseSchema,
+  initProjectGitResponseSchema,
+  publishProjectGithubResponseSchema,
+  githubLoginStateSchema,
   launchKeyResponseSchema,
+  repoSuggestionsResponseSchema,
   projectsResponseSchema,
   registerProjectResponseSchema,
   removeProjectResponseSchema,
@@ -97,6 +101,12 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type UpdateProject200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['$patch'], 200>;
   type RemoveProject200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['$delete'], 200>;
   type FsBrowse200 = InferResponseType<typeof client.api.v1.fs.browse.$get, 200>;
+  type FsRepos200 = InferResponseType<typeof client.api.v1.fs.repos.$get, 200>;
+  type InitProjectGit200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['git-init']['$post'], 200>;
+  type PublishGithub200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['publish-github']['$post'], 200>;
+  type GithubLoginStart200 = InferResponseType<typeof client.api.v1.github.login.$post, 200>;
+  type GithubLoginRead200 = InferResponseType<typeof client.api.v1.github.login.$get, 200>;
+  type GithubLoginCancel200 = InferResponseType<typeof client.api.v1.github.login.$delete, 200>;
   type LaunchKey200 = InferResponseType<(typeof client.api.v1)['launch-key']['$get'], 200>;
 
   // ---- workspace settings + the per-repo agent knobs ---------------------------------------
@@ -213,6 +223,12 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof updateProjectResponseSchema>, UpdateProject200>>,
     Assert<Exact<z.infer<typeof removeProjectResponseSchema>, RemoveProject200>>,
     Assert<Exact<z.infer<typeof fsBrowseResponseSchema>, FsBrowse200>>,
+    Assert<Exact<z.infer<typeof repoSuggestionsResponseSchema>, FsRepos200>>,
+    Assert<Exact<z.infer<typeof initProjectGitResponseSchema>, InitProjectGit200>>,
+    Assert<Exact<z.infer<typeof publishProjectGithubResponseSchema>, PublishGithub200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginStart200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginRead200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginCancel200>>,
     Assert<Exact<z.infer<typeof launchKeyResponseSchema>, LaunchKey200>>,
     // workspace settings + prefs
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,

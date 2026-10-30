@@ -112,6 +112,8 @@ function useSidebarCollapse(activeProjectId: string | null) {
   return { collapsed, toggle, expand }
 }
 
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function ProjectGroups({
   projects,
   bootProjectId,
@@ -119,6 +121,7 @@ export function ProjectGroups({
   automationsAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
 }: {
   projects: ProjectListEntry[]
   /** The project a flat, unprefixed URL resolves to — so the boot project is the one that
@@ -130,6 +133,8 @@ export function ProjectGroups({
   automationsAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started — the active group's dot. */
+  newNavItems?: ReadonlySet<string>
 }) {
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
@@ -247,6 +252,7 @@ export function ProjectGroups({
       automationsAvailable={automationsAvailable}
       inboxCount={inboxCount}
       skillsUpdateAvailable={skillsUpdateAvailable}
+      newNavItems={newNavItems}
       showTokens={metricVisibility.tokens}
       showCost={metricVisibility.cost}
       sortable={sortable}
@@ -353,6 +359,7 @@ function ProjectGroup({
   automationsAvailable,
   inboxCount,
   skillsUpdateAvailable,
+  newNavItems,
   showTokens,
   showCost,
   sortable,
@@ -378,6 +385,7 @@ function ProjectGroup({
   automationsAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   showTokens: boolean
   showCost: boolean
   /** The registry holds more than one project AND the ui-state cache is populated, so a drag has
@@ -697,6 +705,12 @@ function ProjectGroup({
                     <span data-slot="nav-update-marker" className="ml-auto flex items-center">
                       <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
                       <span className="sr-only">Skills update available</span>
+                    </span>
+                  ) : null}
+                  {active && newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
                     </span>
                   ) : null}
                 </Link>
