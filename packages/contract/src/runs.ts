@@ -109,6 +109,7 @@ export const stepStateSchema = z.object({
    *  that created it, so resume and Continue read this rather than the project's current
    *  selection. Absent on records written before accounts existed. */
   profileId: z.string().optional(),
+  llmProviderId: z.string().uuid().optional(),
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
@@ -174,6 +175,7 @@ export const runRecordSchema = z.object({
   /** URLs of the attachments on the initial task prompt (#image-display) — images and, since
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
+  llmProviderId: z.string().uuid().optional(),
   model: z.string().optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
@@ -1169,6 +1171,7 @@ export const createRunInputBaseSchema = z
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
     /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
     task: z.string().max(100_000, 'must be at most 100000 characters'),
+    llmProviderId: z.string().uuid().optional(),
     model: z.string().optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
@@ -1262,6 +1265,7 @@ export const continueInputSchema = z.object({
   images: attachmentListSchema.optional(),
   runner: runnerSchema.optional(),
   model: z.string().max(200).optional(),
+  llmProviderId: z.union([z.string().uuid(), z.literal('')]).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
    *  account the run is already on. */
   agentProfile: z.string().max(64).optional(),

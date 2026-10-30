@@ -33,6 +33,15 @@ describe('deferred start API', () => {
     expect(response.status).toBe(201);
     return { api, request, result: await response.json() as { scheduled: { id: string } } };
   }
+  it('rejects API-bound schedules instead of silently launching with native billing', async () => {
+    const api = app();
+    const input = { ...body, task: { ...body.task, llmProviderId: randomUUID() } };
+    const preview = await apiRequest(api, '/api/v1/deferred-start/preview', json(input));
+    expect(await preview.json()).toMatchObject({ available: false, message: 'Tasks using an API provider can only start now.' });
+    const create = await apiRequest(api, '/api/v1/deferred-start', json({ ...input, previewRevision: 'stale', idempotencyKey: randomUUID() }));
+    expect(create.status).toBe(400);
+    expect(await create.json()).toEqual({ error: 'Tasks using an API provider can only start now.' });
+  });
   it('describes reset eligibility and server zone without probing usage or creating a run', async () => {
     const usage = vi.spyOn(codexProbes, 'probeCodexUsageWindows').mockRejectedValue(new Error('unexpected usage probe'));
     const identity = vi.spyOn(codexProbes, 'probeCodexIdentity').mockRejectedValue(new Error('unexpected identity probe'));

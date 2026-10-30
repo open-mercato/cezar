@@ -282,7 +282,7 @@ export class PiRunner implements AgentRunner {
 
 export function buildPiArgs(spec: AgentRunSpec): string[] {
   const args = ['--mode', 'rpc'];
-  if (spec.sessionId) args.push(spec.resume ? '--session' : '--session-id', spec.sessionId);
+  if (spec.resume && spec.sessionId) args.push('--session', spec.sessionId);
   if (spec.systemPrompt) args.push('--append-system-prompt', spec.systemPrompt);
   if (spec.model) args.push('--model', spec.model);
   const tools = piTools(spec.allowedTools ?? [], spec.bashAllowlist);

@@ -324,6 +324,7 @@ export interface BuildChildEnvOptions {
 export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   const source = opts.source ?? process.env;
   const extra = opts.extraEnv ?? {};
+  const selectedApi = Object.hasOwn(extra, 'LLM_API_KEY');
 
   // Names `extra` is about to define, normalized. The host copy of a var the
   // per-run env overrides must be DROPPED, not merely shadowed: env names are
@@ -338,7 +339,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   // Parsed with the same `isTruthy` the Bedrock/Vertex toggles use (#456
   // review) — an exact `=== '1'` made `CEZ_AGENT_ENV_FULL=true` silently do
   // nothing, which is a confusing way to fail open-vs-closed.
-  if (isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) {
+  if (!selectedApi && isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) {
     const full: NodeJS.ProcessEnv = {};
     for (const [name, value] of Object.entries(source)) {
       if (!overridden.has(name.toUpperCase())) full[name] = value;
@@ -373,6 +374,8 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   for (const [name, value] of Object.entries(source)) {
     if (value === undefined) continue;
     if (overridden.has(name.toUpperCase())) continue; // the per-run value replaces it, whatever the spelling
+    // An explicit API connection carries its own routing and credentials, never a native login.
+    if (selectedApi && matchesPrefix(name.toUpperCase(), backendPrefixes)) continue;
     if (allow(name)) out[name] = value;
   }
   // Per-run env last — it is cezar's own, never a host secret, and must win.

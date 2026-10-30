@@ -1,3 +1,5 @@
+import { useLlmProviders, useLlmProviderModels } from '@/api/llm-providers'
+import { supportsLlmProvider } from '@open-mercato/cezar-api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
 
@@ -58,13 +60,19 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const [pickedModel, setPickedModel] = useState<string | null>(null)
   const [pickedAccount, setPickedAccount] = useState<string | null>(null)
 
-  const continuation = useContinuationProvider(run, pickedRunner)
+  const connections = useLlmProviders()
+  const [pickedConnection, setPickedConnection] = useState<string | null>(null)
+  const llmProviderId = pickedConnection === null ? (pickedRunner && pickedRunner !== run.runner ? undefined : run.llmProviderId) : pickedConnection || undefined
+  const continuation = useContinuationProvider(run, pickedRunner, llmProviderId ?? null)
   const { runners, canContinue, currentRunner, runner } = continuation
+  const availableConnections = (connections.data?.providers ?? []).filter(provider => provider.hasApiKey && supportsLlmProvider(runner, provider))
   // The catalog belongs to the runner this continuation would use (#794), so switching the
   // runner pill re-reads that backend's own models. Only a run that can actually be continued
   // fetches at all — every other thread (running, queued, closed with no session) would be
   // fetching it to render nothing.
-  const catalog = useRunnerModels(runner, available)
+  const nativeCatalog = useRunnerModels(runner, available && !llmProviderId)
+  const providerCatalog = useLlmProviderModels(runner, llmProviderId)
+  const catalog = llmProviderId ? providerCatalog : nativeCatalog
   const modelsLocked = config.data?.modelsLocked === true
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
@@ -74,8 +82,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       ? { ...config.data?.defaultModels, [runner]: run.model }
       : config.data?.defaultModels
   const effectivePickedModel = modelsLocked ? null : pickedModel
-  const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
-  const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
+  const models = llmProviderId ? (catalog.data?.models ?? []).map(model => ({ id: model.id, label: model.label, desc: model.description })) : modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
+  const model = llmProviderId ? pickedModel ?? (pickedConnection === null ? run.model ?? '' : '') : resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
 
   // Agent accounts (spec 2026-07-29-agent-profiles): rows of the RUNNER pill, exactly as the /new
   // composer offers them — `claude · Default` / `claude · Klaudiusz` / `codex`. Without them a
@@ -105,6 +113,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }
+      if (llmProviderId && !model) {
+        return Promise.reject(new Error('Choose a model from the selected provider.'))
+      }
       return continueRun(run.id, {
         // An empty draft posts no `text` at all, so the server's default opening prompt
         // ("Continue.") still applies — one-click Continue, unchanged.
@@ -114,7 +125,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // server keeps the run's current backend/model. If that backend disconnected, the
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
-        model: !modelsLocked && pickedModel !== null ? model : undefined,
+        model: !modelsLocked && (pickedModel !== null || pickedConnection !== null) ? model : undefined,
+        ...(pickedConnection !== null ? { llmProviderId: pickedConnection } : {}),
         // Only a login the user actually picked rides the request. Omitted, the run keeps the
         // account it is on — and the reopened session still resumes, which an explicit switch
         // deliberately does not (a session id lives inside ONE account's config dir).
@@ -149,16 +161,23 @@ export function useContinueAction(run: ApiRun): ContinueAction {
               // per-runner — while an account switch keeps it, the catalog being the same either
               // way.
               if (next !== runner) {
+                setPickedConnection(null)
                 setPickedRunner(next)
                 setPickedModel(null)
               }
             }}
           />
         ) : null}
+        {!modelsLocked && (llmProviderId || availableConnections.length > 0) ? <PickerPill slot="follow-up-provider-pill" ariaLabel="LLM provider"
+          label={connections.data?.providers.find(provider => provider.id === llmProviderId)?.name ?? (llmProviderId ? 'Removed provider' : 'Default')}
+          value={llmProviderId ?? ''}
+          onPick={id => { setPickedConnection(id); setPickedModel('') }}
+          options={[{ value: '', label: 'Default' }, ...availableConnections.map(provider => ({ value: provider.id, label: provider.name, desc: 'API key · billed by this provider' }))]}
+        /> : null}
         <PickerPill
           slot="follow-up-model-pill"
           ariaLabel="Model"
-          label={models.find((m) => m.id === model)?.label ?? 'auto'}
+          label={models.find((m) => m.id === model)?.label ?? (llmProviderId ? model || 'Choose model' : 'auto')}
           value={model}
           readOnly={modelsLocked}
           disabledHint="Model selection is locked to native coding-agent settings."

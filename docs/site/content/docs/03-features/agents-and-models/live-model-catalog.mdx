@@ -22,4 +22,4 @@ New task → model selector
 2. Open the model list.
 3. Choose a model or auto to leave the choice to the CLI.
 
-> **Good to know**: If the CLI lookup fails, the list uses cached data or fallback entries. The pi agent has no local model catalog.
+> **Good to know**: If the CLI lookup fails, the list uses cached data or fallback entries. Pi reads its native catalog through `pi --list-models`. An explicitly selected API provider reads its own `/models` endpoint; lookup failures never substitute native models.

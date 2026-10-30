@@ -1,3 +1,4 @@
+import { LlmProviderSettings } from './llm-provider-settings'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 
@@ -190,6 +191,7 @@ export function ProviderSettings() {
         </p>
       </div>
 
+      <LlmProviderSettings />
       {status.isError ? (
         <div
           role="alert"

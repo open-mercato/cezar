@@ -1,3 +1,4 @@
+import { LlmProviders, type ResolvedLlmProvider } from '../workspace/llm-providers.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
 import type { WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
@@ -502,6 +503,7 @@ interface ContinueRunOptions {
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
    *  account the run is already on. */
   agentProfile?: string;
+  llmProviderId?: string;
 }
 
 interface ActiveRun {
@@ -896,6 +898,7 @@ export interface StartRunInput {
    *  on `runner`. Unset = the project's own selection. Persisted on the record so the choice
    *  survives into resume and Continue, and so the thread can say which account did the work. */
   agentProfile?: string;
+  llmProviderId?: string;
   /** Attachments pasted into the new-task form — persisted when the run is created and
    *  delivered once, with the first agent step's opening message. Images ride along as blocks the
    *  model can view; a file (#950) only ever reaches the agent as the path it was written to. */
@@ -1687,8 +1690,11 @@ export class RunManager {
     runId: string,
     backend: RunnerId,
     options: { generateFollowups?: boolean; recordedProfileId?: string } = {},
-  ): Promise<{ env: Record<string, string>; profileId: string; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
+  ): Promise<{ env: Record<string, string>; profileId: string; llmProvider?: ResolvedLlmProvider; onUsageWindows?: (observation: UsageWindowsObservation) => void }> {
     const run = this.store.getRun(runId);
+    const llmProvider = run?.llmProviderId && backend === run.runner
+      ? await new LlmProviders().resolve(run.llmProviderId, backend) : undefined;
+    if (llmProvider) this.store.registerRunSecrets(runId, [llmProvider.apiKey]);
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
@@ -1746,6 +1752,7 @@ export class RunManager {
     return {
       env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env },
       profileId: resolved.profile.id,
+      ...(llmProvider ? { llmProvider } : {}),
       ...(onUsageWindows ? { onUsageWindows } : {}),
     };
   }
@@ -1761,7 +1768,7 @@ export class RunManager {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
-      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined } : input),
+      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined, llmProviderId: undefined } : input),
       // A root started with the composer's Dispatch toggle always gets a worktree: children fork
       // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
       // what `execute()` reads, not only on the record.
@@ -1779,6 +1786,7 @@ export class RunManager {
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
       agentProfile: input.agentProfile,
+      llmProviderId: effectiveInput.llmProviderId,
       // The global inbox is the ceiling on the per-run flag (#471). Enforced here rather than
       // at the HTTP route because `cezar run`, the inbox's own "▶ Run" and variants all reach
       // startRun directly — a route-level gate would leave those writing todos.json.
@@ -3021,6 +3029,7 @@ export class RunManager {
       systemPrompt: composeDispatchPrompt(input.kind),
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
+      ...(sameRunner(parent.runner) && parent.llmProviderId ? { llmProviderId: parent.llmProviderId } : {}),
       ...(childModel ? { model: childModel } : {}),
       autonomous: true,
       dispatch: {
@@ -3427,6 +3436,7 @@ export class RunManager {
       model: run.model,
       runner: run.runner,
       agentProfile: run.agentProfile,
+      llmProviderId: run.llmProviderId,
       // No `systemPrompt`: the record keeps only the COMPOSED prompt, never the bare override, so
       // feeding it back would re-compose it; a usage-limit resume reuses it verbatim in `execute`.
       generateFollowups: followupsEnabled() ? run.generateFollowups : false,
@@ -4567,7 +4577,7 @@ export class RunManager {
     deferForCapacity = false,
   ): { ok: boolean; error?: string } {
     if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
-    if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
+    if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.llmProviderId)) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
@@ -4580,7 +4590,8 @@ export class RunManager {
         && run.steps.some((s) => s.sessionId);
       if (!settledTurn) return { ok: false, error: 'run is still active' };
       const runner = opts.runner ?? run.runner ?? 'claude';
-      if (opts.model && modelConflictsWithRunner(opts.model, runner)) {
+      const connection = opts.llmProviderId !== undefined ? opts.llmProviderId || undefined : runner === run.runner ? run.llmProviderId : undefined;
+      if (!connection && opts.model && modelConflictsWithRunner(opts.model, runner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${runner} model` };
       }
       unwinding.continueOnDrop = { opts, deferForCapacity };
@@ -4617,7 +4628,8 @@ export class RunManager {
     const targetAccount = opts.agentProfile
       ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
     const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
-    const resume = sessionBackend === targetRunner && !accountSwitched;
+    const targetConnection = opts.llmProviderId !== undefined ? opts.llmProviderId || undefined : targetRunner === run.runner ? run.llmProviderId : undefined;
+    const resume = sessionBackend === targetRunner && !accountSwitched && sessionStep.llmProviderId === targetConnection;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -4626,12 +4638,12 @@ export class RunManager {
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
-    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined) {
+    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined || opts.llmProviderId !== undefined) {
       // Guard the pairing before persisting anything: the model override applies to the runner
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
       // another runner's preset would corrupt the run; free-form/custom ids pass untouched.
-      if (opts.model && modelConflictsWithRunner(opts.model, targetRunner)) {
+      if (!targetConnection && opts.model && modelConflictsWithRunner(opts.model, targetRunner)) {
         return { ok: false, error: `model '${opts.model}' is not a ${targetRunner} model` };
       }
       // A runner switch that carries NO explicit model must not leave the previous backend's pin
@@ -4657,7 +4669,8 @@ export class RunManager {
         run.agentProfile !== undefined &&
         targetRunner !== (run.runner ?? 'claude');
       this.store.updateRun(runId, {
-        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(opts.llmProviderId !== undefined ? { llmProviderId: opts.llmProviderId || undefined } : {}),
+        ...(opts.runner !== undefined ? { runner: opts.runner, ...(opts.runner !== run.runner && opts.llmProviderId === undefined ? { llmProviderId: undefined } : {}) } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
           : inheritedPinIsForeign
@@ -5141,7 +5154,7 @@ export class RunManager {
       const normalized = normalizeModelForBackend(
         continueBackend,
         agentModelsLocked(this.repoRoot) ? undefined : record?.model,
-        { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
+        { configuredProvider: await configuredModelProvider(continueBackend, state.cwd), llmProviderId: continueBackend === record?.runner ? record?.llmProviderId : undefined },
       );
       continueModel = normalized?.backendModel;
       this.store.updateRun(runId, {
@@ -5192,7 +5205,7 @@ export class RunManager {
       failBeforeSpawn(err.message);
       return;
     }
-    this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
+    this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId, llmProviderId: continueProfile.llmProvider?.provider.id });
 
     const runner = createRunner(continueBackend);
     const continueMcp = await this.privateMcpForLaunch(continueBackend, onEvent);
@@ -5245,6 +5258,7 @@ export class RunManager {
             continueProfile.env,
           ),
           env: continueProfile.env,
+          llmProvider: continueProfile.llmProvider,
           onUsageWindows: continueProfile.onUsageWindows,
           mcpServers: continueMcp,
           model: continueModel,
@@ -5439,7 +5453,7 @@ export class RunManager {
       const normalized = normalizeModelForBackend(
         taskBackend,
         agentModelsLocked(this.repoRoot) ? undefined : input.model,
-        { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot) },
+        { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot), llmProviderId: input.llmProviderId },
       );
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
     } catch {
@@ -7318,7 +7332,7 @@ export class RunManager {
         stepBackend,
         // The task's model was picked for the task's runner; a step on another runner gets its own default.
         agentModelsLocked(this.repoRoot) ? undefined : step.model ?? (stepBackend === taskBackend ? input.model : undefined),
-        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
+        { configuredProvider: await configuredModelProvider(stepBackend, state.cwd), llmProviderId: stepBackend === taskBackend ? input.llmProviderId : undefined },
       );
       backendModel = normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
@@ -7350,7 +7364,7 @@ export class RunManager {
       if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
       throw err;
     }
-    this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
+    this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId, llmProviderId: stepProfile.llmProvider?.provider.id });
 
     const runner = createRunner(stepBackend);
     const stepMcp = await this.privateMcpForLaunch(stepBackend, onEvent);
@@ -7387,6 +7401,7 @@ export class RunManager {
             stepProfile.env,
           ),
           env: stepProfile.env,
+          llmProvider: stepProfile.llmProvider,
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepMcp,
           model: backendModel,
@@ -7650,14 +7665,14 @@ export class RunManager {
       let execution: Parameters<typeof generateRunName>[2];
       // A scheduled launch names under its bound account with the ordinary namer model; a live
       // refresh is ordinary naming and must not re-probe the binding (#1340).
-      if (!live && scheduled && deferredBindingActive(scheduled, this.store.listRuns())) {
+      if (scheduled?.llmProviderId || (!live && scheduled && deferredBindingActive(scheduled, this.store.listRuns()))) {
         const first = scheduled.workflowDef?.graph
           ? Object.values(scheduled.workflowDef.graph.nodes).find(node => node.type === 'agent')
           : scheduled.workflowDef?.steps.find(s => stepKind(s) === 'agent');
-        const runner = first?.runner ?? scheduled.runner ?? 'claude';
+        const runner = scheduled.llmProviderId ? scheduled.runner ?? 'claude' : first?.runner ?? scheduled.runner ?? 'claude';
         const profile = await this.agentEnvForStep(runId, runner);
         const { namerModel } = await loadConfig(this.repoRoot);
-        execution = { runner, model: runner === 'claude' ? namerModel : undefined, env: profile.env, onUsageWindows: profile.onUsageWindows };
+        execution = { runner, model: scheduled.llmProviderId ? scheduled.model : runner === 'claude' ? namerModel : undefined, env: profile.env, llmProvider: profile.llmProvider, onUsageWindows: profile.onUsageWindows };
       }
       const result = await generateRunName(this.repoRoot, { task, skillName, skillDescription, ...live, nameBranch: !live }, execution);
       if (!result) return undefined;

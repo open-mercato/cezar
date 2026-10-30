@@ -28,8 +28,8 @@ import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring
  * store is exactly as strong as a private plaintext file, and `keyBackend()` says so.
  *
  * Values never enter `process.env`: a consumer asks `resolve()` for an AUDIENCE and gets only
- * the secrets that admit it. There is no agent audience, so `buildChildEnv`'s prefix matching
- * can never pass one to a backend — the leak the old "export the key before starting cezar"
+ * the secrets that admit it. There is no general agent audience. LLM connections explicitly bind their own
+ * `cezar`-audience key to the selected invocation; ordinary secrets never enter a backend — the leak the old "export the key before starting cezar"
  * advice caused, which silently switched Claude Code and Codex to API billing.
  *
  * Same write discipline as `TrackerConnections`: a `0700` directory with a `*` `.gitignore`,

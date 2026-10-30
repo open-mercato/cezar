@@ -369,6 +369,7 @@ class CopilotAcpSession implements AgentSession {
       // `session/load` result shape is unverified, so this asks unconditionally rather than
       // comparing against a field that may not be there.
       await this.client.setModel(this.acpSessionId, this.spec.model, HANDSHAKE_TIMEOUT_MS).catch((error: unknown) => {
+        if (this.spec.llmProvider) throw new Error('Copilot could not apply the selected API model; refusing to continue with another model.');
         this.emit({
           type: 'note',
           message: `Copilot kept its own model: session/set_model failed (${error instanceof Error ? error.message : String(error)})`,

@@ -341,7 +341,7 @@ export function ThreadView({
         // The badge the user already opens to inspect runner/account/model now edits the SAME
         // continuation choice as the dock. One hook owns both renderings, so a header pick is
         // exactly what the next composer submission sends — no second, drifting engine state.
-        continuationEngine={continuable ? continueAction.pills : undefined}
+        continuationEngine={hasContinuation ? continueAction.pills : undefined}
       />}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);

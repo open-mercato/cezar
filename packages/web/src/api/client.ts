@@ -1,3 +1,5 @@
+import { llmProvidersResponseSchema } from '@open-mercato/cezar-api-client'
+import type { CreateLlmProvider, LlmProvider, LlmProvidersResponse } from '@open-mercato/cezar-api-client'
 import type { z } from 'zod'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
@@ -1666,6 +1668,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
  *  backend/model/account. `text`/`images` are the prompt the reopened session starts on — omitted,
  *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
+  llmProviderId?: string
   text?: string
   images?: AttachmentEntry[]
   runner?: Runner
@@ -1687,6 +1690,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+    ...(opts.llmProviderId !== undefined ? { llmProviderId: opts.llmProviderId } : {}),
     ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
   }
   return unwrap(
@@ -1713,6 +1717,7 @@ export async function continueProjectRun(
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+        ...(opts.llmProviderId !== undefined ? { llmProviderId: opts.llmProviderId } : {}),
         ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
       },
     }),
@@ -2994,4 +2999,17 @@ export async function createDeferredStart(body: import('@open-mercato/cezar-api-
 
 export async function getDeferredStartOptions(body: import('@open-mercato/cezar-api-client').DeferredOptionsInput) {
   return unwrap(await cez.api.v1.p[':projectId']['deferred-start'].options.$post({ param: { projectId: queryScope() }, json: body }), '/deferred-start/options')
+}
+
+export async function getLlmProviders(): Promise<LlmProvidersResponse> {
+  return llmProvidersResponseSchema.parse(await unwrap(await cez.api.v1['llm-providers'].$get(), '/llm-providers'))
+}
+export async function addLlmProvider(input: CreateLlmProvider): Promise<LlmProvider> {
+  return unwrap(await cez.api.v1['llm-providers'].$post({ json: input }), '/llm-providers')
+}
+export async function deleteLlmProvider(id: string): Promise<void> {
+  await unwrap(await cez.api.v1['llm-providers'][':id'].$delete({ param: { id } }), '/llm-providers')
+}
+export async function getLlmProviderModels(runner: Runner, llmProviderId: string): Promise<RunnerModelCatalogResponse> {
+  return unwrap(await cez.api.v1.models.$get({ query: { runner, llmProviderId } }), '/models')
 }

@@ -340,7 +340,7 @@ class JunieSession implements AgentSession {
     // cached on disk (confirmed live). Best-effort: a real auth problem still
     // surfaces clearly from the first `session/prompt` error below.
     const methodId = firstAuthMethodId(initResult);
-    if (methodId) {
+    if (methodId && !this.spec.llmProvider) {
       await this.rpc.request('authenticate', { methodId }).catch(() => undefined);
     }
 
@@ -373,7 +373,7 @@ class JunieSession implements AgentSession {
         await this.rpc.request('session/set_config_option', {
           sessionId,
           configId: 'model',
-          value: this.spec.model,
+          value: this.spec.llmProvider ? externalJunieModel(session, this.spec.model) : this.spec.model,
         });
       }
     } else {
@@ -589,4 +589,22 @@ function safeStringify(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function externalJunieModel(session: Record<string, unknown>, model: string): string {
+  const profile = model.replace(/^custom:/, '');
+  const configs = Array.isArray(session.configOptions) ? session.configOptions : [];
+  const candidates: unknown[] = [];
+  for (const config of configs) {
+    if (!config || typeof config !== 'object' || !('id' in config) || config.id !== 'model' || !('options' in config) || !Array.isArray(config.options)) continue;
+    for (const entry of config.options) {
+      if (entry && typeof entry === 'object' && 'options' in entry && Array.isArray(entry.options)) candidates.push(...entry.options);
+      else candidates.push(entry);
+    }
+  }
+  for (const entry of candidates) {
+    if (!entry || typeof entry !== 'object' || !('value' in entry) || typeof entry.value !== 'string') continue;
+    if (entry.value === model || entry.value.endsWith(`:custom:${profile}`)) return entry.value;
+  }
+  throw new Error('Junie did not load the selected custom model profile; update Junie to a version with custom model support.');
 }

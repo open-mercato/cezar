@@ -1182,3 +1182,39 @@ published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
 
 ---
+
+### LLM provider connections
+
+Settings → Agents → Providers → LLM providers adds OpenRouter or a custom API
+endpoint. Each task can keep its agent's **native account** (the default) or
+explicitly select an API connection. Adding a connection does not switch an
+existing subscription to API billing. Models are read from the selected
+connection's `/models` endpoint; custom gateways must expose that endpoint and
+the selected API format. Claude Code needs Anthropic Messages, Codex needs
+OpenAI Responses, and Cursor uses native configuration only. Tasks using an
+API connection can only start immediately; scheduling requires the default setup.
+
+API keys are write-only and encrypted with the existing secret vault. Its
+workspace `cezar` audience does not expose these keys to workflow check steps.
+Settings reports whether the encryption key uses the OS keychain or a private
+local key file. No key enters task JSON or a copyable terminal command.
+
+The same configuration is available without the cockpit:
+
+```sh
+cez llm-providers list
+# Pipe a key from your secret manager; never put its literal value in shell history.
+your-secret-manager read openrouter | cez llm-providers add --openrouter --key-stdin
+# Custom API base URL includes the API version, e.g. https://gateway.example/v1.
+your-secret-manager read gateway | cez llm-providers add --name Gateway --url https://gateway.example/v1 --protocol openai-completions --key-stdin
+cez llm-providers models <connection-id>
+cez llm-providers exec <connection-id> pi --model <provider-model-id>
+cez llm-providers remove <connection-id>
+```
+
+`exec` starts the native interactive CLI; arguments after `--` pass through to
+it (for example `-- --session <id>` for Pi). Credentials and endpoints are
+applied only to that child process. Continue keeps the recorded connection;
+changing it opens a fresh agent session with the conversation context. Removing
+a connection makes its saved tasks require an explicit new selection. Hosting
+wrappers may enforce their own routing policy; this feature does not bypass it.

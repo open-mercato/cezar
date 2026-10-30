@@ -2670,3 +2670,67 @@ it.each(['launched', 'cancelled'] as const)('recovers a terminal %s result witho
   expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
   expect(postedBody()).toBeUndefined()
 })
+
+
+describe('LLM connection selection', () => {
+  it.each([
+    { providers: [] },
+    { providers: [{ id: '12345678-1234-4234-8234-123456789abc', name: 'No key', kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai-completions', hasApiKey: false }] },
+    { providers: [{ id: '12345678-1234-4234-8234-123456789abc', name: 'Codex only', kind: 'custom', baseUrl: 'https://gateway.example/v1', protocol: 'openai-responses', hasApiKey: true }] },
+  ])('hides the provider picker when no usable alternative exists (%j)', async ({ providers }) => {
+    serve()
+    const nativeFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/llm-providers') return new Response(JSON.stringify({ providers, keyBackend: 'file' }))
+      return nativeFetch(input, init)
+    })
+    renderNewTask()
+    await pillReady()
+    expect(screen.queryByRole('button', { name: 'LLM provider' })).toBeNull()
+  })
+
+  it('keeps a removed draft connection visible so it can be reset explicitly', async () => {
+    serve()
+    writeDraft({ ...readDraft(), llmProviderId: '12345678-1234-4234-8234-123456789abc' })
+    const nativeFetch = globalThis.fetch
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/v1/llm-providers') return new Response(JSON.stringify({ providers: [], keyBackend: 'file' }))
+      return nativeFetch(input, init)
+    })
+    renderNewTask()
+    await pillReady()
+    expect(screen.getByRole('button', { name: 'LLM provider' }).textContent).toBe('Unavailable provider')
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'LLM provider' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Default/ }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'LLM provider' })).toBeNull())
+    expect(readDraft().llmProviderId).toBeNull()
+  })
+
+  it('loads the selected provider catalog and sends its connection ID with the native model ID', async () => {
+    serve()
+    const nativeFetch = globalThis.fetch
+    const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+    const id = '12345678-1234-4234-8234-123456789abc'
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/llm-providers') return json({ providers: [{ id, name: 'OpenRouter', kind: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai-completions', hasApiKey: true }], keyBackend: 'file' })
+      if (url.includes('/models?') && url.includes('llmProviderId=')) return json({ runner: 'claude', models: [{ id: 'vendor/provider-model', label: 'Gateway Model', description: 'via OpenRouter' }], source: 'live', stale: false })
+      return nativeFetch(input, init)
+    }))
+    renderNewTask()
+    await pillReady()
+    expect(screen.getByRole('button', { name: 'LLM provider' }).textContent).toBe('Default')
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'LLM provider' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /OpenRouter/ }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Gateway Model/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+    expect(await screen.findByText('Tasks using an API provider can only start now.')).not.toBeNull()
+    expect((screen.getByRole('radio', { name: /Pick date/ }) as HTMLInputElement).disabled).toBe(true)
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' })
+    fireEvent.change(textarea(), { target: { value: 'Use the selected gateway' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'claude', llmProviderId: id, model: 'vendor/provider-model' })
+    expect(JSON.stringify(postedBody())).not.toContain('apiKey')
+  })
+})

@@ -1,3 +1,4 @@
+import { llmProviderCommand } from '@open-mercato/cezar-api-client'
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { cliTargetRunner } from '@/components/open-in-menu'
 import { canBeUnread, isUnread } from '@/lib/read-state'
@@ -66,7 +67,8 @@ export function resumeHint(run: RunRecord): string | undefined {
   if (isRunActive(run.status) || run.worktreeLifecycle?.activeOperationId) return undefined
   const sessionId = lastSessionId(run)
   if (sessionId === undefined) return undefined
-  const command = resumeCommand(run.runner, sessionId)
+  const nativeCommand = resumeCommand(run.runner, sessionId)
+  const command = run.llmProviderId && nativeCommand ? llmProviderCommand(run.llmProviderId, run.runner ?? 'claude', run.model ?? '', nativeCommand) ?? undefined : nativeCommand
   if (command === undefined) return undefined
   return run.worktreePath ? `cd ${run.worktreePath} && ${command}` : command
 }

@@ -199,7 +199,7 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * the heuristic title. `namerModel` is a Claude alias, so it is passed only
  * when the namer runs on Claude (the `plannerModel` precedent).
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; model?: string; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; model?: string; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows']; llmProvider?: AgentRunSpec['llmProvider'] }): Promise<NameResult | null> {
   try {
     const config = await loadConfig(repoRoot);
     if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
@@ -219,6 +219,7 @@ export async function generateRunName(repoRoot: string, ctx: NamerContext, execu
         allowedTools: [],
         model,
         onUsageWindows: execution?.onUsageWindows,
+        llmProvider: execution?.llmProvider,
         timeoutMs: NAMER_TIMEOUT_MS,
         // Shadow the argv-capture hook: dry-run tests capture the AGENT's argv
         // through CEZ_MOCK_ARGS_FILE; the namer's bookkeeping call must not

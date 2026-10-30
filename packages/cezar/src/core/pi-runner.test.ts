@@ -108,12 +108,10 @@ describe('pi RPC argv', () => {
     ]);
   });
 
-  it('creates a new exact session id instead of invoking the interactive resume picker', () => {
+  it('lets Pi create a fresh session without the unsupported --session-id option', () => {
     expect(buildPiArgs({ cwd: '/repo', userPrompt: 'task', sessionId: 'session-1' })).toEqual([
       '--mode',
       'rpc',
-      '--session-id',
-      'session-1',
     ]);
   });
 

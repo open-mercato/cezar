@@ -27,6 +27,7 @@ export interface NewTaskDraft {
    *  selection, which is what every draft that never touched the control means. Sticky like the
    *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
   agentProfile: string | null
+  llmProviderId?: string | null
   model: string | null
   variants: number
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
@@ -213,6 +214,7 @@ function normalize(raw: unknown): NewTaskDraft {
     source: isSource(obj.source) ? obj.source : null,
     runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
+    ...(typeof obj.llmProviderId === 'string' ? { llmProviderId: obj.llmProviderId } : {}),
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,

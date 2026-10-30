@@ -117,6 +117,7 @@ const stepStateSchema = z.object({
    *  a PAIR. Without it, changing the project's account would silently make Continue resume
    *  against the wrong account's session store. Absent = the discovered default. */
   profileId: z.string().optional(),
+  llmProviderId: z.string().uuid().optional(),
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
@@ -181,6 +182,7 @@ export const runRecordSchema = z.object({
   /** URLs of images attached to the initial task prompt, for the thread's first bubble
    *  (#image-display) — persisted like agent screenshots, served from `/images/`. */
   taskImages: z.array(z.string()).optional(),
+  llmProviderId: z.string().uuid().optional(),
   model: z.string().optional(),
   /** Canonical provider/model identity (#405) — the normalised `provider/model`
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
@@ -1325,6 +1327,7 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
+    llmProviderId?: string;
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
@@ -1347,6 +1350,7 @@ export class RunStore extends EventEmitter {
       workflow: input.workflow,
       task: input.task,
       model: input.model,
+      llmProviderId: input.llmProviderId,
       runner: input.runner,
       agentProfile: input.agentProfile,
       generateFollowups: input.generateFollowups,

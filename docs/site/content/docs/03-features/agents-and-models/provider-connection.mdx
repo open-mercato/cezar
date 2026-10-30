@@ -1,6 +1,6 @@
 ---
 title: "Sign in and check agent providers"
-description: "See which agents are installed and have credentials."
+description: "Check native agent accounts and add OpenRouter or a custom API gateway."
 related:
   links:
     - architecture/agent-runners
@@ -23,3 +23,44 @@ Settings → project → Agents → Providers
 3. Return to Cezar and choose Check again.
 
 > **Good to know**: If Cezar cannot open a local terminal, it provides a command to run manually. Detected credentials do not guarantee available account quota.
+
+## API provider connections
+
+Under **LLM providers**, choose **OpenRouter** or **Custom API / AI gateway**.
+Enter a connection name and API key. A custom connection also needs an API base
+URL and an API format: OpenAI Chat Completions, OpenAI Responses, or Anthropic
+Messages.
+
+In **New task** or **Continue**, select the agent, choose the **LLM provider**, and
+select a model from that provider. Native accounts remain the default. The native
+label means the agent uses its existing login and configuration; an API connection
+uses the saved key and is billed by that provider.
+
+Claude Code requires Anthropic Messages and Codex requires OpenAI Responses for
+custom gateways. Pi, OpenCode, Copilot, and Junie accept all three formats.
+OpenRouter supplies compatibility endpoints for these agents. Cursor uses its
+native account.
+
+Keys are write-only and encrypted in Cezar's existing secret store. Connections
+are shared across projects. Removing a connection prevents tasks from using it;
+you can choose another connection explicitly. Changing the connection for a
+continuation starts a fresh agent session with the conversation context.
+
+### Configure from a terminal
+
+Pipe a key from your secret manager into the command below. The key is read from
+stdin and is never accepted as a command-line argument.
+
+```bash title="Terminal"
+your-secret-command | npx cezar-run llm-providers add --openrouter --key-stdin
+npx cezar-run llm-providers list
+npx cezar-run llm-providers models PROVIDER_ID
+npx cezar-run llm-providers exec PROVIDER_ID pi --model MODEL_ID
+```
+
+For a gateway, replace `--openrouter` with
+`--name "My gateway" --url https://gateway.example/v1 --protocol openai-completions`.
+Use the same provider ID in the cockpit and terminal. Terminal handoff commands
+contain connection references, never API keys.
+
+> **Good to know**: API connections require a working `/models` endpoint and an explicit model. A failed lookup shows an unavailable catalog; it never substitutes the native account's models. A hosting platform's agent wrappers must support the selected API routing.

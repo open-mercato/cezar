@@ -1,3 +1,7 @@
+import { llmProviderCommand } from '@open-mercato/cezar-contract';
+import { discoverPiModels } from '../core/pi-model-catalog.ts';
+import { createLlmProviderSchema, llmProviderParamsSchema, llmProviderIdSchema, runnerSchema } from '@open-mercato/cezar-contract';
+import { LlmProviders } from '../workspace/llm-providers.ts';
 import { createWebhookRoutes } from './webhooks.ts';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
@@ -818,6 +822,7 @@ const startRunSchema = z
     // own selection, then the discovered default. Bounded like a profile id in the workspace
     // schema, so a value this route accepts can never be degraded away by the next load.
     agentProfile: z.string().max(64).optional(),
+    llmProviderId: llmProviderIdSchema.optional(),
     // Parallel variants (spec 010): ×2/×3 runs the task as 2–3 competing
     // agents in separate worktrees; the user compares diffs and picks one.
     variants: z.number().int().min(1).max(3).optional(),
@@ -1392,8 +1397,10 @@ export function createApp(deps: ServerDeps) {
   // turns into a compile error instead.
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
+  const llmProviders = new LlmProviders(deps.secrets);
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
+      pi: { discover: () => discoverPiModels(bootRoot) },
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
@@ -1442,6 +1449,13 @@ export function createApp(deps: ServerDeps) {
     required: readonly ProviderId[],
     scope: ProviderAccountScope = {},
   ): Promise<string | null> => {
+    if (scope.llmProviderId && scope.llmRunner && required.includes(scope.llmRunner)) {
+      try { await llmProviders.resolve(scope.llmProviderId, scope.llmRunner); }
+      catch (error) { return error instanceof Error ? error.message : 'LLM provider unavailable'; }
+      const row = (await providerStatus()).providers.find(row => row.provider === scope.llmRunner);
+      if (!row || row.status === 'not-installed' || row.enabled === false) return 'The selected agent must be installed and enabled.';
+      return providerActionError(required.filter(runner => runner !== scope.llmRunner), { repoRoot: scope.repoRoot, profileFor: scope.profileFor });
+    }
     // Judge the account the action runs on, not only the default login (telemetry ac53a6ef).
     const judged = async (refresh: boolean): Promise<ProviderStatusResponse> => {
       const rows = await providerStatus(refresh ? { refresh: true } : undefined);
@@ -2105,13 +2119,28 @@ export function createApp(deps: ServerDeps) {
   if (deps.socketHub) void warmAgentKnowledge();
 
   // ---- chained family: host model catalog (workspace-level) ----
+  const llmProvidersRoutes = new Hono<ProjectApiEnv>()
+    .get('/llm-providers', async (c) => c.json(await llmProviders.list()))
+    .post('/llm-providers', jsonZodValidator(createLlmProviderSchema), async (c) => {
+      try { return c.json(await llmProviders.add(c.req.valid('json')), 201); }
+      catch { return c.json({ error: 'Could not save provider. Check the API URL and local storage permissions.' }, 400); }
+    })
+    .delete('/llm-providers/:id', paramZodValidator(llmProviderParamsSchema), async (c) => {
+      await llmProviders.remove(c.req.valid('param').id);
+      return c.body(null, 204);
+    });
   const modelsRoutes = new Hono<ProjectApiEnv>()
-    // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
-    // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
-    // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
-      const query = { data: c.req.valid('query') };
-      return c.json(await modelCatalog.get(query.data.runner));
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform(value => value[0] as string)]).pipe(runnerSchema), llmProviderId: llmProviderIdSchema.optional() }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
+      const query = c.req.valid('query');
+      if (query.llmProviderId) {
+        try {
+          await llmProviders.resolve(query.llmProviderId, query.runner);
+          return c.json({ runner: query.runner, models: await llmProviders.models(query.llmProviderId), source: 'live' as const, stale: false });
+        } catch {
+          return c.json({ runner: query.runner, models: [], source: 'unavailable' as const, stale: false, reason: 'Selected provider model discovery failed. Check the URL, credentials and protocol in Settings. Native models were not substituted.' });
+        }
+      }
+      return c.json(await modelCatalog.get(query.runner));
     });
 
   /**
@@ -4846,7 +4875,7 @@ export function createApp(deps: ServerDeps) {
     .post('/runs', jsonZodValidator(startRunSchema), async (c) => {
       const { root: repoRoot, dataDir, manager } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+      if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.llmProviderId)) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
       }
       let workflow: WorkflowDef | undefined;
@@ -4868,6 +4897,7 @@ export function createApp(deps: ServerDeps) {
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
         repoRoot,
         profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+        llmProviderId: parsed.data.llmProviderId, llmRunner: fallback,
       });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
@@ -4899,6 +4929,7 @@ export function createApp(deps: ServerDeps) {
         model: parsed.data.model,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
+        llmProviderId: parsed.data.llmProviderId,
         images,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
@@ -5041,7 +5072,7 @@ export function createApp(deps: ServerDeps) {
         // disconnected (provider-auth spec: disabling never blocks existing-task mutations).
         // In the dequeue race, the ladder below safely turns this into a starting-state buffer.
         if (run.status !== 'queued') {
-          const blocked = await providerActionError([providerForActiveRun(run)], {
+          const blocked = await providerActionError([providerForActiveRun(run)], { llmProviderId: run.llmProviderId, llmRunner: run.runner,
             repoRoot,
             profileFor: (provider) => recordedProfileFor(run, provider),
           });
@@ -5186,11 +5217,12 @@ export function createApp(deps: ServerDeps) {
       if (receipt && 'prior' in receipt) return c.json(receipt.prior);
       let answered: ContinueResponse | undefined;
       try {
-        if (agentModelsLocked(repoRoot) && parsed.data.model?.trim()) {
+        if (agentModelsLocked(repoRoot) && (parsed.data.model?.trim() || parsed.data.llmProviderId)) {
           return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
         }
         const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)], {
           repoRoot,
+          llmProviderId: parsed.data.llmProviderId !== undefined ? parsed.data.llmProviderId || undefined : !parsed.data.runner || parsed.data.runner === run.runner ? run.llmProviderId : undefined, llmRunner: parsed.data.runner ?? run.runner,
           // A runner switch drops the run's account (`continueRun`), so only the same runner inherits it.
           profileFor: (provider) => parsed.data.agentProfile
             ?? (provider === (run.runner ?? 'claude') ? recordedProfileFor(run, provider) : undefined),
@@ -5213,6 +5245,7 @@ export function createApp(deps: ServerDeps) {
           runner: parsed.data.runner,
           model: parsed.data.model,
           agentProfile: parsed.data.agentProfile,
+          llmProviderId: parsed.data.llmProviderId,
         });
         if (!result.ok) return c.json({ error: result.error }, 409);
         return c.json((answered = { continued: true as const }));
@@ -5244,13 +5277,14 @@ export function createApp(deps: ServerDeps) {
       const sessionId = sessionStep?.sessionId;
       if (!sessionId) return c.json({ error: 'no agent session to resume' }, 409);
       // Gate the account `handoffEnv` launches on below: the session's own, default when it recorded none.
-      const blocked = await providerActionError([providerForExistingRun(run)], {
+      const blocked = await providerActionError([providerForExistingRun(run)], { llmProviderId: run.llmProviderId, llmRunner: run.runner,
         repoRoot,
         profileFor: () => sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID,
       });
       if (blocked) return c.json({ error: blocked }, 409);
       const cwd = run.worktreePath && existsSync(run.worktreePath) ? run.worktreePath : repoRoot;
-      const command = resumeCommand(run.runner, sessionId);
+      const nativeCommand = resumeCommand(run.runner, sessionId);
+      const command = run.llmProviderId && nativeCommand ? llmProviderCommand(run.llmProviderId, run.runner ?? 'claude', run.model ?? '', nativeCommand) : nativeCommand;
       // Fails closed on an id we do not recognise — see resumeCommand (#431).
       if (!command) return c.json({ error: 'the recorded session id has an unexpected shape' }, 409);
       // The account that OWNS this session, not the project's current one (spec 2026-07-29).
@@ -5362,7 +5396,7 @@ export function createApp(deps: ServerDeps) {
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
         // Gate the account the terminal opens on below: the session's for a resume, the project's otherwise.
-        const blocked = await providerActionError([cliRunner], {
+        const blocked = await providerActionError([cliRunner], { llmProviderId: cliRunner === run.runner ? run.llmProviderId : undefined, llmRunner: run.runner,
           repoRoot,
           profileFor: () => (resume ? sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID : undefined),
         });
@@ -5370,7 +5404,9 @@ export function createApp(deps: ServerDeps) {
         // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
         // claude found off PATH by detection has to be named by absolute path here too —
         // otherwise the menu offers a handoff that opens on `command not found`.
-        const command = withResolvedClaudeBin(resume ?? cliRunner, cliRunner);
+        const nativeCommand = withResolvedClaudeBin(resume ?? cliRunner, cliRunner);
+        const command = run.llmProviderId && cliRunner === run.runner ? llmProviderCommand(run.llmProviderId, cliRunner, run.model ?? '', nativeCommand) : nativeCommand;
+        if (!command) return c.json({ error: 'The selected provider/model cannot be represented safely in a terminal command.' }, 409);
         // BOTH branches carry the account (spec 2026-07-29-agent-profiles): a resume needs the
         // config dir that holds its session, and a FRESH CLI in this worktree should still open
         // on the account the project works under — otherwise "Open in → Claude CLI" quietly
@@ -8030,6 +8066,7 @@ export function createApp(deps: ServerDeps) {
   const workspaceV1 = new Hono()
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
+    .route('/', llmProvidersRoutes)
     .route('/', providersRoutes)
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)

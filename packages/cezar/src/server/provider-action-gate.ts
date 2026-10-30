@@ -66,6 +66,8 @@ export function providerForActiveRun(run: RunRecord): ProviderId {
 /** Which account a gated action runs on, per provider: an explicit id (a run's recorded or composer
  *  account), else the project's selection, else the discovered default — `selectProfile`'s order. */
 export interface ProviderAccountScope {
+  llmProviderId?: string;
+  llmRunner?: ProviderId;
   repoRoot?: string;
   profileFor?: (provider: ProviderId) => string | undefined;
 }

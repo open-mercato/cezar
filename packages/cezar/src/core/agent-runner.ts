@@ -40,6 +40,8 @@ export function isRunnerId(value: string): value is RunnerId {
 }
 
 export interface AgentRunSpec {
+  /** Resolved only at launch; never persisted or returned by the API. */
+  llmProvider?: import('../workspace/llm-providers.ts').ResolvedLlmProvider;
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */

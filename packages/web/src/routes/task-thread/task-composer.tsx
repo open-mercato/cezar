@@ -87,14 +87,14 @@ export function TaskComposer({
 
   // The chat box always names its engine: the editable pills when a Continue can choose one,
   // the same chips read-only otherwise (a live session cannot switch mid-turn).
-  const footerStatus = continuable ? continueAction.pills : (
+  const footerStatus = (
     <>
       {providerBlocked && !continueAction.providerPending ? (
         <Link to="/settings/agents#providers" className="text-xs font-medium text-foreground underline underline-offset-4">
           Configure providers
         </Link>
       ) : null}
-      <RunEnginePills run={run} />
+      {hasContinuation ? continueAction.pills : <RunEnginePills run={run} />}
     </>
   )
   // While the agent is working, the empty box's send button is ■ Stop — where the reader is

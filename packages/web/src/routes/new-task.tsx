@@ -1,3 +1,5 @@
+import { supportsLlmProvider } from '@open-mercato/cezar-api-client'
+import { useLlmProviders, useLlmProviderModels } from '@/api/llm-providers'
 import { previewSettingsKey, StartTimePicker, type StartChoice } from '@/components/start-time-picker'
 import { ApiError, createDeferredStart } from '@/api/client'
 import { deferredCreateInputSchema } from '@open-mercato/cezar-api-client'
@@ -280,20 +282,30 @@ export function NewTaskRoute() {
   }, [autoText, sourcesReady])
 
   const providers = useProviderStatus()
-  const runners = usableRunners(providers.data)
+  const llmProviders = useLlmProviders()
+  const connectionId = draft.llmProviderId ?? undefined
+  const setConnectionId = (id: string | undefined) => update({ llmProviderId: id ?? null })
+  const runners = (providers.data?.providers ?? []).filter(row => row.enabled !== false && row.status !== 'not-installed' && (row.status === 'connected' || llmProviders.data?.providers.some(provider => provider.hasApiKey && supportsLlmProvider(row.provider, provider)))).map(row => row.provider)
   const defaultRunner = config.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-  const catalog = useRunnerModels(displayRunner)
+  const availableConnections = (llmProviders.data?.providers ?? []).filter(provider => provider.hasApiKey && supportsLlmProvider(displayRunner, provider))
+  const selectedConnection = llmProviders.data?.providers.find(provider => provider.id === connectionId && supportsLlmProvider(displayRunner, provider))
+  const llmProviderId = connectionId
+  const nativeCatalog = useRunnerModels(displayRunner, !llmProviderId)
+  const externalCatalog = useLlmProviderModels(displayRunner, llmProviderId)
+  const catalog = llmProviderId ? externalCatalog : nativeCatalog
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
+    : llmProviderId ? (catalog.data?.models ?? []).map(model => ({ id: model.id, label: model.label, desc: model.description }))
+      : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
   const model = runner === null
     ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+    : llmProviderId ? (models.some(model => model.id === draft.model) ? draft.model! : '')
+      : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
@@ -578,14 +590,14 @@ export function NewTaskRoute() {
   }
   // Trimmed on both sides: the composer submits the trimmed body, so the preview must match it.
   const taskBody = (text: string, submitted: AttachmentEntry[]) => {
-    return buildCreateRunBody({
+    return { ...buildCreateRunBody({
         task: text.trim(),
         source,
         model,
         modelsLocked,
         runner: runner ?? defaultRunner ?? 'claude',
-        runnerExplicit: draft.runner !== null,
-        agentProfile,
+        runnerExplicit: draft.runner !== null || !!llmProviderId,
+        agentProfile: llmProviderId ? undefined : agentProfile,
         defaultRunner,
         variants,
         images: submitted,
@@ -603,9 +615,9 @@ export function NewTaskRoute() {
         dispatch,
         readOnly: askOn,
         inPlaceByDefault,
-      })
+      }), ...(llmProviderId ? { llmProviderId } : {}) }
   }
-  const schedulingDisabledReason = images.length ? 'Remove attachments to schedule this task.' : deepLink.todo ? 'Tasks linked to a todo can only start now.' : health.data?.capabilities?.automations !== true ? 'Scheduling is disabled on this server.' : undefined
+  const schedulingDisabledReason = llmProviderId ? 'Tasks using an API provider can only start now.' : images.length ? 'Remove attachments to schedule this task.' : deepLink.todo ? 'Tasks linked to a todo can only start now.' : health.data?.capabilities?.automations !== true ? 'Scheduling is disabled on this server.' : undefined
   const previewTask = taskBody(draft.text, images)
   const scheduleReady = !schedulingDisabledReason && !!startChoice?.preview && Date.parse(startChoice.preview.notBefore) > Date.now() && startChoice.settingsKey === previewSettingsKey(previewTask)
   const submit = async (text: string, submitted: AttachmentEntry[]) => {
@@ -619,10 +631,11 @@ export function NewTaskRoute() {
             : 'Connect an agent provider before starting a task.',
       )
     }
-    if (accountCheck.blocked !== null) {
+    if (!llmProviderId && accountCheck.blocked !== null) {
       const blocked = await accountCheck.verify()
       if (blocked !== null) throw new Error(blocked)
     }
+    if (llmProviderId && !model) throw new Error('Choose a model from the selected provider.')
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
@@ -735,7 +748,7 @@ export function NewTaskRoute() {
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
           sendLabel={startChoice ? 'Schedule task' : undefined}
-          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
+          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!llmProviderId && !model) || (!!startChoice && !scheduleReady)}
           disabled={!providersReady}
           disabledReason={
             providers.isPending
@@ -809,20 +822,28 @@ export function NewTaskRoute() {
                   // Changing the AGENT clears the model pin: presets are per-runner, so a kept
                   // model would be one the new runner does not have. Changing only the account
                   // keeps it — the model catalog is the same either way.
-                  onPick={(next, picked) =>
+                  onPick={(next, picked) => {
                     update({
                       runner: next,
                       agentProfile: picked,
-                      ...(next === displayRunner ? {} : { model: null }),
+                      ...(next === displayRunner ? {} : { model: null, llmProviderId: null }),
                     })
-                  }
+                  }}
                   disabled={!providersReady}
                 />
               ) : null}
+              {!modelsLocked && (llmProviderId || availableConnections.length > 0) ? <PickerPill
+                slot="llm-provider-pill"
+                ariaLabel="LLM provider"
+                label={selectedConnection?.name ?? (llmProviderId ? 'Unavailable provider' : 'Default')}
+                value={llmProviderId ?? ''}
+                onPick={id => { setConnectionId(id || undefined); update({ model: null }) }}
+                options={[{ value: '', label: 'Default', desc: 'Use the agent’s existing login and configuration' }, ...availableConnections.map(provider => ({ value: provider.id, label: provider.name, desc: 'API key · billed by this provider' }))]}
+              /> : null}
               <PickerPill
                 slot="model-pill"
                 ariaLabel="Model"
-                label={models.find((m) => m.id === model)?.label ?? 'auto'}
+                label={models.find((m) => m.id === model)?.label ?? (llmProviderId ? 'Choose model' : 'auto')}
                 value={model}
                 disabled={!providersReady}
                 readOnly={modelsLocked}
@@ -945,7 +966,7 @@ export function NewTaskRoute() {
           }
         />
 
-        {accountCheck.blocked !== null ? (
+        {!llmProviderId && accountCheck.blocked !== null ? (
           <p
             data-slot="account-signed-out"
             role="alert"

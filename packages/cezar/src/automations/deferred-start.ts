@@ -27,6 +27,8 @@ export function digest(value: unknown): string {
 
 /** Expand actual workflow runners before requiring any provider profile directory. */
 async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['task']) {
+  // shortcut: deferred bindings pin native accounts only; support API ownership before scheduling it.
+  if (task.llmProviderId) throw new DeferredResolutionError('Tasks using an API provider can only start now.');
   const config = await loadConfig(root);
   if (agentModelsLocked(root) && task.model?.trim()) throw new Error('Model selection is locked for this project.');
   const catalog = (await loadWorkflows(root)).workflows;

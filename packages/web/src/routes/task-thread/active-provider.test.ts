@@ -97,3 +97,47 @@ describe('active task provider availability', () => {
     })
   })
 })
+
+const connection = {
+  id: '12345678-1234-4234-8234-123456789abc',
+  name: 'Gateway',
+  kind: 'custom' as const,
+  baseUrl: 'https://gateway.example/v1',
+  protocol: 'anthropic-messages' as const,
+  hasApiKey: true,
+}
+
+describe.each([
+  ['live messages', activeProviderAvailability],
+  ['Guard reply continuation', existingProviderAvailability],
+] as const)('API connection availability for %s', (_name, availability) => {
+  const record = run({ runner: 'claude', llmProviderId: connection.id })
+  const signedOut = providers({ providers: [{ provider: 'claude', status: 'disconnected', enabled: true }] })
+
+  it('accepts the selected connection without a native login', () => {
+    expect(availability(record, signedOut, [connection])).toEqual({ provider: 'claude', usable: true })
+  })
+
+  it.each([
+    ['removed', []],
+    ['missing key', [{ ...connection, hasApiKey: false }]],
+    ['incompatible', [{ ...connection, protocol: 'openai-responses' as const }]],
+  ] as const)('refuses a %s connection even with a native login', (_case, connections) => {
+    expect(availability(record, providers(), [...connections]).usable).toBe(false)
+  })
+
+  it.each([
+    { provider: 'claude', status: 'connected', enabled: false },
+    { provider: 'claude', status: 'not-installed', enabled: true },
+  ] as const)('does not bypass disabled or missing agents (%j)', (row) => {
+    expect(availability(record, providers({ providers: [row] }), [connection]).usable).toBe(false)
+  })
+})
+
+it('does not apply the run connection to another workflow step backend', () => {
+  const record = run({ runner: 'claude', llmProviderId: connection.id, currentStepId: 'review', steps: [
+    { id: 'review', name: 'Review', kind: 'agent', status: 'waiting', iterations: 1, tokensUsed: 0, backend: 'codex' },
+  ] })
+  const status = providers({ providers: [{ provider: 'codex', status: 'disconnected', enabled: true }] })
+  expect(activeProviderAvailability(record, status, [{ ...connection, kind: 'openrouter' }])).toMatchObject({ provider: 'codex', usable: false })
+})

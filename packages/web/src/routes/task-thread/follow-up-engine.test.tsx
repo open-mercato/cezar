@@ -97,6 +97,7 @@ function serve(
       const method = init.method ?? 'GET'
       const body = init.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
+      if (url === '/api/v1/llm-providers') return json({ providers: [], keyBackend: 'file' })
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
@@ -559,5 +560,28 @@ describe('the follow-up runner pill carries the account', () => {
     renderAction(makeRun())
     await screen.findByRole('button', { name: 'Model' })
     expect(runnerPill()).toBeNull()
+    expect(screen.queryByRole('button', { name: 'LLM provider' })).toBeNull()
   })
+})
+
+
+it('continues with an explicitly selected API connection and its own model catalog', async () => {
+  serve()
+  const nativeFetch = vi.mocked(fetch).getMockImplementation()!
+  const id = '12345678-1234-4234-8234-123456789abc'
+  const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const url = String(input)
+    if (url === '/api/v1/llm-providers') return json({ providers: [{ id, name: 'Gateway', kind: 'openrouter', protocol: 'openai-completions', baseUrl: 'https://openrouter.ai/api/v1', hasApiKey: true }], keyBackend: 'file' })
+    if (url.includes('llmProviderId=')) return json({ runner: 'claude', models: [{ id: 'vendor/model', label: 'Gateway Model' }], source: 'live', stale: false })
+    return nativeFetch(input, init)
+  })
+  renderAction(makeRun())
+  expect((await screen.findByRole('button', { name: 'LLM provider' })).textContent).toBe('Default')
+  fireEvent.pointerDown(screen.getByRole('button', { name: 'LLM provider' }))
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /Gateway/ }))
+  fireEvent.pointerDown(await screen.findByRole('button', { name: 'Model' }))
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /Gateway Model/ }))
+  fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
+  await waitFor(() => expect(requests.find(request => request.method === 'POST' && request.url.endsWith('/continue'))?.body).toMatchObject({ llmProviderId: id, model: 'vendor/model' }))
 })

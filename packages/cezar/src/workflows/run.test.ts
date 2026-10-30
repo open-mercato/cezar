@@ -524,6 +524,22 @@ describe('RunManager.continueRun override', () => {
     expect(calls[0]?.[3]).toBe('claude');
   });
 
+  it.each([
+    ['12345678-1234-4234-8234-123456789abc', 'sess-1'],
+    ['22345678-1234-4234-8234-123456789abc', undefined],
+    ['', undefined],
+  ])('resumes only the connection that owns the session: %s', (connection, sessionId) => {
+    const id = resumableRun();
+    const original = '12345678-1234-4234-8234-123456789abc';
+    store.updateRun(id, { llmProviderId: original, model: 'vendor/model' });
+    store.updateStep(id, 's1', { backend: 'claude', llmProviderId: original });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => { calls.push(args); };
+    expect(manager.continueRun(id, { llmProviderId: connection, model: connection ? 'vendor/model' : '' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBe(sessionId);
+    expect(store.getRun(id)?.llmProviderId).toBe(connection || undefined);
+  });
+
   it('an omitted override preserves the run current backend/model (backward compat)', () => {
     const id = resumableRun();
     expect(manager.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });

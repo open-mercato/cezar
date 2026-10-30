@@ -1,3 +1,4 @@
+import { routeLlmProvider } from './llm-provider-routing.ts';
 import { existsSync } from 'node:fs';
 import type { AgentBackend, AgentRunner, AgentRunSpec, RunnerId } from './agent-runner.ts';
 import { ClaudeCliRunner } from './claude-cli-runner.ts';
@@ -60,7 +61,7 @@ function guardWorkingDirectory(runner: AgentRunner): AgentRunner {
   const guarded = Object.create(runner) as AgentRunner;
   guarded.startSession = function (spec, onEvent, opts) {
     check(spec);
-    return runner.startSession.call(this, spec, onEvent, opts);
+    return runner.startSession.call(this, routeLlmProvider(runner.backend, spec), onEvent, opts);
   };
   guarded.run = function (spec, onEvent) {
     try {

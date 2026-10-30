@@ -51,6 +51,7 @@ function renderView(
       const path = String(input)
       const body =
         path === '/api/v1/providers/status' ? providerStatus
+        : path === '/api/v1/llm-providers' ? { providers: [], keyBackend: 'file' }
         : path === '/api/v1/health' ? health
         : []
       return Promise.resolve(
@@ -370,10 +371,16 @@ describe('ThreadView', () => {
     renderView(<ThreadView run={run('running', { runner: 'claude', model: 'opus' })} thread={reduceThread(EVENTS)} />)
     const engine = document.querySelector('[data-slot="run-engine"]') as HTMLElement
     expect(engine).not.toBeNull()
+    expect(engine.querySelector('[data-slot="run-engine-provider"]')).toBeNull()
     expect(engine.querySelector('[data-slot="run-engine-runner"]')?.textContent).toBe('claude')
     // Read-only chips, not pickers: nothing here opens a menu.
     expect(engine.querySelector('button')).toBeNull()
     expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
+  })
+
+  it('keeps a running task’s external connection visible even after removal', () => {
+    renderView(<ThreadView run={run('running', { runner: 'claude', llmProviderId: '12345678-1234-4234-8234-123456789abc' })} thread={reduceThread(EVENTS)} />)
+    expect(document.querySelector('[data-slot="run-engine-provider"]')?.textContent).toContain('Removed API provider')
   })
 
   it('a continuable run swaps the read-only engine for the editable pills', async () => {
@@ -581,6 +588,7 @@ describe('ThreadView', () => {
       return el!
     })
     expect(button.title.length).toBeGreaterThan(0)
+    expect(screen.getByRole('link', { name: 'Configure providers' })).not.toBeNull()
   })
 
   it('any failure with a session to continue offers Continue after its message', async () => {
@@ -694,6 +702,20 @@ describe('ThreadView', () => {
     )
     expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
     expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toContain('continue to resume it')
+  })
+
+  it('lets a closed task explicitly replace a removed connection while sending stays blocked', async () => {
+    renderView(<ThreadView run={run('done', {
+      runner: 'claude', llmProviderId: '12345678-1234-4234-8234-123456789abc',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 's-1' }],
+    })} thread={reduceThread(EVENTS)} />)
+    const picker = await screen.findByRole('button', { name: 'LLM provider' })
+    const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+    expect(textarea.disabled).toBe(true)
+    fireEvent.pointerDown(picker)
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Default' }))
+    await waitFor(() => expect(textarea.disabled).toBe(false))
+    expect(screen.queryByRole('button', { name: 'LLM provider' })).toBeNull()
   })
 
   it('closed but resumable → the composer stays enabled, and sending is Continue', async () => {

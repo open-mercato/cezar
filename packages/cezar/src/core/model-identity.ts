@@ -232,8 +232,12 @@ export function toBackendModel(backend: AgentBackend, id: ModelIdentity): string
 export function normalizeModelForBackend(
   backend: AgentBackend,
   raw: string | undefined,
-  options: { configuredProvider?: string } = {},
+  options: { configuredProvider?: string; llmProviderId?: string } = {},
 ): { backendModel: string; identity: ModelIdentity } | undefined {
+  if (options.llmProviderId) {
+    if (!raw?.trim()) throw new ModelIdentityError('Select a model for this LLM provider');
+    return { backendModel: raw.trim(), identity: { provider: `llm:${options.llmProviderId}`, model: raw.trim() } };
+  }
   const identity = resolveModelIdentity(backend, raw, options);
   if (!identity) return undefined;
   return { backendModel: toBackendModel(backend, identity), identity };

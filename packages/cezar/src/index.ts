@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runLlmProvidersCommand } from './workspace/llm-providers-cli.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
 import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
@@ -82,6 +83,7 @@ Usage:
                             command on PATH that updates itself from the cockpit)
   cezar update              update the managed install to the channel's newest version
                             (--channel stable|nightly, --version <x> to pin or downgrade)
+  cezar llm-providers       list/add/remove API connections, models, or exec an agent through one
   cezar versions            list installed versions and cezar worktrees (\`cezar use <id>\` switches)
   cezar link [<dir>]        run a cezar checkout/worktree (default: cwd) as a version — a
                             link, not a copy, so rebuilds are live (--use to switch to it now);
@@ -118,6 +120,10 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'llm-providers') {
+    process.exitCode = await runLlmProvidersCommand(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === 'tracker-connections') {
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
     return;

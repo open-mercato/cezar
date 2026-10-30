@@ -143,6 +143,19 @@ describe('watchProviderRuntimeAuthFailures', () => {
     ]));
   });
 
+  it.each(['claude', 'codex'] as const)('isolates API auth failures while observing native %s steps', (backend) => {
+    const onInvalidated = watch();
+    const run = store.createRun({
+      title: 'API and native', workflow: 'mixed', task: 'work', runner: 'claude',
+      llmProviderId: '12345678-1234-4234-8234-123456789abc',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'work', { backend });
+    store.appendEvent(run.id, { type: 'error', stepId: 'work', message: 'authentication failed with HTTP 401' });
+    if (backend === 'claude') expect(onInvalidated).not.toHaveBeenCalled();
+    else expect(onInvalidated).toHaveBeenCalledWith(expect.objectContaining({ provider: 'codex', status: 'disconnected' }));
+  });
+
   it('falls back to the run backend when the event has no matching step', () => {
     const onInvalidated = watch();
     const run = store.createRun({

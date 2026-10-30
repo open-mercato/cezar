@@ -1,3 +1,4 @@
+import { useLlmProviders } from '@/api/llm-providers'
 import { useAgentProfiles, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun } from '@open-mercato/cezar-api-client'
 import { PickerPill } from '@/components/picker-pill'
@@ -17,6 +18,7 @@ export function useRunEngine(run: ApiRun) {
   // routes.)
   const config = useConfig()
   const profiles = useAgentProfiles()
+  const connections = useLlmProviders()
   const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
   const model = run.model ?? 'auto'
   // The account is read from the STEP that actually spawned, never from the run's composer
@@ -36,8 +38,9 @@ export function useRunEngine(run: ApiRun) {
   // something `model` does not (#546). Absent on pre-#405 records and skipped when it merely
   // repeats `model` — an identity nothing wrote down is not one a reader may invent.
   const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
-  const summary = [runner, account, model].filter(Boolean).join(' · ')
-  return { runner, account, model, identity, summary }
+  const connection = run.llmProviderId ? connections.data?.providers.find(provider => provider.id === run.llmProviderId)?.name ?? 'Removed API provider' : undefined
+  const summary = [runner, connection ? `${connection} · API key` : account, model].filter(Boolean).join(' · ')
+  return { runner, account, model, identity, summary, connection }
 }
 
 /**
@@ -67,6 +70,7 @@ export function RunEnginePills({ run }: { run: ApiRun }) {
         readOnly
         hint={hint}
       />
+      {engine.connection ? <PickerPill slot="run-engine-provider" ariaLabel="LLM provider" label={`${engine.connection} · API key`} value={run.llmProviderId ?? ''} options={[]} onPick={() => {}} readOnly /> : null}
       <PickerPill
         slot="run-engine-model"
         ariaLabel="Model"
