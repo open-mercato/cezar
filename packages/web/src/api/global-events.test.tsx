@@ -199,7 +199,7 @@ describe('useGlobalEvents — connection', () => {
   it('opens exactly one stream, at /api/v1/workspace/events', () => {
     mount()
     expect(FakeEventSource.instances).toHaveLength(1)
-    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events?slim=1')
     expect(FakeEventSource.last.init).toEqual({ withCredentials: true })
   })
 
@@ -240,7 +240,7 @@ describe('useGlobalEvents — liveness watchdog', () => {
     act(() => vi.advanceTimersByTime(55_000)) // past the ~40 s threshold with total silence
 
     expect(FakeEventSource.instances).toHaveLength(2)
-    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events?slim=1')
   })
 
   it('a keep-alive alone proves liveness — a quiet workspace is not a dead socket', () => {
@@ -436,7 +436,7 @@ describe('useGlobalEvents — back/forward cache', () => {
     firePageShow(true)
 
     expect(FakeEventSource.instances).toHaveLength(2)
-    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
+    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events?slim=1')
   })
 
   it('does nothing on the pageshow of a normal load', () => {
