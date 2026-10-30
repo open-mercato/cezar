@@ -711,6 +711,14 @@ describe('errors', () => {
     expect((error as Error).name).toBe('ApiError')
   })
 
+  it('explains a proxy 413 instead of printing the status line (#1735)', async () => {
+    fail(413, '<html>413 Request Entity Too Large</html>', 'text/html')
+    const error = (await getRuns().catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(413)
+    expect(error.message).toContain('too large')
+    expect(error.message).toContain('client_max_body_size')
+  })
+
   it('survives an empty error body', async () => {
     fail(404, '')
     const error = (await getRun('nope').catch((e: unknown) => e)) as ApiError

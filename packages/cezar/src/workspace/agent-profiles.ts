@@ -135,6 +135,17 @@ export function selectProfile(
 }
 
 /**
+ * The id of the account a run on `provider` ends up on — `selectProfile`'s answer, as the key the
+ * usage-limit hold uses (#1722). One resolver so the hold and the spawn cannot drift apart.
+ */
+export function resolveAccountId(
+  store: AgentAccountStore,
+  options: { provider: ProviderId; repoRoot?: string; profileId?: string },
+): string {
+  return selectProfile(store, options).id;
+}
+
+/**
  * The env a spawned `provider` process needs for the account selected by `repoRoot`/`profileId`.
  *
  * `{}` for the default account, which is the whole point: the zero-config path adds nothing to the

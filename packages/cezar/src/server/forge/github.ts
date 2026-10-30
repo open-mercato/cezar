@@ -476,6 +476,7 @@ query ($owner: String!, $name: String!, $issuesLimit: Int!, $prsLimit: Int!, $is
 }`;
 
 type GithubListPage = ReturnType<typeof parseGithubListPage>;
+type GithubListCursors = { issuesCursor?: string; prsCursor?: string; issuesDone?: boolean; prsDone?: boolean };
 
 /** Walks both open connections up to `limit` rows each, at most `GH_GRAPHQL_PAGE_MAX` per request,
  *  keeping each side's cursor exact so the returned next cursors resume where the rows stop. */
@@ -484,12 +485,13 @@ export async function fetchGithubListPages(
   owner: string,
   name: string,
   limit: number,
-  cursors: { issuesCursor?: string; prsCursor?: string } = {},
+  cursors: GithubListCursors = {},
 ): Promise<GithubListPage> {
   let issuesCursor = cursors.issuesCursor;
   let prsCursor = cursors.prsCursor;
-  let issuesDone = false;
-  let prsDone = false;
+  // An exhausted side must stay exhausted: a missing cursor alone means "first page" (#1750).
+  let issuesDone = cursors.issuesDone === true;
+  let prsDone = cursors.prsDone === true;
   let result: GithubListPage | null = null;
   while (!result || !issuesDone || !prsDone) {
     const issuesSize = issuesDone ? 0 : Math.min(GH_GRAPHQL_PAGE_MAX, limit - (result?.issues.nodes.length ?? 0));
@@ -522,6 +524,9 @@ export async function fetchGithubListPages(
     }
     result = acc;
   }
+  // A side skipped from the start fetched `first: 0`; its pageInfo says nothing about exhaustion.
+  if (cursors.issuesDone) result.issues.pageInfo = { ...result.issues.pageInfo, hasNextPage: false };
+  if (cursors.prsDone) result.pullRequests.pageInfo = { ...result.pullRequests.pageInfo, hasNextPage: false };
   return result;
 }
 
@@ -529,11 +534,11 @@ export async function fetchGithub(
   repoRoot: string,
   refresh = false,
   limit = 30,
-  cursors: { issuesCursor?: string; prsCursor?: string } = {},
+  cursors: GithubListCursors = {},
 ): Promise<GithubData> {
   if (process.env.CEZ_DRY_RUN === '1') return mockGithubPage(limit, cursors);
   const capped = Math.min(Math.max(limit, 1), GH_MAX_LIMIT);
-  const cacheKey = `${repoRoot}\0${cursors.issuesCursor ?? ''}\0${cursors.prsCursor ?? ''}`;
+  const cacheKey = `${repoRoot}\0${cursors.issuesCursor ?? ''}\0${cursors.prsCursor ?? ''}\0${cursors.issuesDone ? 1 : 0}${cursors.prsDone ? 1 : 0}`;
   const hit = listCache.get(cacheKey);
   if (!refresh && hit && Date.now() - hit.at < CACHE_MS && hit.limit >= capped) {
     return hit.data;
@@ -891,20 +896,20 @@ function mockGithub(): GithubData {
   };
 }
 
-function mockGithubPage(limit: number, cursors: { issuesCursor?: string; prsCursor?: string }): GithubData {
+function mockGithubPage(limit: number, cursors: GithubListCursors): GithubData {
   const full = mockGithub();
   const issueStart = Number(cursors.issuesCursor ?? 0);
   const prStart = Number(cursors.prsCursor ?? 0);
-  const issues = full.issues.slice(issueStart, issueStart + limit);
-  const prs = full.prs.slice(prStart, prStart + limit);
+  const issues = cursors.issuesDone ? [] : full.issues.slice(issueStart, issueStart + limit);
+  const prs = cursors.prsDone ? [] : full.prs.slice(prStart, prStart + limit);
   return {
     ...full,
     issues,
     prs,
     issuesTotal: full.issues.length,
     prsTotal: full.prs.length,
-    issuesNextCursor: issueStart + issues.length < full.issues.length ? String(issueStart + issues.length) : null,
-    prsNextCursor: prStart + prs.length < full.prs.length ? String(prStart + prs.length) : null,
+    issuesNextCursor: !cursors.issuesDone && issueStart + issues.length < full.issues.length ? String(issueStart + issues.length) : null,
+    prsNextCursor: !cursors.prsDone && prStart + prs.length < full.prs.length ? String(prStart + prs.length) : null,
   };
 }
 
