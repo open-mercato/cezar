@@ -162,6 +162,13 @@ const taskTableUiStateSchema = z.looseObject({
   expandedColumns: z.record(z.string(), z.boolean()).optional(),
 });
 
+export const AUTOMATION_ORDER_LIMIT = 200;
+export const automationListPreferencesSchema = z.looseObject({
+  sort: z.enum(['manual', 'name', 'nextRun']).optional(),
+  order: z.array(z.string().trim().min(1).max(200)).max(AUTOMATION_ORDER_LIMIT).optional(),
+});
+export type AutomationListPreferences = z.infer<typeof automationListPreferencesSchema>;
+
 /**
  * `GET/PUT /api/v1/ui-state` — the per-repo GUI prefs in `.ai/cezar/ui-state.json`.
  *
@@ -205,6 +212,8 @@ export const uiStateSchema = z.looseObject({
   githubView: z.enum(['issues', 'prs']).optional(),
   /** The GitHub tab's list order. Absent → newest first, which is what `gh` already returns. */
   githubSort: z.enum(['newest', 'oldest']).optional(),
+  /** List presentation only (#1819); absent preserves alphabetical order. */
+  automationList: automationListPreferencesSchema.optional(),
   /** Settings → Appearance. The theme itself stays in localStorage (`cez-theme`) — it must
    *  pre-paint, and it is per-browser by design. */
   appearance: appearanceSchema.optional(),
