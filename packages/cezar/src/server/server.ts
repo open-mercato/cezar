@@ -4711,9 +4711,18 @@ export function createApp(deps: ServerDeps) {
 
     /** Create ONE child of run `:id`. Refusals (cap, budget, settled parent) are 409 with the
      *  reason — the same text the parent's transcript notes. */
-    .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
-      const { manager } = c.get('project');
-      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'));
+    .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), async (c) => {
+      const { manager, store } = c.get('project');
+      const input = c.req.valid('json');
+      // An explicit account is checked like POST /runs checks one (#1497): unknown = refusal.
+      if (input.account !== undefined) {
+        const parent = store.getRun(c.req.param('id'));
+        const root = parent && store.getRun(parent.dispatch?.rootRunId ?? parent.id);
+        const runner = input.runner ?? root?.dispatch?.intent?.runner ?? parent?.runner ?? 'claude';
+        const account = await resolveWorkspaceProfile(runner, input.account);
+        if ('error' in account) return c.json({ error: `dispatch refused — ${account.error}` }, 409);
+      }
+      const outcome = manager.dispatch(c.req.param('id'), input);
       if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
       return c.json(outcome, 201);
     })

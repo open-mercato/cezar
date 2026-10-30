@@ -3014,6 +3014,8 @@ export class RunManager {
     const childModel = input.model
       ?? (intent?.model && sameRunner(intent.runner ?? parent.runner) ? intent.model : undefined)
       ?? (parent.model && sameRunner(parent.runner) ? parent.model : undefined);
+    // Like the model: the parent's account only follows its own runner; `--account` overrides.
+    const childAccount = input.account ?? (sameRunner(parent.runner) ? parent.agentProfile : undefined);
     const record = this.startRun(opts.workflow ?? workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
@@ -3022,6 +3024,7 @@ export class RunManager {
       ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
+      ...(childAccount ? { agentProfile: childAccount } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,
