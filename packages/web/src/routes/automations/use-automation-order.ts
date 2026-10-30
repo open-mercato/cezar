@@ -3,7 +3,7 @@ import { useMemo } from 'react'
 import { queryScope, type UiState } from '@open-mercato/cezar-api-client'
 
 import { putUiState } from '@/api/client'
-import { useUiState } from '@/api/queries'
+import { queryKeys, useUiState } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
 import { normalizeAutomationOrder, type AutomationOrder, type AutomationSort } from './automation-order'
 
@@ -15,7 +15,7 @@ export function useAutomationOrder() {
   const queryClient = useQueryClient()
   const uiState = useUiState()
   const scope = queryScope()
-  const key = useMemo(() => [scope, 'ui-state'] as const, [scope])
+  const key = useMemo(() => queryKeys.uiState, [scope])
   const preferences = normalizeAutomationOrder(uiState.data?.automationList)
 
   const write = (patch: Partial<AutomationOrder>) => {

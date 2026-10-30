@@ -126,7 +126,7 @@ export function AutomationsList({
           />
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs text-muted-foreground">Sort</span>
-            <fieldset disabled={!canSave} className="min-w-0">
+            <fieldset disabled={!canSave} aria-label="Automation sort" className="min-w-0">
               <Segmented<AutomationSort>
                 slot="automations-sort"
                 label="Sort automations"
