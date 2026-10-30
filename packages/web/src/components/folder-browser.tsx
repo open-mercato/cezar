@@ -69,6 +69,16 @@ export function FolderBrowser({
         {listing.data?.path ?? (listing.isError ? '' : 'Loading…')}
       </p>
 
+      {!listing.isError && listing.data?.parent === null ? (
+        <p data-slot="fs-root-hint" className="text-[12.5px] text-soft-foreground">
+          This is the browse root. To browse elsewhere, change{' '}
+          {/* A document navigation also dismisses pickers owned above the route (#1688). */}
+          <a href="/settings/global/projects" className="text-foreground underline underline-offset-4 hover:text-muted-foreground">
+            Default browse folder in Settings → Projects
+          </a>.
+        </p>
+      ) : null}
+
       {listing.isError ? (
         <div className="flex min-w-0 flex-col gap-2">
           <p data-slot="fs-error" className="min-w-0 break-words text-[13px] text-danger">
