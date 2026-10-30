@@ -2423,6 +2423,8 @@ describe('RunStore — a save never drops another process’s runs', () => {
     store.on('deleted', (id: string) => deleted.push(id));
     const oldest = newRun(store, 'oldest');
     store.getRun(oldest)!.createdAt = '2000-01-01T00:00:00.000Z';
+    // Live runs are pinned against retention; only a settled run can be pruned.
+    store.getRun(oldest)!.status = 'done';
 
     for (let index = 0; index < 301; index++) newRun(store, `retained-${index}`);
 

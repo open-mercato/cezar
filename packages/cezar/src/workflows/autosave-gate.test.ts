@@ -220,6 +220,8 @@ describe('periodic autosave gate (#471)', () => {
     const seam = manager;
     const unarchived = store.createRun({ title: 'old unarchived', workflow: 'quick-task', task: 'old', steps: [] });
     store.getRun(unarchived.id)!.createdAt = '2000-01-01T00:00:00.000Z';
+    // Live runs are pinned against retention; only a settled run can be pruned.
+    store.getRun(unarchived.id)!.status = 'done';
     seam.checkArtifactSnapshots.set(unarchived.id, new Map([['check-output.txt', 'snapshot']]));
     seam.autosaveCheckpointBlockedRuns.add(unarchived.id);
     for (let index = 0; index < 301; index++) {
@@ -231,6 +233,7 @@ describe('periodic autosave gate (#471)', () => {
 
     const archived = store.createRun({ title: 'old archived', workflow: 'quick-task', task: 'old', steps: [] });
     store.getRun(archived.id)!.createdAt = '2000-01-01T00:00:00.000Z';
+    store.getRun(archived.id)!.status = 'done';
     store.setArchived(archived.id, true);
     seam.checkArtifactSnapshots.set(archived.id, new Map([['check-output.txt', 'snapshot']]));
     seam.autosaveCheckpointBlockedRuns.add(archived.id);
