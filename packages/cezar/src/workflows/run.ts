@@ -131,8 +131,9 @@ import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-re
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
-import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
-import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
+import { resolveAccountId, resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { recordedProfileFor } from '../server/recorded-profile.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { PROJECT_ID_RE } from '../workspace/config.ts';
@@ -697,8 +698,9 @@ function accountHeldFor(
   run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts'>,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
+  accounts?: AccountResolution,
 ): boolean {
-  const key = runAccountKey(run, fallbackRunner);
+  const key = runAccountKey(run, fallbackRunner, accounts);
   if (holds.deadline.has(key)) return true;
   return holds.inFlight.has(key) && !resumeInFlight(run);
 }
@@ -714,10 +716,29 @@ function accountHeldFor(
  * persists it), and only started runs can be holding.
  */
 export function runAccountKey(
-  run: Pick<RunRecord, 'runner' | 'agentProfile'>,
+  run: Pick<RunRecord, 'runner' | 'agentProfile'> & { steps?: RunRecord['steps'] },
   fallbackRunner: RunnerId,
+  accounts?: AccountResolution,
 ): string {
-  return `${run.runner ?? fallbackRunner}:${run.agentProfile ?? 'default'}`;
+  const runner = run.runner ?? fallbackRunner;
+  // Without the account store the old literal key stands (#1722 resolves only what it can read).
+  if (!accounts) return `${runner}:${run.agentProfile ?? 'default'}`;
+  // A holding run is keyed on the account its steps recorded; a run asking to start has no
+  // recording yet, so it resolves as the spawn will: its override, else the repo's selection.
+  const explicit = accounts.holding
+    ? recordedProfileFor({ ...run, runner, steps: run.steps ?? [] } as RunRecord, runner)
+    : run.agentProfile;
+  // A named account keeps its own key (a stale id is still its own budget to the user).
+  if (explicit !== undefined) return `${runner}:${explicit}`;
+  return `${runner}:${resolveAccountId(accounts.store, { provider: runner, repoRoot: accounts.repoRoot })}`;
+}
+
+/** What `runAccountKey` needs to resolve an absent `agentProfile` to the account that really runs (#1722). */
+export interface AccountResolution {
+  store: AgentAccountStore;
+  repoRoot: string;
+  /** True when keying a run that holds the account (reads its recorded step), false when it asks to start. */
+  holding?: boolean;
 }
 
 /**
@@ -1768,6 +1789,7 @@ export class RunManager {
         // leaks into the next ordinary one.
         const forced = this.forceNextPump;
         this.forceNextPump = false;
+        if (this.queue.length > 0 && !forced) await this.refreshAccounts();
         const holds = this.queue.length > 0 && !forced ? this.semaphore.accountHolds() : NO_HOLDS;
         const anyHold = holds.deadline.size > 0 || holds.inFlight.size > 0;
         // Only pay for the config read when something is actually held: a queued record may name
@@ -1775,7 +1797,7 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
-          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
           return capacity();
         };
         // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
@@ -2938,6 +2960,8 @@ export class RunManager {
 
   /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it. */
   private armAutoResume(runId: string, deadline: number): void {
+    // The hold's key resolves an absent profile through the accounts file (#1722); load it now.
+    void this.refreshAccounts();
     this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString() });
     const timer = setTimeout(() => this.fireAutoResume(runId), Math.max(0, deadline - Date.now()));
     timer.unref?.();
@@ -3081,7 +3105,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner)) return false;
+    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts())) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -3151,6 +3175,16 @@ export class RunManager {
     void this.pump();
   }
 
+  /** Snapshot of agent-accounts.json for resolving absent `agentProfile`s (#1722). Re-read per
+   *  sweep, never trusted across them; unreadable degrades to the literal-`default` key. */
+  private accountStore: AgentAccountStore | undefined;
+  private async refreshAccounts(): Promise<void> {
+    try { this.accountStore = await loadAgentAccounts(); } catch { this.accountStore = undefined; }
+  }
+  private askingAccounts(): AccountResolution | undefined {
+    return this.accountStore ? { store: this.accountStore, repoRoot: this.repoRoot } : undefined;
+  }
+
   /**
    * The accounts this project is currently holding: one key per run parked on a usage-limit
    * resume that has not come due yet (spec 2026-08-03-auto-resume-after-usage-limit).
@@ -3169,7 +3203,7 @@ export class RunManager {
     for (const run of this.store.listRuns()) {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
-      const key = () => runAccountKey(run, run.runner ?? 'claude');
+      const key = () => runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
       if (run.status === 'failed' && run.autoResumeAt) {
         const at = Date.parse(run.autoResumeAt);
         if (Number.isFinite(at) && at > now) deadline.add(key());

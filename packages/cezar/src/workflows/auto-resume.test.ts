@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import {
   AUTO_RESUME_GRACE_MS,
@@ -499,6 +500,46 @@ describe('a run stopped by a usage limit resumes itself', () => {
       .poll(() => store.getRun(other.id)?.startedAt, { timeout: 20_000 })
       .toBeDefined();
   }, 60_000);
+
+  describe('when the configured default account is not the built-in one (#1722)', () => {
+    async function limitedOnConfiguredDefault(): Promise<string> {
+      const acmeDir = join(repoRoot, '.acme-claude');
+      mkdirSync(acmeDir, { recursive: true });
+      writeFileSync(join(acmeDir, '.credentials.json'), '{}');
+      await mergeWriteAgentAccounts((accounts) => {
+        accounts.accounts = [{ id: 'acme', provider: 'claude', label: 'Acme', configDir: acmeDir, addedAt: '' }];
+        accounts.defaults.claude = 'acme';
+      });
+      manager = new RunManager(store, repoRoot, {
+        semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 1 } }),
+      });
+      const limited = manager.startRun(workflow, { task: 'mock:limit on the default', worktree: false });
+      await settle(limited.id);
+      expect(store.getRun(limited.id)?.agentProfile).toBeUndefined();
+      expect(store.getRun(limited.id)?.steps[0]?.profileId).toBe('acme');
+      // The hold resolves through the accounts file, which loads asynchronously.
+      await expect.poll(() => [...manager!.accountHolds().deadline], { timeout: 10_000 }).toEqual(['claude:acme']);
+      return limited.id;
+    }
+
+    it('holds the account the run really ran on, and lets the built-in login start', async () => {
+      await limitedOnConfiguredDefault();
+      const other = manager!.startRun(workflow, { task: 'mock:done explicit default', worktree: false, agentProfile: 'default' });
+      await expect.poll(() => store.getRun(other.id)?.startedAt, { timeout: 20_000 }).toBeDefined();
+    }, 60_000);
+
+    it('keeps explicit-acme and absent-profile runs queued', async () => {
+      await limitedOnConfiguredDefault();
+      const explicit = manager!.startRun(workflow, { task: 'mock:done explicit acme', worktree: false, agentProfile: 'acme' });
+      const absent = manager!.startRun(workflow, { task: 'mock:done absent profile', worktree: false });
+      // This line has no queue reason to name the account (#1340), so hold is proved by admission alone.
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      for (const id of [explicit.id, absent.id]) {
+        expect(store.getRun(id)?.startedAt).toBeUndefined();
+        expect(store.getRun(id)?.status).toBe('queued');
+      }
+    }, 60_000);
+  });
 
   it('never resumes a task the user resigned from — archived is archived', async () => {
     manager = new RunManager(store, repoRoot);
