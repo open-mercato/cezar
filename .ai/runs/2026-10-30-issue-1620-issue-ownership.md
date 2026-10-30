@@ -18,14 +18,17 @@ Optional metadata adds bounded latency. Failure must preserve usable existing ro
 
 ## Progress
 
+PR: #1845
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Contract and discovery
-- [ ] 1.1 Add optional metadata contract and compatibility coverage
-- [ ] 1.2 Enrich all discovery paths with bounded validated metadata
+- [x] 1.1 Add optional metadata contract and compatibility coverage — 65f00256 (compatibility: 4c43e5f7)
+- [x] 1.2 Enrich all discovery paths with bounded validated metadata — 65f00256 (compatibility: 4c43e5f7)
 
 ### Phase 2: Presentation
-- [ ] 2.1 Render accessible ownership and PR status links with tests
+- [x] 2.1 Render accessible ownership and PR status links with tests — 65f00256 (compatibility: 4c43e5f7)
 
 ### Phase 3: Evidence and handoff
 - [ ] 3.1 Validate, review, browser QA and publish ready PR
+
