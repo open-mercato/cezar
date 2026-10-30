@@ -277,9 +277,12 @@ the prompt's placeholders listed only as placeholder text, and an "Enabled" swit
 technical note. The form keeps every field and every data-slot and reads differently:
 
 - **One column that reads as a sentence.** Under the header (unchanged: Back, title, templates,
-  Cancel, Save) sits a three-step rail — When · What · Go live — ticked as the form fills in
-  (`railSteps`), then the name as a large light line (`Name this automation`), then the three
-  parts split by hairlines, each with a light title and one line on why.
+  Cancel, Save) sits one low strip — the name as a light line (`Name this automation`) on the
+  left, the three-step rail When · What · Go live on the right, ticked as the form fills in
+  (`railSteps`). The strip sticks under the header while the form scrolls (static below `md`,
+  where the header may wrap), so what you are building and how far along you are never leave
+  the screen. Then the three parts, split by hairlines, each with a light title and one line on
+  why.
 - **When.** The trigger is three `SelectTile`s (picture, title, one line; the chosen one wears
   the violet wash; a locked or unavailable one is dimmed with the reason as its tooltip), then
   the trigger's own fields, then the next-runs preview inline where the schedule is, not in a

@@ -228,21 +228,27 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
         <Button className="font-normal" disabled={!canSave} onClick={() => void save()}>{saveLabel}</Button>
       </header>
 
-      <div className="flex justify-center px-5 pt-8 pb-16 md:pt-10">
+      <div className="flex justify-center px-5 pb-16">
         <div className="flex w-full max-w-3xl flex-col items-center">
-          <OnboardingStepRail steps={rail} />
-
-          {/* The name, large and light under the rail: the one line the list shows for it. */}
-          <input
-            aria-label="Name"
-            placeholder={editing ? 'Name' : 'Name this automation'}
-            value={draft.name}
-            onChange={(event) => patch({ name: event.target.value })}
-            className="mt-7 w-full max-w-xl bg-transparent text-center text-3xl font-light tracking-tight text-foreground outline-none placeholder:text-soft-foreground"
-          />
+          {/* One low strip — the name and the rail — that stays under the header while the form
+              scrolls, so what you are building and how far along you are never leave the screen.
+              Static below `md`, where the header may wrap and a sticky strip would cover the form. */}
+          <div
+            data-slot="editor-strip"
+            className="sticky top-14 z-10 flex w-full flex-wrap items-center gap-x-6 gap-y-1.5 border-b border-border bg-background/95 py-2.5 backdrop-blur max-md:static"
+          >
+            <input
+              aria-label="Name"
+              placeholder={editing ? 'Name' : 'Name this automation'}
+              value={draft.name}
+              onChange={(event) => patch({ name: event.target.value })}
+              className="min-w-0 flex-1 bg-transparent text-xl font-light tracking-tight text-foreground outline-none placeholder:text-soft-foreground"
+            />
+            <OnboardingStepRail steps={rail} />
+          </div>
 
           {conflict || error?.section === 'top' || (showTemplates && !automation) ? (
-          <div className="mt-8 flex w-full flex-col gap-4">
+          <div className="mt-6 flex w-full flex-col gap-4">
             {conflict ? (
               <div role="alert" data-slot="editor-conflict" className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-[13px] text-foreground">
                 Edited elsewhere — reload to see the latest version
@@ -456,7 +462,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
 /** One part of the sentence: a light title, one line on why, the controls — split by hairlines. */
 function Section({ slot, title, why, children }: { slot: string; title: string; why: string; children: ReactNode }) {
   return (
-    <section data-slot="editor-section" data-section={slot} className="mt-9 w-full border-t border-border pt-8">
+    <section data-slot="editor-section" data-section={slot} className="mt-7 w-full border-t border-border pt-6 first-of-type:mt-6 first-of-type:border-t-0 first-of-type:pt-0">
       <h2 className="text-xl font-light tracking-tight text-foreground">{title}</h2>
       <p className="mt-1 mb-5 text-[13px] text-muted-foreground">{why}</p>
       {children}
