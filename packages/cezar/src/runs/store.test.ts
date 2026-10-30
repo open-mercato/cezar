@@ -4,7 +4,7 @@ import { threadId } from 'node:worker_threads';
 import { hostname, tmpdir, uptime } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from './store.ts';
+import { RunStore, SEQ_RESTART_HEADROOM } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
@@ -1672,9 +1672,40 @@ describe('RunStore — seq survives a restart (#424 symptom class)', () => {
     // process restarting seqs at 1 would have every resumed event dropped.
     const reopened = RunStore.open(dataDir, { keepLive: true });
     const resumed = reopened.appendEvent(run.id, { type: 'note', message: 'after restart' });
-    expect(resumed.seq).toBe(3);
+    expect(resumed.seq).toBeGreaterThan(2);
     const seqs = reopened.readEvents(run.id).map((e) => e.seq);
-    expect(seqs).toEqual([1, 2, 3]);
+    expect(seqs).toEqual([1, 2, resumed.seq]);
+  });
+
+  it('never reuses a seq a live client saw on an ephemeral event before the restart', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, { type: 'note', message: 'persisted' });
+    const burned = [
+      store.emitEphemeral(run.id, { type: 'tool-call', id: 't1', tool: 'Bash', input: {} }),
+      store.emitEphemeral(run.id, { type: 'tool-result', toolCallId: 't1', result: 'ok', isError: false }),
+      store.emitEphemeral(run.id, { type: 'text', text: 'done' }),
+    ];
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    const resumed = reopened.appendEvent(run.id, { type: 'note', message: 'after restart' });
+    expect(resumed.seq).toBeGreaterThan(Math.max(...burned.map((event) => event.seq)));
+  });
+
+  it('never reuses an ephemeral tool seq after a crash left the persisted high-water mark behind', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, { type: 'item.completed', item: { id: 'i1', kind: 'tool', name: 'Bash', status: 'completed' } });
+    store.flush();
+    const burned = [
+      store.emitEphemeral(run.id, { type: 'tool-call', id: 'i1', tool: 'Bash', input: {} }),
+      store.emitEphemeral(run.id, { type: 'tool-result', toolCallId: 'i1', result: 'ok', isError: false }),
+    ];
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    const resumed = reopened.appendEvent(run.id, { type: 'note', message: 'after crash' });
+    expect(resumed.seq).toBeGreaterThan(Math.max(...burned.map((event) => event.seq)));
   });
 
   it('starts at 1 for a run with no event file', () => {
@@ -2496,7 +2527,7 @@ describe('RunStore — seq rehydration from the persisted high-water mark', () =
     store.flush();
 
     const reopened = RunStore.open(dataDir, { keepLive: true });
-    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(delta.seq + 1);
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(delta.seq + SEQ_RESTART_HEADROOM + 1);
   });
 
   it('does not schedule an index save for a stream that dirties nothing else', () => {
@@ -2525,7 +2556,7 @@ describe('RunStore — seq rehydration from the persisted high-water mark', () =
 
     const reopened = RunStore.open(dataDir, { keepLive: true });
     const readEvents = vi.spyOn(reopened, 'readEvents');
-    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(51);
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(50 + SEQ_RESTART_HEADROOM + 1);
     expect(readEvents).not.toHaveBeenCalled();
   });
 
@@ -2542,7 +2573,7 @@ describe('RunStore — seq rehydration from the persisted high-water mark', () =
 
     const reopened = RunStore.open(dataDir, { keepLive: true });
     expect(reopened.getRun(run.id)?.lastSeq).toBe(1);
-    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after crash' }).seq).toBe(6);
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after crash' }).seq).toBe(5 + SEQ_RESTART_HEADROOM + 1);
   });
 
   it('falls back to the full transcript maximum for a record written before lastSeq existed', () => {
@@ -2552,7 +2583,7 @@ describe('RunStore — seq rehydration from the persisted high-water mark', () =
     writeFileSync(join(dataDir, 'runs', `${LEGACY_RUN.id}.ndjson`), `${lines.join('\n')}\n`);
 
     const store = RunStore.open(dataDir);
-    expect(store.appendEvent(LEGACY_RUN.id, { type: 'note', message: 'next' }).seq).toBe(10);
+    expect(store.appendEvent(LEGACY_RUN.id, { type: 'note', message: 'next' }).seq).toBe(9 + SEQ_RESTART_HEADROOM + 1);
   });
 });
 
