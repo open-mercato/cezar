@@ -27,6 +27,7 @@ import {
   type WorkspaceLayout,
 } from './layout-state'
 import { stripTabs, type StripTab } from './strip'
+import { useDragHover } from './use-drag-hover'
 import { VIEW_ICONS } from './view-picker'
 
 /** The row's `gap-0.5`, and the `…` button that folds the tabs that do not fit (28px + that gap). */
@@ -203,9 +204,9 @@ export function LayoutCards({
   const overflow = items.filter((tab) => !visible.includes(tab))
 
   // A column header held over the row: dropping it closes that column.
-  const [closeTarget, setCloseTarget] = useState(false)
   const acceptsColumn = (event: React.DragEvent) =>
     onColumnDropClose !== undefined && event.dataTransfer.types.includes(COLUMN_DRAG_TYPE)
+  const { over: closeTarget, reset: resetCloseTarget, handlers: closeHover } = useDragHover(acceptsColumn)
 
   return (
     <div
@@ -220,14 +221,10 @@ export function LayoutCards({
         if (!acceptsColumn(event)) return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'move'
-        setCloseTarget(true)
       }}
-      onDragLeave={(event) => {
-        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
-        setCloseTarget(false)
-      }}
+      {...closeHover}
       onDrop={(event) => {
-        setCloseTarget(false)
+        resetCloseTarget()
         if (!acceptsColumn(event)) return
         const raw = event.dataTransfer.getData(COLUMN_DRAG_TYPE)
         const index = Number(raw)
