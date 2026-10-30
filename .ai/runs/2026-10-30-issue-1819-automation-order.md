@@ -31,5 +31,5 @@ Persist presentation-only Manual / Name / Next run ordering per project, with ac
 
 - [x] 1.1 Shared preference schema and API tests (API rejection regression red on original source, green fixed).
 - [x] 1.2 Pure ordering rules and tests (7 focused ordering cases pass).
-- [ ] 2.1 Persisted sort and accessible placement controls with interaction tests.
+- [x] 2.1 Persisted sort and accessible placement controls with interaction tests (1db4e61c; 51 focused tests pass; original UI fails the new move test; follow-up loading/error recovery tests pass).
 - [ ] 2.2 Review, validation, browser evidence and final PR state.
