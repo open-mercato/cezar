@@ -2018,12 +2018,20 @@ export function useGithubInfinite(limit = 50, enabled = true) {
   return useInfiniteQuery({
     queryKey: queryKeys.githubPages(limit),
     queryFn: ({ pageParam, signal }) =>
-      getGithub({ limit, issuesCursor: pageParam.issuesCursor, prsCursor: pageParam.prsCursor }, { signal }),
-    initialPageParam: { issuesCursor: undefined as string | undefined, prsCursor: undefined as string | undefined },
+      getGithub({ limit, ...pageParam }, { signal }),
+    initialPageParam: {
+      issuesCursor: undefined as string | undefined,
+      prsCursor: undefined as string | undefined,
+      issuesDone: false,
+      prsDone: false,
+    },
+    // A side with no next cursor is marked done so the server does not restart it (#1750).
     getNextPageParam: (last) => {
       const issuesCursor = last.issuesNextCursor ?? undefined
       const prsCursor = last.prsNextCursor ?? undefined
-      return issuesCursor || prsCursor ? { issuesCursor, prsCursor } : undefined
+      return issuesCursor || prsCursor
+        ? { issuesCursor, prsCursor, issuesDone: !issuesCursor, prsDone: !prsCursor }
+        : undefined
     },
     enabled,
     staleTime: 60_000,

@@ -918,7 +918,7 @@ export async function getRunCommit(
 /** Issues + PRs via the logged-in `gh`. Degrades to `{ available: false, reason }` server-side —
  *  an unreachable forge is a hint in the tab, not an ApiError. */
 export async function getGithub(
-  params: { limit?: number; refresh?: boolean; issuesCursor?: string; prsCursor?: string } = {},
+  params: { limit?: number; refresh?: boolean; issuesCursor?: string; prsCursor?: string; issuesDone?: boolean; prsDone?: boolean } = {},
   opts?: ReadOptions,
 ): Promise<GithubData> {
   return unwrap(
@@ -932,6 +932,8 @@ export async function getGithub(
           refresh: params.refresh ? '1' : undefined,
           issuesCursor: params.issuesCursor,
           prsCursor: params.prsCursor,
+          issuesDone: params.issuesDone ? '1' : undefined,
+          prsDone: params.prsDone ? '1' : undefined,
         },
       },
       init(opts),

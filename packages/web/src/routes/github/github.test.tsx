@@ -555,6 +555,28 @@ describe('scroll-driven paging', () => {
     expect(live()).toHaveLength(0)
   })
 
+  it('marks the exhausted side done so the server does not restart it (#1750)', async () => {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(sent.some((r) => r.path.includes('issuesCursor=c1'))).toBe(true))
+    const next = sent.find((r) => r.path.includes('issuesCursor=c1'))!
+    expect(next.path).toContain('prsDone=1')
+    expect(next.path).not.toContain('issuesDone')
+  })
+
   it('does not fetch while the sentinel stays out of view', async () => {
     const sent = stubPaged()
     renderAt('/github')
