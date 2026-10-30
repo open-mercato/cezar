@@ -13,6 +13,8 @@ describe('independent access/model compatibility', () => {
   it('offers only advertised programs, while unknown catalogs grant nothing', () => {
     expect(availableAccessModes(catalog)).toEqual(['standard', 'daybreak-blue'])
     expect(availableAccessModes()).toEqual([])
+    expect(availableAccessModes({} as RunnerModelCatalogResponse)).toEqual([])
+    expect(accessModeError('daybreak-blue', 'a', {} as RunnerModelCatalogResponse)).toBeDefined()
     expect(availableAccessModes({ ...catalog, models: [catalog.models[2]!] })).toEqual([])
   })
   it('keeps either eligible underlying model when changing mode', () => {

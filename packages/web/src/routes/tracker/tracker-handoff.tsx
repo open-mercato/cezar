@@ -96,7 +96,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <WorkflowPicker workflows={workflows} value={workflow} onChange={setWorkflow} slotPrefix="tracker" />
         <SkillsPicker skills={skills} skillUsage={undefined} selected={validSkills} onToggle={toggleSkill} maxSelections={workflow === null ? MAX_CHAIN_STEPS : undefined} slotPrefix="tracker" />
-        <EnginePills pick={engine} onChange={setEngine} accounts disabled={start.isPending || !resolved.canRun} />
+        <EnginePills pick={engine} onChange={setEngine} accounts disabled={start.isPending} />
         <AgentProviderGate resolved={resolved} dataSlot="tracker-provider-gate" />
       </div>
       {validSkills.length ? <div className="mt-2.5 flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}

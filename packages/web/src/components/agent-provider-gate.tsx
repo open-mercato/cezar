@@ -3,10 +3,13 @@ import { Link } from '@/lib/project-router'
 
 /** Explain an unavailable start and keep its recovery link in the active project. */
 export function AgentProviderGate({ resolved, dataSlot }: {
-  resolved: Pick<ResolvedEngine, 'providerPending' | 'providerError' | 'canRun'>
+  resolved: Pick<ResolvedEngine, 'providerPending' | 'providerError' | 'canRun' | 'runners' | 'accessModeError'>
   dataSlot?: string
 }) {
   if (resolved.providerPending || resolved.canRun) return null
+  if (!resolved.providerError && resolved.runners.length > 0 && resolved.accessModeError) {
+    return <span data-slot={dataSlot} role="status" className="text-xs text-destructive">{resolved.accessModeError}</span>
+  }
   return (
     <span data-slot={dataSlot} className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
       {resolved.providerError

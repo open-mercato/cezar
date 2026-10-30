@@ -13,8 +13,9 @@ export function AccessModePill({ runner, value, model, catalog, onPick, disabled
   disabled?: boolean
   locked?: boolean
 }) {
+  if (runner !== 'codex' || locked) return null
   const modes = availableAccessModes(catalog)
-  if (runner !== 'codex' || locked || (!value && modes.length === 0)) return null
+  if (!value && modes.length === 0) return null
   const shown = value && !modes.includes(value) ? [...modes, value] : modes
   const error = accessModeError(value, model, catalog)
   return (
@@ -31,7 +32,7 @@ export function AccessModePill({ runner, value, model, catalog, onPick, disabled
         }}
         options={[
           { value: '', label: 'Native default', desc: 'Let Codex choose its automatic treatment' },
-          ...shown.map((mode) => ({ value: mode, label: labels[mode], desc: modes.includes(mode) ? 'Advertised by this Codex account' : 'Unavailable for this account' })),
+          ...shown.map((mode) => ({ value: mode, label: labels[mode], desc: modes.includes(mode) ? 'Advertised by this Codex catalog' : 'Not advertised by this catalog' })),
         ]}
         status={error}
       />

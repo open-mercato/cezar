@@ -1,12 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
+import { useState } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import type { TrackerItem } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
-import { TrackerHandoff } from './tracker-handoff'
+import { TrackerHandoff, type TrackerHandoffSelection } from './tracker-handoff'
 
 const ITEM: TrackerItem = {
   kind: 'issue', id: 'OPS-1', title: 'Fix it', author: 'Ada',
@@ -17,6 +18,32 @@ const ITEM: TrackerItem = {
 const connected = { providers: [{ provider: 'claude', status: 'connected', enabled: true }] }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
+
+it('keeps an incompatible saved mode correctable while blocking task launch', async () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.endsWith('/providers/status')) return json({ providers: [{ provider: 'codex', status: 'connected', enabled: true }] })
+    if (path.includes('/models?runner=codex')) return json({ runner: 'codex', source: 'live', stale: false, models: [{ id: 'gpt-eligible-a', label: 'A', description: '', supportedAccessModes: ['standard'] }] })
+    if (path.endsWith('/config')) return json({ defaultRunner: 'codex', defaultModels: {} })
+    if (path.endsWith('/repo')) return json({ info: { root: '/demo' } })
+    if (path.endsWith('/workspace/agent-profiles')) return json({ profiles: [] })
+    return json({})
+  }))
+  function Selection() {
+    const [selection, setSelection] = useState<TrackerHandoffSelection>({ workflow: null, selectedSkills: [], engine: { runner: 'codex', model: 'gpt-eligible-a', account: null, accessMode: 'daybreak-blue' } })
+    return <TrackerHandoff item={ITEM} workflows={[]} skills={[]} selection={selection} onSelectionChange={setSelection} />
+  }
+  render(<MemoryRouter><QueryClientProvider client={createQueryClient()}><Selection /></QueryClientProvider></MemoryRouter>)
+  const mode = await screen.findByRole('button', { name: 'Access mode' }) as HTMLButtonElement
+  const run = screen.getByRole('button', { name: /Run agent/ }) as HTMLButtonElement
+  await waitFor(() => expect(mode.disabled).toBe(false))
+  expect(run.disabled).toBe(true)
+  fireEvent.pointerDown(mode, { button: 0, ctrlKey: false })
+  fireEvent.click(await screen.findByRole('menuitemradio', { name: /Native default/ }))
+  await waitFor(() => expect(run.disabled).toBe(false))
+})
 
 it.each(['missing', 'failed'] as const)('explains a %s backend and recovers without losing the draft', async (state) => {
   const client = createQueryClient()
