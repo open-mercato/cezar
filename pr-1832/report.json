@@ -1,0 +1,98 @@
+{
+  "runId": "issue-1688",
+  "mode": "pr",
+  "target": {
+    "prNumber": 1832,
+    "title": "Explain the browse-root boundary and link to Settings",
+    "branch": "feat/issue-1688-browse-root",
+    "headSha": "e26d8594f0827d5f660a9de8d8a6f90feb56df55"
+  },
+  "verdict": "PARTIAL",
+  "environment": {
+    "baseUrl": "http://127.0.0.1:63104",
+    "role": "local cockpit, disposable CEZ_HOME",
+    "startedByThisRepo": true,
+    "browserProvider": "agent-browser 0.41.0 / Chrome 156"
+  },
+  "scenario": [
+    {
+      "step": 1,
+      "priority": "P1",
+      "action": "Cold-open Add project → Open local folder at configured root",
+      "expected": "Canonical root path, explanation and Settings link; no Up",
+      "observed": "Root path and hint visible; no Up; useful shell/loading appeared before data",
+      "result": "PASS",
+      "screenshot": "step-01-root.png"
+    },
+    {
+      "step": 2,
+      "priority": "P1",
+      "action": "Enter Projects, then activate Up",
+      "expected": "Up below root, hint absent below root and restored at root",
+      "observed": "Nested listing shows Up; returning to absolute root restores hint",
+      "result": "PASS",
+      "screenshot": "step-02-nested.png"
+    },
+    {
+      "step": 3,
+      "priority": "P1",
+      "action": "Focus Settings link and press Enter",
+      "expected": "Settings → Projects opens and picker dismisses",
+      "observed": "URL /settings/global/projects, Default browse folder textbox visible, picker absent",
+      "result": "PASS",
+      "screenshot": "step-03-settings.png"
+    },
+    {
+      "step": 4,
+      "priority": "P1",
+      "action": "Repeat root picker at 390 × 844 viewport with long canonical path",
+      "expected": "Hint/link wrap; no horizontal overflow or missing controls",
+      "observed": "Readable wrapped hint, truncated path, visible Cancel/Add controls",
+      "result": "PASS",
+      "screenshot": "step-04-mobile-root.png"
+    },
+    {
+      "step": 5,
+      "priority": "P1",
+      "action": "Enter empty child folder",
+      "expected": "Existing empty-folder guidance and Up; no root hint",
+      "observed": "No subfolders guidance and Up visible; root hint absent",
+      "result": "PASS",
+      "screenshot": "step-05-empty-nested.png"
+    },
+    {
+      "step": 6,
+      "priority": "P1",
+      "action": "Delete task-owned empty Unavailable fixture after root listing, then enter it",
+      "expected": "Browse error and Back; no false root hint",
+      "observed": "Server no such directory error; Back visible; no root hint/link",
+      "result": "PASS",
+      "screenshot": "step-06-error.png"
+    },
+    {
+      "step": 7,
+      "priority": "P1",
+      "action": "Change disposable Default browse folder via Settings to Empty; reopen picker; restore setting",
+      "expected": "Empty root retains explanation and empty-folder guidance",
+      "observed": "Both messages visible, no Up; original fixture root restored",
+      "result": "PASS",
+      "screenshot": "step-07-empty-root.png"
+    },
+    {
+      "step": 8,
+      "priority": "P1",
+      "action": "Initial pending and permission-denied browse states",
+      "expected": "No premature root hint, existing permission guidance retained",
+      "observed": "Covered by component tests, including cached-root refresh failure; not separately forced in browser",
+      "result": "not exercised",
+      "screenshot": ""
+    }
+  ],
+  "hasUiTest": false,
+  "notes": [
+    "Seven browser scenarios passed; pending/403 states exercised only by component tests.",
+    "Native CLI ref midpoint click on the wrapped multiline link did not navigate; keyboard Enter did. A text click was not separately re-tested.",
+    "Add-agent-account caller inspected for shared root semantics; not separately exercised in browser.",
+    "No QA approval labels granted. Full local validation blocked outside this UI scope."
+  ]
+}
