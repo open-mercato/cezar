@@ -62,6 +62,19 @@ describe('POST /api/v1/runs systemPrompt', () => {
 
   const base = { task: 'do the thing', steps: [{ id: 'work', prompt: '{{task}}' }] };
 
+  it.each(['standard', 'daybreak-blue'] as const)('passes independent access treatment %s with its underlying model', async (accessMode) => {
+    expect((await post({ ...base, runner: 'codex', model: 'gpt-future', accessMode })).status).toBe(201);
+    expect(captured).toMatchObject({ runner: 'codex', model: 'gpt-future', accessMode });
+  });
+
+  it('keeps native access absent and refuses unsupported treatment spellings', async () => {
+    expect((await post(base)).status).toBe(201);
+    expect(captured).not.toHaveProperty('accessMode');
+    captured = undefined;
+    expect((await post({ ...base, accessMode: 'daybreak-red' })).status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
   it('passes a trimmed systemPrompt through to the manager', async () => {
     const res = await post({ ...base, systemPrompt: '  Answer in bullet points.  ' });
     expect(res.status).toBe(201);

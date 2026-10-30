@@ -31,6 +31,7 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     images?: Array<{ type: string; source: { media_type: string; data: string } }>;
     runner?: string;
     model?: string;
+    accessMode?: 'standard' | 'daybreak-blue' | null;
     agentProfile?: string;
   };
   let captured: { id: string; opts: ContinueOpts } | undefined;
@@ -111,6 +112,17 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(res.status).toBe(200);
     expect(captured?.opts.runner).toBeUndefined();
     expect(captured?.opts.model).toBeUndefined();
+    expect(captured?.opts).not.toHaveProperty('accessMode');
+  });
+
+  it.each(['standard', 'daybreak-blue', null] as const)('carries explicit access treatment %s unchanged', async (accessMode) => {
+    expect((await post({ runner: 'codex', accessMode })).status).toBe(200);
+    expect(captured?.opts.accessMode).toBe(accessMode);
+  });
+
+  it('rejects unknown access treatment before reaching the manager', async () => {
+    expect((await post({ accessMode: 'daybreak-red' })).status).toBe(400);
+    expect(captured).toBeUndefined();
   });
 
   it('still carries a follow-up text alongside the override', async () => {

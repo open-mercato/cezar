@@ -78,6 +78,12 @@ describe('POST /api/v1/todos/:id/start', () => {
 
   // ---- route guards ---------------------------------------------------------------------------
 
+  it.each(['standard', 'daybreak-blue'] as const)('passes Inbox access treatment %s to the same run boundary', async (accessMode) => {
+    writeTodos([{ id: 't1', summary: 'Ship it' }]);
+    expect((await start('t1', { runner: 'codex', model: 'gpt-future', accessMode })).status).toBe(201);
+    expect(captured).toMatchObject({ runner: 'codex', model: 'gpt-future', accessMode });
+  });
+
   it('404s an unknown id', async () => {
     writeTodos([]);
     const res = await start('nope');

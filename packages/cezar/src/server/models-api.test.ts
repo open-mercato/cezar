@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { RunnerModelCatalog, type ModelOption } from '../core/runner-model-catalog.ts';
+import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -11,8 +12,11 @@ import { createApp } from './server.ts';
 describe('workspace model catalog API', () => {
   let root: string;
   let store: RunStore;
+  let home: string | undefined;
+  let previousHome: string | undefined;
 
   beforeEach(() => {
+    previousHome = process.env.CEZ_HOME;
     root = mkdtempSync(join(tmpdir(), 'cez-models-api-'));
     store = RunStore.open(join(root, '.ai/cezar'));
   });
@@ -20,6 +24,10 @@ describe('workspace model catalog API', () => {
   afterEach(() => {
     store.flush();
     rmSync(root, { recursive: true, force: true });
+    if (home) rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    home = undefined;
+    if (previousHome === undefined) delete process.env.CEZ_HOME;
+    else process.env.CEZ_HOME = previousHome;
   });
 
   type Discover = () => Promise<Array<{ id: string; label: string; description: string }>>;
@@ -157,5 +165,35 @@ describe('workspace model catalog API', () => {
   it('is workspace-level rather than project-scoped', async () => {
     const response = await apiRequest(app(async () => []), '/api/v1/p/default/models?runner=codex');
     expect(response.status).toBe(404);
+  });
+
+  it('isolates the selected Codex account capabilities and refuses unknown or missing accounts', async () => {
+    home = mkdtempSync(join(tmpdir(), 'cez-model-accounts-'));
+    process.env.CEZ_HOME = home;
+    const profilePath = join(home, 'research');
+    mkdirSync(profilePath);
+    await mergeWriteAgentAccounts((state) => {
+      state.accounts.push({ id: 'research', provider: 'codex', configDir: profilePath, label: 'Research', addedAt: '' });
+      state.accounts.push({ id: 'missing', provider: 'codex', configDir: join(home!, 'missing'), label: '', addedAt: '' });
+    });
+    const seen: Array<Record<string, string> | undefined> = [];
+    const server = createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test',
+      modelCatalog: new RunnerModelCatalog({ adapters: { codex: {
+        discover: async (context): Promise<ModelOption[]> => {
+          seen.push(context?.env);
+          return [{ id: 'gpt-future', label: 'Future', description: '',
+            supportedAccessModes: context?.env.CODEX_HOME === profilePath ? ['standard', 'daybreak-blue'] : ['standard'] }];
+        },
+      } } }),
+    });
+    for (const account of [undefined, 'research', undefined, 'research']) {
+      const response = await apiRequest(server, `/api/v1/models?runner=codex${account ? `&agentProfile=${account}` : ''}`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ models: [{ supportedAccessModes: account ? ['standard', 'daybreak-blue'] : ['standard'] }] });
+    }
+    expect(seen).toEqual([undefined, { CODEX_HOME: profilePath }]);
+    expect((await apiRequest(server, '/api/v1/models?runner=codex&agentProfile=unknown')).status).toBe(400);
+    expect((await apiRequest(server, '/api/v1/models?runner=codex&agentProfile=missing')).status).toBe(409);
+    expect(seen).toHaveLength(2);
   });
 });
