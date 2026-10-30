@@ -820,8 +820,8 @@ describe('#1652 a native question.asked', () => {
     );
     const result = await session.result;
     expect(asks).toHaveLength(1);
-    expect(asks[0].questions[0]).toMatchObject({ header: 'Approach' });
-    expect(asks[0].questions[0].options).toHaveLength(2);
+    expect(asks[0]?.questions[0]).toMatchObject({ header: 'Approach' });
+    expect(asks[0]?.questions[0]?.options).toHaveLength(2);
     expect(result.text).toContain('question answered {"answers":[["Approach B"]]}');
   }, 30_000);
 
