@@ -28,7 +28,7 @@ import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import { ApiError, getProjectRun } from './client'
 import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
-import { hiddenTabNeedsWorkspaceStream } from './hidden-stream'
+import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
 import type {
   ApiRun,
   HealthResponse,
@@ -912,7 +912,11 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     const releaseWhileHidden = (): void => {
       hiddenTimer = undefined
       if (disposed || document.visibilityState !== 'hidden') return
-      if (hiddenTabNeedsWorkspaceStream(queryClient)) return
+      if (hiddenTabNeedsWorkspaceStream(queryClient)) {
+        // Settings not loaded yet: look again instead of holding the stream forever (#1782).
+        if (hiddenTabAwaitsUiState(queryClient)) hiddenTimer = setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        return
+      }
       clearTimeout(reopenTimer)
       reopenTimer = undefined
       const current = source
@@ -921,9 +925,14 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       current?.close()
     }
 
+    // A tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState === 'hidden') hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+    }
+
     const onVisibilityChange = (): void => {
       if (document.visibilityState === 'hidden') {
-        hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        armHiddenTimer()
         return
       }
       clearTimeout(hiddenTimer)
@@ -961,6 +970,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       if (!event.persisted) return
       reconcileOnReopen()
       connect()
+      armHiddenTimer()
     }
 
     // Only while the tab is visible: a hidden tab is legitimately throttled into silence, and
@@ -978,6 +988,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
     connect()
+    armHiddenTimer()
 
     return () => {
       disposed = true
