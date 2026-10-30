@@ -13,7 +13,8 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // npm supplies its JS entry point to scripts; invoking it through Node also works on Windows.
 const npmCli = process.env.npm_execpath;
 
-test('the release tarball installs and runs the dry-run CLI workflow', { timeout: 120_000 }, async () => {
+// Windows CI runs this in 87–105s; the steps' own 30–60s caps already bound a hang.
+test('the release tarball installs and runs the dry-run CLI workflow', { timeout: 300_000 }, async () => {
   assert.ok(npmCli, 'run this suite through npm run test:package');
   const root = await mkdtemp(join(tmpdir(), 'cezar-package-e2e-'));
 

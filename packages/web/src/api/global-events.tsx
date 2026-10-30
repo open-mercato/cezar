@@ -27,7 +27,8 @@ import {
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import { ApiError, getProjectRun } from './client'
-import { RUN_EVENT_BATCH_MS } from './run-events'
+import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
+import { hiddenTabNeedsWorkspaceStream } from './hidden-stream'
 import type {
   ApiRun,
   HealthResponse,
@@ -905,8 +906,28 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       }, RECONCILE_TIMEOUT_MS)
     }
 
+    // #1753: release the socket once the tab has stayed hidden past the grace, unless a hidden-tab
+    // feature (run notifications) still reads it. The return path below reconnects and reconciles.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    const releaseWhileHidden = (): void => {
+      hiddenTimer = undefined
+      if (disposed || document.visibilityState !== 'hidden') return
+      if (hiddenTabNeedsWorkspaceStream(queryClient)) return
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      const current = source
+      source = null
+      dashboardLive.connected(false)
+      current?.close()
+    }
+
     const onVisibilityChange = (): void => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState === 'hidden') {
+        hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
       // is what the reader is about to trust, so ask the server before they read it.
@@ -963,6 +984,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       clearTimeout(reopenTimer)
       clearTimeout(reopenReconcileTimer)
       clearInterval(livenessTimer)
+      clearTimeout(hiddenTimer)
       dashboardLive.connected(false)
       clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
       clearTimeout(lifecycleTimer); clearTimeout(lifecycleMaxTimer); lifecycleScopes.clear()

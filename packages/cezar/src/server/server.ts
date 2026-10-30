@@ -51,6 +51,7 @@ import {
   isTrackerAutomation,
   isScheduleAutomation,
   type AutomationDefinition,
+  type AutomationRuntimeState,
 } from '../automations/types.ts';
 import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
@@ -4397,6 +4398,18 @@ export function createApp(deps: ServerDeps) {
         if (kind === 'schedule' && JSON.stringify(current.schedule) !== JSON.stringify(automation.schedule)) {
           if (automationStore.state(automation.id)?.nextRunAt) {
             automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
+          }
+        }
+        // A poll's `nextCheckAt` was computed from the old interval; a shorter one takes effect
+        // now, not after the old wait (#1736). An active failure backoff is left alone.
+        if (kind !== 'schedule' && automation.enabled && current.enabled) {
+          const now = Date.now();
+          const soonest = now + (automation.intervalSeconds ?? 300) * 1_000;
+          const pullIn = (state: AutomationRuntimeState | undefined) => !!state?.nextCheckAt
+            && Date.parse(state.nextCheckAt) > soonest
+            && !(state.backoffUntil && Date.parse(state.backoffUntil) > now);
+          if (pullIn(automationStore.state(automation.id))) {
+            automationStore.setState(automation.id, (latest) => pullIn(latest) ? { ...latest, nextCheckAt: new Date(soonest).toISOString() } : latest);
           }
         }
         if (kind !== 'tracker' && automation.enabled && !current.enabled) armAutomation(automationStore, automation);
