@@ -26,6 +26,7 @@ const BILLING_RES = [
   /\bcredit balance is too low\b/i, // claude (7d0a1d6d)
   /\binsufficient[_\s]quota\b/i, // OpenAI-backed codex/opencode
   /\bexceeded your current quota\b/i,
+  /\bapi error:\s*402\b|\brequires more credits\b/i, // claude via a credit-billed gateway (cb147fae)
 ] as const;
 
 const CONTEXT_TOO_LARGE_RES = [
