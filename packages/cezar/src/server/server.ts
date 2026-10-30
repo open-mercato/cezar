@@ -1,5 +1,5 @@
 import { createWebhookRoutes } from './webhooks.ts';
-import { executionAccessModeSchema, runnerModelsQuerySchema } from '@open-mercato/cezar-contract';
+import { executionAccessModeSchema, runnerModelsQuerySchema, startTodoInputSchema } from '@open-mercato/cezar-contract';
 import { WebhookCoordinator } from '../webhooks/coordinator.ts';
 import { webhooksEnabled } from '../webhooks/service.ts';
 import { listServerInstances } from '../server-install/state.ts';
@@ -1112,19 +1112,7 @@ const continueSchema = continueInputSchema;
 // means "host default" rather than "keep what the run had". `prompt` (#413) is extra
 // instructions appended to the entry's suggested/summary task text; whitespace-only degrades to
 // absent so it never touches `task`.
-const startTodoSchema = z
-  .object({
-    runner: z.enum(RUNNER_IDS).optional(),
-    model: z.string().max(200).optional(),
-    accessMode: executionAccessModeSchema.optional(),
-    prompt: z
-      .string()
-      .trim()
-      .max(20_000, 'must be at most 20000 characters')
-      .optional()
-      .transform((s) => (s ? s : undefined)),
-  })
-  .optional();
+const startTodoSchema = startTodoInputSchema.optional();
 
 /** Hono env for `POST /todos/:id/start`: the guard in front of that route publishes the resolved
  *  entry so the handler does not re-read `todos.json` a second time in the same request. */

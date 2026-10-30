@@ -1,6 +1,6 @@
 import type { z } from 'zod'
 import type {
-  ExecutionAccessMode,
+  ContinueInput, StartTodoInput,
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
   LifecyclePreviewResponse, LifecycleActionInput, StartLifecycleRemovalInput,
@@ -1667,18 +1667,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
  *  and agent account handle the reopened session. Omitted fields keep the run's current
  *  backend/model/account. `text`/`images` are the prompt the reopened session starts on — omitted,
  *  the engine opens with its plain "Continue.". */
-export interface ContinueOptions {
-  text?: string
-  images?: AttachmentEntry[]
-  runner?: Runner
-  model?: string
-  accessMode?: ExecutionAccessMode | null
-  /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
-   *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
-  agentProfile?: string
-  /** One per Continue, reused by its retries: a key that already landed is not continued again. */
-  idempotencyKey?: string
-}
+export type ContinueOptions = ContinueInput
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
  *  runner/model override lets the follow-up choose the engine; omitted keeps the run's current
@@ -1803,12 +1792,7 @@ export async function removeTodo(id: string): Promise<RemoveTodoResponse> {
  *  `ContinueOptions` these start a NEW run, so an omitted `runner`/`model` means the host's
  *  `defaultRunner`, not "keep the run's". `prompt` (#413) is extra instructions appended to the
  *  suggested/summary task text — e.g. a template inserted in the Inbox composer. */
-export interface StartTodoOptions {
-  runner?: Runner
-  model?: string
-  accessMode?: ExecutionAccessMode
-  prompt?: string
-}
+export type StartTodoOptions = StartTodoInput
 
 /** Inbox "Run" (spec 007): the server turns the entry into a task — a one-off single-step
  *  workflow around the suggested skill when it exists, plain quick-task otherwise — and
