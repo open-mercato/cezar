@@ -1,4 +1,4 @@
-# Per-project Tasks quick and selected-row actions
+﻿# Per-project Tasks quick and selected-row actions
 
 ## TLDR
 
@@ -22,9 +22,11 @@ Issue #1599 describes archiving specific tasks requiring opening each thread. Th
 
 ## Architecture and API Contracts
 
-Change `packages/web/src/routes/tasks-overview.tsx` and issue-specific action/selection helpers and tests. Reuse `archiveRun(id, archived, 'tasks_table')`, `markRunSeen(id)` and `markRunUnseen(id)`, `writePatchedRunToCaches`, authoritative runs invalidation and existing `Button` styles. No schema, API, persisted state, setting, dependency or global UI change. Archive eligibility follows existing done/failed/cancelled status rules; restoring already archived rows remains allowed. Read-state eligibility is exactly `canBeUnread`, with current state from `isUnread`.
+Change `packages/web/src/routes/tasks-overview.tsx` and issue-specific action/selection helpers and tests. Reuse `archiveProjectRun(projectId, id, archived, 'tasks_table')` and `setProjectRunRead(projectId, id, read)` with the original project pinned for the batch, `writePatchedRunToCaches`, authoritative runs invalidation and existing `Button` styles. No schema, API, persisted state, setting, dependency or global UI change. Archive eligibility follows existing done/failed/cancelled status rules; restoring already archived rows remains allowed. Read-state eligibility is exactly `canBeUnread`, with current state from `isUnread`.
 
 ## UI/UX
+
+Prototype: .ai/specs/assets/issue-1599-tasks-actions/proposed.html (illustrative static; running-app evidence on implementation PR #1843).
 
 Each displayed desktop row and mobile card gets a labelled native checkbox plus eligible quick action buttons. Controls must not navigate to the thread. A page-level Select displayed tasks checkbox includes filtered, expanded rows across the virtualized list, excluding collapsed children. Its indeterminate state reflects partial selection. Selection changes stay local to the page; changing project remounts the page, changing view/search/facets or collapsing children prunes hidden ids, sorting retains visible selections. No shift-range selection in this delivery: checkboxes and select-all cover the requested subset without another interaction model.
 
@@ -51,3 +53,4 @@ Phase 1: scoped actions and selection.
 Phase 2: verification and handoff.
 3. Add React interaction tests for subset/mixed eligibility, pending/error states, responsive controls, hidden selection and API/cache behavior; prove a key regression red against the old route.
 4. Run the configured gate, review/autofix, then real-browser desktop/mobile QA and publish evidence. Record platform baseline failures honestly; final Linux CI must independently pass before claiming a full green gate.
+
