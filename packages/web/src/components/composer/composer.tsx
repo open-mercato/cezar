@@ -43,6 +43,7 @@ import {
 import { releaseStaged, sendWithStaged, stageAttachment } from './attachment-staging'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
+import { dictationLanguageOptions, useDictationLanguage } from './dictation-language'
 
 /**
  * The SHARED composer (spec §"Task thread" composer + §"New task" composer intelligence —
@@ -238,10 +239,11 @@ export function Composer({
   // highest-traffic skill surface — both reads and feeds the same stats as the pickers.
   const uiState = useUiState()
   const queryClient = useQueryClient()
+  const [dictationLanguage, setDictationLanguage] = useDictationLanguage()
   const dictation = useDictation(({ message, failure }) => {
     if (failure) reportDictationFailed(failure)
     toast(message, failure ? { tone: 'danger', reported: true } : {})
-  })
+  }, dictationLanguage)
 
   // On-mount only, by design: re-focusing on a later `autoFocus` flip would steal focus mid-visit.
   useEffect(() => {
@@ -691,6 +693,22 @@ export function Composer({
                 {footerStart}
               </div>
               <div className="ml-auto flex items-center gap-1">
+                {dictation.supported ? (
+                  <select
+                    aria-label="Dictation language"
+                    title="Dictation language"
+                    value={dictationLanguage}
+                    disabled={disabled}
+                    onChange={(e) => setDictationLanguage(e.target.value)}
+                    className="h-8 max-w-28 rounded-md border-0 bg-transparent px-1 text-xs text-muted-foreground outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-40"
+                  >
+                    {dictationLanguageOptions().map((o) => (
+                      <option key={o.tag} value={o.tag} className="bg-card text-foreground">
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
                 {dictation.supported && dictation.unavailable ? (
                   // aria-disabled, not disabled: a disabled button never gets the hover/focus
                   // that opens the tooltip saying why.
