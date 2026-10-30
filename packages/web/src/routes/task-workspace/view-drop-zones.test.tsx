@@ -13,7 +13,7 @@ const hot = (el: Element) => el.className.includes('bg-muted')
 describe('ViewDropZones hover (#1556)', () => {
   it('keeps the highlight while the pointer crosses into the label, with no relatedTarget', () => {
     const { container } = render(
-      <ViewDropZones view="terminal" columns={[{ view: 'diff', width: 100 }]} onDrop={vi.fn()} />,
+      <ViewDropZones view="terminal" columns={[{ view: 'changes', width: 100 }]} onDrop={vi.fn()} />,
     )
     const zone = container.querySelector('[data-drop-zone="replace"]')!
     const label = zone.firstChild!.parentElement!.appendChild(document.createElement('span'))
@@ -31,7 +31,7 @@ describe('ViewDropZones hover (#1556)', () => {
   it('still drops with the view and clears the highlight', () => {
     const onDrop = vi.fn()
     const { container } = render(
-      <ViewDropZones view="terminal" columns={[{ view: 'diff', width: 100 }]} onDrop={onDrop} />,
+      <ViewDropZones view="terminal" columns={[{ view: 'changes', width: 100 }]} onDrop={onDrop} />,
     )
     const zone = container.querySelector('[data-drop-zone="replace"]')!
     fireEvent.dragEnter(zone, { dataTransfer })
