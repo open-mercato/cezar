@@ -1,4 +1,4 @@
-﻿# Explain the browse-root boundary (#1688)
+# Explain the browse-root boundary (#1688)
 
 ## Goal and scope
 
@@ -40,5 +40,3 @@ Source implementation: 5669ca14. Browser QA: seven scenarios passed; pending/403
 
 - [ ] 2.1 Run the full configured validation gate and independent code review; resolve actionable findings.
 - [x] 2.2 Verify the real UI and Settings destination in a browser; publish evidence and leave human QA required.
-
-
