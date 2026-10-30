@@ -596,7 +596,7 @@ function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'sch
   // below to one that reaches this far (e.g. a PUT that omits `kind` on an existing tracker row).
   if (kind === 'tracker') return body.trackerTrigger ? null : 'Choose an event to finish configuring this automation';
   if (kind === 'schedule') {
-    if (body.events || body.filters || body.intervalSeconds !== undefined || body.trackerTrigger) return 'a scheduled automation has no event filter';
+    if (body.events || body.filters || body.intervalSeconds !== undefined || body.trackerTrigger) return 'a scheduled automation has no GitHub filter';
     return null;
   }
   if (!body.events?.length) return 'a GitHub automation needs at least one event';
