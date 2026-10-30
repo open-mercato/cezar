@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, statSync, utimesSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -44,7 +44,7 @@ describe('disclaimedCommand', () => {
     symlinkSync(real, join(dir, 'bin', 'claude'));
     const [file, argv] = disclaimedCommand('claude', ['-p'], { PATH: join(dir, 'bin') }, darwin);
     expect(file).toBe(trampoline);
-    expect(argv[1]).toMatch(/\/clones\/claude-[0-9a-f]{16}\/claude$/);
+    expect(argv[1]).toMatch(/\/clones\/claude-[0-9a-f]{12}\/claude$/);
     expect(readFileSync(argv[1]!)).toEqual(readFileSync(real));
     expect(argv.slice(2)).toEqual(['-p']);
     // Stable across spawns: the second call reuses the first clone.
@@ -68,7 +68,7 @@ describe('disclaimedCommand', () => {
     const flagged = exe('npm/flagged', `#!/usr/bin/env -S node --no-warnings\n`);
     const [, argv] = disclaimedCommand('pi', ['--mode', 'rpc'], { PATH: join(dir, 'npm') }, darwin);
     expect(argv.slice(2)).toEqual([pi, '--mode', 'rpc']);
-    if (process.platform === 'darwin') expect(argv[1]).toMatch(/\/clones\/pi-[0-9a-f]{16}\/pi$/);
+    if (process.platform === 'darwin') expect(argv[1]).toMatch(/\/clones\/pi-[0-9a-f]{12}\/pi$/);
     else expect(argv[1]).toBe(node);
     expect(disclaimedCommand(flagged, [], { PATH: join(dir, 'npm') }, darwin)[1].slice(2)).toEqual(['--no-warnings', flagged]);
   });
@@ -87,5 +87,85 @@ describe('disclaimedCommand', () => {
     expect(disclaimedCommand(lone, [], { PATH: join(dir, 'lone') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, lone]]);
     const bash = exe('lone/launcher', '#!/usr/bin/env bash\nexec node x\n');
     expect(disclaimedCommand(bash, [], { PATH: join(dir, 'npm') }, darwin)).toEqual([trampoline, [DISCLAIM_EXEC_FLAG, bash]]);
+  });
+
+  describe('clone slot across agent updates (#1696)', () => {
+    const macho = (tag: string) => Buffer.from([0xcf, 0xfa, 0xed, 0xfe, ...Buffer.from(tag)]);
+    const clones = join(dir, 'upd-clones');
+    const env = (bin: string) => ({ PATH: bin });
+    const opts = { ...darwin, cloneDir: clones, cloneFile: copyFileSync };
+    const install = (bin: string, version: string, tag: string) => {
+      mkdirSync(join(bin, '..', 'versions'), { recursive: true });
+      mkdirSync(bin, { recursive: true });
+      const real = exe(`${bin.slice(dir.length + 1)}/../versions/${version}`, macho(tag));
+      rmSync(join(bin, 'claude'), { force: true });
+      symlinkSync(real, join(bin, 'claude'));
+      return real;
+    };
+    const spawnPath = (bin: string) => disclaimedCommand('claude', [], env(bin), opts)[1][1]!;
+
+    it('keeps the same path when the agent moves to a new version, and refreshes the content', () => {
+      const bin = join(dir, 'upd1', 'bin');
+      install(bin, '2.1.1', 'old');
+      const before = spawnPath(bin);
+      expect(before).toContain('upd-clones');
+      const oldInode = statSync(before).ino;
+      expect(readFileSync(before).toString()).toContain('old');
+      install(bin, '2.1.2', 'new');
+      const after = spawnPath(bin);
+      expect(after).toBe(before);
+      expect(readFileSync(after).toString()).toContain('new');
+      // Replaced by rename, not rewritten: a running agent keeps the old inode.
+      expect(statSync(after).ino).not.toBe(oldInode);
+    });
+
+    it('reuses an up-to-date clone without cloning again', () => {
+      const bin = join(dir, 'upd2', 'bin');
+      install(bin, '2.1.1', 'x');
+      let clonesMade = 0;
+      const counting = { ...opts, cloneFile: (a: string, b: string) => { clonesMade++; copyFileSync(a, b); } };
+      disclaimedCommand('claude', [], env(bin), counting);
+      disclaimedCommand('claude', [], env(bin), counting);
+      expect(clonesMade).toBe(1);
+    });
+
+    it('refreshes when only the mtime of the same-named build changes', () => {
+      const bin = join(dir, 'upd3', 'bin');
+      const real = install(bin, '2.1.1', 'same');
+      const first = spawnPath(bin);
+      utimesSync(real, new Date(), new Date(Date.now() + 5000));
+      let clonesMade = 0;
+      disclaimedCommand('claude', [], env(bin), { ...opts, cloneFile: (a, b) => { clonesMade++; copyFileSync(a, b); } });
+      expect(clonesMade).toBe(1);
+      expect(spawnPath(bin)).toBe(first);
+    });
+
+    it('gives different installs of the same agent name different slots', () => {
+      const a = install(join(dir, 'upd4a', 'bin'), '1.0.0', 'a');
+      const b = install(join(dir, 'upd4b', 'bin'), '1.0.0', 'b');
+      const pa = spawnPath(join(dir, 'upd4a', 'bin'));
+      const pb = spawnPath(join(dir, 'upd4b', 'bin'));
+      expect(pa).not.toBe(pb);
+      expect(readFileSync(pa).toString()).toContain('a');
+      expect(readFileSync(pb).toString()).toContain('b');
+      expect([a, b]).toHaveLength(2);
+    });
+
+    it('removes legacy per-version slots once, and leaves other agents alone', () => {
+      const bin = join(dir, 'upd5', 'bin');
+      install(bin, '2.1.1', 'q');
+      mkdirSync(join(clones, 'claude-0123456789abcdef'), { recursive: true });
+      mkdirSync(join(clones, 'codex-0123456789abcdef'), { recursive: true });
+      spawnPath(bin);
+      expect(existsSync(join(clones, 'claude-0123456789abcdef'))).toBe(false);
+      expect(existsSync(join(clones, 'codex-0123456789abcdef'))).toBe(true);
+    });
+
+    it('falls back to the resolved path when cloning fails, and leaves no half-made target', () => {
+      const bin = join(dir, 'upd6', 'bin');
+      install(bin, '2.1.1', 'z');
+      const failing = { ...opts, cloneDir: join(dir, 'fail-clones'), cloneFile: () => { throw new Error('EXDEV'); } };
+      expect(disclaimedCommand('claude', [], env(bin), failing)[1][1]).toBe(join(bin, 'claude'));
+    });
   });
 });

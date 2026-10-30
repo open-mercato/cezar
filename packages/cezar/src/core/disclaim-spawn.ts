@@ -13,7 +13,8 @@
  * The prompt names the executable's REAL file, past symlinks: Claude Code's native install links
  * `claude` to `versions/2.1.295`, so it asked as "2.1.295". A Mach-O whose file name is not the
  * agent's runs from an APFS clone named after it (`~/.cache/cez/agent-exec/`) — no extra disk,
- * same code signature, so a grant still follows the agent's identity. No clone, no rename.
+ * same code signature, so a grant still follows the agent's identity. The clone's path is stable
+ * across agent updates (#1696). No clone, no rename.
  * A Node script (an npm install) would ask as "node", so it runs on a clone of its `node` named
  * after the agent; a bash launcher stays as it is unless its runner unwraps it (`cursor-agent`).
  *
@@ -30,11 +31,13 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
@@ -51,6 +54,8 @@ export interface DisclaimOptions {
   cloneDir?: string;
   /** The name a privacy prompt should show; defaults to `program`'s file name. */
   name?: string;
+  /** Test seam: how a binary is cloned; defaults to `cp -c` (clonefile). */
+  cloneFile?: (from: string, to: string) => void;
 }
 
 /** Whether `disclaimedCommand` reroutes at all: the desktop shell on macOS. */
@@ -73,12 +78,13 @@ export function disclaimedCommand(
   if (!resolved) return [program, [...args]];
   const name = opts.name ?? basename(program);
   const cloneDir = opts.cloneDir ?? join(homedir(), '.cache', 'cez', 'agent-exec');
+  const clone = opts.cloneFile ?? cloneWithCp;
   const shebang = nodeShebang(resolved);
   const node = shebang && resolveProgram(shebang[0]!, path);
   if (shebang && node && isRealNode(node)) {
-    return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(node, name, cloneDir), ...shebang.slice(1), resolved, ...args]];
+    return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(node, name, cloneDir, clone), ...shebang.slice(1), resolved, ...args]];
   }
-  return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(resolved, name, cloneDir), ...args]];
+  return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(resolved, name, cloneDir, clone), ...args]];
 }
 
 /** `[node, …flags]` from a `#!/usr/bin/env node` (or `-S node …`, or `/path/node`) script, else null. */
@@ -106,32 +112,61 @@ function isRealNode(path: string): boolean {
   }
 }
 
-/** `resolved`, or a clone of its real file named `name`; any failure keeps `resolved`. */
-function namedAfterAgent(resolved: string, name: string, cloneDir: string): string {
+/**
+ * `resolved`, or a clone of its real file named `name`; any failure keeps `resolved`. The slot is
+ * keyed on `resolved` (the launcher's own path, e.g. `~/.local/bin/claude`), not on the versioned
+ * real file, so the path TCC records a grant against survives an agent update (#1696). A marker
+ * beside the clone says which build it holds; a mismatch re-clones in place.
+ */
+function namedAfterAgent(resolved: string, name: string, cloneDir: string, clone: CloneFile): string {
   try {
     const real = realpathSync(resolved);
     // Scripts find their siblings relative to their own path; only a Mach-O is safe to move.
     if (basename(real) === name || !isMachO(real)) return resolved;
     const { size, mtimeMs } = statSync(real);
-    const key = createHash('sha256').update(`${real}\0${size}\0${mtimeMs}`).digest('hex').slice(0, 16);
-    const slot = `${name}-${key}`;
+    const build = createHash('sha256').update(`${real}\0${size}\0${mtimeMs}`).digest('hex');
+    const slot = `${name}-${createHash('sha256').update(resolved).digest('hex').slice(0, SLOT_KEY_LENGTH)}`;
     const target = join(cloneDir, slot, name);
-    if (isExecutable(target)) return target;
+    const marker = join(cloneDir, slot, BUILD_MARKER);
+    if (isExecutable(target) && readFileOrEmpty(marker) === build) return target;
     mkdirSync(join(cloneDir, slot), { recursive: true });
     const tmp = `${target}.${process.pid}.tmp`;
-    // `cp -c` is clonefile(2): a clone or an error, never a silent full copy of a 200 MB binary
-    // (Node's COPYFILE_FICLONE_FORCE is ENOSYS on macOS).
-    execFileSync('/bin/cp', ['-c', real, tmp], { stdio: 'ignore', timeout: 10_000 });
+    clone(real, tmp);
+    // rename(2) swaps the directory entry: a running agent keeps its old inode.
     renameSync(tmp, target);
-    // Drop the clones of versions this agent has moved past (a running one keeps its inode).
+    // After the rename, so a marker never vouches for a clone that is not there yet.
+    const markerTmp = `${marker}.${process.pid}.tmp`;
+    writeFileSync(markerTmp, build);
+    renameSync(markerTmp, marker);
+    // Drop legacy per-version slots (`<name>-<16 hex>`, pre-#1696).
     for (const entry of readdirSync(cloneDir)) {
-      if (entry !== slot && entry.startsWith(`${name}-`) && entry.length === slot.length) {
+      if (entry !== slot && LEGACY_SLOT.test(entry) && entry.startsWith(`${name}-`)) {
         rmSync(join(cloneDir, entry), { recursive: true, force: true });
       }
     }
     return target;
   } catch {
     return resolved;
+  }
+}
+
+const SLOT_KEY_LENGTH = 12;
+const BUILD_MARKER = '.build';
+const LEGACY_SLOT = /-[0-9a-f]{16}$/;
+
+type CloneFile = (from: string, to: string) => void;
+
+/** `cp -c` is clonefile(2): a clone or an error, never a silent full copy of a 200 MB binary
+ * (Node's COPYFILE_FICLONE_FORCE is ENOSYS on macOS). */
+const cloneWithCp: CloneFile = (from, to) => {
+  execFileSync('/bin/cp', ['-c', from, to], { stdio: 'ignore', timeout: 10_000 });
+};
+
+function readFileOrEmpty(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
   }
 }
 
