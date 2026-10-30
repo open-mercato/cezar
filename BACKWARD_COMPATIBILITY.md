@@ -182,6 +182,14 @@ Breaking: removing/renaming a route; making a previously optional body field req
 
 ## 3. `.ai/cezar/` state files (`packages/cezar/src/runs/store.ts` and friends)
 
+- `ui-state.json` optionally stores `automationList: { sort?: 'manual' | 'name' | 'nextRun',
+  order?: string[] }` (#1819). The existing project-scoped GET/PUT UI-state routes preserve
+  unknown sibling fields; new writes bound the order to 200 IDs of 1–200 characters. Missing
+  preferences retain alphabetical ordering. Manual order survives sort changes and reloads;
+  existing windows keep the established last-write-wins preference semantics. This changes
+  list presentation only: automation definitions, scheduler priority, calendars and the Next
+  runs rail are unchanged. No migration or required configuration is introduced.
+
 - `webhooks/` is private opt-in state, covered by `ensureDataGitignore` in boot and lazy project
   contexts and verified ignored/untracked before secrets are written. Files include root-bound
   installation identity, endpoints/keys/revisions/activation fences, ownership proof, bounded outbox
