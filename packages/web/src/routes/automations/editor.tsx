@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, FileTextIcon, LayoutTemplateIcon, Settings2Icon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
-import type { AutomationListEntry, AutomationsResponse } from '@open-mercato/cezar-api-client'
+import { MAX_AUTOMATION_SCHEDULES, type AutomationListEntry, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 import { ApiError, createAutomation, updateAutomation } from '@/api/client'
 import { useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import { Chip } from '@/components/chip'
@@ -239,15 +239,17 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                       <legend className="px-1 text-xs text-muted-foreground">Schedule {index + 1}</legend>
                       <EditorScheduleFields schedule={schedule} timeZone={timeZone} allowOnce={schedules.length === 1} onChange={(value) => {
                         const next = schedules.map((item, i) => i === index ? value : item)
-                        patch({ schedule: next[0]!, schedules: next.length > 1 ? next : undefined })
+                        const first = next[0]
+                        if (first) patch({ schedule: first, schedules: next.length > 1 ? next : undefined })
                       }} />
                       {schedules.length > 1 ? <Button variant="ghost" size="sm" aria-label={`Remove schedule ${index + 1}`} onClick={() => {
                         const next = schedules.filter((_, i) => i !== index)
-                        patch({ schedule: next[0]!, schedules: next.length > 1 ? next : undefined })
+                        const first = next[0]
+                        if (first) patch({ schedule: first, schedules: next.length > 1 ? next : undefined })
                       }}>Remove schedule</Button> : null}
                     </fieldset>
                   ))}
-                  <Button variant="outline" size="sm" disabled={(draft.schedules?.length ?? 1) >= 16 || draft.schedule.type === 'once'} onClick={() => patch({
+                  <Button variant="outline" size="sm" disabled={(draft.schedules?.length ?? 1) >= MAX_AUTOMATION_SCHEDULES || draft.schedule.type === 'once'} onClick={() => patch({
                     schedules: [draft.schedule, ...(draft.schedules?.slice(1) ?? []), { type: 'daily', hour: 4, minute: 0 }],
                   })}>Add schedule</Button>
                   <p className="text-xs text-muted-foreground">Times that coincide start one task. One-time schedules run on their own.</p>

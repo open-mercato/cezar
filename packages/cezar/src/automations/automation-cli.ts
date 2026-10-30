@@ -57,8 +57,8 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
                      [--changed-label <label-id>] [--require-label <name>]... [--every 30m] --prompt <text> [--enable]
                                                 use this project's configured tracker; only advertised events are accepted
   cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, kind,
-                                                events, intervalSeconds, filters, schedule, task); keys you omit keep
-                                                their value
+                                                events, intervalSeconds, filters, schedule, schedules, task); omitted
+                                                keys keep their value; an explicit schedule replaces the whole list
   cez automation check <id> [--execute]         event poll: run the filter now — preview counts matches and launches
                                                 nothing, --execute launches a task per match exactly as a poll would
   cez automation run <id>                       schedule: launch it once, now, by hand (paused or not)

@@ -1,4 +1,4 @@
-# Multiple schedules sharing an automation
+﻿# Multiple schedules sharing an automation
 
 Source doc: .ai/specs/2026-09-14-automations-redesign.md (amendment in design PR #1863)
 Issue: #1818
@@ -28,11 +28,12 @@ entry. No base merges or pushes. Local Windows full-suite/platform limits must r
 
 ### Phase 1: compatible scheduling
 
-- [ ] 1.1 Bounded list, union helpers, compatible writes and due invalidation
-- [ ] 1.2 Union runner and bounded catch-up with receipt/lease evidence
-- [ ] 1.3 HTTP boundary and compatibility note (parent-owned)
+- [x] 1.1 Bounded list, union helpers, compatible writes and due invalidation — 86945326
+- [x] 1.2 Union runner and bounded catch-up with receipt/lease evidence — 86945326
+- [x] 1.3 HTTP boundary and compatibility note (parent-owned) — 9caaf696
 
 ### Phase 2: editor and verification
 
-- [ ] 2.1 Editor groups and all union/copy/template consumers
+- [x] 2.1 Editor groups and all union/copy/template consumers — b16b5926, 3ca31821
 - [ ] 2.2 Full validation, review, browser QA and exact-head CI
+

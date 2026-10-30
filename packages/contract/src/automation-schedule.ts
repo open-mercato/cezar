@@ -69,7 +69,8 @@ export function automationScheduleIssue(selection: ScheduleSelection, kind = 'sc
   const schedules = schedulesOf(selection);
   const parsed = automationSchedulesSchema.safeParse(schedules);
   if (!parsed.success) return parsed.error.issues[0]?.message ?? 'a scheduled automation needs a schedule';
-  if (selection.schedule && selection.schedules && JSON.stringify(normalizeSchedule(selection.schedule)) !== JSON.stringify(normalizeSchedule(selection.schedules[0]!))) {
+  const first = selection.schedules?.[0];
+  if (selection.schedule && first && JSON.stringify(normalizeSchedule(selection.schedule)) !== JSON.stringify(normalizeSchedule(first))) {
     return 'schedule must match the first entry of schedules';
   }
   return null;

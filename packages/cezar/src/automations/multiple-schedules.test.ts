@@ -87,7 +87,9 @@ describe('#1818 multiple schedule union', () => {
     const times = scheduleOccurrencesBetween({ schedules }, from, from + 24 * 3_600_000, 'Europe/Warsaw');
     expect(times).toHaveLength(1);
     // Preserve the existing single-shape wall-time resolution: near the gap, later fold.
-    expect(new Date(times[0]!).toISOString()).toBe(date === '2026-03-29' ? '2026-03-29T00:30:00.000Z' : '2026-10-25T01:30:00.000Z');
+    const instant = times[0];
+    if (instant === undefined) throw new Error('expected one DST occurrence');
+    expect(new Date(instant).toISOString()).toBe(date === '2026-03-29' ? '2026-03-29T00:30:00.000Z' : '2026-10-25T01:30:00.000Z');
   });
 
   it('uses one receipt for a coincident instant across restart and a competing cockpit', async () => {
@@ -98,7 +100,8 @@ describe('#1818 multiple schedule union', () => {
     const otherStore = AutomationStore.open(dir);
     const otherLaunch = vi.fn(async () => ({ runId: 'r2' }));
     const other = new ScheduleRunner({ projectId: 'p', store: otherStore, timeZone: 'UTC', now: () => Date.parse('2026-10-30T09:00:01Z'), launch: otherLaunch });
-    const lease = store.acquireLease()!;
+    const lease = store.acquireLease();
+    if (!lease) throw new Error('expected the first cockpit to acquire its lease');
     expect((await other.fire(definition)).result).toBe('lease-held');
     expect(otherStore.state('shared')?.nextRunAt).toBe('2026-10-30T09:00:00.000Z');
     lease.release();

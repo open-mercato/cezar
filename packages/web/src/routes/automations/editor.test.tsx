@@ -149,7 +149,9 @@ describe('AutomationEditor — new', () => {
     fillRequired('Shared checks', 'Check once per instant')
     fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }))
     expect(screen.getAllByLabelText('Hour')).toHaveLength(2)
-    fireEvent.change(screen.getAllByLabelText('Hour')[1]!, { target: { value: '16' } })
+    const secondHour = screen.getAllByLabelText('Hour')[1]
+    if (!secondHour) throw new Error('expected the added schedule hour field')
+    fireEvent.change(secondHour, { target: { value: '16' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove schedule 3' }))
     fireEvent.click(saveButton())
