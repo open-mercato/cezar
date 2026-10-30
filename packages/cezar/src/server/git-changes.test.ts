@@ -1435,9 +1435,36 @@ describe('pushCurrentBranch — a rebased branch (#1758)', () => {
     try {
       expect((await pushCurrentBranch(dir)).ok).toBe(true);
       g(dir, 'commit', '--amend', '-m', 'work, rewritten');
-      const res = await pushCurrentBranch(dir);
+      const res = await pushCurrentBranch(dir, { leaseRewrites: true });
       expect(res.ok).toBe(true);
       expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('work, rewritten');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('the repo-root push, without the option, still refuses a rewritten branch', async () => {
+    const { remote, dir } = setup();
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      expect((await pushCurrentBranch(dir)).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('never rewrites a default branch, even with the option', async () => {
+    const { remote, dir } = setup();
+    try {
+      g(dir, 'checkout', '-q', '-B', 'main');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true })).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'main, rewritten');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true })).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'main').trim()).toBe('work');
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(remote, { recursive: true, force: true });
@@ -1457,7 +1484,7 @@ describe('pushCurrentBranch — a rebased branch (#1758)', () => {
       g(c, 'push', '-q', 'origin', 'cez/x');
       g(dir, 'fetch', '-q', 'origin');
       g(dir, 'commit', '--amend', '-m', 'work, rewritten');
-      const res = await pushCurrentBranch(dir);
+      const res = await pushCurrentBranch(dir, { leaseRewrites: true });
       expect(res.ok).toBe(false);
       expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('theirs');
     } finally {
