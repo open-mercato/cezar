@@ -19,6 +19,19 @@ import {
 
 afterEach(resetDraft)
 
+describe('remembered Codex access selection', () => {
+  it.each([null, 'standard', 'daybreak-blue'] as const)('retains %s after starting a draft', (accessMode) => {
+    writeDraft({ ...readDraft(), runner: 'codex', model: 'custom-alias', accessMode })
+    clearStartedDraft()
+    expect(readDraft()).toMatchObject({ model: 'custom-alias', accessMode })
+    expect(JSON.parse(localStorage.getItem('cez-new-task-draft')!)).toMatchObject({ accessMode })
+  })
+  it('leaves old and unknown selections absent', () => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ accessMode: 'future-mode' }))
+    expect(readDraft()).not.toHaveProperty('accessMode')
+  })
+})
+
 const EMPTY_DRAFT = {
   text: '',
   source: null,

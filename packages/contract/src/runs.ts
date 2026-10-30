@@ -1277,6 +1277,17 @@ export const continueInputSchema = z.object({
 });
 export type ContinueInput = z.input<typeof continueInputSchema>;
 
+/** `POST /todos/:id/start`: the Inbox's ordinary task creation selection. The body itself may
+ * be omitted, preserving older clients; the route applies `.optional()` to this shape. */
+export const startTodoInputSchema = z.object({
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  accessMode: executionAccessModeSchema.optional(),
+  prompt: z.string().trim().max(20_000, 'must be at most 20000 characters').optional()
+    .transform((s) => (s ? s : undefined)),
+});
+export type StartTodoInput = z.input<typeof startTodoInputSchema>;
+
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both
  * `title` and `titleSummary` so it wins over any auto-summary. `task` (#472) is the initial

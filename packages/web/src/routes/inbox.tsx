@@ -334,7 +334,7 @@ function TodoCard({
       {runnable ? (
         <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-5">
           <EnginePills pick={engine} onChange={setEngine} disabled={busy} />
-          {!resolved.providerPending && !resolved.canRun ? (
+          {!resolved.providerPending && (resolved.providerError || resolved.runners.length === 0) ? (
             <span
               data-slot="todo-provider-gate"
               className="inline-flex flex-wrap items-center gap-1 text-xs text-muted-foreground"

@@ -16,6 +16,17 @@ afterEach(resetFollowupSelection)
 
 const EMPTY = { workflow: null, skills: [], runner: null, model: null }
 
+describe('remembered Codex access selection', () => {
+  it.each([null, 'standard', 'daybreak-blue'] as const)('round-trips %s without collapsing native and explicit', (accessMode) => {
+    writeFollowupSelection({ runner: 'codex', model: 'custom-alias', accessMode })
+    expect(readFollowupSelection()).toMatchObject({ model: 'custom-alias', accessMode })
+  })
+  it('ignores unknown selection metadata in an older stored pick', () => {
+    localStorage.setItem('cez-followup-selection', JSON.stringify({ ...EMPTY, accessMode: 'future-mode' }))
+    expect(readFollowupSelection()).toEqual(EMPTY)
+  })
+})
+
 describe('the follow-up "remembered last selection" store (#408 item 3)', () => {
   it('starts empty — no workflow, no skills, no engine pick', () => {
     expect(readFollowupSelection()).toEqual(EMPTY)
