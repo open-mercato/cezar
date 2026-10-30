@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
 
+describe('new-task execution access mode body', () => {
+  const body = (runner: 'codex' | 'claude', accessMode?: 'standard' | 'daybreak-blue' | null, modelsLocked = false) =>
+    buildCreateRunBody({ task: 'work', source: null, runner, model: 'legacy-latest', accessMode, modelsLocked, variants: 1, images: [] })
+  it('keeps model aliases while distinguishing native, standard and Blue', () => {
+    expect(body('codex')).not.toHaveProperty('accessMode')
+    expect(body('codex', null)).not.toHaveProperty('accessMode')
+    expect(body('codex', 'standard')).toMatchObject({ model: 'legacy-latest', accessMode: 'standard' })
+    expect(body('codex', 'daybreak-blue')).toMatchObject({ model: 'legacy-latest', accessMode: 'daybreak-blue' })
+    expect(body('claude', 'daybreak-blue')).not.toHaveProperty('accessMode')
+    expect(body('codex', 'daybreak-blue', true)).not.toHaveProperty('accessMode')
+  })
+})
+
 import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 

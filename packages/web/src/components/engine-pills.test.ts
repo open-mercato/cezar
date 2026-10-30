@@ -8,6 +8,16 @@ import type { Runner } from '@open-mercato/cezar-api-client'
 
 import { engineBody, engineRunBody, type EnginePick, type ResolvedEngine, useResolvedEngine } from './engine-pills'
 
+describe('engine execution access serialization', () => {
+  it('keeps omission, standard and Blue distinct on both shared start surfaces', () => {
+    expect(engineBody(resolved({ runner: 'codex' }))).not.toHaveProperty('accessMode')
+    expect(engineBody(resolved({ runner: 'codex', accessMode: 'standard' })).accessMode).toBe('standard')
+    expect(engineRunBody(resolved({ runner: 'codex', accessMode: 'daybreak-blue' })).accessMode).toBe('daybreak-blue')
+    expect(engineBody(resolved({ runner: 'claude', accessMode: 'daybreak-blue' }))).not.toHaveProperty('accessMode')
+    expect(engineBody(resolved({ runner: 'codex', accessMode: 'daybreak-blue', modelsLocked: true }))).not.toHaveProperty('accessMode')
+  })
+})
+
 /**
  * `engineBody` (#401) is the one place the create-run body rules live for the Inbox and the
  * GitHub tab. The rules are small; the reason they are worth pinning is the third case below —

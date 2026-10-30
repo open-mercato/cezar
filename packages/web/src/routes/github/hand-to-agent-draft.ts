@@ -21,6 +21,7 @@ import { RUNNERS } from '@/routes/new-task-form'
  */
 
 export interface FollowupSelection {
+  accessMode?: import('@open-mercato/cezar-api-client').ExecutionAccessMode | null
   workflow: string | null
   skills: string[]
   /**
@@ -55,6 +56,9 @@ function normalizeSelection(raw: unknown): FollowupSelection {
     // runner — the pill would render nothing selectable and the POST would name a dead backend.
     runner: KNOWN_RUNNERS.includes(obj.runner as Runner) ? (obj.runner as Runner) : null,
     model: typeof obj.model === 'string' ? obj.model : null,
+    ...(obj.accessMode === null || obj.accessMode === 'standard' || obj.accessMode === 'daybreak-blue'
+      ? { accessMode: obj.accessMode }
+      : {}),
   }
 }
 

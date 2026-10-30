@@ -46,6 +46,8 @@ import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { DispatchToggle } from '@/components/dispatch-toggle'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
+import { AccessModePill } from '@/components/access-mode-pill'
+import { accessModeError, catalogAccount, modelsForAccessMode, selectedAccessMode } from '@/lib/access-mode'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SourcePill } from '@/components/source-pill'
 import {
@@ -286,14 +288,7 @@ export function NewTaskRoute() {
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-  const catalog = useRunnerModels(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
-  const models = runner === null
-    ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
-  const model = runner === null
-    ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
@@ -308,6 +303,13 @@ export function NewTaskRoute() {
     : null
   // The account this task will actually run on — what the server's gate judges (ac53a6ef).
   const accountCheck = useSelectedAccountCheck(displayRunner, agentProfile ?? repoAccount?.[displayRunner])
+  const catalog = useRunnerModels(displayRunner, true, catalogAccount(displayRunner, agentProfile ?? repoAccount?.[displayRunner]))
+  const accessMode = selectedAccessMode(displayRunner, draft.accessMode, modelsLocked)
+  const model = runner === null ? '' : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+  const models = runner === null ? [] : modelsForAccessMode(
+    modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]]), accessMode, model, catalog.data,
+  )
+  const accessError = accessModeError(accessMode, model, catalog.data)
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -582,6 +584,7 @@ export function NewTaskRoute() {
         task: text.trim(),
         source,
         model,
+        accessMode,
         modelsLocked,
         runner: runner ?? defaultRunner ?? 'claude',
         runnerExplicit: draft.runner !== null,
@@ -609,6 +612,7 @@ export function NewTaskRoute() {
   const previewTask = taskBody(draft.text, images)
   const scheduleReady = !schedulingDisabledReason && !!startChoice?.preview && Date.parse(startChoice.preview.notBefore) > Date.now() && startChoice.settingsKey === previewSettingsKey(previewTask)
   const submit = async (text: string, submitted: AttachmentEntry[]) => {
+    if (accessError) throw new Error(accessError)
     if (scheduleRequest.current) throw new Error('Recover the original schedule before starting another task.')
     if (!providersReady || runner === null) {
       throw new Error(
@@ -735,7 +739,7 @@ export function NewTaskRoute() {
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={startChoice ? 'Schedule task' : 'Start task'}
           sendLabel={startChoice ? 'Schedule task' : undefined}
-          submitDisabled={!!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
+          submitDisabled={!!accessError || !!scheduleRecovery || recovering || !sourcesReady || (!!startChoice && !scheduleReady)}
           disabled={!providersReady}
           disabledReason={
             providers.isPending
@@ -813,7 +817,7 @@ export function NewTaskRoute() {
                     update({
                       runner: next,
                       agentProfile: picked,
-                      ...(next === displayRunner ? {} : { model: null }),
+                      ...(next === displayRunner ? {} : { model: null, accessMode: null }),
                     })
                   }
                   disabled={!providersReady}
@@ -835,6 +839,9 @@ export function NewTaskRoute() {
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
               />
+              <AccessModePill runner={displayRunner} value={accessMode} model={model} catalog={catalog.data}
+                disabled={!providersReady} locked={modelsLocked}
+                onPick={(mode, nextModel) => update({ accessMode: mode, model: nextModel })} />
               <PickerPill
                 slot="variants-pill"
                 ariaLabel="Parallel variants"

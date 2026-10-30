@@ -420,7 +420,9 @@ export function useTrackerItem(association: TrackerAssociation | null | undefine
  */
 export const workspaceQueryKeys = {
   dashboard: ['workspace', 'dashboard'] as const,
-  models: (runner: string) => ['workspace', 'models', runner] as const,
+  models: (runner: string, agentProfile?: string) => agentProfile
+    ? ['workspace', 'models', runner, agentProfile] as const
+    : ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
@@ -482,14 +484,14 @@ export const workspaceQueryKeys = {
  * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue — hooks
  * cannot be called conditionally) skip the fetch when it definitely won't.
  */
-export function useRunnerModels(runner: Runner, enabled = true) {
+export function useRunnerModels(runner: Runner, enabled = true, agentProfile?: string) {
   return useQuery({
-    queryKey: workspaceQueryKeys.models(runner),
+    queryKey: workspaceQueryKeys.models(runner, agentProfile),
     // The narrowing IS the guard — the query is disabled for a runner with no host catalog, so
     // this branch is unreachable rather than merely unlikely, and no cast is needed to say so.
     queryFn: ({ signal }) =>
       runnerDiscoversModels(runner)
-        ? getRunnerModels(runner, { signal })
+        ? getRunnerModels(runner, { signal }, agentProfile)
         : Promise.reject(new Error(`${runner} has no host model catalog`)),
     staleTime: 5 * 60 * 1_000,
     enabled: enabled && runnerDiscoversModels(runner),

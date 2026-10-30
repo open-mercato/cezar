@@ -251,7 +251,7 @@ export function HandToAgent({
         <EnginePills
           pick={engine}
           onChange={onEngineChange}
-          disabled={start.isPending || !resolved.canRun}
+          disabled={start.isPending}
           accounts
         />
         <AgentProviderGate resolved={resolved} dataSlot="gh-provider-gate" />

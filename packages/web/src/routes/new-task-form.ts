@@ -5,6 +5,7 @@ import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
+  ExecutionAccessMode,
   CreateRunResponse,
   AttachmentEntry,
   DispatchIntent,
@@ -328,6 +329,7 @@ export function buildCreateRunBody(opts: {
   /** `null` — nothing picked — runs the built-in `quick-task`. */
   source: TaskSource | null
   model: string
+  accessMode?: ExecutionAccessMode | null
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -394,6 +396,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
+    ...(!modelsLocked && runner === 'codex' && opts.accessMode ? { accessMode: opts.accessMode } : {}),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.

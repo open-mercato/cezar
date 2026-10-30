@@ -89,13 +89,14 @@ describe('access mode across task lifecycle construction sites', () => {
   }, 20_000);
 
   it('uses step overrides and retains them when that session is continued', async () => {
-    const definition: WorkflowDef = { ...workflow, steps: [{ id: 'work', prompt: '{{task}}', accessMode: 'standard' }] };
-    const run = manager.startRun(definition, { task: 'work', worktree: false, runner: 'codex', accessMode: 'daybreak-blue' });
+    const definition: WorkflowDef = { ...workflow, steps: [{ id: 'work', prompt: '{{task}}', model: 'gpt-eligible-b', accessMode: 'standard' }] };
+    const run = manager.startRun(definition, { task: 'work', worktree: false, runner: 'codex', model: 'gpt-eligible-a', accessMode: 'daybreak-blue' });
     await settled(run.id, 1);
     expect(captured.specs[0]?.accessMode).toBe('standard');
     expect(manager.continueRun(run.id)).toEqual({ ok: true });
     await settled(run.id, 2);
     expect(captured.specs[1]?.accessMode).toBe('standard');
+    expect(captured.specs[1]?.model).toBe('gpt-eligible-b');
   });
 
   it('does not carry Codex treatment into another backend', async () => {

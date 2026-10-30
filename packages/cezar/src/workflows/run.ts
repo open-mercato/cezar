@@ -4672,6 +4672,8 @@ export class RunManager {
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
+          : targetRunner === 'codex' && sessionStep.accessMode !== undefined && targetRunner === sessionBackend && sessionStep.modelIdentity
+            ? { model: sessionStep.modelIdentity }
           : inheritedPinIsForeign
             ? { model: undefined }
             : {}),

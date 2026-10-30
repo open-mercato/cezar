@@ -7,6 +7,8 @@ import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
+import { AccessModePill } from '@/components/access-mode-pill'
+import { accessModeError, catalogAccount, modelsForAccessMode, selectedAccessMode, type AccessModePick } from '@/lib/access-mode'
 import {
   modelsForRunner,
   modelCatalogStatus,
@@ -57,25 +59,29 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
   const [pickedAccount, setPickedAccount] = useState<string | null>(null)
+  const [pickedAccessMode, setPickedAccessMode] = useState<AccessModePick>(undefined)
 
   const continuation = useContinuationProvider(run, pickedRunner)
-  const { runners, canContinue, currentRunner, runner } = continuation
+  const { runners, currentRunner, runner } = continuation
   // The catalog belongs to the runner this continuation would use (#794), so switching the
   // runner pill re-reads that backend's own models. Only a run that can actually be continued
   // fetches at all — every other thread (running, queued, closed with no session) would be
   // fetching it to render nothing.
-  const catalog = useRunnerModels(runner, available)
   const modelsLocked = config.data?.modelsLocked === true
+  const sessionStep = [...run.steps].reverse().find((step) => step.sessionId)
+  // Explicit treatment and model are one session choice. A workflow may have overridden the
+  // task model; Codex's canonical identity records that actual model after provider resolution.
+  const sessionModel = runner === 'codex' && sessionStep?.accessMode && sessionStep.modelIdentity
+    ? sessionStep.modelIdentity.slice(sessionStep.modelIdentity.indexOf('/') + 1)
+    : run.model
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
   const runnerChanged = runner !== currentRunner
   const modelDefaults =
-    !modelsLocked && !runnerChanged && run.model
-      ? { ...config.data?.defaultModels, [runner]: run.model }
+    !modelsLocked && !runnerChanged && sessionModel
+      ? { ...config.data?.defaultModels, [runner]: sessionModel }
       : config.data?.defaultModels
   const effectivePickedModel = modelsLocked ? null : pickedModel
-  const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
-  const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
 
   // Agent accounts (spec 2026-07-29-agent-profiles): rows of the RUNNER pill, exactly as the /new
   // composer offers them — `claude · Default` / `claude · Klaudiusz` / `codex`. Without them a
@@ -99,11 +105,21 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const account = accounts.some((choice) => choice.provider === runner && choice.id === pickedAccount)
     ? pickedAccount
     : null
+  const catalog = useRunnerModels(runner, available, catalogAccount(runner, account ?? accountDefaults?.[runner]))
+  const mode = selectedAccessMode(runner,
+    pickedAccessMode === undefined ? (runnerChanged ? undefined : sessionStep?.accessMode ?? run.accessMode) : pickedAccessMode, modelsLocked)
+  const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
+  const models = modelsForAccessMode(modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]]), mode, model, catalog.data)
+  const accessError = accessModeError(mode, model, catalog.data)
+  // Keep the engine controls reachable when a saved mode becomes unavailable. Consumers hide
+  // the composer on a provider failure; selection errors instead stay beside the picker and
+  // are rejected before the API call below, so the user can correct them without losing a draft.
+  const canContinue = continuation.canContinue
 
   const mutation = useMutation({
     mutationFn: ({ text, images, idempotencyKey }: { text: string; images: AttachmentEntry[]; idempotencyKey?: string }) => {
-      if (!canContinue) {
-        return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
+      if (!canContinue || accessError) {
+        return Promise.reject(new Error(accessError ?? continuation.reason ?? 'Connect an agent provider to continue.'))
       }
       return continueRun(run.id, {
         // An empty draft posts no `text` at all, so the server's default opening prompt
@@ -115,6 +131,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
         model: !modelsLocked && pickedModel !== null ? model : undefined,
+        ...(!modelsLocked && runner === 'codex' && pickedAccessMode !== undefined
+          ? { accessMode: pickedAccessMode }
+          : {}),
         // Only a login the user actually picked rides the request. Omitted, the run keeps the
         // account it is on — and the reopened session still resumes, which an explicit switch
         // deliberately does not (a session id lives inside ONE account's config dir).
@@ -128,7 +147,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   return {
     available,
     canContinue,
-    reason: continuation.reason,
+    reason: accessError ?? continuation.reason,
     providerPending: continuation.providerPending,
     pills: (
       <div data-slot="follow-up-engine" className="flex flex-wrap items-center gap-1.5">
@@ -146,11 +165,12 @@ export function useContinueAction(run: ApiRun): ContinueAction {
               // Picking another LOGIN of the agent already in force is not a backend choice, so it
               // must not become one: recording it would put a `runner` on the wire that the run is
               // already on. Changing the AGENT does invalidate the model pick — presets are
-              // per-runner — while an account switch keeps it, the catalog being the same either
-              // way.
+              // per-runner — while an account switch keeps it and revalidates against that
+              // account's advertised capabilities.
               if (next !== runner) {
                 setPickedRunner(next)
                 setPickedModel(null)
+                setPickedAccessMode(undefined)
               }
             }}
           />
@@ -166,6 +186,8 @@ export function useContinueAction(run: ApiRun): ContinueAction {
           options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
           status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
         />
+        <AccessModePill runner={runner} value={mode} model={model} catalog={catalog.data} locked={modelsLocked}
+          onPick={(next, nextModel) => { setPickedAccessMode(next); setPickedModel(nextModel) }} />
       </div>
     ),
     continueWith: (text, images, idempotencyKey) => mutation.mutateAsync({ text, images, idempotencyKey }),

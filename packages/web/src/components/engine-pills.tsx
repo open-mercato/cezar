@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 
 import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
-import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
+import type { CreateRunInput, ExecutionAccessMode, Runner } from '@open-mercato/cezar-api-client'
+import { AccessModePill } from './access-mode-pill'
+import { accessModeError, catalogAccount, modelsForAccessMode, selectedAccessMode, type AccessModePick } from '@/lib/access-mode'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
@@ -32,6 +34,7 @@ import { readFollowupSelection, writeFollowupSelection } from '@/routes/github/h
 
 /** What the user actually touched. `null` on any field means "never touched". */
 export interface EnginePick {
+  accessMode?: AccessModePick
   runner: Runner | null
   model: string | null
   /**
@@ -46,6 +49,8 @@ export interface EnginePick {
 
 /** The effective backend, plus what the body rules need to decide what to send. */
 export interface ResolvedEngine {
+  accessMode?: ExecutionAccessMode
+  accessModeError?: string
   runner: Runner
   /** A sticky/user pick must ride the request even when it currently equals the default. */
   runnerExplicit: boolean
@@ -78,7 +83,6 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const defaultRunner = config.data?.defaultRunner
   const runner = resolveRunner(pick.runner, runners, defaultRunner ?? runners[0] ?? 'claude')
   // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
-  const catalog = useRunnerModels(runner)
   const modelsLocked = config.data?.modelsLocked === true
   // Agent accounts (spec 2026-07-29-agent-profiles), read through the shared hook the /new composer
   // and the thread's Continue read, so no start surface can disagree about which login runs.
@@ -88,13 +92,19 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   const account = accounts.some((choice) => choice.provider === runner && choice.id === pick.account)
     ? pick.account
     : null
+  const catalog = useRunnerModels(runner, true, catalogAccount(runner, account ?? repoAccount?.[runner]))
+  const model = resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data)
+  const accessMode = selectedAccessMode(runner, pick.accessMode, modelsLocked)
+  const accessError = accessModeError(accessMode, model, catalog.data)
   return {
+    ...(accessMode ? { accessMode } : {}),
+    ...(accessError ? { accessModeError: accessError } : {}),
     runner,
     runnerExplicit: pick.runner !== null,
-    model: resolveModel(modelsLocked ? null : pick.model, runner, config.data?.defaultModels, catalog.data),
+    model,
     runners,
     defaultRunner,
-    canRun: providers.isSuccess && runners.length > 0,
+    canRun: providers.isSuccess && runners.length > 0 && !accessError,
     modelsLocked,
     providerPending: providers.isPending,
     providerError: providers.isError,
@@ -126,8 +136,8 @@ function useEnginePick(persist: boolean): [EnginePick, (pick: EnginePick) => voi
   const [pick, setPick] = useState<EnginePick>(readPersistedEnginePick)
   useEffect(() => {
     if (!persist) return
-    writeFollowupSelection({ runner: pick.runner, model: pick.model })
-  }, [persist, pick.runner, pick.model])
+    writeFollowupSelection({ runner: pick.runner, model: pick.model, accessMode: pick.accessMode })
+  }, [persist, pick.runner, pick.model, pick.accessMode])
   useEnginePickValidity(pick, setPick)
   return [pick, setPick]
 }
@@ -135,7 +145,7 @@ function useEnginePick(persist: boolean): [EnginePick, (pick: EnginePick) => voi
 /** The seed every surface starts from. `account` is per-run, never remembered — see `useEnginePick`. */
 function readPersistedEnginePick(): EnginePick {
   const stored = readFollowupSelection()
-  return { runner: stored.runner, model: stored.model, account: null }
+  return { runner: stored.runner, model: stored.model, account: null, ...(stored.accessMode !== undefined ? { accessMode: stored.accessMode } : {}) }
 }
 
 /**
@@ -206,10 +216,11 @@ function useEnginePickValidity(pick: EnginePick, onChange: (pick: EnginePick) =>
  * and explicitly sends the provider-status fallback when it is not. A sticky/user pick always
  * rides the request, so a boot-project snapshot can never erase that intent.
  */
-export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model'> {
+export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runner' | 'model' | 'accessMode'> {
   return {
     runner: runnerOverride(resolved.runner, resolved.defaultRunner, resolved.runnerExplicit),
     model: resolved.modelsLocked ? undefined : resolved.model || undefined,
+    ...(resolved.runner === 'codex' && !resolved.modelsLocked && resolved.accessMode ? { accessMode: resolved.accessMode } : {}),
   }
 }
 
@@ -228,7 +239,7 @@ export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runn
  */
 export function engineRunBody(
   resolved: ResolvedEngine,
-): Pick<CreateRunInput, 'runner' | 'model' | 'agentProfile'> {
+): Pick<CreateRunInput, 'runner' | 'model' | 'agentProfile' | 'accessMode'> {
   return {
     ...engineBody(resolved),
     ...(resolved.account ? { agentProfile: resolved.account } : {}),
@@ -254,11 +265,11 @@ export function EnginePills({
   accounts?: boolean
 }) {
   const resolved = useResolvedEngine(pick)
-  const { runner, model, runners, canRun, modelsLocked } = resolved
+  const { runner, model, runners, modelsLocked } = resolved
   const config = useConfig()
-  const catalog = useRunnerModels(runner)
-  const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
-  const unavailable = disabled || !canRun
+  const catalog = useRunnerModels(runner, true, catalogAccount(runner, resolved.account ?? resolved.repoAccount?.[runner]))
+  const models = modelsForAccessMode(modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]]), resolved.accessMode, model, catalog.data)
+  const unavailable = disabled || resolved.providerPending || resolved.providerError || runners.length === 0
   const accountChoices = accounts ? resolved.accounts : []
   // Shown when there is a choice to make: more than one runner, or — where accounts are offered —
   // more than one login for one of them. A host with neither sees no pill, exactly as before.
@@ -277,14 +288,14 @@ export function EnginePills({
           disabled={unavailable}
           // Changing the AGENT drops the model pick: the presets are per-runner, so a kept model
           // would be a preset the new runner does not have (composer rule). Changing only the
-          // ACCOUNT keeps it — the catalog is identical across logins of the same runner.
+          // ACCOUNT keeps it and revalidates it against that login's own catalog.
           // Without accounts every row IS an agent, so that surface keeps its unconditional
           // reset rather than quietly gaining the re-pick-keeps-the-model behaviour.
           onPick={(next, picked) =>
             onChange(
               accounts
-                ? { runner: next, account: picked, model: next === runner ? pick.model : null }
-                : { runner: next, account: null, model: null },
+                ? { ...pick, runner: next, account: picked, model: next === runner ? pick.model : null, accessMode: next === runner ? pick.accessMode : null }
+                : { runner: next, account: null, model: null, accessMode: null },
             )
           }
         />
@@ -303,6 +314,9 @@ export function EnginePills({
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
       />
+      <AccessModePill runner={runner} value={resolved.accessMode} model={model} catalog={catalog.data}
+        disabled={unavailable} locked={modelsLocked}
+        onPick={(mode, nextModel) => onChange({ ...pick, accessMode: mode, model: nextModel })} />
     </>
   )
 }

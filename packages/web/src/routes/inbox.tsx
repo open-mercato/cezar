@@ -333,7 +333,7 @@ function TodoCard({
           Run knobs (engine + prompt) read as one group. */}
       {runnable ? (
         <div data-slot="todo-engine" className="flex flex-wrap items-center gap-2 pl-5">
-          <EnginePills pick={engine} onChange={setEngine} disabled={busy || !resolved.canRun} />
+          <EnginePills pick={engine} onChange={setEngine} disabled={busy} />
           {!resolved.providerPending && !resolved.canRun ? (
             <span
               data-slot="todo-provider-gate"

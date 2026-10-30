@@ -2,6 +2,7 @@ import {
   DISPATCH_MAX_IN_FLIGHT,
   DISPATCH_MAX_SUBTASKS,
   type DispatchIntent,
+  type ExecutionAccessMode,
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
@@ -28,6 +29,7 @@ export interface NewTaskDraft {
    *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
   agentProfile: string | null
   model: string | null
+  accessMode?: ExecutionAccessMode | null
   variants: number
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
@@ -214,6 +216,9 @@ function normalize(raw: unknown): NewTaskDraft {
     runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
+    ...(obj.accessMode === null || obj.accessMode === 'standard' || obj.accessMode === 'daybreak-blue'
+      ? { accessMode: obj.accessMode }
+      : {}),
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
     ...(typeof obj.worktreeBasis === 'string' ? { worktreeBasis: obj.worktreeBasis } : {}),

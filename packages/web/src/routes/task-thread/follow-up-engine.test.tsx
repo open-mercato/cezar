@@ -9,6 +9,7 @@ import type {
   ApiRun,
   HealthResponse,
   ProviderStatusResponse,
+  RunnerModelCatalogResponse,
   StepState,
 } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
@@ -86,6 +87,7 @@ function serve(
   modelsLocked = false,
   /** Agent accounts (spec 2026-07-29-agent-profiles); omitted answers the zero-config host. */
   agentProfiles?: AgentProfilesResponse,
+  codexCatalog?: RunnerModelCatalogResponse,
 ) {
   requests = []
   const json = (payload: unknown, status = 200) =>
@@ -99,7 +101,7 @@ function serve(
       requests.push({ method, url, body })
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url.startsWith('/api/v1/models?runner=codex')) return json(codexCatalog ?? { runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest', supportedAccessModes: ['standard', 'daybreak-blue'] }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/config' && method === 'GET')
@@ -165,7 +167,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
   return (
     <>
       {action.pills}
-      <button type="button" onClick={() => void action.continueWith(draft, [])}>
+      <button type="button" onClick={() => void action.continueWith(draft, []).catch(() => {})}>
         Continue
       </button>
     </>
@@ -187,6 +189,49 @@ const continueBody = () =>
   requests.find((r) => r.url.endsWith('/continue') && r.method === 'POST')?.body
 
 describe('follow-up ContinueAction runner/model selection (#401)', () => {
+  it('retains a saved Blue selection when untouched', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', accessMode: 'daybreak-blue' }))
+    expect((await screen.findByRole('button', { name: /Access mode/i })).textContent).toContain('Daybreak Blue')
+    fireEvent.click(await screen.findByRole('button', { name: /^Continue$/i }))
+    await waitFor(() => expect(continueBody()).toEqual({}))
+  })
+
+  it('sends null for Native default', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', accessMode: 'daybreak-blue' }))
+    fireEvent.pointerDown(await screen.findByRole('button', { name: /Access mode/i }), { button: 0, ctrlKey: false })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Native default/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Continue$/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({ model: 'gpt-future', accessMode: null })
+  })
+
+  it('lets explicit standard override Blue without changing the underlying model', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', accessMode: 'daybreak-blue' }))
+    fireEvent.pointerDown(await screen.findByRole('button', { name: /Access mode/i }), { button: 0, ctrlKey: false })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /^Standard/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Continue$/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({ model: 'gpt-future', accessMode: 'standard' })
+  })
+
+  it('uses the session account catalog and leaves a stale mode correctable', async () => {
+    serve(HEALTH_MULTI, {}, providersForHealth(HEALTH_MULTI), 200, false, undefined, {
+      runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false,
+    })
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', accessMode: 'daybreak-blue', steps: [step({ sessionId: 's', profileId: 'research' })] }))
+    const mode = await screen.findByRole('button', { name: /Access mode/i })
+    await screen.findByText(/This account\/model does not advertise/)
+    expect(requests.some((request) => request.url === '/api/v1/models?runner=codex&agentProfile=research')).toBe(true)
+    fireEvent.click(await screen.findByRole('button', { name: /^Continue$/i }))
+    expect(continueBody()).toBeUndefined()
+    fireEvent.pointerDown(mode, { button: 0, ctrlKey: false })
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /Native default/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Continue$/i }))
+    await waitFor(() => expect(continueBody()).toEqual({ model: 'gpt-future', accessMode: null }))
+  })
   it('an untouched Continue omits runner & model — the run keeps its backend', async () => {
     serve()
     renderAction(makeRun())
