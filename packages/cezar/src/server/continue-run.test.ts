@@ -215,6 +215,14 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured).toBeUndefined();
   });
 
+  /** #1735: an over-limit body used to answer a bare "Payload Too Large" the cockpit could not explain. */
+  it('answers an over-limit body with a JSON 413 naming the limit', async () => {
+    const res = await post({ text: 'x', pad: 'A'.repeat(33 * 1024 * 1024) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(((await res.json()) as { error: string }).error).toContain('32 MiB');
+  });
+
   it('refuses a reference to an upload that is gone, with the wording the composer matches', async () => {
     const res = await post({ images: [{ uploadId: 'a'.repeat(24) }] });
     expect(res.status).toBe(400);

@@ -1148,6 +1148,9 @@ const pinSchema = z.object({
 // attachments, ≤ MAX_ATTACHMENTS_TOTAL_BASE64 in total); the ui-state PUT gets a much tighter cap since
 // it only ever carries small GUI prefs.
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
+// JSON like every other refusal (#1735): the bare "Payload Too Large" text told the cockpit nothing.
+const bodyTooLarge = (c: Context) =>
+  c.json({ error: `request body too large — the server accepts at most ${GLOBAL_BODY_LIMIT / 1024 / 1024} MiB per request` }, 413);
 const UI_STATE_BODY_LIMIT = 128 * 1024; // 128 KiB
 const BRANDING_LOGO_MAX_BYTES = 2 * 1024 * 1024;
 const BRANDING_LOGO_TYPES = {
@@ -1666,7 +1669,7 @@ export function createApp(deps: ServerDeps) {
 
   // Reject oversized request bodies before they reach any handler (#429). GETs
   // and SSE carry no body, so this only ever gates the mutating routes.
-  app.use('*', bodyLimit({ maxSize: GLOBAL_BODY_LIMIT }));
+  app.use('*', bodyLimit({ maxSize: GLOBAL_BODY_LIMIT, onError: bodyTooLarge }));
 
   // ---- request-origin guard (#426) -----------------------------------------
   // This server executes agents with shell access — "start a task" ≈ run code
@@ -3751,7 +3754,10 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/uploads', jsonZodValidator(attachmentInputSchema), (c) => {
       const result = writeUpload(c.req.valid('json'));
       // The fs error names a path under the user's home; the cockpit reports this answer to telemetry.
-      if (!result.ok) return c.json({ error: 'could not stage the attachment' }, 500);
+      if (!result.ok) {
+        console.error(`[uploads] could not stage an attachment: ${result.error}`); // #1735: the reason stays local
+        return c.json({ error: 'could not stage the attachment' }, 500);
+      }
       return c.json(stagedUploadSchema.parse(result.upload));
     })
     .delete('/workspace/uploads/:uploadId', paramZodValidator(uploadIdParamSchema), (c) => {
