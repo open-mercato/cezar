@@ -5721,7 +5721,7 @@ export function createApp(deps: ServerDeps) {
           });
           store.appendEvent(id, {
             type: 'note',
-            message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
+            message: `${outcome.updated ? 'PR updated' : draft ? 'draft PR created' : 'PR created'}: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
           });
           return outcome;
         })()
@@ -5737,7 +5737,7 @@ export function createApp(deps: ServerDeps) {
       if (!outcome.ok) {
         return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
       }
-      return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
+      return c.json({ url: outcome.url, dryRun: outcome.dryRun, ...(outcome.updated ? { updated: true as const } : {}) }, 201);
     })
 
     // Create PR by the task's agent: once its turn ends, the PR it opened is found by branch and

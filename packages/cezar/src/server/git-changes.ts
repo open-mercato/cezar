@@ -903,6 +903,17 @@ export async function baseDivergence(
   return unknown;
 }
 
+/** `--force-with-lease` pinned to the remote tip this branch once HELD (found in its own reflog),
+ *  for a push the remote refused as non-fast-forward because the branch was rebased (#1758).
+ *  null when the remote tip was never ours — someone else's commit — so it is never overwritten. */
+export async function rewriteLeaseArg(dir: string, remote: string, branch: string): Promise<string | null> {
+  const tip = await git(dir, ['rev-parse', '--verify', '-q', `refs/remotes/${remote}/${branch}`]);
+  if (!tip.ok) return null;
+  const sha = tip.stdout.trim();
+  const log = await git(dir, ['reflog', 'show', '--format=%H', `refs/heads/${branch}`]);
+  return log.ok && log.stdout.split('\n').includes(sha) ? `--force-with-lease=${branch}:${sha}` : null;
+}
+
 export type PushResult =
   | { ok: true; branch: string; remote: string; upstreamSet: boolean }
   | { ok: false; error: string };
@@ -924,7 +935,11 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
-  const push = await git(dir, args);
+  let push = await git(dir, args);
+  if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
+    const lease = await rewriteLeaseArg(dir, remote, branch);
+    if (lease) push = await git(dir, ['push', lease, ...(upstream.ok ? [] : ['-u']), remote, branch]);
+  }
   if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
   return { ok: true, branch, remote, upstreamSet: !upstream.ok };
 }
