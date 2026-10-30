@@ -32,7 +32,19 @@ existing GitHub/schedule flags and exit semantics remain unchanged.
 
 Breaking: renaming/removing a command, flag, alias or env var; changing a default (port, workflow); changing `run` exit-code semantics. Required path: keep the old spelling as a deprecated alias for at least one minor release, print a one-line deprecation warning, document the replacement.
 
-## 2. HTTP API of the cockpit server (`packages/cezar/src/server/server.ts`)
+## 2. HTTP API of the cockpit server (packages/cezar/src/server/server.ts)
+
+Issue ownership metadata (#1620, additive): `GET /api/v1/github` and
+`GET /api/v1/github/search`, including their project aliases, may add issue-only
+`assignees: string[]`, `assigneesTruncated: boolean`,
+`linkedPrs: { number, title, url, state: 'open' | 'merged' | 'closed', isDraft }[]`
+and `linkedPrsTruncated: boolean`. Omission means unavailable or unsupported;
+successful empty connections return empty arrays. These are authoritative
+closing/development references, not casual mentions. Discovery is bounded and
+can fail independently of usable existing rows. Other forge drivers and older
+servers may omit the metadata. Existing keys, defaults, routes, settings and
+persisted state remain unchanged.
+
 
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, and `discord.v1`.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
