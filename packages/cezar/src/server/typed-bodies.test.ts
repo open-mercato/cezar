@@ -1,6 +1,6 @@
 import type { ExtractSchema } from 'hono/types';
 import { describe, expect, it } from 'vitest';
-import { setWorkspaceUiStateInputSchema } from '@open-mercato/cezar-contract';
+import { createRunInputSchema, setWorkspaceUiStateInputSchema } from '@open-mercato/cezar-contract';
 import type { z } from 'zod';
 import type { AppType } from './app-type.ts';
 
@@ -88,6 +88,12 @@ describe('every mutating route carries a typed body into AppType', () => {
   type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
   type _WorkspaceUiStateInputCheck = Assert<
     Mutual<z.infer<typeof setWorkspaceUiStateInputSchema>, WorkspaceUiStatePutBody>
+  >;
+
+  // #1601: the route and the contract agree on `sourceUrl`, in both directions.
+  type RunPostBody = Schema['/api/v1/runs']['$post']['input']['json'];
+  type _SourceUrlCheck = Assert<
+    Mutual<z.input<typeof createRunInputSchema>['sourceUrl'], RunPostBody['sourceUrl']>
   >;
 
   /** Same idea for the routes that validate a path param or the query string. */

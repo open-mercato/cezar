@@ -224,6 +224,7 @@ function stubFetch(
       if (method === 'GET' && (path === '/api/v1/github' || path.startsWith('/api/v1/github?'))) {
         return jsonResponse(GITHUB)
       }
+      if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
       if (method === 'GET' && path === '/api/v1/workflows') return jsonResponse(WORKFLOWS)
       if (method === 'GET' && path === '/api/v1/skills') return jsonResponse(SKILLS)
       if (method === 'GET' && path === '/api/v1/providers/status') {
@@ -2193,6 +2194,49 @@ describe('the hand-to-agent run (legacy three-way body)', () => {
     expect(document.querySelector('[data-slot="gh-view-run"]')?.getAttribute('href')).toBe('/tasks/run-1')
     // The list row grows the queued flag.
     expect(document.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('the hand-off body links the run to its item via sourceUrl (#1601)', async () => {
+    const sent = stubFetch()
+    await openDetail()
+    await waitForAgentRunEnabled()
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-queued"]')).not.toBeNull())
+    const posted = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/runs')
+    expect(posted?.body).toMatchObject({ sourceUrl: ISSUE_142.url })
+  })
+
+  it('rebuilds the queued marker from the runs list on a fresh mount (#1601)', async () => {
+    stubFetch({
+      'GET /api/v1/runs': () =>
+        jsonResponse([
+          {
+            id: 'run-9', title: 'queued', workflow: 'quick-task', task: 't', status: 'queued',
+            createdAt: '2026-07-15T08:00:00.000Z', tokensUsed: 0, archived: false, steps: [],
+            sourceUrl: ISSUE_142.url,
+          },
+        ]),
+    })
+    await openDetail()
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-queued"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="gh-view-run"]')?.getAttribute('href')).toBe('/tasks/run-9')
+    expect(document.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('shows no queued marker once the linked run has finished (#1601)', async () => {
+    stubFetch({
+      'GET /api/v1/runs': () =>
+        jsonResponse([
+          {
+            id: 'run-9', title: 'done', workflow: 'quick-task', task: 't', status: 'done',
+            createdAt: '2026-07-15T08:00:00.000Z', tokensUsed: 0, archived: false, steps: [],
+            sourceUrl: ISSUE_142.url,
+          },
+        ]),
+    })
+    await openDetail()
+    await waitForAgentRunEnabled()
+    expect(document.querySelector('[data-slot="gh-queued"]')).toBeNull()
   })
 
   it('confirms the hand-off with a toast — the inline affordance is off-screen on a phone', async () => {

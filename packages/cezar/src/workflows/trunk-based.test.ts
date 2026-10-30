@@ -212,6 +212,12 @@ describe('trunk-based projects', { timeout: 20_000 }, () => {
     expect(store.getRun(writer.id)?.status).toBe('waiting');
   });
 
+  it('records the GitHub item a task was handed from on the run (#1601)', async () => {
+    const url = 'https://github.com/acme/demo/issues/142';
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask', sourceUrl: url });
+    expect(store.getRun(record.id)?.sourceUrl).toBe(url);
+  });
+
   it('does not let a git-tracked config grant auto-land', async () => {
     writeConfig({ taskWorkspace: 'in-place', landing: 'auto' });
     await run('git', ['add', '-f', '.ai/cezar/config.json'], { cwd: repoRoot });

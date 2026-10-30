@@ -24,7 +24,7 @@ import { Virtualizer } from 'virtua'
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithubInfinite, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { queryKeys, useGithubInfinite, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useRuns, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
@@ -56,7 +56,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from '@/components/ui/toaster'
 import { shortAge } from '@/lib/format'
-import { githubTaskPrompt } from '@/lib/github-task'
+import { githubTaskPrompt, openRunsBySource } from '@/lib/github-task'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -359,7 +359,16 @@ export function GithubRoute({
     () => orderSkillsByUsage(skillsData ?? [], skillUsage),
     [skillsData, skillUsage],
   )
-  const [queued, setQueued] = useState<ReadonlyMap<string, string>>(new Map())
+  // Hand-offs made in this mount show at once; the runs list (stream-patched, no extra polling)
+  // restores the marker after navigation or reload via each run's `sourceUrl` (#1601).
+  const [justQueued, setJustQueued] = useState<ReadonlyMap<string, string>>(new Map())
+  const runsData = useRuns().data
+  const queued = useMemo(() => {
+    const known = new Set((runsData ?? []).map((run) => run.id))
+    // Only runs the list has not caught up with yet: once it has, the list is the truth.
+    const pending = [...justQueued].filter(([, runId]) => !known.has(runId))
+    return new Map([...openRunsBySource(runsData ?? []), ...pending])
+  }, [runsData, justQueued])
   // The swipe launcher (touch): the item stays set while the sheet animates closed.
   const [swipeItem, setSwipeItem] = useState<GithubItem | null>(null)
   const [swipeOpen, setSwipeOpen] = useState(false)
@@ -368,7 +377,7 @@ export function GithubRoute({
     setSwipeOpen(true)
   }, [])
   const markQueued = useCallback(
-    (url: string, runId: string) => setQueued((current) => new Map(current).set(url, runId)),
+    (url: string, runId: string) => setJustQueued((current) => new Map(current).set(url, runId)),
     [],
   )
   // List filtering (#gh-filter): free-text search (by #id or any text) + a label narrow.

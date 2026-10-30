@@ -915,6 +915,8 @@ export interface StartRunInput {
   /** A read-only Ask task (spec 2026-10-20-trunk-based-projects): in place, read-only tools,
    *  no repo-root lease, never lands. Wins over `worktree`, `newBranch` and dispatch. */
   readOnly?: boolean;
+  /** The GitHub item this task was handed from (#1601); recorded on the run, never read by the engine. */
+  sourceUrl?: string;
   /** Autonomous mode (#autonomous): the run never parks at `waiting` for the
    *  user — turn-ends auto-continue until the agent signals done or the safety
    *  cap is hit. No "needs you" is ever raised. */
@@ -1805,6 +1807,7 @@ export class RunManager {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
     }
     if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
+    if (input.sourceUrl) this.store.updateRun(run.id, { sourceUrl: input.sourceUrl });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather

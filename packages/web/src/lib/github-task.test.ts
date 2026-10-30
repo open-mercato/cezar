@@ -12,6 +12,7 @@ import {
   githubTaskPrompt,
   githubTaskRef,
   mentionsItem,
+  openRunsBySource,
   skillChainSteps,
 } from './github-task'
 
@@ -298,5 +299,31 @@ describe('githubRunBody backend (#401)', () => {
     })
     expect(JSON.parse(JSON.stringify(clean))).not.toHaveProperty('runner')
     expect(JSON.parse(JSON.stringify(clean))).not.toHaveProperty('model')
+  })
+})
+
+describe('sourceUrl and the queued marker (#1601)', () => {
+  it('every body shape carries the item URL as sourceUrl', () => {
+    const url = item().url
+    expect(githubRunBody(item(), 'ship-it', []).sourceUrl).toBe(url)
+    expect(githubRunBody(item(), null, ['om-fix']).sourceUrl).toBe(url)
+    expect(githubRunBody(item(), null, []).sourceUrl).toBe(url)
+  })
+
+  const run = (id: string, status: string, over: Record<string, unknown> = {}) =>
+    ({ id, status, archived: false, createdAt: `2026-07-0${id}T00:00:00Z`, sourceUrl: 'u1', ...over }) as never
+
+  it('maps an item to its newest open run, ignoring finished, archived and unlinked runs', () => {
+    const map = openRunsBySource([
+      run('1', 'queued'),
+      run('2', 'running'),
+      run('3', 'done'),
+      run('4', 'queued', { archived: true }),
+      run('5', 'queued', { sourceUrl: undefined }),
+      run('6', 'waiting', { sourceUrl: 'u2' }),
+    ])
+    expect(map.get('u1')).toBe('2')
+    expect(map.get('u2')).toBe('6')
+    expect(map.size).toBe(2)
   })
 })
