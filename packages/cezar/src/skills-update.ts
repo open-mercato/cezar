@@ -117,9 +117,13 @@ async function defaultRun(file: string, args: readonly string[], cwd: string, ti
 
 /** Parse only explicit update lines naming a lock-authorized skill. */
 function availableNames(output: string, names: readonly string[]): string[] {
-  const lines = output.split(/\r?\n/);
-  return names.filter((name) => lines.some((line) =>
-    line.toLowerCase().includes(name.toLowerCase()) && /update|out.of.date|new version/i.test(line)));
+  const lines = output.split(/\r?\n/).map((line) => line.toLowerCase());
+  const lowered = names.map((name) => name.toLowerCase());
+  // Strip every name before testing the keywords: a name like `om-auto-update-changelog` in the
+  // `Updating a, b, …` header would otherwise flag every name on it (#1740).
+  const bare = lines.map((line) => lowered.reduce((rest, name) => rest.split(name).join(' '), line));
+  return names.filter((_, i) => lines.some((line, j) =>
+    line.includes(lowered[i]!) && /update|out.of.date|new version/i.test(bare[j]!)));
 }
 
 export class SkillsUpdateService {
