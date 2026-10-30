@@ -26,10 +26,10 @@ function LocationProbe() {
   return <span data-testid="location">{useLocation().pathname}</span>
 }
 
-function renderTable(data = response(), actions = mockActions()) {
+function renderTable(data = response(), actions = mockActions(), defaultRunner?: string) {
   render(
     <MemoryRouter initialEntries={['/automations']}>
-      <AutomationsTable data={data} actions={actions} now={NOW} />
+      <AutomationsTable data={data} actions={actions} defaultRunner={defaultRunner} now={NOW} />
       <LocationProbe />
     </MemoryRouter>,
   )
@@ -100,6 +100,24 @@ describe('AutomationsTable', () => {
     expect(runsAs?.className).toContain('cz-auto-wide')
     // The weekly changelog is not autonomous — no mark.
     expect(cells('a5')[3]?.querySelector('[data-slot="autonomous-mark"]')).toBeNull()
+  })
+
+  it('shows the project default runner, dimmed, when none is pinned (#1622)', () => {
+    const unpinned = { ...NIGHTLY, task: { ...NIGHTLY.task, runner: undefined } }
+    renderTable(response({ automations: [unpinned, TRIAGE] }), mockActions(), 'codex')
+
+    const inherited = cells(NIGHTLY.id)[3]?.querySelector('[data-slot="inherited-runner"]')
+    expect(inherited?.textContent).toBe('codex')
+    // A pinned runner stays plain, so the two are told apart.
+    expect(cells(TRIAGE.id)[3]?.querySelector('[data-slot="inherited-runner"]')).toBeNull()
+    expect(cells(TRIAGE.id)[3]?.textContent).toContain(TRIAGE.task.runner ?? '?')
+  })
+
+  it('shows no runner for an unpinned automation until the default is known', () => {
+    const unpinned = { ...NIGHTLY, task: { ...NIGHTLY.task, runner: undefined } }
+    renderTable(response({ automations: [unpinned] }))
+
+    expect(cells(NIGHTLY.id)[3]?.querySelector('[data-slot="inherited-runner"]')).toBeNull()
   })
 
   it('reports the next run: continuous for a poll, the server instant for a schedule, a dash when paused', () => {
