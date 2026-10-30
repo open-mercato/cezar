@@ -125,6 +125,9 @@ listener is loopback-only, mirrors only what was already listening on loopback, 
 - **Local `http://` only.** No `https://` loopback (certificate trust) and no external sites.
 - **No hosted mode.** On a hosted cockpit a loopback address is refused, not framed (brutus's
   preview gateway, `2026-10-10-preview-gateway`, is not ported).
+  Since 2026-10-22 the refusal shows the `ssh -N -L <port>:localhost:<port> <cockpit host>`
+  command and frames the address once the user says the tunnel is open (session-only), with an
+  "Open in a new tab" fallback; Design Mode stays off there.
 - **`localStorage` is per-origin.** The mirror keeps the hostname the user typed, so cookies carry
   over (they are not port-scoped), but origin-scoped storage does not: an app that keeps its
   session in `localStorage` shows up logged out in Design Mode.
@@ -196,8 +199,9 @@ Running it opens a NEW terminal tab of the task (the same `POST /terminal` + inp
 **Run** uses) and polls `/runs/:id/terminal/urls` every second for an address first seen after the
 start, preferring one that answers; the first one is opened in the tab. Exits: the address
 (opened), the command exiting first ("exited with code N"), or two minutes with neither (still
-running, no address). The last two offer **Show terminal**. A hosted cockpit keeps the plain hint:
-it refuses loopback addresses anyway.
+running, no address). The last two offer **Show terminal**. A hosted cockpit shows the panel too
+wherever its terminal is on (`CEZ_TERMINAL=1`): the app runs on the task's host either way, and the
+loopback address it opens lands on the tunnel hint above. Without a terminal the empty tab says so.
 
 ## 7c. A project's start recipe (2026-10-17)
 

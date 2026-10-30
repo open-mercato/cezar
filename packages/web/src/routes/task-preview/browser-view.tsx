@@ -39,7 +39,8 @@ import { parseDesignPick, type NewDesignPick } from './design-picks'
  *  - A page that refuses to be framed (`X-Frame-Options`, `frame-ancestors`) fires `load` for the
  *    refusal too. The timeout below is the only signal available, and its message says so.
  *  - On a HOSTED cockpit a loopback address means the VIEWER's machine, not the host the task
- *    runs on, so it is never framed there — the case is refused with the reason.
+ *    runs on, so it is not framed until the user forwards the port with SSH — the refusal shows
+ *    the exact `ssh -L` command and frames the address once they say the tunnel is open.
  */
 
 /** How long a page gets to fire `load` before the view calls it a failure. Generous: a cold dev
@@ -171,7 +172,10 @@ export function BrowserView({
   // A loopback address this cockpit cannot honestly show: on a hosted cockpit it would open on
   // the viewer's machine. `localHandoff` is the server's own "this cockpit is local" answer.
   const canPreview = health.data?.capabilities?.localHandoff ?? true
-  const refused = target !== '' && !canPreview && isLoopback(target)
+  /** Origins the user forwarded to their own machine with `ssh -L`, so `localhost` there IS the
+   *  task's host. Session-only: a tunnel does not outlive the shell that opened it. */
+  const [tunneled, setTunneled] = useState<ReadonlySet<string>>(() => new Set())
+  const refused = target !== '' && !canPreview && isLoopback(target) && !tunneled.has(originOf(target) ?? '')
 
   /**
    * Design Mode.
@@ -686,9 +690,17 @@ export function BrowserView({
             tone="neutral"
             heading="h2"
             title="This address points at the machine you are sitting at"
-            subtitle="This cockpit runs remotely, so a local address would open on your computer rather than on the task's host. Open the cockpit on the task's machine to preview its app."
-          />
-        ) : target === '' && renderEmpty && canPreview ? (
+            subtitle="This cockpit runs remotely, so a local address opens on your computer rather than on the task's host. Forward the port from your computer first:"
+          >
+            <TunnelHint
+              url={target}
+              onTunneled={() => {
+                const origin = originOf(target)
+                if (origin) setTunneled((prev) => new Set(prev).add(origin))
+              }}
+            />
+          </CenteredState>
+        ) : target === '' && renderEmpty ? (
           renderEmpty(commit)
         ) : target === '' ? (
           <CenteredState
@@ -696,7 +708,11 @@ export function BrowserView({
             tone="neutral"
             heading="h2"
             title="Empty tab"
-            subtitle="Enter the address of the task's app, e.g. http://localhost:3000 — then switch on Design Mode to point at an element and tell the agent what to change."
+            subtitle={
+              canPreview
+                ? "Enter the address of the task's app, e.g. http://localhost:3000 — then switch on Design Mode to point at an element and tell the agent what to change."
+                : "Enter the address of the task's app, e.g. http://localhost:3000. This cockpit runs remotely: start the app in the task's terminal (on a hosted cockpit it needs CEZ_TERMINAL=1), and cezar shows the SSH command that forwards its port to you."
+            }
           />
         ) : (
           <>
@@ -988,6 +1004,56 @@ export function pageAddress(reported: string, frameOrigin: string, appOrigin: st
   if (parsed.origin !== frameOrigin) return null
   const path = parsed.pathname + parsed.search + parsed.hash
   return normalizeAddress((appOrigin ?? frameOrigin) + path)
+}
+
+/**
+ * The `ssh -L` command that forwards a loopback address of the cockpit's host to the same port on
+ * the viewer's machine. The host is the one the cockpit is served from — the usual case of a VPS
+ * behind a reverse proxy; one reached otherwise is the user's to substitute.
+ */
+export function tunnelCommand(url: string, sshHost: string): string | null {
+  try {
+    const parsed = new URL(url)
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    return `ssh -N -L ${port}:localhost:${port} ${sshHost || '<host>'}`
+  } catch {
+    return null
+  }
+}
+
+function TunnelHint({ url, onTunneled }: { url: string; onTunneled: () => void }) {
+  const command = tunnelCommand(url, window.location.hostname)
+  if (!command) return null
+  return (
+    <div data-slot="browser-tunnel" className="flex w-full flex-col items-center gap-3">
+      <code className="w-full rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all text-foreground select-all">
+        {command}
+      </code>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard?.writeText(command).then(
+              () => toast('Copied the SSH command.'),
+              () => toast('Could not copy — select the command instead.', { tone: 'danger' }),
+            )
+          }}
+        >
+          Copy command
+        </Button>
+        <Button type="button" size="sm" data-action="browser-tunnel-open" onClick={onTunneled}>
+          The tunnel is open — show it here
+        </Button>
+        <Button type="button" variant="ghost" size="sm" asChild>
+          <a href={url} target="_blank" rel="noreferrer">
+            Open in a new tab
+          </a>
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 export function isLoopback(url: string): boolean {
