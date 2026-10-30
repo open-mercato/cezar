@@ -175,6 +175,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
   return {
     task,
     model: definition.task.model,
+    ...(definition.task.accessMode !== undefined ? { accessMode: definition.task.accessMode } : {}),
     runner: definition.task.runner ?? definition.deferredStart?.binding.runner as RunnerId | undefined,
     agentProfile: definition.task.agentProfile ?? definition.deferredStart?.binding.accounts.find(a => a.runner === definition.deferredStart?.binding.runner)?.id,
     systemPrompt: definition.task.systemPrompt,

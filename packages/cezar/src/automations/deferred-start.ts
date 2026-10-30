@@ -28,7 +28,8 @@ export function digest(value: unknown): string {
 /** Expand actual workflow runners before requiring any provider profile directory. */
 async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['task']) {
   const config = await loadConfig(root);
-  if (agentModelsLocked(root) && task.model?.trim()) throw new Error('Model selection is locked for this project.');
+  const locked = agentModelsLocked(root);
+  if (locked && (task.model?.trim() || task.accessMode)) throw new Error('Model selection is locked for this project.');
   const catalog = (await loadWorkflows(root)).workflows;
   let workflow: WorkflowDef | undefined;
   if (task.steps) {
@@ -40,7 +41,7 @@ async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['tas
   if (!workflow) throw new Error('The selected workflow is unavailable.');
   const runner = task.runner ?? config.defaultRunner;
   const store = await loadAgentAccounts();
-  const locked = agentModelsLocked(root);
+  const accessMode = runner === 'codex' && !locked ? task.accessMode : undefined;
   const models: { runner: string; model?: string; step?: string }[] = [];
   const references: WorkflowDef[] = [];
   type Context = { runner: typeof runner; model?: string; agentProfile?: string };
@@ -88,11 +89,11 @@ async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['tas
   }
   visit(workflow, { runner, model: locked ? undefined : task.model, agentProfile: task.agentProfile }, []);
   models.push(...work.map(step => ({ runner: step.runner, step: step.step, model: step.model })));
-  return { workflow, runner, store, references, work, models };
+  return { workflow, runner, store, references, work, models, accessMode };
 }
 
 async function bindDeferredPlan(root: string, plan: Awaited<ReturnType<typeof resolveDeferredPlan>>) {
-  const { workflow, runner, store, references, work, models } = plan;
+  const { workflow, runner, store, references, work, models, accessMode } = plan;
   const accounts: DeferredBinding['accounts'] = [];
   for (const step of work) {
     const backend = step.runner;
@@ -116,7 +117,7 @@ async function bindDeferredPlan(root: string, plan: Awaited<ReturnType<typeof re
     }
     if (!accounts.some(a => a.runner === account.runner)) accounts.push(account);
   }
-  const binding: DeferredBinding = { runner, accounts, models, revision: digest({ root, workflow, ...(references.length ? { references } : {}), runner, accounts, models: models.map(({ runner, model }) => ({ runner, model })), modelPolicy: agentModelsLocked(root) }) };
+  const binding: DeferredBinding = { runner, accounts, models, revision: digest({ root, workflow, ...(references.length ? { references } : {}), runner, accounts, models: models.map(({ runner, model }) => ({ runner, model })), ...(accessMode !== undefined ? { accessMode } : {}), modelPolicy: agentModelsLocked(root) }) };
   return { workflow, binding, models };
 }
 

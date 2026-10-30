@@ -34,6 +34,12 @@ Breaking: renaming/removing a command, flag, alias or env var; changing a defaul
 
 ## 2. HTTP API of the cockpit server (`packages/cezar/src/server/server.ts`)
 
+Scheduled starts preserve explicit Codex access treatment (#1700) through the existing
+automation task and launch path. Stored treatment uses the shared enum; unknown values and
+null are rejected, while omission retains Native behavior. Deferred preview/launch revisions
+bind an explicit treatment so changing it requires a new confirmation. Existing Native binding
+digests stay byte-compatible, and model-locked projects reject explicit treatment in previews.
+
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, and `discord.v1`.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
   format. Delivery records snapshot the format; provider rendering uses the public event schema.
