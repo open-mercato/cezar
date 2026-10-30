@@ -124,7 +124,8 @@ export class ClaudeCliRunner implements AgentRunner {
     opts: SessionOptions = {},
   ): AgentSession {
     const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
-    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path);
+    const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
+    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path);
 
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -133,6 +134,7 @@ export class ClaudeCliRunner implements AgentRunner {
       child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       mcpConfig?.cleanup();
+      promptFile?.cleanup();
       throw wrapSpawnError(err, this.bin);
     }
 
@@ -328,6 +330,7 @@ export class ClaudeCliRunner implements AgentRunner {
         stdinOpen = false;
         // stdout closed: the CLI read `--mcp-config` at startup long ago, so the file can go.
         mcpConfig?.cleanup();
+        promptFile?.cleanup();
       }
 
       const exitCode = await waitForExit(child);
@@ -401,6 +404,7 @@ export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
   mcpConfigPath?: string,
+  systemPromptFilePath?: string,
 ): string[] {
   const args: string[] = [
     '--print',
@@ -413,7 +417,8 @@ export function buildClaudeArgs(
     '--permission-mode',
     env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
-  args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
+  if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
+  else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.
@@ -441,6 +446,33 @@ export function buildClaudeArgs(
     args.push('--add-dir', dir);
   }
   return args;
+}
+
+/** Windows caps a command line at 32,767 chars; a skill body plus cezar's rules blows past it (#1584). */
+const WINDOWS_ARGV_PROMPT_LIMIT = 8_000;
+
+/** Whether the system prompt must travel in a file instead of argv. Never true off Windows. */
+export function shouldSpoolSystemPrompt(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === 'win32' && prompt.length > WINDOWS_ARGV_PROMPT_LIMIT;
+}
+
+/** Write an oversized system prompt to a `0600` temp file for `--append-system-prompt-file`. */
+export function writeClaudeSystemPromptFile(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): { path: string; cleanup: () => void } | undefined {
+  if (!shouldSpoolSystemPrompt(prompt, platform)) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-prompt-'));
+    const path = join(dir, 'system-prompt.md');
+    writeFileSync(path, prompt, { mode: 0o600 });
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
