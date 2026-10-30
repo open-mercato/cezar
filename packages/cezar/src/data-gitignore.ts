@@ -1,5 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 /**
  * `.ai/cezar/.gitignore` — keep run data out of the user's repo history while workflows and
@@ -7,7 +8,8 @@ import { join } from 'node:path';
  * the same PR).
  *
  * Additive by construction: entries the user added stay, and a missing one is appended rather
- * than the file being rewritten. Never throws — a read-only repo means one un-ignored directory,
+ * than the file being rewritten. A file the user committed is left alone (#1486): its missing
+ * entries go to the repo's `info/exclude` instead, so a release never dirties the checkout. Never throws — a read-only repo means one un-ignored directory,
  * not a failed boot.
  *
  * Lives in its own module rather than in `index.ts` so it can be tested: importing `index.ts`
@@ -63,12 +65,47 @@ export const DATA_GITIGNORE_ENTRIES = [
  *  .gitignore are not untracked by default, but they are never the task's work. */
 export const CEZAR_DATA_EXCLUDE = ':(exclude).ai/cezar';
 
+function git(repoRoot: string, args: string[]): string {
+  return execFileSync('git', args, { cwd: repoRoot, stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).toString();
+}
+
+/** True only when git confirms the file is tracked; any git failure (non-git dir, no git) is false. */
+function isTracked(repoRoot: string, path: string): boolean {
+  try { git(repoRoot, ['ls-files', '--error-unmatch', '--', path]); return true; } catch { return false; }
+}
+
+/** Mirror the missing entries into `info/exclude` (shared by task worktrees). Never throws. */
+function excludeMissing(repoRoot: string, tracked: string[]): void {
+  try {
+    const raw = git(repoRoot, ['rev-parse', '--git-path', 'info/exclude']).trim();
+    if (!raw) return;
+    const file = isAbsolute(raw) ? raw : resolve(repoRoot, raw);
+    const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
+    const lines = current.split('\n');
+    const missing = DATA_GITIGNORE_ENTRIES
+      .filter((w) => !tracked.includes(w))
+      .map((w) => `/.ai/cezar/${w}`)
+      .filter((w) => !lines.includes(w));
+    if (missing.length === 0) return;
+    mkdirSync(dirname(file), { recursive: true });
+    const glue = current && !current.endsWith('\n') ? '\n' : '';
+    writeFileSync(file, `${current}${glue}${missing.join('\n')}\n`, 'utf8');
+  } catch {
+    // non-fatal: read-only exclude leaves entries un-ignored, never a failed boot
+  }
+}
+
 export function ensureDataGitignore(repoRoot: string): void {
   const path = join(repoRoot, '.ai/cezar', '.gitignore');
   try {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    const exists = existsSync(path);
+    const current = exists ? readFileSync(path, 'utf8') : '';
     const lines = current.split('\n');
+    if (exists && isTracked(repoRoot, path)) {
+      excludeMissing(repoRoot, lines);
+      return;
+    }
     const missing = DATA_GITIGNORE_ENTRIES.filter((w) => !lines.includes(w));
     if (missing.length > 0) {
       const glue = current && !current.endsWith('\n') ? '\n' : '';
