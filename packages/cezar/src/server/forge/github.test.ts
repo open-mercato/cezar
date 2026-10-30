@@ -17,6 +17,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import {
   pickBranchPr,
+  fetchGithubListPages,
   AGGREGATE_CHECK_NAME,
   __clearCommentsCacheForTests,
   __clearMergeStateCacheForTests,
@@ -3502,5 +3503,45 @@ describe('GH_HOST pinning (GitHub Enterprise)', () => {
     });
     await resolveRepoHandle('/repo/no-origin');
     expect(ghEnv('/repo/no-origin').env?.GH_HOST).toBe('acme.ghe.com');
+  });
+});
+
+/** #1750: an exhausted side must not restart from page one when the other side keeps paging. */
+describe('fetchGithubListPages exhausted sides', () => {
+  const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [] }, url: `https://github.com/o/n/${n}`, comments: { totalCount: 0 }, isDraft: false, additions: 0, deletions: 0 });
+  /** A fake GitHub with `issues` issues and `prs` PRs: a missing cursor means first page. */
+  const fakeGraphql = (issues: number, prs: number) => async (_q: string, v: Record<string, string>) => {
+    const side = (total: number, size: number, cursor?: string) => {
+      const start = cursor ? Number(cursor) : 0;
+      const n = Math.max(0, Math.min(size, total - start));
+      return { totalCount: total, nodes: Array.from({ length: n }, (_, i) => node(start + i + 1)), pageInfo: { hasNextPage: start + n < total, endCursor: String(start + n) } };
+    };
+    return JSON.stringify({ data: { repository: {
+      issues: side(issues, Number(v.issuesLimit), v.issuesCursor),
+      pullRequests: side(prs, Number(v.prsLimit), v.prsCursor),
+    } } });
+  };
+  const walk = async (issues: number, prs: number, limit: number) => {
+    const run = fakeGraphql(issues, prs);
+    const seen = { issues: [] as number[], prs: [] as number[] };
+    let cursors: Parameters<typeof fetchGithubListPages>[4] = {};
+    for (let guard = 0; guard < 20; guard++) {
+      const page = await fetchGithubListPages(run, 'o', 'n', limit, cursors);
+      seen.issues.push(...page.issues.nodes.map((n) => n.number));
+      seen.prs.push(...page.pullRequests.nodes.map((n) => n.number));
+      const ic = page.issues.pageInfo.hasNextPage ? page.issues.pageInfo.endCursor ?? undefined : undefined;
+      const pc = page.pullRequests.pageInfo.hasNextPage ? page.pullRequests.pageInfo.endCursor ?? undefined : undefined;
+      if (!ic && !pc) break;
+      cursors = { issuesCursor: ic, prsCursor: pc, issuesDone: !ic, prsDone: !pc };
+    }
+    return seen;
+  };
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+
+  it('lists every PR once when issues outlast PRs', async () => {
+    expect(await walk(25, 5, 10)).toEqual({ issues: range(25), prs: range(5) });
+  });
+  it('lists every issue once when PRs outlast issues', async () => {
+    expect(await walk(5, 25, 10)).toEqual({ issues: range(5), prs: range(25) });
   });
 });
