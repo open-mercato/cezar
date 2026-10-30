@@ -451,7 +451,11 @@ describe('claudeCostDelta (#1704)', () => {
   });
 
   it('treats a drop to a lower total as a reset', () => {
-    expect(sum('s-reset', [5, 1, 3])).toBe(5 + 1 + 2);
+    expect(sum('s-reset', [5, 1, 3], '2.1.300')).toBe(5 + 1 + 2);
+  });
+
+  it('keeps raw totals when the CLI reports no version', () => {
+    expect(sum('s-nover', [1, 2.5])).toBe(3.5);
   });
 
   it('passes the raw total when there is no session id', () => {

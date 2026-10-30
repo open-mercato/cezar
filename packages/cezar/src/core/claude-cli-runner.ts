@@ -67,7 +67,7 @@ const CUMULATIVE_COST_SINCE = [2, 1, 277] as const;
 
 function costIsCumulative(version: string | undefined): boolean {
   const m = version && /^(\d+)\.(\d+)\.(\d+)/.exec(version);
-  if (!m) return true; // unknown CLI: a reset (value below the baseline) still falls back to the raw value
+  if (!m) return false; // no version in the init frame: keep the raw per-invocation value
   for (let i = 0; i < 3; i++) {
     const n = Number(m[i + 1]);
     const floor = CUMULATIVE_COST_SINCE[i] ?? 0;
