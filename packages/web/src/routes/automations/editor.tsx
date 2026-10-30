@@ -69,10 +69,12 @@ const PLACEHOLDER = {
  * files, and this component owns the header, the save and the two error paths — a stale
  * revision (409, "edited elsewhere") and a validation 400 shown under the section it names.
  */
-export function AutomationEditor({ data, automation, actions, onBack, onSaved, onLog }: {
+export function AutomationEditor({ data, automation, actions, initialKind, onBack, onSaved, onLog }: {
   data: AutomationsResponse | undefined
   automation?: AutomationListEntry
   actions?: AutomationActions
+  /** A new automation opened on this trigger (the explainer's tiles); the template palette stays closed. */
+  initialKind?: 'schedule' | 'github' | 'tracker'
   onBack: () => void
   onSaved: () => void
   onLog?: () => void
@@ -85,8 +87,17 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const skills = useSkills()
   const repo = useRepo()
 
-  const [draft, setDraft] = useState<EditorDraft>(() => (automation ? fromDefinition(automation) : newDraft()))
-  const [showTemplates, setShowTemplates] = useState(!automation)
+  // A GitHub tile with the forge known unavailable falls back to a schedule: the kind switch
+  // would show it disabled, and nothing could be saved under it.
+  const startKind = initialKind === 'github' && data?.available === false ? 'schedule' : initialKind
+  const [draft, setDraft] = useState<EditorDraft>(() =>
+    automation
+      ? fromDefinition(automation)
+      : startKind
+        ? { ...newDraft(), kind: startKind, ...(startKind === 'tracker' ? { intervalSeconds: 1800, enabled: false } : {}) }
+        : newDraft(),
+  )
+  const [showTemplates, setShowTemplates] = useState(!automation && !startKind)
   const [trackerValid, setTrackerValid] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<SaveError | null>(null)

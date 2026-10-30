@@ -1,4 +1,3 @@
-import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -18,7 +17,7 @@ import {
 import * as React from 'react'
 import { useNavigate as useGlobalNavigate } from 'react-router'
 
-import { ApiError, putWorkspaceUiState } from '@/api/client'
+import { ApiError } from '@/api/client'
 import {
   useConfig,
   useConnectAgentAccount,
@@ -37,17 +36,25 @@ import {
   useSkills,
   useGithub,
   useWorkspaceUiState,
-  workspaceQueryKeys,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
-import type { GithubItem, ProviderId, RepoSuggestion, RunRecord, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import type { GithubItem, ProviderId, RepoSuggestion, RunRecord } from '@open-mercato/cezar-api-client'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
 import { GithubIcon } from '@/components/icons'
+import {
+  ChoiceTile,
+  OnboardingDialog,
+  OnboardingPage,
+  PreviewWindow,
+  chipLink,
+  previewLine,
+  quietLink,
+  useOnboardingWrite,
+} from '@/components/onboarding-kit'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { toast } from '@/components/ui/toaster'
 import { NAV_ITEMS } from '@/components/nav-items'
@@ -101,60 +108,15 @@ export function FirstRun({ gitRepo }: { gitRepo: boolean | undefined }) {
   return <Welcome />
 }
 
-/** Merge a patch into the workspace `onboarding` prefs: optimistic, reverted with a toast on error. */
-function useOnboardingWrite() {
-  const queryClient = useQueryClient()
-  return React.useCallback(
-    (patch: NonNullable<WorkspaceUiState['onboarding']>) => {
-      const key = workspaceQueryKeys.uiState
-      const previous = queryClient.getQueryData<WorkspaceUiState>(key)
-      const onboarding = { ...previous?.onboarding, ...patch }
-      queryClient.setQueryData<WorkspaceUiState>(key, { ...previous, onboarding })
-      putWorkspaceUiState({ onboarding })
-        .then((merged) => queryClient.setQueryData(key, merged))
-        .catch((error: unknown) => {
-          queryClient.setQueryData(key, previous)
-          toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
-        })
-    },
-    [queryClient],
-  )
-}
-
+/** The first-run page: the shared onboarding page with the three-step rail on the obstacle pages. */
 function Page({
-  title,
-  slot,
   step,
-  why,
-  subtitle,
-  banner,
-  children,
-}: {
-  title: string
-  slot: string
+  ...rest
+}: Omit<React.ComponentProps<typeof OnboardingPage>, 'rail'> & {
   /** The rail and the why-line belong to the two obstacle pages; the welcome page is the goal. */
   step?: StepId
-  /** One line under the title: why this step matters, in plain words. */
-  why?: string
-  subtitle?: React.ReactNode
-  banner?: React.ReactNode
-  children: React.ReactNode
 }) {
-  return (
-    <section
-      data-onboarding=""
-      data-slot="first-run"
-      data-first-run={slot}
-      className="mx-auto flex w-full max-w-2xl flex-1 flex-col items-center px-1 pt-6 pb-12 text-center md:pt-12"
-    >
-      {banner}
-      {step ? <StepRail current={step} /> : null}
-      <h2 className={cn('text-4xl font-light tracking-tight text-balance text-foreground', step && 'mt-8')}>{title}</h2>
-      {why ? <p className="mt-3 max-w-md text-[15px] text-muted-foreground">{why}</p> : null}
-      {subtitle ? <p className="mt-2 text-[14px] text-muted-foreground">{subtitle}</p> : null}
-      {children}
-    </section>
-  )
+  return <OnboardingPage {...rest} rail={step ? <StepRail current={step} /> : undefined} />
 }
 
 type StepId = 'agent' | 'project' | 'task'
@@ -204,74 +166,8 @@ function StepRail({ current }: { current: StepId }) {
 
 type IconComponent = React.ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
 
-const quiet = 'inline-flex items-center gap-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground'
-
-const chip =
-  'inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground'
-
-/**
- * Half the desktop sidebar's width: an onboarding dialog belongs to the page it opened from, so it
- * centres over the content column, not the whole window. Zero below `md`, where the sidebar is a
- * drawer and the content is the window.
- */
-function useContentCenterOffset(): number {
-  const [offset, setOffset] = React.useState(0)
-  React.useLayoutEffect(() => {
-    const measure = () => {
-      const sidebar = document.querySelector<HTMLElement>('aside[data-slot="sidebar"]')
-      setOffset(sidebar ? Math.max(0, sidebar.getBoundingClientRect().right) / 2 : 0)
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    return () => window.removeEventListener('resize', measure)
-  }, [])
-  return offset
-}
-
-/** Every onboarding dialog: a header band (title, one line), a body, a footer band with the buttons. */
-function OnboardingDialog({
-  title,
-  description,
-  onOpenChange,
-  onSubmit,
-  footer,
-  wide = false,
-  children,
-}: {
-  title: string
-  description: string
-  /** Room for a picture: "What's new" draws each feature. */
-  wide?: boolean
-  onOpenChange: (open: boolean) => void
-  /** Cmd/Ctrl+Enter. */
-  onSubmit?: () => void
-  footer: React.ReactNode
-  children: React.ReactNode
-}) {
-  const contentOffset = useContentCenterOffset()
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent
-        data-onboarding=""
-        className={cn('gap-0 p-0', wide ? 'sm:max-w-lg' : 'sm:max-w-md')}
-        style={contentOffset ? { left: `calc(50% + ${contentOffset}px)` } : undefined}
-        onKeyDown={(event) => {
-          if (onSubmit && event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-            event.preventDefault()
-            onSubmit()
-          }
-        }}
-      >
-        <DialogHeader className="border-b border-border px-6 py-5 text-left">
-          <DialogTitle className="text-xl font-light tracking-tight">{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <div className="px-6 py-5 text-left">{children}</div>
-        <DialogFooter className="border-t border-border px-6 py-4">{footer}</DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
+const quiet = quietLink
+const chip = chipLink
 
 /** Numbered, plain-words steps for people who have never opened a terminal. */
 function Steps({ children }: { children: React.ReactNode }) {
@@ -1304,41 +1200,6 @@ function ProjectChoices() {
   )
 }
 
-function ChoiceTile({
-  title,
-  description,
-  picture,
-  recommended = false,
-  onClick,
-}: {
-  title: string
-  description: string
-  picture: React.ReactNode
-  recommended?: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-recommended={recommended || undefined}
-      className={cn(
-        'group relative flex flex-col items-center gap-4 rounded-xl border px-4 pt-7 pb-5 text-center transition-colors',
-        recommended ? 'onboarding-announcement' : 'border-border bg-card hover:border-muted-foreground',
-      )}
-    >
-      {recommended ? <span className="absolute top-3 right-3 text-[11px] tracking-wide text-violet uppercase">Start here</span> : null}
-      <span className="grid h-16 place-items-center" aria-hidden="true">
-        {picture}
-      </span>
-      <span className="flex flex-col gap-1">
-        <span className="text-lg font-light text-foreground">{title}</span>
-        <span className="text-[12.5px] text-muted-foreground">{description}</span>
-      </span>
-    </button>
-  )
-}
-
 /** Cloning needs a signed-in `gh`. cezar signs it in; the dialog closes itself when GitHub approves. */
 export function ConnectGithubDialog({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange])
@@ -1658,22 +1519,6 @@ function FeaturePreview({ id }: { id: FeaturePreviewId }) {
     </div>
   )
 }
-
-function PreviewWindow({ bar, children }: { bar?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div className="w-full max-w-xs rounded-t-lg border border-b-0 border-border bg-background shadow-[0_-12px_40px_-20px_var(--violet)]">
-      <div className="flex items-center gap-1.5 border-b border-border px-3 py-2">
-        <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-        <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-        <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-        {bar}
-      </div>
-      <div className="p-3">{children}</div>
-    </div>
-  )
-}
-
-const previewLine = 'h-2 rounded bg-muted'
 
 function TabsPreview() {
   return (

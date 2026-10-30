@@ -163,6 +163,21 @@ describe('AutomationEditor — new', () => {
     expect(saveButton().textContent).toContain('Save and enable')
   })
 
+  it('opens on the trigger the explainer tile named, with the palette closed (spec 2026-10-26 § Automations)', () => {
+    stubFetch()
+    renderEditor({ initialKind: 'tracker' })
+    expect(document.querySelector('[data-slot="template-palette"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Start from a template' })).not.toBeNull()
+    expect(document.querySelector('[data-slot="editor-kind"] [data-value="tracker"]')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('a GitHub tile with the forge unavailable falls back to a schedule', () => {
+    stubFetch()
+    renderEditor({ initialKind: 'github', data: { ...DATA, available: false, reason: 'gh not installed' } })
+    expect(document.querySelector('[data-slot="editor-kind"] [data-value="schedule"]')?.getAttribute('aria-pressed')).toBe('true')
+    expect((document.querySelector('[data-slot="editor-kind"] [data-value="github"]') as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('posts a schedule body with enable per the switch and reports back', async () => {
     const sent = stubFetch()
     const { onSaved } = renderEditor()

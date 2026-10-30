@@ -45,14 +45,33 @@ describe('AutomationsList', () => {
     expect(screen.getByText('Boom')).toBeTruthy()
   })
 
-  it('offers to create the first automation when there are none', () => {
+  it('explains automations when there are none, with a way to create the first', () => {
     renderList({ data: response({ automations: [] }) })
 
-    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('No automations yet')
-    expect(screen.getByText('Create one paused, preview it, then enable it.')).toBeTruthy()
+    // The explainer (spec 2026-10-26-first-run-onboarding § Automations), in the onboarding palette.
+    expect(screen.getByRole('heading', { level: 2 }).textContent).toBe('Let the routine run itself')
+    expect(document.querySelector('[data-first-run="automations"][data-onboarding]')).not.toBeNull()
+    expect(screen.getByRole('button', { name: /On a schedule/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /When GitHub changes/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /When an issue moves/ })).toBeTruthy()
+    expect(screen.getByText('Write it as a prompt')).toBeTruthy()
+    expect(screen.getByText('Preview, then enable')).toBeTruthy()
+    expect(screen.getByText('Every run is a task')).toBeTruthy()
     const links = screen.getAllByRole('link', { name: /New automation/ })
     expect(links).toHaveLength(2)
     expect(links.every((link) => link.getAttribute('href') === '/automations/new')).toBe(true)
+    expect(document.querySelector('[data-slot="automations-table"]')).toBeNull()
+  })
+
+  it('keeps "How it works" in the header once automations exist, opening the picture guide', () => {
+    renderList()
+
+    expect(screen.queryByText('Let the routine run itself')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'How automations work' }))
+    expect(screen.getByRole('heading', { name: 'How automations work' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="automations-guide-page"]')?.getAttribute('data-page')).toBe('prompt')
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(document.querySelector('[data-slot="automations-guide-page"]')?.getAttribute('data-page')).toBe('triggers')
   })
 
   it('renders the header status trio in the server zone and the counted view switch', () => {

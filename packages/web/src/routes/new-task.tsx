@@ -8,8 +8,10 @@ import {
   CheckIcon,
   ChevronDownIcon,
   Clock3Icon,
+  FileTextIcon,
+  FlaskConicalIcon,
   FolderOpenIcon,
-  SparklesIcon,
+  GitCommitHorizontalIcon,
   SquareIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -31,6 +33,7 @@ import {
   useSkills,
   useUiState,
   useWorkspaceConfig,
+  useWorkspaceUiState,
   useWorkflows,
 } from '@/api/queries'
 import type {
@@ -43,8 +46,9 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
+import { ComposerTips } from '@/components/composer-tips'
 import { DispatchToggle } from '@/components/dispatch-toggle'
-import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
+import { ghostChip, useOnboardingWrite } from '@/components/onboarding-kit'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SourcePill } from '@/components/source-pill'
@@ -63,6 +67,7 @@ import {
   normalizePromptTemplates,
   resolveAutoApply,
 } from '@/lib/prompt-templates'
+import { markTipSeen } from '@/lib/composer-tips'
 import {
   bumpSkillUsage,
   orderSkillsByUsage,
@@ -131,9 +136,10 @@ function saveScheduleRecovery(key: string, request: DeferredCreateInput | null) 
 }
 
 /**
- * `/new` — the full-screen new-task hero (spec §"New task (full-screen, #386)"; visual
- * contract docs/mockups/new-task.html): centered composer card on the twinkle surface, the
- * picker pill row inside the card below the textarea, suggested-task ghost chips underneath.
+ * `/new` — the full-screen new-task hero (spec §"New task (full-screen, #386)"), in the
+ * onboarding grammar since spec 2026-10-26-first-run-onboarding § Composer: a large light title
+ * on a plain surface, the composer card with the picker pill row below the textarea, the
+ * suggestion chips of the welcome page underneath, and one or two composer tips per visit.
  * This route also owns the saved-bookmarklet contract (spec 011, BACKWARD_COMPATIBILITY.md):
  * a full document load of `/new?skill=&ref=&auto=1&key=` auto-starts a run unattended when the
  * key matches `GET /api/launch-key`, and only prefills otherwise — `handleDeepLink()` in
@@ -166,6 +172,11 @@ export function NewTaskRoute() {
   const skills = useSkills()
   const repo = useRepo()
   const uiState = useUiState()
+  // Composer tips (spec 2026-10-26-first-run-onboarding § Composer tips) remember what was
+  // shown in the workspace ui-state — one person learns the composer once, for every project.
+  const workspaceUiState = useWorkspaceUiState()
+  const writeOnboarding = useOnboardingWrite()
+  const tipsRoot = useRef<HTMLDivElement>(null)
   // Settings → Agents runner/model policy for this project. `/api/health` is boot-bound and
   // cannot answer these per-project defaults when another project is active (#699).
   const config = useConfig()
@@ -686,20 +697,19 @@ export function NewTaskRoute() {
   return (
     <div
       data-route="new"
+      data-onboarding=""
       className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
     >
-      <TwinkleBackdrop />
-      <GhostCodeBackdrop />
-
-      <div className="w-full max-w-[720px]">
-        <header className="mb-6 text-center max-md:mb-4">
-          <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
+      {/* `relative`: the composer tips place their halo over a pill by measuring against this box. */}
+      <div ref={tipsRoot} className="relative w-full max-w-[720px]">
+        <header className="mb-7 text-center max-md:mb-5">
+          <h1 className="text-4xl font-light tracking-tight text-balance text-foreground max-md:text-3xl">
             What should the agent work on?
           </h1>
           {/* Follows the resolved run mode (#793). Printing the isolation promise
               unconditionally made this line false for every run the user opted out of — and
               for a non-git folder, where there is no worktree to opt into. */}
-          <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
+          <p data-slot="run-mode-note" className="mx-auto mt-3 max-w-md text-[15px] text-muted-foreground max-md:text-[13.5px]">
             {composerRunModeNote({
               worktree: worktreeOn,
               hasGit,
@@ -973,9 +983,18 @@ export function NewTaskRoute() {
           </p>
         ) : null}
 
+        <ComposerTips
+          anchorRoot={tipsRoot}
+          ready={providersReady && sourcesReady && !scheduleRecovery}
+          loaded={workspaceUiState.data !== undefined}
+          seen={workspaceUiState.data?.onboarding?.composerTipsSeen}
+          off={workspaceUiState.data?.onboarding?.composerTipsOff}
+          onSeen={(id) => writeOnboarding((current) => ({ composerTipsSeen: markTipSeen(current?.composerTipsSeen, id) }))}
+          onOff={(off) => writeOnboarding({ composerTipsOff: off })}
+        />
+
         <SuggestedChips onPick={(text) => update({ text })} />
       </div>
-
     </div>
   )
 }
@@ -1340,27 +1359,21 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
   )
 }
 
-/** Honest static starters (the mockup's ghost chips): they only fill the textarea — the user
+/** Honest static starters, the welcome page's three: they only fill the textarea — the user
  *  still aims and submits. */
 const SUGGESTIONS = [
-  'Fix a failing or flaky test',
-  'Summarize recent commits on this branch',
-  'Update the README for recent changes',
+  { icon: FlaskConicalIcon, label: 'Fix a failing test', task: 'Fix a failing or flaky test' },
+  { icon: GitCommitHorizontalIcon, label: 'Summarize recent commits', task: 'Summarize recent commits on this branch' },
+  { icon: FileTextIcon, label: 'Update the README', task: 'Update the README for recent changes' },
 ]
 
 function SuggestedChips({ onPick }: { onPick: (text: string) => void }) {
   return (
-    <div className="mt-7 flex flex-wrap justify-center gap-2 max-md:justify-start">
-      {SUGGESTIONS.map((suggestion) => (
-        <button
-          key={suggestion}
-          type="button"
-          data-slot="suggested-chip"
-          onClick={() => onPick(suggestion)}
-          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
-          {suggestion}
+    <div className="mt-4 flex flex-wrap justify-center gap-2 max-md:justify-start">
+      {SUGGESTIONS.map(({ icon: Icon, label, task }) => (
+        <button key={label} type="button" data-slot="suggested-chip" onClick={() => onPick(task)} className={ghostChip}>
+          <Icon aria-hidden="true" className="size-3.5" />
+          {label}
         </button>
       ))}
     </div>

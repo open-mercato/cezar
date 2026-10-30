@@ -213,6 +213,59 @@ live in `lib/onboarding.ts`, newest first, each dated by the day it merged, with
 an optional nav place and action, and an optional hero entry for the welcome page's big card.
 Only real, shipped features go in the list.
 
+## Composer (`/new`)
+
+Status: implemented (2026-10-30). `packages/web/src/routes/new-task.tsx`,
+`packages/web/src/lib/composer-tips.ts`, `packages/web/src/components/composer-tips.tsx`; the
+shared primitives moved to `packages/web/src/components/onboarding-kit.tsx`.
+
+The composer is where the first run lands, so it wears the same grammar: `data-onboarding` on the
+route (the violet `--primary` family for Start and the checked chips), a large light title with the
+run-mode line under it in the why-line's size, the welcome page's three suggestion chips (icon,
+no border), and a plain surface. The twinkle scatter and the ghost-code texture that used to sit
+behind the card are gone; the onboarding palette rule — no texture, no hero — applies here too.
+
+### Composer tips
+
+The screen carries a dozen controls, and a tour of all of them teaches none. Each visit explains
+at most **two** (`TIPS_PER_VISIT`), one card at a time under the composer: a label ("Tip 1 of 2"),
+the control's name, one or two sentences, and a small moving picture of what it does, drawn from
+plain boxes like the "What's new" miniatures (rows rising in, a bar filling, a branch drawing
+itself, a thumbnail dropping in; still under `prefers-reduced-motion`). The card points at its
+control with an arrow placed by measurement and rings the control with a pulsing halo.
+
+- **Order** is the catalog in `composer-tips.ts`: what everyone uses first (`/` for skills, the
+  source pill), then what changes how a task runs (worktree, autonomous, variants, model), then
+  the rest (attachments, schedule, dispatch, Ask, base branch, follow-ups, templates, project).
+- **Only controls on screen.** A tip whose anchor is not rendered (no git, one runner, no
+  templates, dispatch off) is skipped, not shown pointing at nothing. The visit's pair is chosen
+  once, when the pills first render; a pill that appears later joins the next visit.
+- **Closing.** "Got it" / "Next tip" / × close a tip for good; clicking the control it points at
+  counts as got it (except the textarea, which the page focuses itself); a card left up for five
+  seconds counts as read when the user leaves the page. "Don't show tips" turns them off.
+- **The way back.** When nothing is due, a quiet "Tips" link under the composer brings the next
+  pair; once every tip on this screen has been closed (or tips are off) it reads "Show me around"
+  and walks all of them.
+- **Stored** in the workspace ui-state: `onboarding.composerTipsSeen` (ids, capped at 50) and
+  `onboarding.composerTipsOff`. Both additive and optional, like the rest of the object.
+
+## Automations
+
+Status: implemented (2026-10-30). `packages/web/src/routes/automations/automations-onboarding.tsx`.
+
+With no automation yet, `/automations` explains instead of showing an empty box: "Let the routine
+run itself", one line on what an automation is (a prompt cezar turns into a task on its own), three
+tiles for what can start one — On a schedule (recommended), When GitHub changes, When an issue
+moves (Jira / Linear) — and three numbered steps for how it goes live: write it as a prompt, preview
+then enable (new automations start paused), every run is a task (own worktree, review gate, log).
+A tile opens the editor on that trigger (`/automations/new?kind=…`, `initialKind`; the template
+palette stays closed). Without the GitHub CLI the GitHub tile says "Sign in to the GitHub CLI first"
+and leads to `/github`.
+
+The same four ideas, in pictures, sit behind **How it works** in the page header (`GuideDialog`,
+the "What's new" shape: picture, title, one sentence, page dots), for someone who already has
+automations. Nothing is stored for it; it is a door, not a tour.
+
 ## Not in phase 1
 
 - "Watch a demo run" on the mock agent — needs a server-side way to run one task on the mock

@@ -350,6 +350,10 @@ export const workspaceUiStateSchema = z.looseObject({
       welcomeBackClosedAt: z.string().max(40).optional(),
       /** The last time the user opened "What's new" — its sidebar dot counts from here. */
       whatsNewSeenAt: z.string().max(40).optional(),
+      /** Composer tips on `/new` (one or two controls explained per visit): the ones already
+       *  shown, by id, and whether the user turned them off. */
+      composerTipsSeen: z.array(z.string().max(64)).max(50).optional(),
+      composerTipsOff: z.boolean().optional(),
     })
     .optional(),
 });
