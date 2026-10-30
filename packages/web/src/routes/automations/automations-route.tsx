@@ -2,6 +2,7 @@ import { ZapIcon } from 'lucide-react'
 import { useParams, useSearchParams } from 'react-router'
 
 import { CenteredState } from '@/components/centered-state'
+import { useConfig } from '@/api/queries'
 import { useNavigate } from '@/lib/project-router'
 
 import { AutomationEditor } from './editor'
@@ -27,6 +28,7 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   const query = useAutomationsQuery(gate.known && !gate.off)
   const data = query.data ? { ...query.data, automations: query.data.automations.filter(a => !a.deferredStart) } : undefined
   const actions = useAutomationActions(data)
+  const defaultRunner = useConfig().data?.defaultRunner
   const [searchParams, setSearchParams] = useSearchParams()
   const view = viewOf(searchParams.get('view'))
 
@@ -73,6 +75,7 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
       data={data}
       error={query.error ? String(query.error instanceof Error ? query.error.message : query.error) : undefined}
       actions={actions}
+      defaultRunner={defaultRunner}
       view={view}
       onViewChange={(next) => setSearchParams((current) => {
         const params = new URLSearchParams(current)

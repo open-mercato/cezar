@@ -34,12 +34,15 @@ export function AutomationsList({
   data,
   error,
   actions,
+  defaultRunner,
   view,
   onViewChange,
 }: {
   data: AutomationsResponse | undefined
   error?: string
   actions: AutomationActions
+  /** The project's default runner — what an automation with no pinned runner runs on (#1622). */
+  defaultRunner?: string
   view: AutomationsView
   onViewChange: (view: AutomationsView) => void
 }) {
@@ -119,7 +122,7 @@ export function AutomationsList({
             railOpen={railOpen}
             onOpenRail={() => setRailOpen(true)}
           />
-          <AutomationsTable data={data} actions={actions} now={now} />
+          <AutomationsTable data={data} actions={actions} defaultRunner={defaultRunner} now={now} />
           <NextRunsRail
             open={railOpen}
             onOpenChange={setRailOpen}
