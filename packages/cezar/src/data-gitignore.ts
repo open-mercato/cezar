@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 /**
@@ -74,13 +74,23 @@ function isTracked(repoRoot: string, path: string): boolean {
   try { git(repoRoot, ['ls-files', '--error-unmatch', '--', path]); return true; } catch { return false; }
 }
 
+/** The file's text, or null when it is absent: reading directly leaves no check-then-use window. */
+function readIfPresent(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
 /** Mirror the missing entries into `info/exclude` (shared by task worktrees). Never throws. */
 function excludeMissing(repoRoot: string, tracked: string[]): void {
   try {
     const raw = git(repoRoot, ['rev-parse', '--git-path', 'info/exclude']).trim();
     if (!raw) return;
     const file = isAbsolute(raw) ? raw : resolve(repoRoot, raw);
-    const current = existsSync(file) ? readFileSync(file, 'utf8') : '';
+    const current = readIfPresent(file) ?? '';
     const lines = current.split('\n');
     const missing = DATA_GITIGNORE_ENTRIES
       .filter((w) => !tracked.includes(w))
@@ -99,10 +109,10 @@ export function ensureDataGitignore(repoRoot: string): void {
   const path = join(repoRoot, '.ai/cezar', '.gitignore');
   try {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    const exists = existsSync(path);
-    const current = exists ? readFileSync(path, 'utf8') : '';
+    const existing = readIfPresent(path);
+    const current = existing ?? '';
     const lines = current.split('\n');
-    if (exists && isTracked(repoRoot, path)) {
+    if (existing !== null && isTracked(repoRoot, path)) {
       excludeMissing(repoRoot, lines);
       return;
     }
