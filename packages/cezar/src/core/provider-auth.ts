@@ -120,6 +120,8 @@ interface ProviderDescriptor {
    * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
    */
   foreign?: (executable: string, version: ProviderCommandResult) => boolean;
+  /** What `foreign` reports instead of the generic "not a working CLI" text. */
+  foreignHint?: (result: ProviderCommandResult) => string | undefined;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -508,6 +510,11 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     stdin: copilotAcpProbeStdin,
     // The version of the binary the probe ran, not a cached newer package.
     versionArgs: ['--no-auto-update', '--version'],
+    // No ACP frame and no semver on stdout or stderr: not a Copilot CLI that can run here, so a
+    // status of its own, not a crash report on every boot (telemetry 298c2e1f, #1580).
+    foreign: (_executable, version) => !process.env.CEZ_COPILOT_BIN
+      && (version.exitCode !== 0 || (cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)) === null),
+    foreignHint: copilotUnrecognizedHint,
     unrecognizedHint: copilotUnrecognizedHint,
   },
 ];
@@ -1383,8 +1390,9 @@ export class ProviderAuthService {
         return {
           provider: descriptor.id,
           status: 'not-installed',
-          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
-            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+          hint: descriptor.foreignHint?.(result)
+            ?? `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+              + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
         };
       }
     }
