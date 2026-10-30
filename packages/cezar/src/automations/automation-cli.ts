@@ -16,7 +16,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule, type AutomationResponse, type AutomationsResponse } from '@open-mercato/cezar-contract';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
@@ -258,7 +258,7 @@ export async function runAutomationCommand(
   const createFrom = async (body: Record<string, unknown>): Promise<number> => {
     const response = await json(`${api.scope}/automations`, { method: 'POST', body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
-    const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean; kind?: string; schedule?: AutomationSchedule; schedules?: AutomationSchedule[] } };
+    const { automation } = (await response.json()) as AutomationResponse;
     const schedule = automation.kind === 'schedule' ? ` — ${schedulesOf(automation).map(scheduleLabel).join('; ')}, in the cockpit's time zone` : '';
     io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? (automation.kind === 'schedule' ? 'ENABLED, next occurrence armed' : 'ENABLED from a current-time baseline') : 'paused'}${schedule}`);
     io.log(`cockpit: ${pageUrl(api, automation.id)}`);
@@ -405,17 +405,7 @@ export async function runAutomationCommand(
       case 'list': {
         const response = await io.fetch(`${api.scope}/automations`);
         if (!response.ok) throw new Error(`could not list automations — ${await readError(response)}`);
-        const data = (await response.json()) as {
-          available: boolean;
-          reason?: string;
-          automations: Array<{
-            id: string; name: string; enabled: boolean; kind?: string; events?: string[]; intervalSeconds?: number; schedule?: AutomationSchedule; schedules?: AutomationSchedule[];
-            counts: { launched: number; duplicates: number; errors: number };
-            nextRunAt?: string;
-            trackerTrigger?: { events: string[]; association: { kind: string } };
-            state?: { nextCheckAt?: string; lastSuccessAt?: string };
-          }>;
-        };
+        const data = (await response.json()) as AutomationsResponse;
         if (!data.available) io.log(`GitHub is not available to this cockpit${data.reason ? ` — ${data.reason}` : ''}; GitHub polls will not run until it is (schedules still do).`);
         if (data.automations.length === 0) {
           io.log('no automations in this project');

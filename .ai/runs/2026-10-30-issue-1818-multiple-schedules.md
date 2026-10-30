@@ -40,3 +40,5 @@ entry. No base merges or pushes. Local Windows full-suite/platform limits must r
 
 Validation commands all executed. Local full-suite timeout and Windows node:test failures are disclosed in the QA report; no local green gate is claimed. Author review and browser evidence are complete. Final PR-head CI follow-up is recorded separately on the PR after publishing this evidence commit; until it settles the PR status remains in-progress.
 
+
+Parent review replaced duplicated CLI create/list response declarations with contract-inferred AutomationResponse/AutomationsResponse aliases. Compile-time only; CLI24/24 and server typecheck PASS17s. Parent independently reran75 union/API/CLI/editor/table tests PASS43s. Final-head CI is rechecked after this contract-rule cleanup; existing browser/runtime evidence is unchanged.
