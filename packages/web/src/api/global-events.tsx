@@ -27,7 +27,12 @@ import {
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import { ApiError, getProjectRun } from './client'
+<<<<<<< HEAD
 import { RUN_EVENT_BATCH_MS } from './run-events'
+=======
+import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
+import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
+>>>>>>> ee16f08 (fix(web): release event streams of tabs opened hidden (#1782) (#1792))
 import type {
   ApiRun,
   HealthResponse,
@@ -905,8 +910,42 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       }, RECONCILE_TIMEOUT_MS)
     }
 
+<<<<<<< HEAD
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== 'visible') return
+=======
+    // #1753: release the socket once the tab has stayed hidden past the grace, unless a hidden-tab
+    // feature (run notifications) still reads it. The return path below reconnects and reconciles.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    const releaseWhileHidden = (): void => {
+      hiddenTimer = undefined
+      if (disposed || document.visibilityState !== 'hidden') return
+      if (hiddenTabNeedsWorkspaceStream(queryClient)) {
+        // Settings not loaded yet: look again instead of holding the stream forever (#1782).
+        if (hiddenTabAwaitsUiState(queryClient)) hiddenTimer = setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        return
+      }
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      const current = source
+      source = null
+      dashboardLive.connected(false)
+      current?.close()
+    }
+
+    // A tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState === 'hidden') hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+    }
+
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') {
+        armHiddenTimer()
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
+>>>>>>> ee16f08 (fix(web): release event streams of tabs opened hidden (#1782) (#1792))
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
       // is what the reader is about to trust, so ask the server before they read it.
@@ -940,6 +979,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       if (!event.persisted) return
       reconcileOnReopen()
       connect()
+      armHiddenTimer()
     }
 
     // Only while the tab is visible: a hidden tab is legitimately throttled into silence, and
@@ -957,6 +997,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
     connect()
+    armHiddenTimer()
 
     return () => {
       disposed = true

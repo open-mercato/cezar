@@ -184,6 +184,91 @@ describe('useRunEvents — subscription', () => {
   })
 })
 
+<<<<<<< HEAD
+=======
+describe('useRunEvents — hidden tab releases its stream (#1753)', () => {
+  const setVisibility = (state: 'visible' | 'hidden'): void => {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+  }
+  afterEach(() => setVisibility('visible'))
+
+  it('closes after the grace, reopens on return and the replay dedups', async () => {
+    const { result } = renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    first.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    await flushEvents()
+
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+    expect(first.readyState).toBe(2)
+
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(2)
+    FakeEventSource.last.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    FakeEventSource.last.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    await flushEvents()
+    expect(result.current.map((event) => event.seq)).toEqual([1, 2])
+  })
+
+  it('keeps the stream when the tab returns inside the grace', () => {
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    setVisibility('visible')
+    act(() => vi.advanceTimersByTime(5_000))
+
+    expect(first.readyState).not.toBe(2)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useRunEvents — tab opened hidden (#1782)', () => {
+  const hideSilently = (): void => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+  }
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+
+  it('D: releases a stream mounted while hidden, with no visibilitychange', () => {
+    hideSilently()
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(first.readyState).toBe(2)
+  })
+
+  it('E: releases the new stream when the runId changes while hidden', () => {
+    hideSilently()
+    const { rerender } = renderHook(({ id }) => useRunEvents(id), { initialProps: { id: 'run-1' } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    rerender({ id: 'run-2' })
+    const second = FakeEventSource.last
+    expect(second.url).toContain('run-2')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(second.readyState).toBe(2)
+  })
+
+  it('arms the timer after a bfcache restore into a hidden document', () => {
+    renderHook(() => useRunEvents('run-1'))
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    hideSilently()
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    const reopened = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(reopened.readyState).toBe(2)
+  })
+})
+
+>>>>>>> ee16f08 (fix(web): release event streams of tabs opened hidden (#1782) (#1792))
 describe('useRunEvents — liveness watchdog (#424)', () => {
   it('reopens a silently-dead socket that never reached CLOSED, then dedups the replay', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))

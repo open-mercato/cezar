@@ -376,8 +376,33 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     // with no error handler ever firing. On return, reopen if it's closed — whatever is on screen
     // is about to be trusted (the thread is the app's primary view, same threat model as the
     // global stream). #minor-run-sse-recovery.
+<<<<<<< HEAD
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== 'visible') return
+=======
+    // #1753: a hidden tab releases the transcript socket after a grace. Nothing else needs it —
+    // run status and completion arrive on the workspace stream — and the reopen below replays
+    // from the high-water mark.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    // Also armed after open(): a tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState !== 'hidden') return
+      hiddenTimer ??= setTimeout(() => {
+        hiddenTimer = undefined
+        if (disposed || document.visibilityState !== 'hidden') return
+        clearTimeout(reopenTimer)
+        reopenTimer = undefined
+        closeSource()
+      }, HIDDEN_STREAM_GRACE_MS)
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') {
+        armHiddenTimer()
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
+>>>>>>> ee16f08 (fix(web): release event streams of tabs opened hidden (#1782) (#1792))
       if (!source || source.readyState === CLOSED) {
         clearTimeout(reopenTimer)
         reopenTimer = undefined
@@ -394,7 +419,9 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       closeSource()
     }
     const onPageShow = (event: PageTransitionEvent): void => {
-      if (event.persisted) open()
+      if (!event.persisted) return
+      open()
+      armHiddenTimer()
     }
 
     // The watchdog only acts while the tab is visible: a hidden tab legitimately receives
@@ -414,6 +441,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     window.addEventListener('pageshow', onPageShow)
     compactCommittedRef.current = requestCompaction
     open()
+    armHiddenTimer()
 
     return () => {
       disposed = true
