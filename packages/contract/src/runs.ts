@@ -112,6 +112,8 @@ export const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step; absent for auto-model steps and
    *  records written before per-step attribution existed. */
   modelIdentity: z.string().optional(),
+  /** Raw model this turn was spawned with ('' = deliberately auto); absent on older records. */
+  model: z.string().optional(),
   costUsd: z.number().optional(),
 });
 export type StepState = z.infer<typeof stepStateSchema>;
