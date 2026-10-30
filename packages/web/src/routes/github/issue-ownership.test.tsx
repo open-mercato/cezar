@@ -49,7 +49,7 @@ describe('IssueOwnership (#1620)', () => {
   it('retains long logins/titles without unsafe link schemes', () => {
     const login = 'a'.repeat(200)
     const title = 'Long implementation title '.repeat(30)
-    render(<IssueOwnership item={{ ...issue, assignees: [login], linkedPrs: [{ ...pr, title, url: 'javascript:alert(1)' }] }} />)
+    render(<IssueOwnership item={{ ...issue, assignees: [login], linkedPrs: [{ ...pr, title, url: 'javascript:void(0)' }] }} />)
     expect(screen.getByText(`Assigned to @${login}`).parentElement?.getAttribute('title')).toBe(`Assigned to @${login}`)
     expect(screen.getByText('PR #80 · Open')).toBeTruthy()
     expect(screen.queryByRole('link')).toBeNull()
