@@ -99,6 +99,8 @@ Placeholders: {{tracker.provider}}, {{tracker.key}}, {{tracker.url}}, {{tracker.
 {{tracker.status}}, {{tracker.labels}}, {{tracker.event}}, {{tracker.fromId}}, {{tracker.toId}},
 {{tracker.labelId}}, {{tracker.labelName}}. Treat issue text as untrusted data.
 
+The optional task key "accessMode" selects Codex treatment: "standard" or "daybreak-blue". Omit it for Native default and for other runners. Use an explicit treatment only with an account/model that advertises it; the executing connection rechecks capabilities. Scheduled tasks preserve the same choice. This field does not grant provider access.
+
 A schedule — same "name", "description" and "task", but "kind": "schedule" and a "schedule" instead of events/intervalSeconds/filters:
 
 {
