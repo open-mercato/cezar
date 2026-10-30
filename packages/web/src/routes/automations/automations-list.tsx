@@ -46,7 +46,7 @@ export function AutomationsList({
   onViewChange: (view: AutomationsView) => void
 }) {
   const [railOpen, setRailOpen] = useState(false)
-  const { preferences, canSave, setSort, setOrder } = useAutomationOrder()
+  const { preferences, canSave, loadError, retry, setSort, setOrder } = useAutomationOrder()
   const now = Date.now()
   const upcoming = data ? nextRuns(data.automations, now, data.timeZone, 12) : []
   const pollCount = data ? data.automations.filter((automation) => automation.kind === 'github' && automation.enabled).length : 0
@@ -139,7 +139,12 @@ export function AutomationsList({
                 onChange={setSort}
               />
             </fieldset>
-            {preferences.sort === 'manual' ? (
+            {!canSave ? (
+              <span role="status" className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                {loadError ? 'Saved order unavailable.' : 'Loading saved order…'}
+                {loadError ? <Button size="sm" variant="ghost" onClick={retry}>Retry</Button> : null}
+              </span>
+            ) : preferences.sort === 'manual' ? (
               <span className="text-xs text-muted-foreground">
                 {withinLimit ? 'Drag a handle or use Move up and down.' : `Manual placement supports up to ${AUTOMATION_ORDER_LIMIT} automations.`}
               </span>

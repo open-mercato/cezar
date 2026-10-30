@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AutomationsList } from './automations-list'
 import { NOW, entry, mockActions, response, stubResizeObserver } from './automations-list.fixtures'
 import type { AutomationsView } from './automations-route'
-import { putUiState } from '@/api/client'
+import { getUiState, putUiState } from '@/api/client'
 
 vi.mock('@/api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('@/api/client')>(),
+  getUiState: vi.fn(async () => ({})),
   putUiState: vi.fn(async (patch: UiState) => patch),
 }))
 
@@ -18,6 +19,7 @@ beforeEach(() => {
   stubResizeObserver()
   setApiScope(null)
   vi.mocked(putUiState).mockClear()
+  vi.mocked(getUiState).mockReset().mockResolvedValue({})
   vi.useFakeTimers({ toFake: ['Date'] })
   vi.setSystemTime(NOW)
 })
@@ -27,10 +29,10 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderList(props: Partial<Parameters<typeof AutomationsList>[0]> = {}, prefs: UiState = {}) {
+function renderList(props: Partial<Parameters<typeof AutomationsList>[0]> = {}, prefs: UiState | null = {}) {
   const onViewChange = vi.fn<(view: AutomationsView) => void>()
   const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false } } })
-  queryClient.setQueryData(['default', 'ui-state'], prefs)
+  if (prefs !== null) queryClient.setQueryData(['default', 'ui-state'], prefs)
   render(
     <QueryClientProvider client={queryClient}>
     <MemoryRouter initialEntries={['/automations']}>
@@ -137,6 +139,18 @@ describe('AutomationsList', () => {
     renderList({}, { automationList: { sort: 'nextRun' } })
     expect(screen.getByRole('button', { name: 'Next run' }).getAttribute('aria-pressed')).toBe('true')
     expect(document.querySelector('[aria-label^="Reorder "]')).toBeNull()
+  })
+
+  it('keeps the list readable while preferences load and offers recovery from a failed read', async () => {
+    vi.mocked(getUiState).mockRejectedValueOnce(new Error('permission denied'))
+    renderList({}, null)
+    expect(screen.getByText('Loading saved order…')).toBeTruthy()
+    expect(document.querySelectorAll('[data-slot="automation-row"]')).toHaveLength(7)
+    await waitFor(() => expect(screen.getByText('Saved order unavailable.')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Manual' }).closest('fieldset')?.disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(screen.queryByText('Saved order unavailable.')).toBeNull())
+    expect(screen.getByRole('button', { name: 'Manual' }).closest('fieldset')?.disabled).toBe(false)
   })
 
   it('keeps every row visible and explains the manual-placement cap', () => {

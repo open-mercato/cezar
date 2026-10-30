@@ -51,6 +51,8 @@ export function useAutomationOrder() {
   return {
     preferences,
     canSave: uiState.data !== undefined,
+    loadError: uiState.isError && uiState.data === undefined,
+    retry: () => { void uiState.refetch() },
     setSort: (sort: AutomationSort) => write({ sort }),
     setOrder: (order: readonly string[]) => write({ order: normalizeAutomationOrder({ order }).order }),
   }
