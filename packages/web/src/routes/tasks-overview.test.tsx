@@ -1384,6 +1384,21 @@ describe('dispatched subtasks nest under their parent', () => {
   const toggleOf = (el: Element | null) =>
     el?.querySelector<HTMLButtonElement>('[data-slot="subtask-toggle"]') ?? null
 
+  it('widens the Task cell floor by the indent so a nested title keeps its room (#979)', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'a', createdAt: ago(30_000) }),
+        run({ id: 'b', createdAt: ago(20_000), dispatch: { rootRunId: 'a', parentRunId: 'a' } }),
+        run({ id: 'c', createdAt: ago(10_000), dispatch: { rootRunId: 'a', parentRunId: 'b' } }),
+      ],
+    })
+    fireEvent.click(toggleOf(tableRow('a')) as HTMLButtonElement)
+    fireEvent.click(toggleOf(tableRow('b')) as HTMLButtonElement)
+    const floor = (id: string) =>
+      (tableRow(id)?.querySelector('td[data-column-id="task"]') as HTMLElement).style.minWidth
+    expect([floor('a'), floor('b'), floor('c')]).toEqual(['220px', '234px', '248px'])
+  })
+
   it('folds a child behind its parent by default; the chip unfolds it in the parent’s place', () => {
     renderOverview({
       runs: [

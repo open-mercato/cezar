@@ -92,6 +92,7 @@ import {
   finishedRunCount,
   formatCost,
   scheduledResume,
+  taskCellMinWidth,
   taskReference,
   taskReferences,
   usageCells,
@@ -1097,7 +1098,11 @@ function TaskTableCell({
       )
     case 'task':
       return (
-        <td data-column-id={column.id} className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
+        <td
+          data-column-id={column.id}
+          className={cn(TD_BASE, 'max-w-0')}
+          style={{ minWidth: `${taskCellMinWidth(depth)}px` }}
+        >
           <TitleCell
             run={run}
             depth={depth}
