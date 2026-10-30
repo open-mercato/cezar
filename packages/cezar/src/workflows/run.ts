@@ -30,7 +30,7 @@ import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } 
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
-import { accountStateHint, classifyAgentFailure, MAX_TRANSIENT_RETRIES, transientRetryDelayMs } from '../core/agent-failure-class.ts';
+import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -865,8 +865,8 @@ function autoResumeReasonFor(error: string | undefined): AutoResumeReason | unde
   return classifyAgentFailure(error) === 'transient' ? 'transient' : undefined;
 }
 
-function autoResumeCap(reason: AutoResumeReason | undefined): number {
-  return reason === 'transient' ? MAX_TRANSIENT_RETRIES : MAX_AUTO_RESUMES;
+function autoResumeCap(reason: AutoResumeReason | undefined, error?: string): number {
+  return reason === 'transient' ? transientRetryCap(error) : MAX_AUTO_RESUMES;
 }
 /**
  * The wake instant as a human reads it — local, to the SECOND, with the zone named. The
@@ -3261,7 +3261,7 @@ export class RunManager {
   /**
    * A transient provider failure (an overload, no response, the OAuth refresh race between two of
    * cezar's own Claude processes): resume the same session after a short backoff, at most
-   * `MAX_TRANSIENT_RETRIES` times per streak, through the usage-limit resume's timer and exits.
+   * `transientRetryCap` times per streak, through the usage-limit resume's timer and exits.
    */
   private scheduleTransientRetry(run: RunRecord): void {
     // Same refusals as a usage-limit resume: an archived task, the switch off, no session.
@@ -3270,10 +3270,13 @@ export class RunManager {
       return;
     }
     const attempts = run.autoResumeAttempts ?? 0;
-    if (attempts >= MAX_TRANSIENT_RETRIES) {
+    const cap = transientRetryCap(run.error);
+    if (attempts >= cap) {
       this.store.appendEvent(run.id, {
         type: 'note',
-        message: `the provider is still failing after ${MAX_TRANSIENT_RETRIES} automatic retries — continue this task manually`,
+        message: isOauthRefreshRace(run.error)
+          ? `Claude Code's login refresh kept colliding with another Claude Code process after ${cap} automatic retries — continue this task manually`
+          : `the provider is still failing after ${cap} automatic retries — continue this task manually`,
       });
       this.reportUnretriedTransient(run, 'retries_exhausted');
       return;
@@ -3282,7 +3285,7 @@ export class RunManager {
     this.armAutoResume(run.id, wakeAt.getTime(), 'transient');
     this.store.appendEvent(run.id, {
       type: 'lifecycle',
-      message: `temporary provider failure — retrying automatically at ${formatWakeInstant(wakeAt)} (${attempts + 1}/${MAX_TRANSIENT_RETRIES})`,
+      message: `temporary provider failure — retrying automatically at ${formatWakeInstant(wakeAt)} (${attempts + 1}/${cap})`,
     });
   }
 
@@ -3385,7 +3388,7 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: reason === 'transient'
-        ? `retrying after a temporary provider failure (${attempts}/${MAX_TRANSIENT_RETRIES})`
+        ? `retrying after a temporary provider failure (${attempts}/${transientRetryCap(run.error)})`
         : `usage limit reset — resuming automatically (${attempts}/${MAX_AUTO_RESUMES})`,
     });
     // A deferred continuation only ENQUEUES itself; the queue moves when something pumps it, and
@@ -3483,7 +3486,7 @@ export class RunManager {
       if (
         run.archived
         || !Number.isFinite(deadline)
-        || (run.autoResumeAttempts ?? 0) >= autoResumeCap(run.autoResumeReason)
+        || (run.autoResumeAttempts ?? 0) >= autoResumeCap(run.autoResumeReason, run.error)
       ) {
         this.store.updateRun(run.id, { autoResumeAt: undefined });
         continue;

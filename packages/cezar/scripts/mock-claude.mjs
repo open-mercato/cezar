@@ -316,6 +316,8 @@ async function respond(userText, imageCount) {
   // state one (7d0a1d6d), in the same `is_error` result envelope (core/agent-failure-class.ts).
   const accountOrProviderError = userText.includes('mock:overloaded')
     ? 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.'
+    : userText.includes('mock:oauthrace')
+      ? 'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute.'
     : userText.includes('mock:credit') ? 'Credit balance is too low'
     : userText.includes('mock:enospc') ? 'ENOSPC: no space left on device, write' : undefined;
   if (accountOrProviderError) {
