@@ -1623,8 +1623,10 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
     });
 
     const data = await fetchGithub('/repo/typed-limit', false, 150);
-    expect(calls.length).toBe(2);
-    for (const argv of calls) {
+    const listCalls = calls.filter(argv => argv.some(arg => arg.startsWith('issuesLimit=')));
+    expect(listCalls).toHaveLength(2);
+    expect(calls.filter(argv => argv.some(arg => arg.includes('closedByPullRequestsReferences')))).toHaveLength(3);
+    for (const argv of listCalls) {
       for (const key of ['issuesLimit', 'prsLimit']) {
         const at = argv.findIndex((a) => a.startsWith(`${key}=`));
         expect(argv[at - 1]).toBe('-F');

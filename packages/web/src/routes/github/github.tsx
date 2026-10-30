@@ -70,6 +70,7 @@ import {
   type GithubSort,
 } from './github-filter'
 import { GithubLoading } from './github-loading'
+import { IssueOwnership } from './issue-ownership'
 import { HandToAgent } from './hand-to-agent'
 import { SwipeLaunchSheet, SwipeReveal, useRowSwipe } from './swipe-launch'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
@@ -915,6 +916,7 @@ const GithubRow = memo(function GithubRow({
           </span>
         ) : null}
       </Link>
+      <IssueOwnership item={item} />
     </li>
   )
 }, sameGithubRow)
