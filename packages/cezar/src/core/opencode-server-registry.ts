@@ -31,6 +31,17 @@ function registryDir(): string {
   return join(cezarHomeDir(), 'opencode-servers');
 }
 
+function isRecord(v: unknown): v is ServerRecord {
+  const r = v as Partial<ServerRecord> | null;
+  return (
+    typeof r === 'object' && r !== null &&
+    Number.isInteger(r.pid) && (r.pid as number) > 1 &&
+    Number.isInteger(r.ownerPid) && (r.ownerPid as number) > 0 &&
+    Number.isInteger(r.port) &&
+    typeof r.start === 'string' && r.start !== '' && typeof r.ownerStart === 'string'
+  );
+}
+
 /** Field 22 of /proc/<pid>/stat; undefined off Linux or when the process is gone. */
 export function procStart(pid: number): string | undefined {
   try {
@@ -94,6 +105,15 @@ export function trackServer(child: ChildProcess, port: number): void {
   }
   child.once('exit', () => {
     live.delete(child);
+    // The launcher may exit on its own and leave the server in its group (the pid stays reserved
+    // while any member lives, so this can only hit our group); a normal session end removes it too.
+    if (start !== undefined) {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        // group already empty
+      }
+    }
     try {
       rmSync(file, { force: true });
     } catch {
@@ -131,7 +151,11 @@ export function sweepOrphanedServers(): number[] {
   for (const name of files) {
     const file = join(registryDir(), name);
     try {
-      const rec = JSON.parse(readFileSync(file, 'utf8')) as ServerRecord;
+      const rec: unknown = JSON.parse(readFileSync(file, 'utf8'));
+      if (!isRecord(rec)) {
+        rmSync(file, { force: true });
+        continue;
+      }
       const ownerGone = !alive(rec.ownerPid) || procStart(rec.ownerPid) !== rec.ownerStart;
       if (!ownerGone || rec.ownerPid === process.pid) continue;
       const cmd = procCmdline(rec.pid);
@@ -145,7 +169,12 @@ export function sweepOrphanedServers(): number[] {
       }
       rmSync(file, { force: true });
     } catch {
-      // unreadable record or a kill that raced: leave it for the next boot
+      // corrupt JSON is dropped (it can never name a server); a kill that raced stays for next boot
+      try {
+        JSON.parse(readFileSync(file, 'utf8'));
+      } catch {
+        rmSync(file, { force: true });
+      }
     }
   }
   return killed;
