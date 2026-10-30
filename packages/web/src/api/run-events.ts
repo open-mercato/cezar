@@ -388,15 +388,20 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     // run status and completion arrive on the workspace stream — and the reopen below replays
     // from the high-water mark.
     let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    // Also armed after open(): a tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState !== 'hidden') return
+      hiddenTimer ??= setTimeout(() => {
+        hiddenTimer = undefined
+        if (disposed || document.visibilityState !== 'hidden') return
+        clearTimeout(reopenTimer)
+        reopenTimer = undefined
+        closeSource()
+      }, HIDDEN_STREAM_GRACE_MS)
+    }
     const onVisibilityChange = (): void => {
       if (document.visibilityState === 'hidden') {
-        hiddenTimer ??= setTimeout(() => {
-          hiddenTimer = undefined
-          if (disposed || document.visibilityState !== 'hidden') return
-          clearTimeout(reopenTimer)
-          reopenTimer = undefined
-          closeSource()
-        }, HIDDEN_STREAM_GRACE_MS)
+        armHiddenTimer()
         return
       }
       clearTimeout(hiddenTimer)
@@ -417,7 +422,9 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       closeSource()
     }
     const onPageShow = (event: PageTransitionEvent): void => {
-      if (event.persisted) open()
+      if (!event.persisted) return
+      open()
+      armHiddenTimer()
     }
 
     // The watchdog only acts while the tab is visible: a hidden tab legitimately receives
@@ -437,6 +444,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     window.addEventListener('pageshow', onPageShow)
     compactCommittedRef.current = requestCompaction
     open()
+    armHiddenTimer()
 
     return () => {
       disposed = true

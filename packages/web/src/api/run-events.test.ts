@@ -222,6 +222,50 @@ describe('useRunEvents — hidden tab releases its stream (#1753)', () => {
   })
 })
 
+describe('useRunEvents — tab opened hidden (#1782)', () => {
+  const hideSilently = (): void => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+  }
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+
+  it('D: releases a stream mounted while hidden, with no visibilitychange', () => {
+    hideSilently()
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(first.readyState).toBe(2)
+  })
+
+  it('E: releases the new stream when the runId changes while hidden', () => {
+    hideSilently()
+    const { rerender } = renderHook(({ id }) => useRunEvents(id), { initialProps: { id: 'run-1' } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    rerender({ id: 'run-2' })
+    const second = FakeEventSource.last
+    expect(second.url).toContain('run-2')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(second.readyState).toBe(2)
+  })
+
+  it('arms the timer after a bfcache restore into a hidden document', () => {
+    renderHook(() => useRunEvents('run-1'))
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    hideSilently()
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    const reopened = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(reopened.readyState).toBe(2)
+  })
+})
+
 describe('useRunEvents — liveness watchdog (#424)', () => {
   it('reopens a silently-dead socket that never reached CLOSED, then dedups the replay', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))

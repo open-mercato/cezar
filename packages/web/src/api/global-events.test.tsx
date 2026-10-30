@@ -321,6 +321,89 @@ describe('useGlobalEvents — hidden tab releases its stream (#1753)', () => {
   })
 })
 
+describe('useGlobalEvents — tab opened hidden (#1782)', () => {
+  const hideSilently = (): void => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+  }
+  const grantNotifications = (): void => {
+    vi.stubGlobal('Notification', Object.assign(function () {}, { permission: 'granted' }))
+  }
+
+  it('A: releases a stream mounted while hidden, with no visibilitychange', () => {
+    vi.useFakeTimers()
+    hideSilently()
+    const { source } = mount()
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(source.closeCount).toBe(1)
+  })
+
+  it('B: releases the new stream when the url changes while hidden', () => {
+    vi.useFakeTimers()
+    hideSilently()
+    let url = '/api/v1/workspace/events'
+    const view = renderHook(() => useGlobalEvents(usage, url), { wrapper })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    url = '/api/v1/workspace/events?x=1'
+    view.rerender()
+    const second = FakeEventSource.last
+    expect(second.url).toBe(url)
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(second.closeCount).toBe(1)
+  })
+
+  it('C: keeps the stream while permission is granted and uiState has not loaded, then honours it', () => {
+    vi.useFakeTimers()
+    grantNotifications()
+    const { source } = mount()
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(source.closeCount).toBe(0)
+    client.setQueryData(workspaceQueryKeys.uiState, { notifications: { enabled: true } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(source.closeCount).toBe(0)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('C2: releases once uiState loads with notifications off', () => {
+    vi.useFakeTimers()
+    grantNotifications()
+    const { source } = mount()
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(source.closeCount).toBe(0)
+    client.setQueryData(workspaceQueryKeys.uiState, { notifications: { enabled: false } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(source.closeCount).toBe(1)
+  })
+
+  it('releases without waiting for uiState when permission is not granted', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('Notification', Object.assign(function () {}, { permission: 'default' }))
+    const { source } = mount()
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(source.closeCount).toBe(1)
+  })
+
+  it('arms the timer after a bfcache restore into a hidden document', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    hideSilently()
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    const reopened = FakeEventSource.last
+    expect(reopened).not.toBe(source)
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(reopened.closeCount).toBe(1)
+  })
+})
+
 describe('useGlobalEvents — back/forward cache', () => {
   // jsdom has no PageTransitionEvent; a plain Event with `persisted` defined is what the
   // handler reads either way.
