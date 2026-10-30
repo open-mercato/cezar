@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { ApiError, archiveRun, cancelRun, deleteRun, getConfig, openRunIn, openRunInCli, startLifecycleRemoval } from '@/api/client'
+import { ApiError, archiveRun, cancelRun, deleteRun, getConfig, getRunGitStatus, openRunIn, openRunInCli, startLifecycleRemoval } from '@/api/client'
 import {
   queryKeys,
   useConfig,
@@ -19,7 +19,7 @@ import { toast } from '@/components/ui/toaster'
 import { useNavigate } from '@/lib/project-router'
 import { usableRunners } from '@/lib/provider-status'
 
-import { cliTargetResumes, cliTargetRunner, runActionFlags } from './run-actions'
+import { canRemoveTaskWorktree, cliTargetResumes, cliTargetRunner, runActionFlags } from './run-actions'
 import type { RunConfirmKind } from './run-confirm-dialog'
 import { useFinishRun } from './use-finish-run'
 import { writeClipboard } from '@/lib/clipboard'
@@ -51,6 +51,7 @@ export function useRunActions(
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState<RunConfirmKind | null>(null)
+  const [worktreeRemovalOpen, setWorktreeRemovalOpen] = useState(false)
   const config = useConfig()
   const configured = config.data?.worktreeLifecycle
   const lifecycleDelete = !!run.worktreeLifecycle || (!!run.worktreePath && !!((configured?.afterCreate.length ?? 0) + (configured?.beforeRemove.length ?? 0)))
@@ -104,6 +105,28 @@ export function useRunActions(
     mutate: () => markReadMutation.mutate(run.id, { onError }),
   }
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
+  const removeWorktree = useMutation({
+    mutationFn: async () => {
+      if (!canRemoveTaskWorktree(run)) throw new Error('This task has no removable worktree.')
+      // Recheck on submit: the confirmation's cached status may have changed in another app.
+      const status = await getRunGitStatus(run.id)
+      if (status.uncommitted !== 0) throw new Error('Commit or stash uncommitted changes before removing the worktree.')
+      return startLifecycleRemoval({ requestId: crypto.randomUUID(), runId: run.id, intent: 'reclaim' })
+    },
+    onSuccess: ({ operation }) => {
+      setWorktreeRemovalOpen(false)
+      queryClient.setQueryData(lifecycleQueryKeys.operation(operation.id), { operation })
+      queryClient.setQueryData<ApiRun>(queryKeys.runs.detail(run.id), previous => previous ? { ...previous, worktreeLifecycle: {
+        worktreeId: operation.worktreeId, generation: operation.generation, activeOperationId: operation.id,
+        phase: operation.phase, state: operation.state, needsAttention: operation.state === 'needs_attention' || operation.state === 'interrupted',
+      } } : previous)
+      void invalidate()
+      void queryClient.invalidateQueries({ queryKey: lifecycleQueryKeys.all() })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.worktrees })
+      toast('Worktree removal requested. Follow cleanup progress on this task.')
+    },
+    onError,
+  })
   const deleteMutation = useMutation({
     mutationFn: async () => {
       // The projection covers existing managed generations. A fresh config read also
@@ -156,6 +179,9 @@ export function useRunActions(
     markUnread,
     markRead,
     cancel,
+    removeWorktree,
+    worktreeRemovalOpen,
+    setWorktreeRemovalOpen,
     delete: deleteMutation,
     lifecycleDelete,
     terminal,

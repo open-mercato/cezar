@@ -2444,3 +2444,72 @@ describe('lifecycle-aware task deletion', () => {
     expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
   })
 })
+
+describe('task worktree removal (#1600)', () => {
+  const operation = { id: '11111111-1111-4111-8111-111111111111', worktreeId: '22222222-2222-4222-8222-222222222222', generation: 1, phase: 'teardown', intent: 'reclaim', state: 'queued', revision: 0, createdAt: 'now', updatedAt: 'now', history: [], entries: [], allowedActions: ['stop'] }
+  const record = () => run('done', { worktreePath: '/project/.ai/cezar/worktrees/r1', branch: 'cez/r1' })
+  const clean = { uncommitted: 0, unpushed: null, behind: 0, ahead: 1 }
+  const endpoint = '/api/v1/worktree-lifecycle/operations'
+  async function openRemoval(mobile = false) {
+    fireEvent.pointerDown(mobile ? screen.getByRole('button', { name: 'Run actions' }) : itemActions().getByRole('button', { name: 'More actions' }))
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Remove worktree…' }))
+    return within(await screen.findByRole('alertdialog'))
+  }
+  it.each([false, true])('confirms reclaim from the mobile=%s menu without deleting or navigating', async mobile => {
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean), [endpoint]: () => jsonResponse({ operation }, 202) })
+    renderHeader(record())
+    const dialog = await openRemoval(mobile)
+    expect(dialog.getByText(/including unpushed commits/)).not.toBeNull()
+    expect(dialog.getByText(/Ignored local files/)).not.toBeNull()
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
+    expect(sent.filter(request => request.path === endpoint)).toHaveLength(0)
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    await screen.findByText('Worktree removal requested. Follow cleanup progress on this task.')
+    expect(sent.find(request => request.path === endpoint)?.body).toEqual({ requestId: expect.any(String), runId: 'r1', intent: 'reclaim' })
+    expect(sent.some(request => request.method === 'DELETE' || request.path.includes('remove-worktree'))).toBe(false)
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+  it('Cancel retains everything and launches no operation', async () => {
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean) })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    fireEvent.click(dialog.getByRole('button', { name: 'Keep worktree' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(sent.some(request => request.method !== 'GET')).toBe(false)
+  })
+  it.each([
+    { name: 'dirty', response: () => jsonResponse({ ...clean, uncommitted: 2 }), message: /This worktree has uncommitted/ },
+    { name: 'missing', response: () => jsonResponse({ error: 'Worktree missing' }, 409), message: /Could not check/ },
+    { name: 'unknown', response: () => jsonResponse({}), message: /Could not check/ },
+  ])('refuses a $name checkout before removal', async ({ response, message }) => {
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': response })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    await dialog.findByText(message)
+    expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    expect(sent.some(request => request.path === endpoint)).toBe(false)
+  })
+  it('rechecks dirty status on submit and never requests removal when it changed', async () => {
+    let dirty = false
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse({ ...clean, uncommitted: dirty ? 1 : 0 }) })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
+    dirty = true
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    await screen.findByText('Commit or stash uncommitted changes before removing the worktree.')
+    expect(sent.some(request => request.path === endpoint)).toBe(false)
+    expect(screen.queryByRole('alertdialog')).not.toBeNull()
+  })
+  it('surfaces a lifecycle conflict and retains the page/dialog', async () => {
+    stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean), [endpoint]: () => jsonResponse({ error: 'Task is active; cancel it before removing its worktree' }, 409) })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    await screen.findByText('Task is active; cancel it before removing its worktree')
+    expect(screen.queryByRole('alertdialog')).not.toBeNull()
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+})

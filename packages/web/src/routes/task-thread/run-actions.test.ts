@@ -5,6 +5,7 @@ import type { RunRecord, RunStatus, StepState } from '@open-mercato/cezar-api-cl
 import { isUnread } from '@/lib/read-state'
 
 import {
+  canRemoveTaskWorktree,
   cliTargetResumes,
   finishTitle,
   isRunActive,
@@ -37,6 +38,24 @@ const run = (status: RunStatus, extra: Partial<RunRecord> = {}): RunRecord => ({
   archived: false,
   steps: [step({ sessionId: 'sess-1' })],
   ...extra,
+})
+
+describe('completed task worktree removal (#1600)', () => {
+  it.each(['done', 'failed', 'cancelled', 'review'] as const)('offers reclaim for %s legacy and managed worktrees', status => {
+    expect(canRemoveTaskWorktree(run(status, { worktreePath: '/wt/r1' }))).toBe(true)
+    expect(canRemoveTaskWorktree(run(status, { worktreePath: '/wt/r1', worktreeLifecycle: { worktreeId: 'w1', generation: 1, needsAttention: false } }))).toBe(true)
+  })
+  it.each(['queued', 'running', 'waiting'] as const)('refuses an active %s task', status => {
+    expect(canRemoveTaskWorktree(run(status, { worktreePath: '/wt/r1' }))).toBe(false)
+  })
+  it.each([
+    {},
+    { worktreePath: '/project', worktree: false as const },
+    { worktreePath: '/wt/r1', worktreeReclaimedAt: '2026-10-30T12:00:00Z' },
+    { worktreePath: '/wt/r1', worktreeLifecycle: { worktreeId: 'w1', generation: 1, activeOperationId: 'op1', needsAttention: true } },
+  ])('refuses absent, in-place, reclaimed or lifecycle-owned checkout %j', extra => {
+    expect(canRemoveTaskWorktree(run('done', extra))).toBe(false)
+  })
 })
 
 describe('runActionFlags — the visibility matrix, all 7 statuses × archived', () => {
