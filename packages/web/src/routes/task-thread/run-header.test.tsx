@@ -2455,9 +2455,9 @@ describe('task worktree removal (#1600)', () => {
     fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Remove worktree…' }))
     return within(await screen.findByRole('alertdialog'))
   }
-  it.each([false, true])('confirms reclaim from the mobile=%s menu without deleting or navigating', async mobile => {
+  it.each([{ mobile: false, managed: false }, { mobile: true, managed: false }, { mobile: false, managed: true }, { mobile: true, managed: true }])('confirms reclaim from the mobile=$mobile managed=$managed menu without deleting or navigating', async ({ mobile, managed }) => {
     const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean), [endpoint]: () => jsonResponse({ operation }, 202) })
-    renderHeader(record())
+    renderHeader({ ...record(), ...(managed ? { worktreeLifecycle: { worktreeId: operation.worktreeId, generation: 1, needsAttention: false } } : {}) })
     const dialog = await openRemoval(mobile)
     expect(dialog.getByText(/including unpushed commits/)).not.toBeNull()
     expect(dialog.getByText(/Ignored local files/)).not.toBeNull()

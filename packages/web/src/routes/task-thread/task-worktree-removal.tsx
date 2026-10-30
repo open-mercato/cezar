@@ -19,8 +19,8 @@ export function TaskWorktreeRemovalDialog({ run, pending, onClose, onConfirm }: 
   const ready = canRemoveTaskWorktree(run) && !status.isFetching && !status.isError && clean && !pending
   return (
     <AlertDialog open onOpenChange={open => { if (!open && !pending) onClose() }}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
+      <AlertDialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col">
+        <AlertDialogHeader className="min-h-0 overflow-y-auto">
           <AlertDialogTitle>Remove this task’s worktree?</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-2">
@@ -39,7 +39,7 @@ export function TaskWorktreeRemovalDialog({ run, pending, onClose, onConfirm }: 
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogFooter>
+        <AlertDialogFooter className="shrink-0">
           <AlertDialogCancel disabled={pending}>Keep worktree</AlertDialogCancel>
           <AlertDialogAction disabled={!ready} className="bg-danger text-danger-foreground hover:brightness-[0.96]"
             onClick={event => { event.preventDefault(); if (ready) onConfirm() }}>
