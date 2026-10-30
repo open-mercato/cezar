@@ -67,15 +67,15 @@ export function EditorGithubFields({
             onClick={() => toggleEvent(event)}
           >
             {EVENT_LABELS[event]}
-            <span className="font-mono text-[10px] font-normal text-soft-foreground">{event}</span>
+            <span className="font-mono text-micro font-normal text-soft-foreground">{event}</span>
           </Chip>
         ))}
       </div>
-      {events.length === 0 ? <p className="m-0 text-[12.5px] text-danger">Pick at least one event.</p> : null}
-      <div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+      {events.length === 0 ? <p className="m-0 text-label text-danger">Pick at least one event.</p> : null}
+      <div className="flex flex-wrap items-center gap-2 text-ui text-muted-foreground">
         Checks GitHub every
         <Select value={String(Math.round(intervalSeconds / 60))} onValueChange={(value) => onChange({ intervalSeconds: Number(value) * 60 })}>
-          <SelectTrigger size="sm" aria-label="Poll interval" className="text-[13px]">
+          <SelectTrigger size="sm" aria-label="Poll interval" className="text-ui">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -86,14 +86,14 @@ export function EditorGithubFields({
         </Select>
         <span>while this cockpit is open, looking back {filters.lookbackDays} days, at most {filters.maxRecords} records.</span>
       </div>
-      <p data-slot="editor-github-how" className="-mt-2 m-0 text-[12.5px] text-soft-foreground">
+      <p data-slot="editor-github-how" className="-mt-2 m-0 text-label text-soft-foreground">
         Through your <code className="text-xs">gh</code>. No webhook or public URL needed.
       </p>
       <Collapsible open={open} onOpenChange={setOpen}>
         <CollapsibleTrigger asChild>
           <button
             type="button"
-            className="inline-flex h-6 items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground"
+            className="inline-flex h-6 items-center gap-1 text-ui text-muted-foreground hover:text-foreground"
           >
             <ChevronDownIcon aria-hidden="true" className={cn('size-3 transition-transform', open ? '' : '-rotate-90')} />
             Filters
@@ -107,7 +107,7 @@ export function EditorGithubFields({
           </button>
         </CollapsibleTrigger>
         <CollapsibleContent>
-          <p className="m-0 pt-2 text-[12.5px] text-soft-foreground">
+          <p className="m-0 pt-2 text-label text-soft-foreground">
             Only matching events start a task. Names in the prompt do not narrow it down; these do.
           </p>
           <div data-slot="editor-github-filters" className="grid grid-cols-1 gap-3 pt-3 sm:grid-cols-2">
@@ -149,7 +149,7 @@ function FilterField({ id, label, value, invalid = false, onChange }: {
         placeholder="comma-separated"
         aria-invalid={invalid || undefined}
         onChange={(event) => onChange(event.target.value)}
-        className="h-8 text-[13px]"
+        className="h-8 text-ui"
       />
     </div>
   )
@@ -173,7 +173,7 @@ function NumberField({ id, label, value, min, max, onChange }: {
         max={max}
         value={value}
         onChange={(event) => onChange(clamp(Number(event.target.value), min, max))}
-        className="h-8 w-28 font-mono text-[13px] tabular-nums"
+        className="h-8 w-28 font-mono text-ui tabular-nums"
       />
     </div>
   )

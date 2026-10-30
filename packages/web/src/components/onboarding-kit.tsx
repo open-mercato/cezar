@@ -77,21 +77,21 @@ export function OnboardingPage({
       {banner}
       {rail}
       <h2 className={cn('text-4xl font-light tracking-tight text-balance text-foreground', rail && 'mt-8')}>{title}</h2>
-      {why ? <p className="mt-3 max-w-md text-[15px] text-muted-foreground">{why}</p> : null}
-      {subtitle ? <p className="mt-2 text-[14px] text-muted-foreground">{subtitle}</p> : null}
+      {why ? <p className="mt-3 max-w-md text-lead text-muted-foreground">{why}</p> : null}
+      {subtitle ? <p className="mt-2 text-body text-muted-foreground">{subtitle}</p> : null}
       {children}
     </section>
   )
 }
 
-export const quietLink = 'inline-flex items-center gap-1.5 text-[13px] text-muted-foreground transition-colors hover:text-foreground'
+export const quietLink = 'inline-flex items-center gap-1.5 text-ui text-muted-foreground transition-colors hover:text-foreground'
 
 export const chipLink =
-  'inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground'
+  'inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-label text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground'
 
 /** The welcome page's suggestion chip: an icon and a label, no border, a wash on hover. */
 export const ghostChip =
-  'inline-flex h-8 items-center gap-2 rounded-full px-3 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+  'inline-flex h-8 items-center gap-2 rounded-full px-3 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
 
 /**
  * Half the desktop sidebar's width: an onboarding dialog belongs to the page it opened from, so it
@@ -227,7 +227,7 @@ export function GuideDialog({
         </div>
         <div className="mt-5 flex min-h-28 flex-col">
           <h3 className="text-lg font-light tracking-tight text-foreground">{page.title}</h3>
-          <p className="mt-1 text-[13px] text-muted-foreground">{page.body}</p>
+          <p className="mt-1 text-ui text-muted-foreground">{page.body}</p>
           {page.action ? (
             <button
               type="button"
@@ -235,7 +235,7 @@ export function GuideDialog({
                 onOpenChange(false)
                 page.action?.onClick()
               }}
-              className="mt-3 inline-flex items-center gap-1 self-start text-[13px] text-violet hover:underline"
+              className="mt-3 inline-flex items-center gap-1 self-start text-ui text-violet hover:underline"
             >
               {page.action.label}
               <ArrowRightIcon className="size-3.5" aria-hidden="true" />
@@ -273,13 +273,13 @@ export function ChoiceTile({
         recommended ? 'onboarding-announcement' : 'border-border bg-card hover:border-muted-foreground',
       )}
     >
-      {recommended ? <span className="absolute top-3 right-3 text-[11px] tracking-wide text-violet uppercase">{badge}</span> : null}
+      {recommended ? <span className="absolute top-3 right-3 eyebrow text-violet">{badge}</span> : null}
       <span className="grid h-16 place-items-center" aria-hidden="true">
         {picture}
       </span>
       <span className="flex flex-col gap-1">
         <span className="text-lg font-light text-foreground">{title}</span>
-        <span className="text-[12.5px] text-muted-foreground">{description}</span>
+        <span className="text-label text-muted-foreground">{description}</span>
       </span>
     </button>
   )
@@ -328,8 +328,8 @@ export function SelectTile({
         {picture}
       </span>
       <span className="flex min-w-0 flex-col gap-0.5">
-        <span className="text-[15px] text-foreground">{title}</span>
-        <span className="text-[12px] text-muted-foreground">{description}</span>
+        <span className="text-lead text-foreground">{title}</span>
+        <span className="text-label text-muted-foreground">{description}</span>
       </span>
     </button>
   )
@@ -340,7 +340,7 @@ export type RailState = 'done' | 'current' | 'next'
 /** A thread of steps with the ones behind the current one ticked: a rail, not a wizard. */
 export function OnboardingStepRail({ steps }: { steps: ReadonlyArray<{ id: string; label: string; state: RailState }> }) {
   return (
-    <ol data-slot="step-rail" className="flex items-center gap-2 text-[12.5px]">
+    <ol data-slot="step-rail" className="flex items-center gap-2 text-label">
       {steps.map((step, i) => (
         <li key={step.id} data-step={step.id} data-state={step.state} className="flex items-center gap-2">
           {i > 0 ? <span className={cn('h-px w-6', step.state === 'next' ? 'bg-border' : 'bg-violet/60')} aria-hidden="true" /> : null}
@@ -352,7 +352,7 @@ export function OnboardingStepRail({ steps }: { steps: ReadonlyArray<{ id: strin
           >
             <span
               className={cn(
-                'grid size-5 place-items-center rounded-full border font-mono text-[10px]',
+                'grid size-5 place-items-center rounded-full border font-mono text-micro',
                 step.state === 'done' && 'border-violet/60 bg-violet/15 text-violet',
                 step.state === 'current' && 'border-violet text-foreground',
                 step.state === 'next' && 'border-border text-soft-foreground',

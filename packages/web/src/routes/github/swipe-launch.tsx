@@ -208,7 +208,7 @@ export function SwipeLaunchSheet({
               placeholder="Filter workflows and skills…"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              className="w-full rounded-md border border-input bg-card py-2 pr-2 pl-7 text-[14px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="w-full rounded-md border border-input bg-card py-2 pr-2 pl-7 text-body outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
           </div>
         </div>
@@ -255,7 +255,7 @@ export function SwipeLaunchSheet({
 function LaunchGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section className="pt-2">
-      <h3 className="px-2 pb-1 text-[11px] font-medium tracking-wide text-soft-foreground uppercase">{label}</h3>
+      <h3 className="px-2 pb-1 eyebrow text-soft-foreground">{label}</h3>
       <ul className="flex flex-col">{children}</ul>
     </section>
   )
@@ -288,7 +288,7 @@ function LaunchOption({
       >
         {icon}
         <span className="flex min-w-0 flex-col">
-          <span className="truncate font-mono text-[13px] font-medium">{name}</span>
+          <span className="truncate font-mono text-ui font-medium">{name}</span>
           {description ? <span className="truncate text-xs text-soft-foreground">{description}</span> : null}
         </span>
       </button>

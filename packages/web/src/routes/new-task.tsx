@@ -686,7 +686,7 @@ export function NewTaskRoute() {
         <TwinkleBackdrop />
         <div data-slot="auto-starting" role="status" className="text-center">
           <h1 className="animate-pulse text-lg font-semibold tracking-tight">Starting task…</h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground">
+          <p className="mt-1.5 text-ui text-muted-foreground">
             Launched from a bookmarklet — taking you to the run.
           </p>
         </div>
@@ -709,7 +709,7 @@ export function NewTaskRoute() {
           {/* Follows the resolved run mode (#793). Printing the isolation promise
               unconditionally made this line false for every run the user opted out of — and
               for a non-git folder, where there is no worktree to opt into. */}
-          <p data-slot="run-mode-note" className="mx-auto mt-3 max-w-md text-[15px] text-muted-foreground max-md:text-[13.5px]">
+          <p data-slot="run-mode-note" className="mx-auto mt-3 max-w-md text-lead text-muted-foreground max-md:text-ui">
             {composerRunModeNote({
               worktree: worktreeOn,
               hasGit,
@@ -1113,7 +1113,7 @@ function NewBranchToggle({
           value={name}
           placeholder="feat/… (auto)"
           onChange={(event) => onNameChange(event.target.value)}
-          className="h-6 w-36 rounded-md border border-input bg-card px-2 font-mono text-[11px] outline-none focus-visible:border-ring"
+          className="h-6 w-36 rounded-md border border-input bg-card px-2 font-mono text-meta outline-none focus-visible:border-ring"
         />
       ) : null}
     </span>
@@ -1261,7 +1261,7 @@ function ProjectPill({
           data-slot="project-pill"
           aria-label="Project"
           title="Which project this task runs in — its skills, workflows, settings and draft"
-          className={cn(chipClass, 'border-foreground/60 font-semibold text-foreground')}
+          className={cn(chipClass, 'border-foreground/60 text-foreground')}
         >
           <FolderOpenIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
           {/* The registry is authoritative for the display name; the raw id is the fallback
@@ -1301,9 +1301,9 @@ function ProjectPill({
               >
                 <span className="min-w-0 flex-1 truncate text-xs font-medium">{project.name}</span>
                 {project.status === 'missing' ? (
-                  <span className="shrink-0 text-[11px] text-soft-foreground">folder not found</span>
+                  <span className="shrink-0 text-meta text-soft-foreground">folder not found</span>
                 ) : project.branch !== undefined ? (
-                  <span className="shrink-0 font-mono text-[11px] text-soft-foreground">
+                  <span className="shrink-0 font-mono text-meta text-soft-foreground">
                     {project.branch}
                   </span>
                 ) : null}
@@ -1315,7 +1315,7 @@ function ProjectPill({
           </CommandList>
           {/* The mockup's `dd-note`. Worth the two lines: picking here does far more than
               relabel a pill, and nothing else on screen says so. */}
-          <p className="border-t border-border px-3 py-2 text-[11px] leading-snug text-soft-foreground">
+          <p className="border-t border-border px-3 py-2 text-meta leading-snug text-soft-foreground">
             Skills, workflows, settings and the draft re-resolve against the selected project.
           </p>
         </Command>
@@ -1347,7 +1347,7 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
     <PickerPill
       slot="base-pill"
       ariaLabel="Base branch"
-      label={<span className="font-mono text-[11.5px]">base: {current}</span>}
+      label={<span className="text-meta">base: {current}</span>}
       value={repo.baseBranch ?? ''}
       onPick={(value) => mutation.mutate(value === '' ? null : value)}
       searchPlaceholder="Search branches…"

@@ -55,12 +55,12 @@ export function AutomationsOnboarding({ data }: { data: AutomationsResponse }) {
       <ol data-slot="automation-steps" className="mt-10 grid w-full gap-6 text-left sm:grid-cols-3">
         {HOW_IT_WORKS.map((step, at) => (
           <li key={step.title} className="flex gap-3">
-            <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border border-violet font-mono text-[11px] text-foreground" aria-hidden="true">
+            <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-full border border-violet font-mono text-meta text-foreground" aria-hidden="true">
               {at + 1}
             </span>
             <span className="flex flex-col gap-1">
-              <span className="text-[15px] text-foreground">{step.title}</span>
-              <span className="text-[12.5px] text-muted-foreground">{step.body}</span>
+              <span className="text-lead text-foreground">{step.title}</span>
+              <span className="text-label text-muted-foreground">{step.body}</span>
             </span>
           </li>
         ))}
@@ -146,7 +146,7 @@ function AutomationsGuide({ onOpenChange }: { onOpenChange: (open: boolean) => v
 
 // ---- pictures -----------------------------------------------------------------------------------
 
-const row = 'flex items-center gap-2 rounded-md px-2 py-1 text-[10.5px]'
+const row = 'flex items-center gap-2 rounded-md px-2 py-1 text-micro'
 
 function Toggle({ on = true }: { on?: boolean }) {
   return (
@@ -197,8 +197,8 @@ function TrackerPicture() {
 
 function PromptPicture() {
   return (
-    <PreviewWindow bar={<span className="ml-3 text-[10px] text-soft-foreground">What to run</span>}>
-      <p className="text-[11px] leading-relaxed text-foreground">
+    <PreviewWindow bar={<span className="ml-3 text-micro text-soft-foreground">What to run</span>}>
+      <p className="text-meta leading-relaxed text-foreground">
         Review <span className="rounded-sm bg-violet/15 px-1 text-violet">{'{{github.url}}'}</span> for real issues only and leave one comment per finding.
       </p>
       <div className={cn(previewLine, 'mt-3 w-1/2')} />
@@ -229,7 +229,7 @@ function PausedPicture() {
           <Toggle on={false} />
         </span>
       </div>
-      <div style={{ '--i': 2 } as React.CSSProperties} className="tip-rise mt-2 rounded-md border border-violet/50 bg-violet/10 px-2 py-1.5 text-[10.5px] text-foreground">
+      <div style={{ '--i': 2 } as React.CSSProperties} className="tip-rise mt-2 rounded-md border border-violet/50 bg-violet/10 px-2 py-1.5 text-micro text-foreground">
         Preview: would have matched 3 issues this week
       </div>
       <div style={{ '--i': 5 } as React.CSSProperties} className={cn(row, 'tip-rise mt-2 justify-between text-foreground')}>
@@ -245,7 +245,7 @@ function PausedPicture() {
 
 function RunsPicture() {
   return (
-    <PreviewWindow bar={<span className="ml-3 text-[10px] text-soft-foreground">Tasks</span>}>
+    <PreviewWindow bar={<span className="ml-3 text-micro text-soft-foreground">Tasks</span>}>
       {[
         ['needs review', 'Triage issue 412: missing repro', 'text-violet'],
         ['running', 'Nightly dependency bump', 'text-success'],

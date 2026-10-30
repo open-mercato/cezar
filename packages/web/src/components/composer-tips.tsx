@@ -150,7 +150,7 @@ export function ComposerTips({
             setVisit(tipsForVisit({ seen, off: false, present: onScreen, replay: everything }))
             setIndex(0)
           }}
-          className={cn(quietLink, 'text-[12px] text-soft-foreground')}
+          className={cn(quietLink, 'text-label text-soft-foreground')}
         >
           <LightbulbIcon className="size-3.5" aria-hidden="true" />
           {everything ? 'Show me around' : 'Tips'}
@@ -175,11 +175,11 @@ export function ComposerTips({
         {arrowLeft !== null ? <span aria-hidden="true" className="composer-tip-arrow z-10" style={{ left: arrowLeft }} /> : null}
         <div ref={cardRef} className="onboarding-announcement relative flex items-stretch overflow-hidden rounded-xl border text-left">
           <div className="flex min-w-0 flex-1 flex-col justify-center p-5 pr-10 sm:pr-5">
-            <span className="text-[11px] tracking-wide text-violet uppercase">
+            <span className="eyebrow text-violet">
               Tip {index + 1} of {visit.length}
             </span>
             <span className="mt-1 text-lg font-light tracking-tight text-foreground">{current.title}</span>
-            <p className="mt-1 max-w-md text-[13px] text-muted-foreground">{current.body}</p>
+            <p className="mt-1 max-w-md text-ui text-muted-foreground">{current.body}</p>
             <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
               <Button size="sm" className="font-normal" onClick={advance}>
                 {last ? 'Got it' : 'Next tip'}
@@ -216,7 +216,7 @@ export function ComposerTips({
 // (`tip-rise`, `tip-progress`, `tip-draw`, `tip-drop` in index.css); still under reduced motion.
 
 const line = 'h-1.5 rounded bg-muted'
-const rowBase = 'tip-rise flex items-center gap-2 rounded-md px-2 py-1 text-[10.5px]'
+const rowBase = 'tip-rise flex items-center gap-2 rounded-md px-2 py-1 text-micro'
 
 function Stage({ children }: { children: React.ReactNode }) {
   return (
@@ -248,7 +248,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
     case 'slash':
       return (
         <Stage>
-          <div className="flex items-center gap-1 rounded-md border border-violet/60 px-2 py-1.5 font-mono text-[11px] text-foreground">
+          <div className="flex items-center gap-1 rounded-md border border-violet/60 px-2 py-1.5 font-mono text-meta text-foreground">
             <span className="text-violet">/</span>fix<span className="tip-caret ml-px h-3 w-px bg-violet" />
           </div>
           <div className="mt-2">
@@ -265,7 +265,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
                 {at > 0 ? <span className="h-px flex-1 bg-muted-foreground/40" /> : null}
                 <span
                   style={{ '--i': at } as React.CSSProperties}
-                  className={cn('tip-rise rounded-md border px-2 py-1 text-[10.5px]', at === 1 ? 'border-violet text-foreground' : 'border-border text-muted-foreground')}
+                  className={cn('tip-rise rounded-md border px-2 py-1 text-micro', at === 1 ? 'border-violet text-foreground' : 'border-border text-muted-foreground')}
                 >
                   {step}
                 </span>
@@ -284,7 +284,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
             <circle cx="60" cy="48" r="3.5" className="fill-background stroke-muted-foreground/70" />
             <circle cx="150" cy="20" r="3.5" style={{ '--i': 2 } as React.CSSProperties} className="tip-rise fill-violet" />
           </svg>
-          <div className="flex justify-between font-mono text-[10px] text-soft-foreground">
+          <div className="flex justify-between font-mono text-micro text-soft-foreground">
             <span>{id === 'base' ? 'base: main' : 'main'}</span>
             <span className="text-violet">{id === 'base' ? 'cez/1a2b' : 'worktree'}</span>
           </div>
@@ -298,7 +298,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
           <div className="mt-3 h-1.5 w-full overflow-hidden rounded bg-muted">
             <div className="tip-progress h-full rounded bg-violet" />
           </div>
-          <div className="mt-2 flex items-center justify-between text-[10.5px]">
+          <div className="mt-2 flex items-center justify-between text-micro">
             <span className="text-muted-foreground">No questions asked</span>
             <span style={{ '--i': 10 } as React.CSSProperties} className="tip-rise inline-flex items-center gap-1 text-success">
               <CheckIcon className="size-3" /> done
@@ -324,7 +324,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
               </div>
             ))}
           </div>
-          <div className="mt-2 text-center font-mono text-[10px] text-soft-foreground">×3 · keep one</div>
+          <div className="mt-2 text-center font-mono text-micro text-soft-foreground">×3 · keep one</div>
         </Stage>
       )
     case 'model':
@@ -340,7 +340,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
             <span className="tip-drop grid size-9 place-items-center rounded-md border border-violet/60 bg-violet/15">
               <span className="size-4 rounded-sm bg-violet/60" />
             </span>
-            <span className="tip-drop grid h-9 items-center rounded-md border border-border px-2 text-[10.5px] text-muted-foreground" style={{ animationDelay: '900ms' }}>
+            <span className="tip-drop grid h-9 items-center rounded-md border border-border px-2 text-micro text-muted-foreground" style={{ animationDelay: '900ms' }}>
               design.pdf
             </span>
           </div>
@@ -370,8 +370,8 @@ function TipPicture({ id }: { id: TipPictureId }) {
     case 'ask':
       return (
         <Stage>
-          <div className="ml-auto w-3/4 rounded-lg rounded-br-sm bg-violet/15 px-2 py-1 text-[10.5px] text-foreground">Where is the retry logic?</div>
-          <div style={{ '--i': 2 } as React.CSSProperties} className="tip-rise mt-2 w-5/6 rounded-lg rounded-bl-sm border border-border px-2 py-1 text-[10.5px] text-muted-foreground">
+          <div className="ml-auto w-3/4 rounded-lg rounded-br-sm bg-violet/15 px-2 py-1 text-micro text-foreground">Where is the retry logic?</div>
+          <div style={{ '--i': 2 } as React.CSSProperties} className="tip-rise mt-2 w-5/6 rounded-lg rounded-bl-sm border border-border px-2 py-1 text-micro text-muted-foreground">
             <span className="font-mono text-foreground">src/runs/retry.ts</span>, nothing changed.
           </div>
         </Stage>
@@ -379,7 +379,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
     case 'followups':
       return (
         <Stage>
-          <div className="mb-1 text-[10px] tracking-wide text-soft-foreground uppercase">Inbox</div>
+          <div className="mb-1 eyebrow text-soft-foreground">Inbox</div>
           <Rows rows={['Add a test for the empty case', 'Document the new flag', 'Remove the old helper'] as const} pick={0} />
         </Stage>
       )
@@ -387,7 +387,7 @@ function TipPicture({ id }: { id: TipPictureId }) {
       return (
         <Stage>
           <div className={cn(line, 'w-3/4')} />
-          <div style={{ '--i': 1 } as React.CSSProperties} className="tip-rise mt-1.5 rounded-sm border border-violet/60 bg-violet/15 px-1.5 py-1 text-[10.5px] text-foreground">
+          <div style={{ '--i': 1 } as React.CSSProperties} className="tip-rise mt-1.5 rounded-sm border border-violet/60 bg-violet/15 px-1.5 py-1 text-micro text-foreground">
             Run the tests and report what you ran.
           </div>
           <div className={cn(line, 'mt-1.5 w-1/2')} />

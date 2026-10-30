@@ -325,7 +325,7 @@ export function TerminalDrawer({
           // uncapped `shrink` takes its content width as its basis, which pushed every tab after
           // the first out of view on a real path. The title carries the whole thing.
           <span className="hidden max-w-[34%] shrink lg:block" title={`${hostLabel} · ${projectLabel} · ${active.cwd}`}>
-            <span className="block truncate text-[11px] text-soft-foreground">
+            <span className="block truncate text-meta text-soft-foreground">
               <span className="text-muted-foreground">{hostLabel}</span>
               {' · '}
               {projectLabel}

@@ -73,7 +73,7 @@ export function DesignNotePopup({
             {note.number}
           </span>
         ) : null}
-        <span data-slot="design-note-element" className="min-w-0 flex-1 truncate font-mono text-[11px] font-medium text-foreground" title={note.pick.selector}>
+        <span data-slot="design-note-element" className="min-w-0 flex-1 truncate font-mono text-meta font-medium text-foreground" title={note.pick.selector}>
           {pickLabel(note.pick)}
         </span>
         <Button
@@ -116,10 +116,10 @@ export function DesignNotePopup({
           // The window appears because the user just pointed at something to talk about.
           autoFocus
           rows={3}
-          className="min-h-16 resize-none text-[13px] md:text-[13px]"
+          className="min-h-16 resize-none text-ui md:text-ui"
         />
       ) : (
-        <p data-slot="design-note-text" className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-2 py-1.5 text-[13px] break-words whitespace-pre-wrap text-foreground">
+        <p data-slot="design-note-text" className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/40 px-2 py-1.5 text-ui break-words whitespace-pre-wrap text-foreground">
           {note.text}
         </p>
       )}

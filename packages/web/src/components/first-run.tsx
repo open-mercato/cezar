@@ -131,7 +131,7 @@ const STEPS: ReadonlyArray<{ id: StepId; label: string }> = [
 function StepRail({ current }: { current: StepId }) {
   const index = STEPS.findIndex((step) => step.id === current)
   return (
-    <ol data-slot="step-rail" className="flex items-center gap-2 text-[12.5px]">
+    <ol data-slot="step-rail" className="flex items-center gap-2 text-label">
       {STEPS.map((step, i) => {
         const state = i < index ? 'done' : i === index ? 'current' : 'next'
         return (
@@ -145,7 +145,7 @@ function StepRail({ current }: { current: StepId }) {
             >
               <span
                 className={cn(
-                  'grid size-5 place-items-center rounded-full border font-mono text-[10px]',
+                  'grid size-5 place-items-center rounded-full border font-mono text-micro',
                   state === 'done' && 'border-violet/60 bg-violet/15 text-violet',
                   state === 'current' && 'border-violet text-foreground',
                   state === 'next' && 'border-border text-soft-foreground',
@@ -171,7 +171,7 @@ const chip = chipLink
 
 /** Numbered, plain-words steps for people who have never opened a terminal. */
 function Steps({ children }: { children: React.ReactNode }) {
-  return <ol className="flex list-decimal flex-col gap-2.5 pl-5 text-[13px] text-muted-foreground marker:text-soft-foreground">{children}</ol>
+  return <ol className="flex list-decimal flex-col gap-2.5 pl-5 text-ui text-muted-foreground marker:text-soft-foreground">{children}</ol>
 }
 
 const GH_INSTALL_URL = 'https://cli.github.com'
@@ -222,7 +222,7 @@ function copyText(text: string, fallback: string) {
 
 function SignInProgress({ children }: { children: React.ReactNode }) {
   return (
-    <p role="status" className="flex items-center gap-2 text-[13px] text-muted-foreground">
+    <p role="status" className="flex items-center gap-2 text-ui text-muted-foreground">
       <LoaderCircleIcon className="size-3.5 animate-spin" aria-hidden="true" />
       {children}
     </p>
@@ -245,14 +245,14 @@ function GithubSignInBody({ signIn }: { signIn: GithubSignIn }) {
       )
     }
     return (
-      <p role="alert" className="text-[13px] whitespace-pre-line text-danger">
+      <p role="alert" className="text-ui whitespace-pre-line text-danger">
         {signIn.start.error.message}
       </p>
     )
   }
   if (state?.status === 'failed') {
     return (
-      <p role="alert" className="text-[13px] whitespace-pre-line text-danger">
+      <p role="alert" className="text-ui whitespace-pre-line text-danger">
         {state.error}
       </p>
     )
@@ -326,7 +326,7 @@ function GithubSignInFooter({ signIn, onClose }: { signIn: GithubSignIn; onClose
 function CommandBox({ command }: { command: string }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
-      <code className="min-w-0 flex-1 truncate font-mono text-[13px] text-foreground select-all">
+      <code className="min-w-0 flex-1 truncate font-mono text-ui text-foreground select-all">
         <span className="text-soft-foreground select-none">$ </span>
         {command}
       </code>
@@ -387,7 +387,7 @@ function Welcome() {
           onChange={(event) => setTask(event.target.value)}
           placeholder="Describe a task for the agent…"
           aria-label="Describe a task for the agent"
-          className="h-full min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-soft-foreground"
+          className="h-full min-w-0 flex-1 bg-transparent text-lead text-foreground outline-none placeholder:text-soft-foreground"
         />
         <Button type="submit" size="icon" variant="ghost" aria-label="Continue to the composer" className="size-9 shrink-0">
           <ArrowRightIcon aria-hidden="true" />
@@ -399,7 +399,7 @@ function Welcome() {
             key={label}
             type="button"
             onClick={() => start(text)}
-            className="inline-flex h-8 items-center gap-2 rounded-full px-3 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="inline-flex h-8 items-center gap-2 rounded-full px-3 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <Icon className="size-3.5" aria-hidden="true" />
             {label}
@@ -427,9 +427,9 @@ function AnnouncementCard() {
   return (
     <div data-slot="announcement" className="onboarding-announcement relative mb-14 flex w-full items-stretch overflow-hidden rounded-xl border text-left">
       <div className="flex min-w-0 flex-1 flex-col justify-center p-6">
-        <span className="text-[11px] tracking-wide text-violet uppercase">New</span>
+        <span className="eyebrow text-violet">New</span>
         <span className="mt-1 text-2xl font-light tracking-tight text-foreground">{item.title}</span>
-        <p className="mt-2 max-w-sm text-[13px] text-muted-foreground">{item.description}</p>
+        <p className="mt-2 max-w-sm text-ui text-muted-foreground">{item.description}</p>
         <Button
           size="sm"
           className="mt-5 self-start font-normal"
@@ -475,7 +475,7 @@ function DesignModePicture() {
             <span className="absolute -right-1 -bottom-1 size-1.5 rounded-[2px] bg-violet" />
           </span>
           <span className="h-6 w-10 rounded-md bg-muted" />
-          <span className="absolute top-7 left-6 rounded-md rounded-tl-sm border border-border bg-card px-2 py-1 text-[10px] whitespace-nowrap text-foreground shadow-md">
+          <span className="absolute top-7 left-6 rounded-md rounded-tl-sm border border-border bg-card px-2 py-1 text-micro whitespace-nowrap text-foreground shadow-md">
             Make this button larger
           </span>
         </div>
@@ -544,7 +544,7 @@ function ActivityStrip() {
   const label = (date: Date) => date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
   return (
     <div data-slot="activity-strip" className="mt-12 w-full">
-      <div className="mb-3 flex items-baseline justify-between text-[13px]">
+      <div className="mb-3 flex items-baseline justify-between text-ui">
         <span className="text-soft-foreground">Activity</span>
         <span className="text-soft-foreground">
           {total} {total === 1 ? 'task' : 'tasks'} in the last {ACTIVITY_DAYS} days
@@ -566,7 +566,7 @@ function ActivityStrip() {
           ))}
         </div>
       </TooltipProvider>
-      <div className="mt-2 flex justify-between font-mono text-[10.5px] text-soft-foreground">
+      <div className="mt-2 flex justify-between font-mono text-micro text-soft-foreground">
         {days.filter((_, i) => i % 7 === 1 || i === ACTIVITY_DAYS - 1).map((day) => (
           <span key={day.date.toISOString()}>{label(day.date)}</span>
         ))}
@@ -593,10 +593,10 @@ function StartFrom({ fresh, issues, colors }: { fresh: boolean; issues: GithubIt
                 className="group flex flex-col gap-1.5 px-3 py-2.5 transition-colors hover:bg-muted"
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 truncate text-[14px] text-foreground">{item.title}</span>
+                  <span className="min-w-0 truncate text-body text-foreground">{item.title}</span>
                   <ArrowRightIcon className="ml-auto size-3.5 shrink-0 text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
                 </span>
-                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-soft-foreground">
+                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta text-soft-foreground">
                   <span className="font-mono">#{item.number}</span>
                   <span>{item.author}</span>
                   <span>{shortAge(item.createdAt)} ago</span>
@@ -607,7 +607,7 @@ function StartFrom({ fresh, issues, colors }: { fresh: boolean; issues: GithubIt
                     </span>
                   ) : null}
                   {item.labels.map((label) => (
-                    <span key={label} style={labelChipStyle(colors[label])} className="rounded-full border px-1.5 py-px text-[10px]">
+                    <span key={label} style={labelChipStyle(colors[label])} className="rounded-full border px-1.5 py-px text-micro">
                       {label}
                     </span>
                   ))}
@@ -630,10 +630,10 @@ function StartFrom({ fresh, issues, colors }: { fresh: boolean; issues: GithubIt
                 className="group flex flex-col gap-1 px-3 py-2.5 transition-colors hover:bg-muted"
               >
                 <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 truncate text-[14px] text-foreground">{commit.subject}</span>
+                  <span className="min-w-0 truncate text-body text-foreground">{commit.subject}</span>
                   <ArrowRightIcon className="ml-auto size-3.5 shrink-0 text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" />
                 </span>
-                <span className="flex items-center gap-2 text-[11.5px] text-soft-foreground">
+                <span className="flex items-center gap-2 text-meta text-soft-foreground">
                   <span className="font-mono">{commit.hash}</span>
                   <span>{commit.author}</span>
                   <span>{commit.when}</span>
@@ -664,7 +664,7 @@ function StartFrom({ fresh, issues, colors }: { fresh: boolean; issues: GithubIt
 function StartSection({ label, slot, children }: { label: string; slot: string; children: React.ReactNode }) {
   return (
     <div data-slot="start-from" data-start-from={slot} className="mt-14 flex w-full flex-col items-center gap-3">
-      <div className="text-[13px] text-soft-foreground">{label}</div>
+      <div className="text-ui text-soft-foreground">{label}</div>
       {children}
     </div>
   )
@@ -738,9 +738,9 @@ export function PublishGithubDialog({ folder, onOpenChange }: { folder: string; 
       }
     >
       {owners.isPending ? (
-        <p className="text-[13px] text-soft-foreground">Checking GitHub…</p>
+        <p className="text-ui text-soft-foreground">Checking GitHub…</p>
       ) : noOwnersReason ? (
-        <p role="alert" className="text-[13px] text-danger">
+        <p role="alert" className="text-ui text-danger">
           {noOwnersReason}
         </p>
       ) : !connected ? (
@@ -756,7 +756,7 @@ export function PublishGithubDialog({ folder, onOpenChange }: { folder: string; 
                 aria-checked={entry.login === chosen}
                 onClick={() => setOwner(entry.login)}
                 className={cn(
-                  'inline-flex h-8 items-center gap-2 rounded-full border px-3 text-[13px] transition-colors',
+                  'inline-flex h-8 items-center gap-2 rounded-full border px-3 text-ui transition-colors',
                   entry.login === chosen ? 'border-primary text-foreground' : 'border-border text-muted-foreground hover:text-foreground',
                 )}
               >
@@ -764,7 +764,7 @@ export function PublishGithubDialog({ folder, onOpenChange }: { folder: string; 
               </button>
             ))}
           </div>
-          <label className="flex items-center gap-1 rounded-lg border border-input bg-background px-3 font-mono text-[13px] focus-within:border-ring">
+          <label className="flex items-center gap-1 rounded-lg border border-input bg-background px-3 font-mono text-ui focus-within:border-ring">
             <span className="text-soft-foreground">{chosen}/</span>
             <input
               value={name}
@@ -803,7 +803,7 @@ export function SetupPill() {
     <div
       data-onboarding=""
       data-slot="setup-pill"
-      className="mb-3 inline-flex items-center gap-2 self-start rounded-full border border-border bg-card py-1 pr-1 pl-3 text-[13px]"
+      className="mb-3 inline-flex items-center gap-2 self-start rounded-full border border-border bg-card py-1 pr-1 pl-3 text-ui"
     >
       <span className="text-soft-foreground">Setup</span>
       {next ? (
@@ -875,7 +875,7 @@ function SignInToAgent() {
         {/* Every agent switched off leaves no row to sign in to: say so, and where to turn one on. */}
         {rows.length === 0 ? (
           <div data-slot="agents-off" className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
-            <span className="text-[14px] text-foreground">All agents are turned off.</span>
+            <span className="text-body text-foreground">All agents are turned off.</span>
             <Button asChild size="sm" className="font-normal">
               <Link to="/settings/agents#providers">Turn one on</Link>
             </Button>
@@ -888,8 +888,8 @@ function SignInToAgent() {
             <div key={row.provider} data-slot="agent-row" data-state={row.state} className="rounded-xl border border-border bg-card p-4">
               <div className="flex items-center gap-4">
                 <div className="min-w-0 flex-1">
-                  <div className="text-[15px] text-foreground">{row.label}</div>
-                  <div className="text-[13px] text-muted-foreground">
+                  <div className="text-lead text-foreground">{row.label}</div>
+                  <div className="text-ui text-muted-foreground">
                     {waiting ? 'Finish in Terminal' : row.state === 'missing' ? 'Not installed' : 'Installed, not signed in'}
                   </div>
                 </div>
@@ -904,12 +904,12 @@ function SignInToAgent() {
                 ) : null}
               </div>
               {row.state === 'signed-out' && !waiting && !failed ? (
-                <p className="mt-3 text-[13px] text-soft-foreground">Opens the login in Terminal.</p>
+                <p className="mt-3 text-ui text-soft-foreground">Opens the login in Terminal.</p>
               ) : null}
-              {waiting ? <p className="mt-3 text-[13px] text-soft-foreground">This page continues by itself.</p> : null}
+              {waiting ? <p className="mt-3 text-ui text-soft-foreground">This page continues by itself.</p> : null}
               {failed ? (
                 <div className="mt-3 flex flex-col gap-3">
-                  <p className="text-[13px] text-muted-foreground">{failed}</p>
+                  <p className="text-ui text-muted-foreground">{failed}</p>
                   <Steps>
                     <li>
                       <span className="text-foreground">Open Terminal and paste:</span>
@@ -938,7 +938,7 @@ function SignInToAgent() {
                     </li>
                     <li>Come back. cezar checks by itself.</li>
                   </Steps>
-                  <p className="text-[12.5px] text-soft-foreground">
+                  <p className="text-label text-soft-foreground">
                     Needs Node.js.{' '}
                     <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer" className="text-violet hover:underline">
                       Get it
@@ -1130,14 +1130,14 @@ function ProjectChoices() {
               }}
               placeholder="Search repositories"
               aria-label="Search repositories"
-              className="min-w-0 flex-1 bg-transparent text-[15px] text-foreground outline-none placeholder:text-soft-foreground"
+              className="min-w-0 flex-1 bg-transparent text-lead text-foreground outline-none placeholder:text-soft-foreground"
             />
           </label>
           <ul role="listbox" aria-label="Repositories" className="mt-1">
             {suggestions.isPending ? (
-              <li className="px-3 py-2.5 text-[13px] text-soft-foreground">Looking for repositories…</li>
+              <li className="px-3 py-2.5 text-ui text-soft-foreground">Looking for repositories…</li>
             ) : shown.length === 0 ? (
-              <li className="px-3 py-2.5 text-[13px] text-soft-foreground">No repositories found</li>
+              <li className="px-3 py-2.5 text-ui text-soft-foreground">No repositories found</li>
             ) : (
               shown.map((repo, index) => (
                 <li key={repo.path} role="option" aria-selected={index === active}>
@@ -1148,8 +1148,8 @@ function ProjectChoices() {
                     disabled={register.isPending}
                     className={cn('flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left', index === active && 'bg-muted')}
                   >
-                    <span className="truncate text-[15px] text-foreground">{repo.name}</span>
-                    <span className="ml-auto truncate font-mono text-[11.5px] text-soft-foreground">{parentPath(repo.path)}</span>
+                    <span className="truncate text-lead text-foreground">{repo.name}</span>
+                    <span className="ml-auto truncate font-mono text-meta text-soft-foreground">{parentPath(repo.path)}</span>
                   </button>
                 </li>
               ))
@@ -1344,7 +1344,7 @@ export function WelcomeBack({ runs }: { runs: readonly RunRecord[] }) {
     >
       <div className="min-w-0 sm:flex-1">
         <h2 className="text-xl font-light tracking-tight text-foreground">Welcome back</h2>
-        <p className="mt-1 text-[14px] text-muted-foreground">{sentence}</p>
+        <p className="mt-1 text-body text-muted-foreground">{sentence}</p>
       </div>
       {/* One column per button, all as wide as the widest: the pair reads as one choice. */}
       <div className="grid shrink-0 auto-cols-fr grid-flow-col gap-2">
@@ -1412,7 +1412,7 @@ export function WhatsNewNavItem() {
           setOpen(true)
           write({ whatsNewSeenAt: new Date().toISOString() })
         }}
-        className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        className="flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-ui text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
       >
         <GiftIcon className="size-4 shrink-0" aria-hidden="true" />
         What’s new
@@ -1488,14 +1488,14 @@ function WhatsNewDialog({
       >
         <FeaturePreview id={item.preview} />
         <div className="mt-5 flex min-h-32 flex-col">
-          <div className="flex items-center gap-2 text-[12px]">
+          <div className="flex items-center gap-2 text-label">
             <span className="rounded-full bg-violet/15 px-2 py-0.5 text-violet">New</span>
             <span className="text-soft-foreground">{new Date(item.releasedAt).toLocaleDateString('en', { month: 'short', day: 'numeric' })}</span>
           </div>
           <h3 className="mt-2 text-lg font-light tracking-tight text-foreground">{item.title}</h3>
-          <p className="mt-1 text-[13px] text-muted-foreground">{item.description}</p>
+          <p className="mt-1 text-ui text-muted-foreground">{item.description}</p>
           {actionLabel ? (
-            <button type="button" onClick={go} className="mt-3 inline-flex items-center gap-1 text-[13px] text-violet hover:underline">
+            <button type="button" onClick={go} className="mt-3 inline-flex items-center gap-1 text-ui text-violet hover:underline">
               {actionLabel}
               <ArrowRightIcon className="size-3.5" aria-hidden="true" />
             </button>
@@ -1524,7 +1524,7 @@ function TabsPreview() {
   return (
     <PreviewWindow
       bar={
-        <span className="ml-3 flex gap-3 text-[10px]">
+        <span className="ml-3 flex gap-3 text-micro">
           {['Chat', 'Changes', 'Preview', 'Terminal'].map((tab) => (
             <span key={tab} className={tab === 'Preview' ? 'text-foreground underline decoration-violet decoration-2 underline-offset-[9px]' : 'text-soft-foreground'}>
               {tab}
@@ -1543,12 +1543,12 @@ function TabsPreview() {
 function PalettePreview() {
   return (
     <div className="w-full max-w-xs self-center rounded-lg border border-border bg-background p-2 shadow-[0_18px_40px_-20px_var(--violet)]">
-      <div className="flex items-center gap-2 border-b border-border px-1 pb-2 text-[11px] text-soft-foreground">
-        <span className="rounded border border-border px-1 font-mono text-[10px] text-muted-foreground">⌘P</span>
+      <div className="flex items-center gap-2 border-b border-border px-1 pb-2 text-meta text-soft-foreground">
+        <span className="rounded border border-border px-1 font-mono text-micro text-muted-foreground">⌘P</span>
         Jump to a task or run an action
       </div>
       {['Fix the login redirect', 'Open Changes', 'Terminal in a column'].map((row, at) => (
-        <div key={row} className={cn('mt-1 rounded px-2 py-1.5 text-[11px]', at === 0 ? 'bg-violet/15 text-foreground' : 'text-muted-foreground')}>
+        <div key={row} className={cn('mt-1 rounded px-2 py-1.5 text-meta', at === 0 ? 'bg-violet/15 text-foreground' : 'text-muted-foreground')}>
           {row}
         </div>
       ))}
@@ -1568,7 +1568,7 @@ function DesignPreview() {
           <span className="absolute -right-1 -bottom-1 size-1.5 rounded-[2px] bg-violet" />
         </span>
         <span className="h-6 w-10 rounded-md bg-muted" />
-        <span className="absolute top-7 left-6 rounded-md rounded-tl-sm border border-border bg-card px-2 py-1 text-[10px] whitespace-nowrap text-foreground shadow-md">
+        <span className="absolute top-7 left-6 rounded-md rounded-tl-sm border border-border bg-card px-2 py-1 text-micro whitespace-nowrap text-foreground shadow-md">
           Make this button larger
         </span>
       </div>
@@ -1579,15 +1579,15 @@ function DesignPreview() {
 
 function ScriptsPreview() {
   return (
-    <PreviewWindow bar={<span className="ml-3 text-[10px] text-soft-foreground">After worktree creation</span>}>
+    <PreviewWindow bar={<span className="ml-3 text-micro text-soft-foreground">After worktree creation</span>}>
       {['npm install', 'cp .env.example .env'].map((command) => (
-        <div key={command} className="flex items-center gap-2 py-1 font-mono text-[11px]">
+        <div key={command} className="flex items-center gap-2 py-1 font-mono text-meta">
           <span className="text-soft-foreground">$</span>
           <span className="flex-1 text-foreground">{command}</span>
           <span className="text-success">done</span>
         </div>
       ))}
-      <div className="mt-2 flex items-center gap-2 font-mono text-[11px] text-soft-foreground">
+      <div className="mt-2 flex items-center gap-2 font-mono text-meta text-soft-foreground">
         <span>$</span>
         <span className="h-3 w-1.5 bg-violet" />
       </div>
@@ -1603,7 +1603,7 @@ function WorkflowPreview() {
           {at > 0 ? <span className="h-px flex-1 bg-muted-foreground/40" /> : null}
           <span
             className={cn(
-              'rounded-md border bg-background px-3 py-2 text-[11px]',
+              'rounded-md border bg-background px-3 py-2 text-meta',
               at === 1 ? 'border-violet text-foreground shadow-[0_10px_30px_-14px_var(--violet)]' : 'border-border text-muted-foreground',
             )}
           >
@@ -1619,7 +1619,7 @@ function AutomationsPreview() {
   return (
     <PreviewWindow>
       {['Every weekday at 9:00', 'When a pull request is merged'].map((trigger) => (
-        <div key={trigger} className="flex items-center gap-3 py-1.5 text-[11px] text-foreground">
+        <div key={trigger} className="flex items-center gap-3 py-1.5 text-meta text-foreground">
           <span className="flex-1">{trigger}</span>
           <span className="flex h-3.5 w-6 items-center justify-end rounded-full bg-violet px-0.5">
             <span className="size-2.5 rounded-full bg-violet-foreground" />

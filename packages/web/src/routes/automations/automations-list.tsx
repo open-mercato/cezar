@@ -65,7 +65,7 @@ export function AutomationsList({
         {data ? (
           <span
             data-slot="automations-status"
-            className="inline-flex min-w-0 items-center gap-2 overflow-hidden text-[12.5px] text-ellipsis whitespace-nowrap text-muted-foreground max-[1280px]:hidden"
+            className="inline-flex min-w-0 items-center gap-2 overflow-hidden text-label text-ellipsis whitespace-nowrap text-muted-foreground max-[1280px]:hidden"
           >
             <StatusDot tone={data.scheduler.state === 'scheduled' ? 'success' : 'neutral'} />
             {data.scheduler.state === 'scheduled' ? 'Scheduler running' : 'Scheduler idle'}

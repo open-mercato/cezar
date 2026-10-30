@@ -310,6 +310,28 @@
   --shadow-sm: 0 2px 4px 0 rgba(27, 28, 29, 0.04);
   --shadow-md: 0 16px 32px -12px rgba(14, 18, 27, 0.1);
   --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.45);
+
+  /* The type scale (typography audit, 2026-10-30): six steps below `text-base`, each one pixel
+   * apart, so the same role is the same size everywhere. Font-size only — line-height stays
+   * inherited, as the arbitrary `text-[13px]` these replace left it. `text-xs` (12) and
+   * `text-sm` (14) keep Tailwind's line-heights and remain in use. Nothing smaller than 10px is
+   * type: the 7–9px labels inside the onboarding pictures are drawing, not reading. */
+  --text-micro: 10px;
+  --text-meta: 11px;
+  --text-label: 12px;
+  --text-ui: 13px;
+  --text-body: 14px;
+  --text-lead: 15px;
+}
+
+/* The eyebrow: the small capitals over a section, a table column or a card (typography audit,
+ * 2026-10-30). One size, weight and tracking for every one of them; the colour is the caller's
+ * (`text-soft-foreground` as a rule, `text-violet` on an onboarding surface). */
+@utility eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 /* ---------- Tailwind theme: utilities point at the tokens above ----------
@@ -634,17 +656,6 @@
   background:
     radial-gradient(90% 120% at 50% 100%, color-mix(in srgb, var(--violet) 24%, transparent), transparent 70%),
     var(--card);
-}
-
-/* One face for the pill row on an onboarding surface (`/new`, the automation editor): the
- * composer's pills come from several components — a mono, semibold skill chip, a mono base
- * branch, a bold project pill — and side by side they read as four typefaces. Hierarchy here
- * comes from size and the violet accent, never from weight or a second family (spec
- * 2026-10-26-first-run-onboarding § Palette). Unlayered on purpose: it must outrank the
- * utilities on the pills. Inputs keep their own face. */
-[data-onboarding] :is([data-slot='composer-footer-start'], [data-slot='editor-run-as']) :is(button, button *, [data-slot$='-pill'], [data-slot$='-pill'] *) {
-  font-family: var(--font-sans);
-  font-weight: 400;
 }
 
 /* ---------- composer tips (spec 2026-10-26-first-run-onboarding, § Composer tips) ----------

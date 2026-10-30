@@ -241,13 +241,13 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
             {/* A plain form field, not a heading that happens to be editable: a borderless line
                 read as a title, and nobody typed into it. */}
             <div className="flex min-w-0 flex-1 items-center gap-3 max-md:basis-full">
-              <span className="shrink-0 text-[13px] text-muted-foreground" aria-hidden="true">Name</span>
+              <span className="shrink-0 text-ui text-muted-foreground" aria-hidden="true">Name</span>
               <Input
                 aria-label="Name"
                 placeholder="Nightly dependency bump"
                 value={draft.name}
                 onChange={(event) => patch({ name: event.target.value })}
-                className="h-9 w-full max-w-md text-[15px] md:text-[15px]"
+                className="h-9 w-full max-w-md text-lead md:text-lead"
               />
             </div>
             <OnboardingStepRail steps={rail} />
@@ -256,7 +256,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
           {conflict || error?.section === 'top' || (showTemplates && !automation) ? (
           <div className="mt-6 flex w-full flex-col gap-4">
             {conflict ? (
-              <div role="alert" data-slot="editor-conflict" className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-[13px] text-foreground">
+              <div role="alert" data-slot="editor-conflict" className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-ui text-foreground">
                 Edited elsewhere — reload to see the latest version
                 <Button variant="outline" size="sm" className="ml-auto" onClick={reload}>Reload</Button>
               </div>
@@ -265,7 +265,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
 
             {showTemplates && !automation ? (
               <div className="flex flex-col gap-3">
-                <p className="m-0 text-center text-[13px] text-muted-foreground">Start from a template, or fill in the three parts below.</p>
+                <p className="m-0 text-center text-ui text-muted-foreground">Start from a template, or fill in the three parts below.</p>
                 <TemplatePalette
                   onPick={(template) => {
                     // A template from another project may name a workflow or skill this repo does
@@ -345,7 +345,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
             <div data-slot="editor-placeholders" className="flex flex-wrap items-center gap-1.5 text-xs text-soft-foreground">
               Insert
               {PLACEHOLDERS[draft.kind].map((token) => (
-                <Chip key={token} className="h-6 font-mono text-[11px]" title={`Insert ${token} at the caret`} onClick={() => insertPlaceholder(token)}>
+                <Chip key={token} className="h-6 font-mono text-meta" title={`Insert ${token} at the caret`} onClick={() => insertPlaceholder(token)}>
                   {token}
                 </Chip>
               ))}
@@ -357,19 +357,19 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
               placeholder={PLACEHOLDER[draft.kind]}
               value={draft.prompt}
               onChange={(event) => patch({ prompt: event.target.value })}
-              className="mt-3 min-h-[120px] rounded-xl px-4 py-3 text-[15px] leading-[1.55] md:text-[15px]"
+              className="mt-3 min-h-[120px] rounded-xl px-4 py-3 text-lead leading-[1.55] md:text-lead"
             />
             <div data-slot="editor-prompt-templates" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-soft-foreground">
               <FileTextIcon aria-hidden="true" className="size-3" />
               Prompt templates
               {promptTemplates.map((template) => (
-                <Chip key={template.id} className="h-6 text-[11.5px]" title={template.text} onClick={() => insertPrompt(template.text)}>
+                <Chip key={template.id} className="h-6 text-meta" title={template.text} onClick={() => insertPrompt(template.text)}>
                   {template.label}
                 </Chip>
               ))}
               <Chip
                 dashed
-                className="h-6 text-[11.5px]"
+                className="h-6 text-meta"
                 icon={<Settings2Icon aria-hidden="true" className="size-3" />}
                 onClick={() => navigate(`${settingsSectionPath('project', 'instructions')}#prompt-templates`)}
               >
@@ -377,7 +377,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
               </Chip>
             </div>
             {unenforcedLogins.length > 0 ? (
-              <div role="status" data-slot="editor-prompt-condition" className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12.5px] text-foreground">
+              <div role="status" data-slot="editor-prompt-condition" className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-label text-foreground">
                 <span className="min-w-0 flex-1">
                   The prompt names {unenforcedLogins.map(({ login }) => `@${login}`).join(', ')}, but prompt text does not decide what launches — without a filter every matching event starts a task.
                 </span>
@@ -426,14 +426,14 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
           </Section>
 
           <Section slot="live" title="Go live" why="Paused, it waits in the list where you can preview it. Enabled, it starts counting from now.">
-            <p data-slot="editor-summary" className="m-0 rounded-xl border border-violet/40 bg-violet/10 px-4 py-3 text-[14px] text-foreground">
+            <p data-slot="editor-summary" className="m-0 rounded-xl border border-violet/40 bg-violet/10 px-4 py-3 text-body text-foreground">
               {sentence}
             </p>
-            <Label className="mt-4 flex items-start gap-3 text-[13px] font-normal">
+            <Label className="mt-4 flex items-start gap-3 text-ui font-normal">
               <Switch aria-label="Enabled" checked={draft.enabled} onCheckedChange={(enabled) => patch({ enabled })} className="mt-0.5" />
               <span className="flex flex-col gap-0.5">
-                <span className="text-[14px] text-foreground">Enabled</span>
-                <span className="text-[12.5px] text-muted-foreground">
+                <span className="text-body text-foreground">Enabled</span>
+                <span className="text-label text-muted-foreground">
                   {draft.kind !== 'schedule'
                     ? 'Counts from a current-time baseline; existing matches will not launch.'
                     : draft.enabled
@@ -470,7 +470,7 @@ function Section({ slot, title, why, children }: { slot: string; title: string; 
   return (
     <section data-slot="editor-section" data-section={slot} className="mt-7 w-full border-t border-border pt-6 first-of-type:mt-6 first-of-type:border-t-0 first-of-type:pt-0">
       <h2 className="text-xl font-light tracking-tight text-foreground">{title}</h2>
-      <p className="mt-1 mb-5 text-[13px] text-muted-foreground">{why}</p>
+      <p className="mt-1 mb-5 text-ui text-muted-foreground">{why}</p>
       {children}
     </section>
   )
@@ -478,7 +478,7 @@ function Section({ slot, title, why, children }: { slot: string; title: string; 
 
 function InlineAlert({ children }: { children: ReactNode }) {
   return (
-    <div role="alert" className={cn('mt-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-[13px] text-foreground')}>
+    <div role="alert" className={cn('mt-3 rounded-lg border border-danger/40 bg-danger/10 px-3.5 py-2.5 text-ui text-foreground')}>
       {children}
     </div>
   )
