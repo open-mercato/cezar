@@ -13,6 +13,7 @@ import {
   CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
+  claudeCostDelta,
   claudeExitMessage,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
@@ -434,5 +435,27 @@ describe('claude result error with a JSON envelope', () => {
         .catch(() => undefined);
       expect(errors).toContain('API Error: 400 [400]: invalid_request_error: model gpt-5 is not available');
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('claudeCostDelta (#1704)', () => {
+  const sum = (id: string, totals: number[], v?: string) =>
+    totals.reduce((a, t) => a + claudeCostDelta(id, t, v), 0);
+
+  it('sums cumulative frames to the final total', () => {
+    expect(sum('s-cum', [8.07, 8.17, 14.1], '2.1.300')).toBeCloseTo(14.1);
+  });
+
+  it('sums per-invocation frames from older CLIs in full', () => {
+    expect(sum('s-old', [1, 2, 3], '2.1.200')).toBe(6);
+  });
+
+  it('treats a drop to a lower total as a reset', () => {
+    expect(sum('s-reset', [5, 1, 3])).toBe(5 + 1 + 2);
+  });
+
+  it('passes the raw total when there is no session id', () => {
+    expect(claudeCostDelta(undefined, 4)).toBe(4);
+    expect(claudeCostDelta(undefined, 4)).toBe(4);
   });
 });

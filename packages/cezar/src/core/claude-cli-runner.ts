@@ -61,6 +61,32 @@ export function appendClaudeSystemPrompt(systemPrompt?: string): string {
     : CLAUDE_HEADLESS_GUIDANCE;
 }
 
+/** Last cumulative `total_cost_usd` seen per session id; each resumed turn is a new process (#1704). */
+const lastSessionCost = new Map<string, number>();
+const CUMULATIVE_COST_SINCE = [2, 1, 277] as const;
+
+function costIsCumulative(version: string | undefined): boolean {
+  const m = version && /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!m) return true; // unknown CLI: a reset (value below the baseline) still falls back to the raw value
+  for (let i = 0; i < 3; i++) {
+    const n = Number(m[i + 1]);
+    if (n !== CUMULATIVE_COST_SINCE[i]) return n > CUMULATIVE_COST_SINCE[i];
+  }
+  return true;
+}
+
+/**
+ * Claude Code >= 2.1.277 reports a session-cumulative `total_cost_usd`; older CLIs restart at zero
+ * per invocation. Returns this turn's spend: the delta against the session's last total, or the raw
+ * value when there is no baseline, the CLI is older, or the total went down (a reset).
+ */
+export function claudeCostDelta(sessionId: string | undefined, total: number, version?: string): number {
+  if (!sessionId || !costIsCumulative(version)) return total;
+  const prev = lastSessionCost.get(sessionId);
+  lastSessionCost.set(sessionId, total);
+  return prev === undefined || total < prev ? total : total - prev;
+}
+
 export interface ClaudeCliRunnerOptions {
   /** Override the binary name/path; defaults to `claude` on PATH. */
   bin?: string;
@@ -245,6 +271,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let tokensUsed = 0;
     let sawUsage = false;
     let spawnFailed: Error | null = null;
+    let cliVersion: string | undefined;
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       spawnFailed = wrapSpawnError(err, this.bin);
@@ -281,6 +308,7 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
 
+          if (msg.type === 'system' && typeof msg.claude_code_version === 'string') cliVersion = msg.claude_code_version;
           emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
 
           // Claude reports `error_during_execution` while reacting to our
@@ -307,7 +335,8 @@ export class ClaudeCliRunner implements AgentRunner {
 
           if (msg.type === 'result') {
             if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
-              onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
+              const usd = claudeCostDelta(spec.sessionId, msg.total_cost_usd, cliVersion);
+              onEvent?.({ type: 'cost', usd });
             }
             onEvent?.({ type: 'turn-end' });
             if (opts.autoEndAfterFirstTurn && stdinOpen && !autoEndTimer) {
@@ -515,6 +544,7 @@ interface ClaudeStreamMessage {
   usage?: RawUsage;
   is_error?: boolean;
   total_cost_usd?: number;
+  claude_code_version?: string;
 }
 
 function normalizeIntentionalTeardownResult(
