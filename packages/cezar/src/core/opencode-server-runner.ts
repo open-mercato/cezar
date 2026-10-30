@@ -481,7 +481,11 @@ class OpencodeSession implements AgentSession {
           .catch(() => undefined);
       }, SERVER_PROBE_INTERVAL_MS);
       probe.unref?.();
-      const onExit = () => fail('opencode serve exited before it started listening');
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        // The stderr tail rides a local note in listen(), never this telemetry-grouped message.
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${code}`;
+        fail(`opencode serve exited before it started listening (${detail})`);
+      };
       const cleanup = () => {
         settled = true;
         clearTimeout(stall);
