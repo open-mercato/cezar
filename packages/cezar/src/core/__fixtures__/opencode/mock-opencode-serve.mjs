@@ -155,6 +155,12 @@ const server = createServer((req, res) => {
             ? 'no-idle'
             : 'default';
 
+      if (promptText.includes('#http-error')) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ name: 'InternalError', data: { message: 'Provider rejected the configured model' } }));
+        return;
+      }
+
       const asked = promptText.match(/#permission (\S+)/);
       if (asked) {
         const id = `per_mock_${turn}`;

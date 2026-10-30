@@ -838,7 +838,12 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      const envelope = parseRecord(res.body);
+      const data = isRecord(envelope.data) ? envelope.data : {};
+      const name = stringField(envelope, 'name');
+      const message = stringField(data, 'message');
+      const detail = name && message ? `${name}: ${message}`.slice(0, 300) : res.body.slice(0, 200);
+      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${detail}`);
     }
     if (!res.body) return {};
     try {

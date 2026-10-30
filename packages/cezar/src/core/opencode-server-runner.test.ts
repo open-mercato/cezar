@@ -324,6 +324,19 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     expect(result.sessionId).toBe('ses_mock_1');
   }, 30_000);
 
+  it('surfaces the OpenCode error name and message for a failed prompt POST', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: '#http-error', cwd: process.cwd() },
+      (e) => events.push(e),
+    );
+    await session.result;
+    expect(errors(events)).toContainEqual({
+      type: 'error',
+      message: 'opencode: POST /session/ses_mock_1/message → 500 InternalError: Provider rejected the configured model',
+    });
+  }, 30_000);
+
   it('never adopts a server on that port that serves another directory', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const events: AgentEvent[] = [];
