@@ -1,0 +1,32 @@
+[
+  {
+    "runId": "16000000-0000-4000-8000-000000000001",
+    "branch": "qa/issue-1600-clean",
+    "branchBefore": "210c80f31b89fbcfb1cb3abd863703e71833f299",
+    "branchAfter": "210c80f31b89fbcfb1cb3abd863703e71833f299",
+    "directoryExists": false,
+    "worktreeReclaimedAt": "2026-10-30T20:50:16.314Z",
+    "operationState": "completed",
+    "transcriptPreserved": true
+  },
+  {
+    "runId": "16000001-0000-4000-8000-000000000001",
+    "branch": "qa/issue-1600-dirty",
+    "branchBefore": "bb3bdde4d19dfaa62ddcf9e286bebfca4d94d135",
+    "branchAfter": "bb3bdde4d19dfaa62ddcf9e286bebfca4d94d135",
+    "directoryExists": false,
+    "worktreeReclaimedAt": "2026-10-30T20:57:35.169Z",
+    "operationState": "completed",
+    "transcriptPreserved": true
+  },
+  {
+    "runId": "16000002-0000-4000-8000-000000000001",
+    "branch": "qa/issue-1600-recovery",
+    "branchBefore": "3bcb3b951aff68a13fcf4a5f6ed37d1f23ba204f",
+    "branchAfter": "3bcb3b951aff68a13fcf4a5f6ed37d1f23ba204f",
+    "directoryExists": false,
+    "worktreeReclaimedAt": "2026-10-30T20:53:18.742Z",
+    "operationState": "completed",
+    "transcriptPreserved": true
+  }
+]
