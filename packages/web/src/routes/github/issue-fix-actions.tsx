@@ -114,10 +114,14 @@ function ActiveIssueFixProvider({ items, queued, engine, onQueued, children }: {
   const queryClient = useQueryClient()
   const scope = queryScope()
   const runsKey = queryKeys.runs.all
+  const accessModeError = 'accessModeError' in resolved && typeof resolved.accessModeError === 'string'
+    ? resolved.accessModeError : undefined
   const unavailable = skills.isPending ? 'Loading fix skill…'
     : skills.isError ? 'Fix skills are unavailable. Open Skills to retry.'
     : !skills.data.some((skill) => skill.name === ISSUE_FIX_SKILL) ? 'Install om-auto-fix-issue to queue fixes.'
     : resolved.providerPending ? 'Checking agent availability…'
+    : !resolved.providerError && resolved.runners.length > 0 && accessModeError
+      ? `${accessModeError} Open an issue to adjust the agent settings.`
     : !resolved.canRun ? 'Connect an agent to queue fixes.' : undefined
   const actions = useIssueFixActions({ items, queued, contextKey: scope, unavailable, launch: async (item) => {
     const created = await createRun(githubRunBody(item, null, [ISSUE_FIX_SKILL], undefined, engineRunBody(resolved)), scope)
@@ -129,7 +133,9 @@ function ActiveIssueFixProvider({ items, queued, engine, onQueued, children }: {
   } })
   const accountLabel = resolved.account === null ? 'project account default'
     : resolved.accounts.find((account) => account.id === resolved.account)?.label ?? 'selected account'
-  const engineLabel = `${resolved.runner} · ${resolved.modelsLocked ? 'agent settings' : resolved.model || 'agent default'} · ${accountLabel}`
+  const mode = 'accessMode' in resolved ? resolved.accessMode : undefined
+  const modeLabel = mode === 'daybreak-blue' ? ' · Daybreak Blue' : mode === 'standard' ? ' · Standard' : ''
+  const engineLabel = `${resolved.runner} · ${resolved.modelsLocked ? 'agent settings' : resolved.model || 'agent default'} · ${accountLabel}${modeLabel}`
   return <IssueFixContext.Provider value={{ actions, engineLabel }}>{children}</IssueFixContext.Provider>
 }
 
