@@ -1,6 +1,6 @@
 import { ArrowUpRightIcon, Clock3Icon, GitForkIcon, ZapIcon } from 'lucide-react'
 import type { SyntheticEvent } from 'react'
-import { nextOccurrence, type AutomationListEntry, type AutomationsResponse } from '@open-mercato/cezar-api-client'
+import { nextScheduleOccurrence, type AutomationListEntry, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
 import { GithubIcon } from '@/components/icons'
 import { Pill } from '@/components/pill'
@@ -195,6 +195,6 @@ function nextRunText(automation: AutomationListEntry, timeZone: string, now: num
   if (!automation.enabled) return '—'
   if (automation.kind !== 'schedule') return 'continuous'
   if (automation.nextRunAt) return dayTime(automation.nextRunAt, timeZone) || '—'
-  const next = automation.schedule ? nextOccurrence(automation.schedule, now, timeZone) : null
+  const next = nextScheduleOccurrence(automation, now, timeZone)
   return next === null ? '—' : dayTime(next, timeZone) || '—'
 }
