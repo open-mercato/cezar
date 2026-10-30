@@ -13,7 +13,7 @@ import { GlobalEventsProvider, RECONCILE_TIMEOUT_MS, useGlobalEvents, useRunUsag
 import { setApiScope, WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
-import { RUN_EVENT_BATCH_MS } from './run-events'
+import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
 import type { ApiRun, ProviderStatusResponse, RunRecord } from '@open-mercato/cezar-api-client'
 
 /**
@@ -276,6 +276,48 @@ describe('useGlobalEvents — liveness watchdog', () => {
     act(() => vi.advanceTimersByTime(60_000))
 
     expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useGlobalEvents — hidden tab releases its stream (#1753)', () => {
+  it('closes the stream after the grace and reconnects with a reconcile on return', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    setVisibility('hidden')
+
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    expect(source.closeCount).toBe(0)
+    act(() => vi.advanceTimersByTime(1))
+    expect(source.closeCount).toBe(1)
+
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(2)
+    act(() => FakeEventSource.last.open())
+    expect(invalidate).toHaveBeenCalled() // reconcile on the reopen
+  })
+
+  it('keeps the stream when the tab returns inside the grace', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    setVisibility('visible')
+    act(() => vi.advanceTimersByTime(5_000))
+
+    expect(source.closeCount).toBe(0)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('keeps the stream in a hidden tab that still owes run notifications', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('Notification', Object.assign(function () {}, { permission: 'granted' }))
+    client.setQueryData(workspaceQueryKeys.uiState, { notifications: { enabled: true } })
+    const { source } = mount()
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+
+    expect(source.closeCount).toBe(0)
   })
 })
 
