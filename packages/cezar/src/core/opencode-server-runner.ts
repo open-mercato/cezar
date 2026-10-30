@@ -16,6 +16,8 @@ import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
+import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { userInputAnswers } from './codex-app-server-runner.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   OpencodeTransportError,
@@ -172,6 +174,8 @@ class OpencodeSession implements AgentSession {
   });
   private readonly toolsSeen = new Set<string>();
   private readonly permissionsAnswered = new Set<string>();
+  /** The native `question` tool call the session is blocked on; the next user message answers it (#1652). */
+  private pendingQuestion: { id: string; questions: AskQuestion[] } | undefined;
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
    *  (the user's own message also streams as parts over the same SSE feed). */
   private readonly msgRole = new Map<string, string>();
@@ -285,6 +289,12 @@ class OpencodeSession implements AgentSession {
     }
     const text = textOf(content);
     if (!text) return true;
+    if (this.pendingQuestion) {
+      const pending = this.pendingQuestion;
+      this.pendingQuestion = undefined;
+      void this.replyQuestion(pending, text);
+      return true;
+    }
     void this.ready
       .then(() => this.prompt(text))
       .catch((err: unknown) => {
@@ -708,6 +718,8 @@ class OpencodeSession implements AgentSession {
       this.armTurnGrace();
     } else if (type === 'permission.asked' || type === 'permission.updated') {
       void this.answerPermission(props);
+    } else if (type === 'question.asked') {
+      this.handleQuestion(props);
     } else if (type === 'session.idle') {
       // The turn boundary (#897). A subtask session going idle closes only its
       // own scope, exactly as the v2 mapper reads it.
@@ -757,6 +769,51 @@ class OpencodeSession implements AgentSession {
       await this.http('POST', `/session/${encodeURIComponent(sid)}/permissions/${encodeURIComponent(id)}`, {
         response: reply,
       }).catch(() => undefined);
+    }
+  }
+
+  /** OpenCode's native `question` tool blocks the session until it is answered; show it as an
+   *  ask card and hold the next message back as the answer (#1652). */
+  private handleQuestion(props: Record<string, unknown>): void {
+    const id = stringField(props, 'id');
+    if (!id) return;
+    const sid = stringField(props, 'sessionID');
+    if (sid !== undefined && sid !== this.sessionId) return;
+    const raw = Array.isArray(props.questions) ? props.questions : [];
+    const questions = parseAskRequest({
+      questions: raw.map((q, i) => {
+        const r = isRecord(q) ? q : {};
+        const text = stringField(r, 'question') ?? '';
+        return {
+          id: String(i),
+          header: (stringField(r, 'header') ?? text).slice(0, 12),
+          question: text,
+          options: (Array.isArray(r.options) ? r.options : []).filter(isRecord).map((o) => ({
+            label: stringField(o, 'label') ?? '',
+            ...(stringField(o, 'description') ? { description: stringField(o, 'description') } : {}),
+          })),
+          multiSelect: r.multiple === true,
+        };
+      }),
+    })?.questions;
+    if (!questions) {
+      // A card needs 2+ options; refuse rather than leave the session blocked.
+      this.emit({ type: 'note', message: 'opencode: declined a question the cockpit cannot render' });
+      void this.http('POST', `/question/${encodeURIComponent(id)}/reject`, undefined).catch(() => undefined);
+      return;
+    }
+    this.pendingQuestion = { id, questions };
+    this.opts.onUiEvent?.({ type: 'ask.requested', requestId: `opencode-${id}`, questions });
+  }
+
+  private async replyQuestion(pending: { id: string; questions: AskQuestion[] }, text: string): Promise<void> {
+    const byId = userInputAnswers(pending.questions, text);
+    const answers = pending.questions.map((q, i) => byId[q.id ?? String(i)]?.answers ?? []);
+    try {
+      await this.http('POST', `/question/${encodeURIComponent(pending.id)}/reply`, { answers });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({ type: 'note', message: `opencode: question reply failed: ${message}` });
     }
   }
 
