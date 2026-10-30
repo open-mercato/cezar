@@ -126,5 +126,7 @@ export const healthResponseSchema = z.object({
   instanceId: z.string().optional(),
   /** Absent where `statfs` is unavailable or fails. */
   disk: diskInfoSchema.optional(),
+  /** Sent only as `true`: the boot project's task history cannot be written, so events stay live-only (#1579). */
+  historyUnsaved: z.literal(true).optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

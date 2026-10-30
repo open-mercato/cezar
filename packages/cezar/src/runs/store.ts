@@ -1187,6 +1187,9 @@ export class RunStore extends EventEmitter {
   // summary must not call an owner that silently dropped records a complete empty project.
   private indexReadHealth: { state: 'complete' | 'unavailable'; omittedRuns: number; reason?: string } = { state: 'complete', omittedRuns: 0 };
 
+  /** True while task history cannot be written (folder access lost, read-only checkout; #1579). */
+  historyUnsaved(): boolean { return this.eventsUnwritable; }
+
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
   /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */

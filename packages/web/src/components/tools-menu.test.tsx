@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, diskNote, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
+import { ToolsMenu, diskNote, historyNote, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -320,6 +320,19 @@ describe('ToolsMenu in the app shell', () => {
 
     const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
     expect(drawer.querySelector('[data-slot="tools-menu-trigger"]')).not.toBeNull()
+  })
+})
+
+/** #1579: a project folder cezar can no longer write to. */
+describe('unsaved task history', () => {
+  it('says nothing while history is being saved', () => {
+    expect(historyNote(ALL_GOOD)).toBeNull()
+  })
+
+  it('names the cause and the macOS fix, and shows in the tooltip', () => {
+    const unsaved: HealthResponse = { ...ALL_GOOD, historyUnsaved: true }
+    expect(historyNote(unsaved)).toMatch(/isn't being saved.*Files and Folders/)
+    expect(toolsTooltip(unsaved)).toBe('cezar v0.1.3 · task history is not being saved')
   })
 })
 

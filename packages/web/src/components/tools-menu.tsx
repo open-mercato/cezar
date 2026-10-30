@@ -76,12 +76,22 @@ export function diskNote(health: HealthResponse): string | null {
   return `Only ${formatFree(disk.freeBytes)} free on the disk holding task worktrees.${used}${effect} Reclaim finished tasks' worktrees (branches are kept) or delete old tasks.`
 }
 
+/**
+ * Task history cannot be written for the boot project (#1579) — on macOS, usually revoked
+ * Files and Folders access. Null while saving works. Exported for the tests.
+ */
+export function historyNote(health: HealthResponse): string | null {
+  if (!health.historyUnsaved) return null
+  return "Task history isn't being saved for this project: cezar can't write to its folder. Messages and events still work live but are lost on restart. On macOS, grant access in System Settings → Privacy & Security → Files and Folders."
+}
+
 /** The trigger's hover tooltip: the cezar version, then the blocker if there is one — else
  *  the optional tools still worth knowing about. Exported for the tests. */
 export function toolsTooltip(health: HealthResponse): string {
   const base = `cezar v${health.version}`
   const blocker = toolsBlocker(health)
   if (blocker) return `${base} · ${blocker}`
+  if (health.historyUnsaved) return `${base} · task history is not being saved`
   const low = health.disk?.level === 'low' ? ` · low disk space (${formatFree(health.disk.freeBytes)} free)` : ''
   const missing = health.checks.filter((check) => !check.available).map((check) => check.name)
   if (low) return `${base}${low}`
@@ -113,6 +123,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
   // is among them. `pending` (amber), not `danger`, otherwise — per-row dots are where red lives.
   const blocker = toolsBlocker(health)
   const disk = diskNote(health)
+  const history = historyNote(health)
 
   return (
     <DropdownMenu>
@@ -123,7 +134,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
           title={toolsTooltip(health)}
           className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
-          <StatusDot tone={blocker || disk ? 'pending' : 'success'} />
+          <StatusDot tone={blocker || disk || history ? 'pending' : 'success'} />
           Tools
           <ChevronDownIcon className="size-[11px]" aria-hidden="true" />
         </button>
@@ -147,6 +158,14 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
             <DropdownMenuSeparator />
             <p data-slot="forge-note" className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
               {note}
+            </p>
+          </>
+        ) : null}
+        {history ? (
+          <>
+            <DropdownMenuSeparator />
+            <p data-slot="history-note" className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+              {history}
             </p>
           </>
         ) : null}
