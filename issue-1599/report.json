@@ -1,0 +1,126 @@
+{
+  "runId": "issue-1599-1843",
+  "mode": "pr",
+  "target": {
+    "prNumber": 1843,
+    "title": "Tasks quick and selected-row actions",
+    "branch": "feat/issue-1599-tasks-actions",
+    "headSha": "c88c207fdca0687245392670d5432eea8a171efe"
+  },
+  "verdict": "PASS",
+  "environment": {
+    "baseUrl": "http://127.0.0.1:43999",
+    "role": "local demo",
+    "startedByThisRepo": true,
+    "browserProvider": "agent-browser"
+  },
+  "scenario": [
+    {
+      "step": 1,
+      "priority": "P1",
+      "action": "Cold-load /p/demo-repo/ on desktop",
+      "expected": "Useful shell; eligible row controls visible",
+      "observed": "Tasks and existing filters/header render; quick controls visible beside checkboxes",
+      "result": "PASS",
+      "screenshot": "step-01-default.png"
+    },
+    {
+      "step": 2,
+      "priority": "P1",
+      "action": "Select done + needs-review, archive selected",
+      "expected": "Only finished row archived; review row skipped and selected; no navigation",
+      "observed": "1 succeeded,1 skipped,0 failed; URL stays on Tasks",
+      "result": "PASS",
+      "screenshot": "step-03-archive-result.png"
+    },
+    {
+      "step": 3,
+      "priority": "P1",
+      "action": "Archived: select2, Restore",
+      "expected": "Restore only selected; archive view empties",
+      "observed": "2 succeeded,0 skipped,0 failed; empty Archived view",
+      "result": "PASS",
+      "screenshot": "step-04-restored-empty.png"
+    },
+    {
+      "step": 4,
+      "priority": "P1",
+      "action": "Row Mark unread then Mark read",
+      "expected": "Read marker and inverse control update without opening thread",
+      "observed": "Both mutations succeeded and inverse row control appeared",
+      "result": "PASS",
+      "screenshot": "step-05-mark-unread.png"
+    },
+    {
+      "step": 5,
+      "priority": "P1",
+      "action": "390x844 mobile: checkbox and row controls",
+      "expected": "Selection sync; card stays on Tasks; toolbar wraps",
+      "observed": "Selected card and wrapped toolbar; URL unchanged",
+      "result": "PASS",
+      "screenshot": "step-06-mobile-selection.png"
+    },
+    {
+      "step": 6,
+      "priority": "P1",
+      "action": "Abort demo archive request with browser network route; retry after unroute",
+      "expected": "Failure explicit; row remains selected and retryable",
+      "observed": "0 succeeded,0 skipped,1 failed with title/error; retry succeeds",
+      "result": "PASS",
+      "screenshot": "step-08-error.png"
+    },
+    {
+      "step": 7,
+      "priority": "P1",
+      "action": "Search for no-task-matches-issue-1599",
+      "expected": "Empty state; no hidden action targets",
+      "observed": "No matching tasks; selection reset",
+      "result": "PASS",
+      "screenshot": "step-09-filtered-empty.png"
+    },
+    {
+      "step": 8,
+      "priority": "P1",
+      "action": "Light theme and keyboard Space on focused checkbox",
+      "expected": "Tokens preserved; native keyboard selection without navigation",
+      "observed": "Light controls legible; checkbox checked and1 selected; Tasks URL unchanged",
+      "result": "PASS",
+      "screenshot": "step-11-keyboard.png"
+    },
+    {
+      "step": 9,
+      "priority": "P1",
+      "action": "306 displayed rows: select all, Archive305 eligible",
+      "expected": "Virtualized list stays responsive; pending controls disabled",
+      "observed": "All306 selected despite windowing; Archive in progress; controls disabled",
+      "result": "PASS",
+      "screenshot": "step-07-loading.png"
+    },
+    {
+      "step": 10,
+      "priority": "P1",
+      "action": "Complete large batch",
+      "expected": "All eligible rows processed once; review skipped",
+      "observed": "305 succeeded,1 skipped,0 failed",
+      "result": "PASS",
+      "screenshot": "step-14-large-result.png"
+    },
+    {
+      "step": 11,
+      "priority": "P1",
+      "action": "390px Archived cards with long title",
+      "expected": "Title wraps; controls remain available",
+      "observed": "Long title wraps within card; no horizontal card overflow",
+      "result": "PASS",
+      "screenshot": "step-12-mobile-long.png"
+    }
+  ],
+  "hasUiTest": false,
+  "notes": [
+    "Evidence only; needs-qa retained, no author QA sign-off.",
+    "No new permission surface: local cockpit has no account/role permission state. Existing server checks unchanged. Network refusal exercised; explicit project isolation tested in React route integration.",
+    "Windows full npm test timed out600s; node:test45pass/2fail/1skip reproduces baseline missing POSIX commands. Typecheck/build/package33/33 and targeted105/105 pass. Final Linux CI reported separately.",
+    "Early layout finding fixed: quick actions moved from offscreen trailing column beside selection.",
+    "Temporary latency proxy was blocked by automatic approval review (blocked by policy). Pending state was instead tested using real existing API requests over306demo rows."
+  ]
+}
