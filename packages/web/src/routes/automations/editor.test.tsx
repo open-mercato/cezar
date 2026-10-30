@@ -245,6 +245,23 @@ describe('AutomationEditor — new', () => {
     expect((post?.body as { filters: unknown }).filters).toEqual({ authors: ['patzick'], lookbackDays: 7, maxRecords: 25 })
   })
 
+  it('"Add to Reviewers" saves a review-request login as filters.reviewers', async () => {
+    const sent = stubFetch()
+    const { onSaved } = renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull_request.opened' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull_request.review_requested' }))
+    fillRequired('Review mine', 'Review the PR when a review is requested for `pkarw`.')
+    expect(screen.getByText(/prompt names @pkarw/)).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add to Authors' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Reviewers' }))
+    expect(screen.queryByText(/prompt names @pkarw/)).toBeNull()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+    const post = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/automations')
+    expect((post?.body as { filters: unknown }).filters).toEqual({ reviewers: ['pkarw'], lookbackDays: 7, maxRecords: 25 })
+  })
+
   it('copies another project\'s skill only when this repo has it', async () => {
     const template = (skill: string) => ({
       project: { id: 'p2', name: 'shop' },
