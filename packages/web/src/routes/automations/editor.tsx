@@ -233,7 +233,25 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 onChange={(kind) => patch({ kind, ...(kind === 'tracker' ? { intervalSeconds: 1800, enabled: false } : {}) })}
               />
               {draft.kind === 'schedule' ? (
-                <EditorScheduleFields schedule={draft.schedule} timeZone={timeZone} onChange={(schedule) => patch({ schedule })} />
+                <div className="flex flex-col gap-4">
+                  {[draft.schedule, ...(draft.schedules?.slice(1) ?? [])].map((schedule, index, schedules) => (
+                    <fieldset key={index} className="min-w-0 rounded-md border p-3">
+                      <legend className="px-1 text-xs text-muted-foreground">Schedule {index + 1}</legend>
+                      <EditorScheduleFields schedule={schedule} timeZone={timeZone} allowOnce={schedules.length === 1} onChange={(value) => {
+                        const next = schedules.map((item, i) => i === index ? value : item)
+                        patch({ schedule: next[0]!, schedules: next.length > 1 ? next : undefined })
+                      }} />
+                      {schedules.length > 1 ? <Button variant="ghost" size="sm" aria-label={`Remove schedule ${index + 1}`} onClick={() => {
+                        const next = schedules.filter((_, i) => i !== index)
+                        patch({ schedule: next[0]!, schedules: next.length > 1 ? next : undefined })
+                      }}>Remove schedule</Button> : null}
+                    </fieldset>
+                  ))}
+                  <Button variant="outline" size="sm" disabled={(draft.schedules?.length ?? 1) >= 16 || draft.schedule.type === 'once'} onClick={() => patch({
+                    schedules: [draft.schedule, ...(draft.schedules?.slice(1) ?? []), { type: 'daily', hour: 4, minute: 0 }],
+                  })}>Add schedule</Button>
+                  <p className="text-xs text-muted-foreground">Times that coincide start one task. One-time schedules run on their own.</p>
+                </div>
               ) : draft.kind === 'tracker' ? (
                 <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
               ) : (
@@ -331,7 +349,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
           </div>
 
           <div className="flex flex-col gap-3 lg:sticky lg:top-[76px]">
-            <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
+            <NextRunsPreview kind={draft.kind} schedule={draft.schedule} schedules={draft.schedules} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
             <CopyAsCliCard definition={cli} />
             {automation && automation.kind !== 'schedule' && actions ? <Button variant="outline" disabled={actions.busy} onClick={() => void actions.preview(automation)}>Preview saved matches</Button> : null}
             {automation?.lastRun ? (

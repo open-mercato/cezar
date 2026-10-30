@@ -143,6 +143,23 @@ const fillRequired = (name = 'Nightly bump', prompt = 'Bump the deps.') => {
 // ---- new ------------------------------------------------------------------------------------
 
 describe('AutomationEditor — new', () => {
+  it('adds, edits and removes schedules while keeping one task definition', async () => {
+    const sent = stubFetch()
+    const { onSaved } = renderEditor()
+    fillRequired('Shared checks', 'Check once per instant')
+    fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }))
+    expect(screen.getAllByLabelText('Hour')).toHaveLength(2)
+    fireEvent.change(screen.getAllByLabelText('Hour')[1]!, { target: { value: '16' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove schedule 3' }))
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+    const body = sent.find(request => request.method === 'POST')?.body
+    expect(body).toMatchObject({ name: 'Shared checks', schedule: { type: 'daily', hour: 4 },
+      schedules: [{ type: 'daily', hour: 4, minute: 0 }, { type: 'daily', hour: 16, minute: 0 }],
+      task: { prompt: 'Check once per instant' } })
+  })
+
   it('opens with the palette, a paused daily draft, and a save disabled until name and prompt', () => {
     stubFetch()
     renderEditor()

@@ -43,11 +43,13 @@ export function EditorScheduleFields({
   schedule,
   timeZone,
   onChange,
+  allowOnce = true,
 }: {
   schedule: AutomationSchedule
   /** The server's zone — what the schedule is evaluated in. */
   timeZone: string
   onChange: (schedule: AutomationSchedule) => void
+  allowOnce?: boolean
 }) {
   const s = normalizeSchedule(schedule)
   const set = (patch: Partial<AutomationSchedule>) => {
@@ -61,7 +63,7 @@ export function EditorScheduleFields({
   return (
     <div data-slot="editor-schedule" className="flex flex-col gap-3.5">
       <div role="group" aria-label="Schedule type" className="flex flex-wrap gap-1.5">
-        {TYPES.map(([value, label]) => (
+        {TYPES.filter(([value]) => allowOnce || value !== 'once').map(([value, label]) => (
           <Chip key={value} active={s.type === value} aria-pressed={s.type === value} onClick={() => set({ type: value })}>
             {label}
           </Chip>

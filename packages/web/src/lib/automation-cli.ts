@@ -15,6 +15,7 @@ export interface CliDefinition {
   kind: 'github' | 'schedule' | 'tracker'
   trackerTrigger?: AutomationDefinition['trackerTrigger']
   schedule?: AutomationSchedule
+  schedules?: AutomationSchedule[]
   events?: AutomationEvent[]
   intervalSeconds?: number
   filters?: Partial<AutomationFilters>
@@ -39,6 +40,7 @@ export function everyFlag(seconds: number): string {
 }
 
 export function flagExpressible(definition: CliDefinition): boolean {
+  if (definition.schedules && definition.schedules.length > 1) return false
   if (definition.kind === 'tracker') return false
   if (definition.kind === 'schedule') return !!definition.schedule && (definition.schedule.type !== 'once' || !!definition.schedule.date)
   if (!definition.events?.length) return false
@@ -86,7 +88,7 @@ export function cliJsonOf(definition: CliDefinition): string {
     name: definition.name || 'untitled',
     kind: definition.kind,
     ...(definition.kind === 'schedule'
-      ? { schedule: definition.schedule }
+      ? { schedule: definition.schedule, ...(definition.schedules ? { schedules: definition.schedules } : {}) }
       : definition.kind === 'tracker'
         ? { trackerTrigger: definition.trackerTrigger, intervalSeconds: definition.intervalSeconds ?? 1800, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }
         : { events: definition.events, intervalSeconds: definition.intervalSeconds ?? 300, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }),
