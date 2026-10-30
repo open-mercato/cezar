@@ -21,12 +21,19 @@ Mixed eligibility, partial failure, hidden selected rows and project navigation 
 
 ## Progress
 
+PR: #1843
+
+Implementation: c88c207f. Source-scoped actions/selection, tests and review fixes complete. Browser QA PASS with screenshots published separately on qa-evidence-issue-1599; no QA-approval label granted. Full commands executed: typecheck PASS; npm test TIMEOUT600s with broad Windows failures; node:test45pass/2fail/1skip (baseline POSIX mkdir and /bin/sh missing); build/check:pack PASS; package33/33 PASS. Targeted105/105 PASS after full-suite load ended. Key subset test FAILS against old route and PASSES restored.
+
+Supported-platform CI on the final documentation head is reported in the PR's review/CI-result comments. Local full gate is not claimed green. Review pickup stays unassigned with review and needs-qa. Full QA report: https://github.com/open-mercato/cezar/blob/qa-evidence-issue-1599/issue-1599/report.md
+
+
 ### Phase 1: scoped actions
 
-- [ ] 1.1 Add canonical eligibility and bounded execution helpers.
-- [ ] 1.2 Wire row/selected actions and accessible responsive selection.
+- [x] 1.1 Add canonical eligibility and bounded execution helpers.
+- [x] 1.2 Wire row/selected actions and accessible responsive selection.
 
 ### Phase 2: verification
 
-- [ ] 2.1 Add interaction tests and demonstrate red/green regression.
-- [ ] 2.2 Run gate, review/autofix, browser QA and publish evidence.
+- [x] 2.1 Add interaction tests and demonstrate red/green regression.
+- [x] 2.2 Run gate, review/autofix, browser QA and publish evidence.
