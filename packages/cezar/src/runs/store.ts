@@ -1202,6 +1202,11 @@ export class RunStore extends EventEmitter {
     this.setMaxListeners(100);
   }
 
+  /** Stable identity for observers that outlive a store instance. */
+  getDataDir(): string {
+    return this.dataDir;
+  }
+
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
     const store = new RunStore(dataDir);
