@@ -20,7 +20,9 @@ Source doc: .ai/specs/2026-10-30-issue-1688-browse-root.md (design-only PR #1831
 
 ## Risks
 
-Full native-Windows validation is blocked outside this UI scope: npm test exceeded 600 seconds with server symlink/process failures; test:unit requires /bin/sh (ENOENT). typecheck and build/check:pack pass; package run failed registry ECONNRESET (32/33 passed), offline retry exceeded180s. Targeted folder-browser + AddProjectDialog tests pass 23/23. Browser provider installed; QA environment isolated under .ai/qa/issue-1688.
+Full native-Windows validation is blocked outside this UI scope: npm test exceeded 600 seconds with server symlink/process failures; test:unit requires /bin/sh (ENOENT). typecheck and build/check:pack pass; package retry with600s bound passed33/33 in44.2s after earlier network/short-timeout failures. Targeted folder-browser + AddProjectDialog tests pass 23/23. Browser provider installed; QA environment isolated under .ai/qa/issue-1688.
+
+Independent source review: approve, no findings; independent targeted23/23PASS. Full-gate CI run41102240826 passed at3d1ee86209dc4e85d1cd0fa79239f7280acb08d1; native Windows failures reproduced on parent baseline, not softened or called passes. Later completion commits change only this plan.
 
 ## Progress
 
@@ -38,5 +40,5 @@ Source implementation: 5669ca14. Browser QA: seven scenarios passed; pending/403
 
 ### Phase 2: Validation and evidence
 
-- [ ] 2.1 Run the full configured validation gate and independent code review; resolve actionable findings.
+- [x] 2.1 Run the full configured validation gate and independent code review; resolve actionable findings.
 - [x] 2.2 Verify the real UI and Settings destination in a browser; publish evidence and leave human QA required.
