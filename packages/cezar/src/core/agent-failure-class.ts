@@ -69,10 +69,26 @@ const TRANSIENT_BACKOFF_MS = [30_000, 120_000] as const;
 /** The CLI's own advice for the refresh race: "retry in a minute". */
 const OAUTH_REFRESH_RACE_MIN_MS = 60_000;
 
-/** The wait before retry `attempt` (1-based) of a transient failure. */
-export function transientRetryDelayMs(attempt: number, error: string | undefined): number {
+/** Runs that lose the race together would retry in lockstep and lose it again without a spread. */
+const OAUTH_REFRESH_RACE_JITTER_MS = 45_000;
+/** The race gets one more retry than other transient failures: it is cezar's own parallelism. */
+const OAUTH_REFRESH_RACE_MAX_RETRIES = 3;
+
+/** The wait before retry `attempt` (1-based) of a transient failure; `random` is injectable for tests. */
+export function transientRetryDelayMs(attempt: number, error: string | undefined, random: () => number = Math.random): number {
   const base = TRANSIENT_BACKOFF_MS[Math.min(Math.max(attempt, 1), TRANSIENT_BACKOFF_MS.length) - 1]!;
-  return OAUTH_REFRESH_RACE_RE.test(error ?? '') ? Math.max(base, OAUTH_REFRESH_RACE_MIN_MS) : base;
+  if (!OAUTH_REFRESH_RACE_RE.test(error ?? '')) return base;
+  return Math.max(base, OAUTH_REFRESH_RACE_MIN_MS) + Math.floor(random() * OAUTH_REFRESH_RACE_JITTER_MS);
+}
+
+/** How many automatic retries one streak of this transient failure earns. */
+export function transientRetryCap(error: string | undefined): number {
+  return OAUTH_REFRESH_RACE_RE.test(error ?? '') ? OAUTH_REFRESH_RACE_MAX_RETRIES : MAX_TRANSIENT_RETRIES;
+}
+
+/** Whether the failure is the OAuth refresh race — its exhaustion message names the cause. */
+export function isOauthRefreshRace(error: string | undefined): boolean {
+  return OAUTH_REFRESH_RACE_RE.test(error ?? '');
 }
 
 const BACKEND_NAMES: Record<string, string> = {
