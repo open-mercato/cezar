@@ -249,6 +249,8 @@ function stubFetch(
       // is not a health payload at all — a reader would crash on it rather than degrade — so the
       // default here is a real one, with automations off exactly as a default server reports.
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(['claude']))
+      // The detail's Related tasks reads the registry for the repo base (#1048); `{}` is not one.
+      if (method === 'GET' && path === '/api/v1/projects') return jsonResponse({ projects: [], bootProject: 'default' })
       return jsonResponse({})
     }),
   )
