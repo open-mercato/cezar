@@ -1749,9 +1749,10 @@ describe('searchGithubItems (#730)', () => {
     const res = await searchGithubItems('/repo/search-number-comments', 'issue', '851');
 
     expect(res.items[0]?.comments).toBe(2);
-    expect(argvs).toHaveLength(1);
-    const view = argvs[0]!;
-    expect(view[0]).toBe('api');
+    // Remote resolution's git probes share the spy; exactly one GitHub call is the bound.
+    const apiCalls = argvs.filter((a) => a[0] === 'api');
+    expect(apiCalls).toHaveLength(1);
+    const view = apiCalls[0]!;
     expect(view[1]).toContain('/issues/851');
     expect(view).toContain('--jq');
     expect(view[view.indexOf('--jq') + 1]).toContain('.comments');
