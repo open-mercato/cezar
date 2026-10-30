@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -46,7 +46,7 @@ describe.skipIf(!linux)('opencode server registry (#1498)', () => {
     const children = readdirSync('/proc').filter((d) => /^\d+$/.test(d) && procStart(Number(d)) && alive(Number(d)));
     const grand = children.map(Number).filter((p) => {
       try {
-        return process.kill(p, 0) && require('node:fs').readFileSync(`/proc/${p}/stat`, 'utf8').split(' ')[3] === String(child.pid);
+        return process.kill(p, 0) && readFileSync(`/proc/${p}/stat`, 'utf8').split(' ')[3] === String(child.pid);
       } catch {
         return false;
       }
@@ -68,7 +68,7 @@ describe.skipIf(!linux)('opencode server registry (#1498)', () => {
       const stranger = fakeServer(41004); // the user's own, never recorded
       await new Promise((r) => setTimeout(r, 200));
       const dir = join(home, 'opencode-servers');
-      require('node:fs').mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true });
       const rec = (c: typeof orphan, port: number, ownerPid: number, ownerStart: string) =>
         writeFileSync(join(dir, `${c.pid}.json`), JSON.stringify({ pid: c.pid, start: procStart(c.pid!), ownerPid, ownerStart, port }));
       rec(orphan, 41002, 999999, '1');
@@ -78,6 +78,35 @@ describe.skipIf(!linux)('opencode server registry (#1498)', () => {
       expect(alive(orphan.pid!)).toBe(false);
       expect(alive(owned.pid!)).toBe(true);
       expect(alive(stranger.pid!)).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.CEZ_HOME;
+      else process.env.CEZ_HOME = prev;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a corrupt or malformed registry never throws and is dropped; a normal exit removes the record', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cez-sweep-'));
+    const prev = process.env.CEZ_HOME;
+    process.env.CEZ_HOME = home;
+    try {
+      const dir = join(home, 'opencode-servers');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, '1.json'), '{not json');
+      writeFileSync(join(dir, '2.json'), '{}');
+      writeFileSync(join(dir, '3.json'), JSON.stringify({ pid: 1, start: '1', ownerPid: 999999, ownerStart: '1', port: 1 }));
+      expect(sweepOrphanedServers()).toEqual([]);
+      expect(readdirSync(dir)).toEqual([]);
+      rmSync(dir, { recursive: true });
+      expect(sweepOrphanedServers()).toEqual([]);
+
+      const child = spawn(process.execPath, ['-e', 'setTimeout(()=>{},300)'], { detached: true, stdio: 'ignore' });
+      pids.push(child.pid!);
+      trackServer(child, 41005);
+      const file = join(dir, `${child.pid}.json`);
+      expect(existsSync(file)).toBe(true);
+      await until(() => !existsSync(file));
+      expect(existsSync(file)).toBe(false);
     } finally {
       if (prev === undefined) delete process.env.CEZ_HOME;
       else process.env.CEZ_HOME = prev;
