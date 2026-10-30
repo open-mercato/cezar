@@ -8425,6 +8425,7 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
       // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
       return `copilot --resume ${sessionId}`;
     case 'kimi':
+      // `-S, --session [id]` resumes that session; bare `--session` opens a picker (`kimi --help`, 2.3.2).
       return `kimi --session ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
