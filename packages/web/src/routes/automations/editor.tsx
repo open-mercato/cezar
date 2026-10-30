@@ -37,7 +37,7 @@ import {
 import { EditorGithubFields } from './editor-github-fields'
 import { EditorRunAs } from './editor-run-as'
 import { EditorScheduleFields } from './editor-schedule-fields'
-import { LastRunCard } from './last-run-card'
+import { RecentRunsCard } from './recent-runs-card'
 import { NextRunsPreview } from './next-runs-preview'
 import { TemplatePalette } from './template-palette'
 import { automationsQueryKey, type AutomationActions } from './use-automations'
@@ -334,11 +334,11 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
             <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
             <CopyAsCliCard definition={cli} />
             {automation && automation.kind !== 'schedule' && actions ? <Button variant="outline" disabled={actions.busy} onClick={() => void actions.preview(automation)}>Preview saved matches</Button> : null}
-            {automation?.lastRun ? (
-              <LastRunCard
-                lastRun={automation.lastRun}
+            {automation ? (
+              <RecentRunsCard
+                automationId={automation.id}
                 busy={actions?.busy}
-                onRunNow={() => void actions?.runNow(automation)}
+                onRunNow={actions ? () => void actions.runNow(automation) : undefined}
                 onLog={onLog}
               />
             ) : null}
