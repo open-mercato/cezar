@@ -35,18 +35,18 @@ Protected HTTP/state/workflow/runner surfaces need optional additive fields and 
 
 ### Phase 1: Contracts and capability discovery
 
-- [x] 1.1 Add optional neutral contract/persistence/workflow fields. — 48261a4f
-- [ ] 1.2 Preserve validated capabilities and isolate account catalog/query context.
+- [x] 1.1 Add optional neutral contract/persistence/workflow fields. - 48261a4f
+- [x] 1.2 Preserve validated capabilities and isolate account catalog/query context. - 48261a4f, 7152309a
 
 ### Phase 2: Execution lifecycle
 
-- [x] 2.1 Carry selection through creation, recovery, workflows and Continue. — 48261a4f, 728433d6
-- [x] 2.2 Validate explicit selection and translate it at every Codex turn/start. — 48261a4f
+- [x] 2.1 Carry selection through creation, recovery, workflows and Continue. - 48261a4f, 728433d6
+- [x] 2.2 Validate explicit selection and translate it at every Codex turn/start. - 48261a4f
 
 ### Phase 3: Consistent picker and release evidence
 
-- [ ] 3.1 Share compatibility and access picker rules across New Task, Inbox/GitHub and Continue.
+- [x] 3.1 Share compatibility and access picker rules across New Task, Inbox/GitHub and Continue. - 728433d6, 7152309a
 - [ ] 3.2 Prove regression red/green; run gates, review/autofix and actual-browser QA.
 
-Core 33 passed / 21 skipped; lifecycle 7/7. Picker implementation 728433d6 and boundary regression tests a358f2d1 committed. Remaining profile catalog/request serialization needs parent-owned server.ts/client.ts edits. Current boundary tests intentionally expose the missing fields (8 HTTP, 3 component failures); 114 component tests pass. Installed Codex 0.164.0 real model/list advertised per-model standard/Blue capabilities without a model turn. Private real-browser preliminary picker/unknown-metadata checks captured; final-head QA/review/gates pending parent boundary integration and full-suite release.
+Core 33 passed / 21 skipped; lifecycle 7/7. Parent boundary integration 7152309a corrected all 8 HTTP/3 component regression failures: the complete focused boundary/picker selection is now 197/197. Main merged at 75a2dc01. Installed Codex 0.164.0 model/list returned per-model standard/Blue capability metadata without a model turn; this is not proof of entitlement. Private real-browser preliminary picker/unknown-metadata checks captured; ordered final gates, review and final-head QA remain in progress.
 
