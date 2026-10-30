@@ -184,15 +184,15 @@ export function IssueFixToolbar({ actions, engineLabel }: { actions: IssueFixAct
       <p role="status" aria-label="Issue fix status" aria-live="polite" className="w-full empty:hidden break-words text-muted-foreground">{actions.message}</p>
     </div>
     <Dialog open={actions.confirm} onOpenChange={actions.setConfirm}>
-      <DialogContent>
-        <DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col gap-3">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Queue {count} issue fixes?</DialogTitle>
           <DialogDescription>One task per issue using {ISSUE_FIX_SKILL}. The existing scheduler controls when tasks start. Agent tasks may use paid tokens.</DialogDescription>
         </DialogHeader>
         <p className="break-words text-sm text-muted-foreground">Engine: {engineLabel}</p>
-        <ul className="max-h-64 overflow-y-auto text-sm">{actions.eligible.map((item) => <li key={item.url} className="py-1 break-words">#{item.number} {item.title}</li>)}</ul>
+        <ul className="min-h-0 max-h-64 flex-1 overflow-y-auto text-sm">{actions.eligible.map((item) => <li key={item.url} className="py-1 break-words">#{item.number} {item.title}</li>)}</ul>
         <p className="text-xs text-muted-foreground">{actions.selected.length - count} already queued issues skipped. Check Tasks before retrying a failed request.</p>
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button type="button" variant="outline" onClick={() => actions.setConfirm(false)}>Cancel</Button>
           <Button type="button" disabled={actions.busy || count === 0 || overLimit || actions.unavailable !== undefined}
             onClick={() => void actions.apply(actions.selected)}>Queue {count} tasks</Button>
