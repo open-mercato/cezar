@@ -3548,7 +3548,8 @@ export function createApp(deps: ServerDeps) {
   // `~/.cezar/config.json` — global knobs only; the registry stays on
   // /api/projects above, and schemaVersion (a migration cursor, not a
   // setting) is deliberately omitted.
-  const workspaceConfigBody = (config: WorkspaceConfig): WorkspaceConfigResponse => ({
+  // Deliberately UNannotated: contract-parity compares the schema to this inferred shape (#1234).
+  const workspaceConfigBody = (config: WorkspaceConfig) => ({
     branding: {
       name: config.branding.name ?? 'cezar',
       logoUrl: logoAssetUrl(),
@@ -3567,7 +3568,7 @@ export function createApp(deps: ServerDeps) {
           ? false
           : process.env.CEZ_AUTONOMOUS_DEFAULT === '1'
             ? true
-            : 'source-dependent',
+            : ('source-dependent' as const),
       inheritedWorktree: effectiveComposerDefault(
         undefined,
         process.env.CEZ_WORKTREE_DEFAULT,
@@ -3588,7 +3589,11 @@ export function createApp(deps: ServerDeps) {
     // to keep meaning "no opinion" here, or the fallback collapses into "always claude".
     agentDefaults: {
       ...(config.agentDefaults.runner !== undefined ? { runner: config.agentDefaults.runner } : {}),
-      ...(config.agentDefaults.models !== undefined ? { models: config.agentDefaults.models } : {}),
+      // The stored bag is passthrough (index signature); the wire still carries it whole, the
+      // cast only names the keys the contract promises (#1234).
+      ...(config.agentDefaults.models !== undefined
+        ? { models: config.agentDefaults.models as NonNullable<WorkspaceConfigResponse['agentDefaults']['models']> }
+        : {}),
     },
   });
   // ---- chained family: workspace settings + GUI prefs (workspace-level) ----

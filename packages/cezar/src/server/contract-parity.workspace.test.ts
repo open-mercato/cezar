@@ -2,6 +2,7 @@ import type { InferRequestType, InferResponseType } from 'hono/client';
 import { hc } from 'hono/client';
 import type { JSONParsed, JSONValue } from 'hono/utils/types';
 import { describe, expect, it } from 'vitest';
+import { runnerSchema, workspaceConfigResponseSchema as workspaceConfigResponseValue } from '@open-mercato/cezar-contract';
 import type { z } from 'zod';
 import type { brandingLogoUploadSchema } from './server.ts';
 import type {
@@ -67,6 +68,23 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : 'route-is-wider') : 'schema-is-wider';
   type Exact<Schema, Route> = Mutual<Schema, Route>;
   type Assert<T extends true> = T;
+
+  /**
+   * Every dotted key path, optional keys included. `Mutual` is blind to an omitted OPTIONAL key
+   * (absent is assignable both ways), which is how the route's `models` lost two providers while
+   * the suite stayed green (#1234); comparing path sets closes that for the pair it is used on.
+   * Index signatures are skipped: the stored `models` is a passthrough bag, so the route's type
+   * carries `[x: string]: JSONValue` that the closed schema rightly does not name.
+   */
+  type Named<T> = { [K in keyof T as string extends K ? never : K]: T[K] };
+  type KeyPaths<T, P extends string = ''> = T extends readonly unknown[]
+    ? KeyPaths<T[number], `${P}[].`>
+    : T extends object
+      ? {
+          [K in keyof Named<T> & string]-?: `${P}${K}` | KeyPaths<NonNullable<Named<T>[K]>, `${P}${K}.`>;
+        }[keyof Named<T> & string]
+      : never;
+  type SameKeys<Schema, Route> = Mutual<KeyPaths<Schema>, KeyPaths<Route>>;
 
   /**
    * `Exact`, for the two OPEN bags — the only schemas here with a catchall.
@@ -217,6 +235,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // workspace settings + prefs
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
+    Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
+    Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoUpload200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoDelete200>>,
     Assert<Exact<z.infer<typeof stagedUploadSchema>, StageUpload200>>,
@@ -275,6 +295,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // assertion above vacuous, exactly the trap this file is meant to avoid.
     const wider: Mutual<{ a: string }, { a: string; b: number }> = 'schema-is-wider';
     const narrower: Mutual<{ a: string; b: number }, { a: string }> = 'route-is-wider';
+    // The blind spot `SameKeys` exists for: an omitted optional key is invisible to `Mutual`.
+    const blind: Mutual<{ m?: { a?: string; b?: string } }, { m?: { a?: string } }> = true;
+    const caught: SameKeys<{ m?: { a?: string; b?: string } }, { m?: { a?: string } }> = 'schema-is-wider';
     // And `ExactOpen`, which normalizes ONLY the JSON round trip: an open bag still fails when a
     // key it names disagrees with the route (here `a: number` against the route's `a: string`),
     // and still fails when it makes a key required that the route never sends. (Both pins spell
@@ -292,5 +315,11 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
       'schema-is-wider',
       'route-is-wider',
     ]);
+  });
+
+  it('names a default-model key for every runner', () => {
+    // The `models` keys are spelled by hand, so a new runner would otherwise drift it silently (#1234).
+    const models = workspaceConfigResponseValue.shape.agentDefaults.shape.models.unwrap();
+    expect(Object.keys(models.shape).sort()).toEqual([...runnerSchema.options].sort());
   });
 });
