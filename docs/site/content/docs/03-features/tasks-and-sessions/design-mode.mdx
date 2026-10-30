@@ -25,3 +25,5 @@ Task → Preview → Design Mode
 3. Describe the change and send the note to the agent.
 
 > **Good to know**: Design Mode works in the local cockpit for http:// addresses pointing to the same computer (loopback). Selection mode starts turned off. `CEZ_DESIGN_MODE=0` disables the entire feature. It is unavailable in the hosted cockpit.
+
+> **Good to know**: Some apps refuse to be embedded in another page (`X-Frame-Options: SAMEORIGIN` or `frame-ancestors 'self'`, which many Next.js apps send), so Preview shows a blank page even though the app opens fine in a browser tab. Turn on Design Mode: its local copy of the app allows the cockpit, and only the cockpit, to embed it. The app's other security headers are passed through unchanged.

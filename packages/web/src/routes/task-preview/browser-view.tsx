@@ -39,7 +39,8 @@ import { parseDesignPick, type NewDesignPick } from './design-picks'
  *
  *  - A cross-origin page's TITLE is unreadable, so a tab's label is derived from its address.
  *  - A page that refuses to be framed (`X-Frame-Options`, `frame-ancestors`) fires `load` for the
- *    refusal too. The timeout below is the only signal available, and its message says so.
+ *    refusal too. The timeout below is the only signal available, and its message says so. The
+ *    Design Mode mirror lets the cockpit frame such a page (`allowFramingBy`).
  *  - On a HOSTED cockpit a loopback address means the VIEWER's machine, not the host the task
  *    runs on, so it is not framed until the user forwards the port with SSH — the refusal shows
  *    the exact `ssh -L` command and frames the address once they say the tunnel is open.
