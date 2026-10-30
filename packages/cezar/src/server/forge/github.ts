@@ -1523,6 +1523,42 @@ export async function fetchGithubChecks(repoRoot: string, numbers: number[]): Pr
   }
 }
 
+export type HeadChecksVerdict =
+  | { kind: 'unavailable' }
+  | { kind: 'stale'; headOid: string }
+  | { kind: 'conflict' }
+  | { kind: 'checks'; glyph: ChecksGlyph };
+
+/**
+ * CI verdict for one exact commit of a PR (#1533), never the 60 s PR-number cache: `stale` while
+ * the PR's head is not `sha` yet (a push not landed), `conflict` for a CONFLICTING PR at that head,
+ * else the rollup for `sha` itself. Offline or gh logged out is `unavailable`, not a verdict.
+ */
+export async function fetchPrHeadChecks(repoRoot: string, number: number, sha: string): Promise<HeadChecksVerdict> {
+  try {
+    const pr = JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid,mergeable'])) as {
+      headRefOid?: unknown;
+      mergeable?: unknown;
+    };
+    if (typeof pr.headRefOid !== 'string' || !pr.headRefOid) return { kind: 'unavailable' };
+    if (pr.headRefOid.toLowerCase() !== sha.toLowerCase()) return { kind: 'stale', headOid: pr.headRefOid };
+    if (pr.mergeable === 'CONFLICTING') return { kind: 'conflict' };
+    const ownerName = parseOwnerName(await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']));
+    if (!ownerName) return { kind: 'unavailable' };
+    const runGraphql: GraphqlRunner = (query, variables) => {
+      const args = ['api', 'graphql', '-f', `query=${query}`];
+      for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
+      return gh(repoRoot, args);
+    };
+    const checks = await fetchCommitChecks(runGraphql, ownerName.owner, ownerName.name, [sha]);
+    // The query failed or the SHA is unknown to GitHub yet: keep polling, do not guess.
+    if (!(sha in checks)) return { kind: 'unavailable' };
+    return { kind: 'checks', glyph: checks[sha] ?? null };
+  } catch {
+    return { kind: 'unavailable' };
+  }
+}
+
 /** CEZ_DRY_RUN=1 — glyphs straight from the mock catalog so the offline demo shows checks. */
 function mockGithubChecks(numbers: number[]): GithubChecksData {
   const byNumber = new Map(mockGithub().prs.map((p) => [p.number, (p.checks ?? null) as ChecksGlyph]));
