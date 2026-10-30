@@ -30,3 +30,15 @@ it('does not attribute unavailable state to another cockpit when the root is mis
   expect(await screen.findByText(/Webhook state is unavailable/)).toBeTruthy()
   expect(screen.queryByText(/Another cockpit/)).toBeNull()
 })
+
+it('keeps a long project root inside the dialog instead of widening it', async () => {
+  mocks.enabled = false
+  const root = '/private/tmp/claude-501/-Users-someone-projects-cezar-units-mvp--ai-cezar-worktrees-c57e477b/scratchpad/cezar-test'
+  render(<QueryClientProvider client={createQueryClient()}><RemoveProjectDialog project={{ id: 'a', name: 'Alpha', root } as never} onOpenChange={() => {}} onConfirm={() => {}} /></QueryClientProvider>)
+  const path = await screen.findByTestId('remove-project-root')
+  // The whole path is shown and wraps; the content's single track is minmax(0,1fr), so it cannot grow.
+  expect(path.textContent).toBe(root)
+  expect(path.className).toContain('break-all')
+  expect(path.className).not.toContain('truncate')
+  expect(document.querySelector('[data-slot="alert-dialog-content"]')?.className).toContain('grid-cols-1')
+})
