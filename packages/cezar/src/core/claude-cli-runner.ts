@@ -70,7 +70,8 @@ function costIsCumulative(version: string | undefined): boolean {
   if (!m) return true; // unknown CLI: a reset (value below the baseline) still falls back to the raw value
   for (let i = 0; i < 3; i++) {
     const n = Number(m[i + 1]);
-    if (n !== CUMULATIVE_COST_SINCE[i]) return n > CUMULATIVE_COST_SINCE[i];
+    const floor = CUMULATIVE_COST_SINCE[i] ?? 0;
+    if (n !== floor) return n > floor;
   }
   return true;
 }
