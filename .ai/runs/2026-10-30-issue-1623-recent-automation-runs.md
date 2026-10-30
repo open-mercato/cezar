@@ -21,11 +21,14 @@ Root baseline has Windows/load failures in unrelated tests. Record actual full-g
 
 ## Progress
 
+PR: #1834
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Detail recent runs
-- [ ] 1.1 Add bounded, event-refreshed card and integrate saved editors.
-- [ ] 1.2 Cover recent launches, filtering, metadata fallbacks, loading/errors/actions/events and editor integration; prove the editor regression red on old sources.
+- [x] 1.1 Add bounded, event-refreshed card and integrate saved editors. - 7cc967fe
+- [x] 1.2 Cover recent launches, filtering, metadata fallbacks, loading/errors/actions/events and editor integration; prove the editor regression red on old sources. - 7cc967fe (28 targeted tests pass; regression failed on original editor)
 
 ### Phase 2: Verification
 - [ ] 2.1 Run configured gate, full review/autofix and real-browser QA; publish evidence and release claims with ready/review/unassigned PRs.
+
