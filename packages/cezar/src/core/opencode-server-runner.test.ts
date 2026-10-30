@@ -798,3 +798,41 @@ describe('a session.status retry the turn cannot outwait', () => {
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
   }, 30_000);
 });
+
+/** #1652: OpenCode's native `question` tool blocks the session until /question/:id/reply. */
+describe('#1652 a native question.asked', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('shows an ask card and sends the next message back as the answer', async () => {
+    const asks: Array<{ requestId: string; questions: Array<{ header: string; options: unknown[] }> }> = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: 'pick one #question', cwd: process.cwd() },
+      () => undefined,
+      {
+        autoEndAfterFirstTurn: true,
+        onUiEvent: (e) => {
+          if (e.type === 'ask.requested') {
+            asks.push(e as never);
+            session.sendMessage([{ type: 'text', text: 'Approach: Approach B' }]);
+          }
+        },
+      },
+    );
+    const result = await session.result;
+    expect(asks).toHaveLength(1);
+    expect(asks[0]?.questions[0]).toMatchObject({ header: 'Approach' });
+    expect(asks[0]?.questions[0]?.options).toHaveLength(2);
+    expect(result.text).toContain('question answered {"answers":[["Approach B"]]}');
+  }, 30_000);
+
+  it('rejects a question the card cannot show, so the session is not left blocked', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: 'pick one #question-free', cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    expect(result.text).toContain('question rejected');
+  }, 30_000);
+});
