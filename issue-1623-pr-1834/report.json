@@ -1,0 +1,195 @@
+﻿{
+    "mode":  "pr",
+    "runId":  "issue-1623",
+    "environment":  {
+                        "startedByThisRepo":  true,
+                        "baseUrl":  "http://127.0.0.1:58093",
+                        "browserProvider":  "agent-browser 0.41.0 / Chrome156",
+                        "role":  "local demo"
+                    },
+    "verdict":  "PASS",
+    "scenario":  [
+                     {
+                         "action":  "Cold open saved paused automation with no launches",
+                         "step":  1,
+                         "screenshot":  "step-01-empty-dark.png",
+                         "observed":  "No runs launched yet; Run now and View log visible",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Useful shell, Recent runs empty state and both actions"
+                     },
+                     {
+                         "action":  "Run now from editor; launch five more through cockpit CLI",
+                         "step":  2,
+                         "screenshot":  "step-02-five-runs-dark.png",
+                         "observed":  "Six real dry-run launches; five semantic list rows, live queued/running/needs-you status and ages",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Five newest tasks, older sixth retained in full log"
+                     },
+                     {
+                         "action":  "Focus newest task link and press Enter",
+                         "step":  3,
+                         "screenshot":  "step-03-keyboard-task-link.png",
+                         "observed":  "Navigated to /p/demo-repo/tasks/4b15e509-7161-478c-b608-ba1aac27c66a",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Project-scoped task navigation by keyboard"
+                     },
+                     {
+                         "action":  "Return and use View log",
+                         "step":  4,
+                         "screenshot":  "step-04-full-log.png",
+                         "observed":  "Navigated to saved automation /log with all six Open task rows",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Full execution history remains reachable"
+                     },
+                     {
+                         "action":  "Apply long task title through demo API; switch system theme to light",
+                         "step":  5,
+                         "screenshot":  "step-05-five-runs-light.png",
+                         "observed":  "Full title in accessible link/title; dark and light layouts readable",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Text truncates within rail; full title accessible; theme preserved"
+                     },
+                     {
+                         "action":  "Set 390x844 viewport and scroll card into view",
+                         "step":  6,
+                         "screenshot":  "step-07-mobile-card.png",
+                         "observed":  "Measured viewport390/page390, five rows; full title retained",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Stacked card, reachable links/actions, no horizontal overflow"
+                     },
+                     {
+                         "action":  "Delay only log fetch eight seconds in browser fixture then open fresh saved automation",
+                         "step":  7,
+                         "screenshot":  "step-11-card-loading.png",
+                         "observed":  "Loading recent runs visible beside Run now and View log",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Card-local loading while editor/actions remain usable"
+                     },
+                     {
+                         "action":  "Respond403 to controlled browser log request",
+                         "step":  8,
+                         "screenshot":  "step-12-forbidden.png",
+                         "observed":  "Could not load recent runs with Retry, Run now, View log and Save changes",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Local error with retry; editor and actions retained"
+                     },
+                     {
+                         "action":  "Restore real fetch and click Retry",
+                         "step":  9,
+                         "screenshot":  "step-13-forbidden-recovered.png",
+                         "observed":  "No runs launched yet returned and error cleared",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Recover without leaving editor"
+                     },
+                     {
+                         "action":  "Abort log refresh after another real launch on a populated card",
+                         "step":  10,
+                         "screenshot":  "step-14-cached-refresh-error.png",
+                         "observed":  "Could not refresh recent runs, five existing rows and actions remained; retry recovered",
+                         "result":  "PASS",
+                         "priority":  "P1",
+                         "expected":  "Keep cached rows with refresh warning and Retry"
+                     }
+                 ],
+    "notes":  [
+                  "Production-built branch; separate dry-run demo git repo and CEZ_HOME. No automation enabled.",
+                  "Loading and403 frontend states use controlled same-origin browser fetch injection; network-error scenarios use agent-browser interception.",
+                  "No new browser test committed; component/editor tests28/28 passed and regression red/green proven.",
+                  "Evidence only: needs-qa remains and author QA approval withheld.",
+                  "Browser/server stopped. Private harness cleared inherited task env after removing two dry-run mock progress entries from this task handoff. No application source or real user workspace state changed.",
+                  "Final-head cold-load recheck PASS at5cb1a586; only tracking-plan documentation differs from full-matrix8034cd23, runtime sources identical."
+              ],
+    "target":  {
+                   "branch":  "feat/issue-1623-recent-automation-runs",
+                   "prNumber":  1834,
+                   "title":  "Recent tasks on automation details",
+                   "headSha":  "5cb1a586540d5e84be10070040444431db29714d"
+               },
+    "screenshots":  [
+                        {
+                            "sha256":  "549BFE4546A9D8AB82FBE5746299FC9F32B3BB92F2D9E51B2036966C6EDA129F",
+                            "file":  "step-01-empty-dark.png",
+                            "bytes":  128810
+                        },
+                        {
+                            "sha256":  "0BEFAE84700FE63C43844094F84BAACE75FBDB3D529751B2920FCDEE02A60065",
+                            "file":  "step-02-five-runs-dark.png",
+                            "bytes":  149977
+                        },
+                        {
+                            "sha256":  "3164871B8B2B00D55EF12920C36D036FD8A1AAB8FA6B4F62EDEBC1BFDDCF1EFC",
+                            "file":  "step-03-keyboard-task-link.png",
+                            "bytes":  140840
+                        },
+                        {
+                            "sha256":  "998E837DE46BDA9D9E09BCE0697BD71ED190F9FD5F350AC5DDA3D5CF248FF0F5",
+                            "file":  "step-04-full-log.png",
+                            "bytes":  75481
+                        },
+                        {
+                            "sha256":  "10E821202F5A7C0CBA13CA0611F0511D914647B6D8EDB4C815790838F1A7D408",
+                            "file":  "step-05-five-runs-light.png",
+                            "bytes":  149665
+                        },
+                        {
+                            "sha256":  "07C84B14E4EFEE30CBA721EE917E2E4C73A328C562DB9E97F911EE9FD5B9FD00",
+                            "file":  "step-06-mobile-light.png",
+                            "bytes":  50279
+                        },
+                        {
+                            "sha256":  "5715C4FAFCBC00988DA404DB70014A86AADB9E332E3213A117D79BB2DFF73654",
+                            "file":  "step-07-mobile-card.png",
+                            "bytes":  56411
+                        },
+                        {
+                            "sha256":  "9FCD113D2066724C9ED972519A37F7C833392C8286AD2BE3FF7A3731C5DBD8F7",
+                            "file":  "step-08-loading.png",
+                            "bytes":  40729
+                        },
+                        {
+                            "sha256":  "26BF05A94B30AC99BB87DE33CA2466B243378970D1206DDE63231BF0D3D34333",
+                            "file":  "step-09-log-error.png",
+                            "bytes":  130513
+                        },
+                        {
+                            "sha256":  "8F9F2F670BEFE5AB979490B8F737A11C68E2D7CAC0A18BE012F44B18B8934DBB",
+                            "file":  "step-10-recovered.png",
+                            "bytes":  149041
+                        },
+                        {
+                            "sha256":  "482158A7F80605C738A8A4FD13044974A60E20278CC0D7435DD2E2F24AD23D81",
+                            "file":  "step-11-card-loading.png",
+                            "bytes":  128225
+                        },
+                        {
+                            "sha256":  "72FC5787AD5F4B798AEF7FB4D7641CED5EF8DBD14CB47D10ACA10070C9452319",
+                            "file":  "step-12-forbidden.png",
+                            "bytes":  129304
+                        },
+                        {
+                            "sha256":  "207B4BEDFFA1479561EE82C7EC70295EBB55EC909A8080C90C5EFFDB76D2C446",
+                            "file":  "step-13-forbidden-recovered.png",
+                            "bytes":  128334
+                        },
+                        {
+                            "sha256":  "780B0E34BC7B52E7D060585CE41CD9EBE5F2D50DD478FE9DCAFB06EFAA6D008D",
+                            "file":  "step-14-cached-refresh-error.png",
+                            "bytes":  152583
+                        },
+                        {
+                            "sha256":  "A209ABF92A0F89B83D5A11D8AB663E3FAE89A17A0CC148A7931455CB26E146B1",
+                            "file":  "step-15-final-head.png",
+                            "bytes":  146812
+                        }
+                    ],
+    "hasUiTest":  false
+}
