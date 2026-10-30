@@ -17,7 +17,7 @@ Issue-only Queue fix and bounded selected-row launch through the installed fix s
 
 ## Implementation Plan / Progress
 
-- [ ] 1.1 Scoped creator, selection/launch controller and exact-request/partial-result tests.
+- [x] 1.1 Scoped creator, selection/launch controller and exact-request/partial-result tests (7 focused cases; web typecheck passes).
 - [ ] 1.2 Accessible row controls, selected-count toolbar and confirmation; wire ordinary/search/virtualized issue rows without PR/navigation regressions.
 - [ ] 2.1 Prove original-code regression failure, run configured gate and code-review/autofix until source and exact-head CI pass.
 - [ ] 2.2 Real-browser QA/state matrix, inline screenshots/report, owner-review handoff: non-draft/unassigned/review/needs-qa, no author QA approval.
