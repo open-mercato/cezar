@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,8 +10,13 @@ import {
   createWorktree,
   parseShortstat,
   pruneOrphans,
+  realIndexPathCount,
   resolveBaseRef,
   uniqueBranchName,
+  withScratchIntentToAddIndex,
+  worktreeDiff,
+  worktreeDiffStat,
+  worktreeChangedFiles,
   worktreeChangedPaths,
   worktreeShortstat,
   worktreeSizeBytes,
@@ -197,6 +202,88 @@ describe('createWorktree recovery (real git)', () => {
   });
 });
 
+describe('worktreeDiff / worktreeDiffStat / worktreeShortstat leave the index alone (real git)', () => {
+  it('list an untracked file without staging it into the worktree index', async () => {
+    const root = await fixtureRepo('cez-wt-readdiff-');
+    writeFileSync(join(root, 'base.txt'), 'edited\n');
+    writeFileSync(join(root, 'new.txt'), 'untracked\n');
+    const indexBefore = readFileSync(join(root, '.git', 'index'));
+
+    const diff = await worktreeDiff(root, 'main');
+    const stat = await worktreeDiffStat(root, 'main');
+    const shortstat = await worktreeShortstat(root, 'main');
+
+    expect(diff).toContain('+untracked');
+    expect(diff).toContain('+edited');
+    expect(stat).toContain('new.txt');
+    expect(shortstat?.files).toBe(2);
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(indexBefore);
+    const { stdout } = await run('git', ['status', '--porcelain', 'new.txt'], { cwd: root });
+    expect(stdout.startsWith('??')).toBe(true);
+  });
+
+  /** HEAD repointed onto a review branch, dated before the run, with `tracked.txt` backdated so
+   *  its recorded stat is stale: any `git diff` against the real index then rewrites it. */
+  async function repointedRepoWithStaleIndex(): Promise<string> {
+    const root = mkdtempSync(join(tmpdir(), 'cez-wt-repointed-index-'));
+    worktreeRoots.push(root);
+    const at = { env: { ...process.env, GIT_COMMITTER_DATE: '2026-01-01T00:00:00Z', GIT_AUTHOR_DATE: '2026-01-01T00:00:00Z' } };
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    await run('git', [...GIT_ID, 'commit', '-q', '--allow-empty', '-m', 'root'], { cwd: root, ...at });
+    writeFileSync(join(root, 'tracked.txt'), 'a\n');
+    await run('git', ['add', '-A'], { cwd: root });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: root, ...at });
+    await run('git', ['checkout', '-q', '-b', 'review/pr-42'], { cwd: root, ...at });
+    writeFileSync(join(root, 'theirs.txt'), 'belongs to the reviewed PR\n');
+    await run('git', ['add', '-A'], { cwd: root });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'reviewed change'], { cwd: root, ...at });
+    const staleTime = new Date(Date.now() - 600_000);
+    utimesSync(join(root, 'tracked.txt'), staleTime, staleTime);
+    return root;
+  }
+  const REPOINTED = { taskBranch: 'cez/task1234', runStartedAt: '2026-06-01T00:00:00Z' };
+
+  it('worktreeShortstat leaves the real index untouched on a repointed HEAD', async () => {
+    const root = await repointedRepoWithStaleIndex();
+    const indexBefore = readFileSync(join(root, '.git', 'index'));
+
+    const stat = await worktreeShortstat(root, 'main', REPOINTED);
+
+    expect(stat?.repointed).toBe(true);
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(indexBefore);
+  });
+
+  it('worktreeChangedFiles lists an untracked file without writing the real index', async () => {
+    const root = await repointedRepoWithStaleIndex();
+    writeFileSync(join(root, 'untracked.txt'), 'u\n');
+    const indexBefore = readFileSync(join(root, '.git', 'index'));
+
+    const files = await worktreeChangedFiles(root, 'main', REPOINTED);
+
+    expect(files).toContain('untracked.txt');
+    expect(readFileSync(join(root, '.git', 'index'))).toEqual(indexBefore);
+    const { stdout } = await run('git', ['ls-files', '--', 'untracked.txt'], { cwd: root });
+    expect(stdout.trim()).toBe('');
+  });
+});
+
+describe('withScratchIntentToAddIndex (real git)', () => {
+  it('remembers a bounded number of worktree index paths', async () => {
+    const root = await fixtureRepo('cez-wt-indexpaths-');
+    const links = mkdtempSync(join(tmpdir(), 'cez-wt-indexpaths-links-'));
+    try {
+      for (let i = 0; i < 80; i++) {
+        const alias = join(links, `wt${i}`);
+        symlinkSync(root, alias);
+        await withScratchIntentToAddIndex(alias, async () => undefined);
+      }
+      expect(realIndexPathCount()).toBeLessThanOrEqual(64);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 describe('uniqueBranchName (spec 2026-10-11-branch-naming-instructions, real git)', () => {
   const runId = '77777777-7777-4777-8777-777777777777';
 
@@ -270,8 +357,6 @@ describe('worktreeShortstat (real git)', () => {
   it('answers all zeros for a clean tree, not null', async () => {
     await run('git', ['checkout', '-q', '--', '.'], { cwd: repo });
     rmSync(join(repo, 'new.txt'), { force: true });
-    // Drop the intent-to-add entry the previous test staged.
-    await run('git', ['reset', '-q'], { cwd: repo });
     const stat = await worktreeShortstat(repo, 'main');
     expect(stat).toEqual({ adds: 0, dels: 0, files: 0 });
   });

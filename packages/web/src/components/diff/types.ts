@@ -27,6 +27,9 @@ export interface DiffFileChange {
   /** This file's unified-diff section (`diff --git …` headers + `@@` hunks), possibly
    *  ending in the server's `… (patch truncated)` marker, possibly empty (metadata-only). */
   patch: string
+  /** The server dropped `patch` to keep the whole payload under its size cap — the file did
+   *  change, so an empty `patch` here does NOT mean metadata-only. */
+  patchOmitted?: true
 }
 
 export type DiffMode = 'unified' | 'split'

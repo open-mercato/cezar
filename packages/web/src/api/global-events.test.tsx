@@ -651,8 +651,98 @@ describe('useGlobalEvents — run events', () => {
 
     source.emit('run', stampedRun(runRecord('r1', { status: 'done' })))
     await flushRunEvents()
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1_500))
+    })
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.changes('r1') })
+  })
+
+  it('refetches an open Changes tab at most once per window during a chatty step', async () => {
+    vi.useFakeTimers()
+    client.setQueryData(queryKeys.runs.changes('r1'), { files: [], stat: { adds: 0, dels: 0, files: 0 } })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+    const changesCalls = () =>
+      invalidate.mock.calls.filter(([filters]) => JSON.stringify(filters?.queryKey) === JSON.stringify(queryKeys.runs.changes('r1'))).length
+
+    for (let tick = 0; tick < 120; tick++) {
+      source.emit('run', stampedRun(runRecord('r1', { status: 'running', tokensUsed: tick })))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
+    }
+    expect(changesCalls()).toBeGreaterThanOrEqual(20)
+    expect(changesCalls()).toBeLessThanOrEqual(40)
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'done', tokensUsed: 999 })))
+    const before = changesCalls()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_600)
+    })
+    expect(changesCalls()).toBeGreaterThan(before)
+  })
+
+  it('refetches an open commit list on a state change, not on every record update', async () => {
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r1', { status: 'running', tokensUsed: 1 })])
+    client.setQueryData(queryKeys.runs.commits('r1'), { commits: [] })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'running', tokensUsed: 50 })))
+    await flushRunEvents()
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.runs.commits('r1') })
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'done', tokensUsed: 60 })))
+    await flushRunEvents()
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.commits('r1') })
+  })
+
+  const BUILD_STEPS: RunRecord['steps'] = [
+    { id: 'build', name: 'build', kind: 'agent', status: 'running', iterations: 1, tokensUsed: 0 },
+  ]
+
+  it('compares a slim frame, which carries no steps, by the step state it merges onto', async () => {
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [
+      runRecord('r1', { status: 'running', currentStepId: 'build', steps: BUILD_STEPS, tokensUsed: 1 }),
+    ])
+    client.setQueryData(queryKeys.runs.commits('r1'), { commits: [] })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+    const commits = { queryKey: queryKeys.runs.commits('r1') }
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'running', currentStepId: 'build', tokensUsed: 50 })))
+    await flushRunEvents()
+    expect(invalidate).not.toHaveBeenCalledWith(commits)
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'running', currentStepId: 'test', tokensUsed: 60 })))
+    await flushRunEvents()
+    expect(invalidate).toHaveBeenCalledWith(commits)
+
+    invalidate.mockClear()
+    source.emit('run', slimRun(runRecord('r1', { status: 'done', currentStepId: 'test', tokensUsed: 70 })))
+    await flushRunEvents()
+    expect(invalidate).toHaveBeenCalledWith(commits)
+  })
+
+  it('takes the detail cache as the baseline when the list holds no row, and refetches with no baseline at all', async () => {
+    client.setQueryData<ApiRun>(queryKeys.runs.detail('r1'), runRecord('r1', { status: 'running', steps: BUILD_STEPS, tokensUsed: 1 }))
+    client.setQueryData(queryKeys.runs.commits('r1'), { commits: [] })
+    client.setQueryData(queryKeys.runs.commits('r2'), { commits: [] })
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'running', tokensUsed: 50 })))
+    await flushRunEvents()
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.runs.commits('r1') })
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'done', tokensUsed: 60 })))
+    await flushRunEvents()
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.commits('r1') })
+
+    source.emit('run', slimRun(runRecord('r2', { status: 'running' })))
+    await flushRunEvents()
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.commits('r2') })
   })
 
   it('does not invalidate a changes cache nobody opened — no background diff fetch', () => {

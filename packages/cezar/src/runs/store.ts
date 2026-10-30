@@ -2203,6 +2203,7 @@ export class RunStore extends EventEmitter {
       // local snapshot so future unchanged fields still defer to the latest persisted value.
       for (const [id, run] of this.runs) this.persisted.set(id, JSON.stringify(run));
     } catch (err) {
+      rmSync(tmpPath, { force: true });
       if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
