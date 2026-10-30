@@ -46,7 +46,13 @@ Protected HTTP/state/workflow/runner surfaces need optional additive fields and 
 ### Phase 3: Consistent picker and release evidence
 
 - [x] 3.1 Share compatibility and access picker rules across New Task, Inbox/GitHub and Continue. - 728433d6, 7152309a
-- [ ] 3.2 Prove regression red/green; run gates, review/autofix and actual-browser QA.
+- [x] 3.2 Prove regression red/green; run gates, review/autofix and actual-browser QA. - 86cfa33a, 440cce50, 36582bf2
 
-Core 33 passed / 21 skipped; lifecycle 7/7. Parent boundary integration 7152309a corrected all 8 HTTP/3 component regression failures: the complete focused boundary/picker selection is now 197/197. Main merged at 75a2dc01. Installed Codex 0.164.0 model/list returned per-model standard/Blue capability metadata without a model turn; this is not proof of entitlement. Private real-browser preliminary picker/unknown-metadata checks captured; ordered final gates, review and final-head QA remain in progress.
+Implementation PR #1856; design-only spec PR #1855. Main merged at 75a2dc01. All source findings from om-auto-review-pr --autofix were corrected. In particular, missing catalog models now fail closed without crashing other backends, and account/mode mismatches leave the shared controls usable. Both catalog regressions were proved red without their source fixes and green after restoration.
+
+Validation: focused boundary/picker 197/197; capability/wire/lifecycle 33 pass with 21 unrelated cases filtered; lifecycle restart/Continue 7/7; draft/typed-route 53/53; affected CI screens/guidance/tracker 126/126 and Changes tab 44/44. Full typecheck passes after autofix. Ordered local gate: typecheck PASS; Vitest TIMEOUT at 300s with existing Windows failures and no completed total; core-unit 45 pass / 2 fail / 1 skip (mkdir and /bin/sh ENOENT); build/check:pack PASS; package 33/33 PASS. These Windows limits are not concealed or described as green.
+
+Supported-platform source-head CI is green at 36582bf2: https://github.com/open-mercato/cezar/actions/runs/41131759853, including all three Vitest shards and Ubuntu/macOS/Windows jobs. The final tracking-only commit's head is checked separately in the PR/task report.
+
+Real-browser evidence (12 screenshots): https://github.com/open-mercato/cezar/pull/1856#issuecomment-6534426151. New Task, two Blue models, explicit Standard, Continue Native clearing, account mismatch/recovery, unknown/cached/empty/loading catalogs, narrow long content and Inbox launch were exercised. Evidence is PARTIAL because a paid/live Blue turn and full real-forge GitHub handoff were not exercised; fixture wire and boundary tests cover the plumbing. No entitlement/credential mutation or paid/live Blue turn occurred. The installed Codex 0.164.0 protocol and read-only catalog metadata were verified; metadata is not proof of entitlement. Own demo/browser processes stopped. Independent review and human QA remain required; no author approval or qa-approved label.
 
