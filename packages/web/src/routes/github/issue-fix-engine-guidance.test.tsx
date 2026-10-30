@@ -4,8 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { IssueFixListProvider, IssueFixListToolbar } from './issue-fix-actions'
 
 const state = vi.hoisted(() => ({ providerError: false, runners: ['codex'] as string[] }))
-vi.mock(import('@/api/queries'), async importOriginal => ({
-  ...await importOriginal(),
+vi.mock('@/api/queries', async importOriginal => ({
+  ...await importOriginal<typeof import('@/api/queries')>(),
   useSkills: () => ({ isPending: false, isError: false, data: [{ name: 'om-auto-fix-issue' }] }),
 }))
 vi.mock('@/components/engine-pills', () => ({
