@@ -23,7 +23,7 @@ import {
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
   terminalResizeSchema, terminalSessionParamsSchema, terminalSessionSchema, terminalStateSchema,
 } from '@open-mercato/cezar-contract';
-import { runsListQuerySchema, workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
+import { runsListQuerySchema, workspaceEventsQuerySchema, workspaceLayoutsResponseSchema, workspaceLayoutsSchema } from '@open-mercato/cezar-contract';
 import type { GithubLoginState, InitProjectGitResponse, PublishProjectGithubResponse, RepoSuggestionsResponse } from '@open-mercato/cezar-contract';
 import { publishProjectGithubInputSchema } from '@open-mercato/cezar-contract';
 import { deleteRunLayouts, readRunLayouts, writeRunLayouts } from '../runs/layouts.ts';
@@ -6560,7 +6560,10 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: workspace SSE stream (workspace-level) ----
   const workspaceEventsRoutes = new Hono<ProjectApiEnv>()
-    .get('/workspace/events', (c) => {
+    .get('/workspace/events', queryZodValidator(workspaceEventsQuerySchema), (c) => {
+      // Pre-0.17 bundles replace a cached row with the frame wholesale, so only a client that
+      // asks for the slim frame gets it (#1848).
+      const slim = c.req.valid('query').slim === '1';
       return streamSSENoBuffer(c, async (stream) => {
         // One detach bundle per attached project — the id guard makes a double
         // attach (connect-time snapshot vs. the built hook) impossible.
@@ -6584,7 +6587,7 @@ export function createApp(deps: ServerDeps) {
           // watcher — and each subscription is scoped to its own dataDir (2.3).
           const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
           const offRun = onRunFrames(store, (_run, frames) =>
-            void stream.writeSSE({ event: 'run', data: frames.workspace(project) }),
+            void stream.writeSSE({ event: 'run', data: frames.workspace(project, slim) }),
           );
           const offLifecycle = ctx.manager.lifecycle?.onChange(event => {
             const payload: WorktreeLifecycleInvalidation = { ...event, projectId: project };
