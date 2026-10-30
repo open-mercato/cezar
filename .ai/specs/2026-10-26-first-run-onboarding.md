@@ -266,6 +266,35 @@ The same four ideas, in pictures, sit behind **How it works** in the page header
 the "What's new" shape: picture, title, one sentence, page dots), for someone who already has
 automations. Nothing is stored for it; it is a door, not a tour.
 
+### Automations editor
+
+Status: implemented (2026-10-30). `packages/web/src/routes/automations/editor.tsx`,
+`editor-sentence.ts`, `editor-github-fields.tsx`; `SelectTile` and `OnboardingStepRail` in the kit.
+
+`/automations/new` and `/automations/:id` used to be four dense cards beside a rail of previews:
+a name box first, a segmented kind switch, raw event ids in mono chips, filters folded away,
+the prompt's placeholders listed only as placeholder text, and an "Enabled" switch with a
+technical note. The form keeps every field and every data-slot and reads differently:
+
+- **One column that reads as a sentence.** Under the header (unchanged: Back, title, templates,
+  Cancel, Save) sits a three-step rail — When · What · Go live — ticked as the form fills in
+  (`railSteps`), then the name as a large light line (`Name this automation`), then the three
+  parts split by hairlines, each with a light title and one line on why.
+- **When.** The trigger is three `SelectTile`s (picture, title, one line; the chosen one wears
+  the violet wash; a locked or unavailable one is dimmed with the reason as its tooltip), then
+  the trigger's own fields, then the next-runs preview inline where the schedule is, not in a
+  side rail. GitHub events read as sentences — "A pull request opens", "An issue gets a label" —
+  with the event id as small print and as the chip's accessible name; the poll line is a
+  sentence; Filters says how many are set and that names in the prompt do not narrow anything.
+- **What the agent does.** An "Insert" row of the placeholders this trigger fills in
+  (`PLACEHOLDERS`), put in at the caret with a click; the prompt in the composer's shape; the
+  prompt templates, the run-as pills, the dispatch row as before.
+- **Go live.** A readback line in plain words — "Every day at 04:00: a quick task on the
+  default agent, autonomous." (`draftSentence`) — above the Enabled switch, whose sentence says
+  what enabling means for this trigger. Copy as CLI, Preview saved matches and the last run
+  sit under it.
+- The template palette, when open, sits above the three parts with one line inviting either way in.
+
 ## Not in phase 1
 
 - "Watch a demo run" on the mock agent — needs a server-side way to run one task on the mock

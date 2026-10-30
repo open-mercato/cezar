@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowRightIcon } from 'lucide-react'
+import { ArrowRightIcon, CheckIcon } from 'lucide-react'
 import * as React from 'react'
 
 import { putWorkspaceUiState } from '@/api/client'
@@ -282,6 +282,91 @@ export function ChoiceTile({
         <span className="text-[12.5px] text-muted-foreground">{description}</span>
       </span>
     </button>
+  )
+}
+
+/**
+ * A selectable tile in a row of choices (the automation editor's trigger): a picture, a title,
+ * one line. Selected wears the violet wash. The accessible name is the title alone, so a test or
+ * a screen reader names the choice, not its description.
+ */
+export function SelectTile({
+  title,
+  description,
+  picture,
+  value,
+  selected,
+  disabled = false,
+  reason,
+  onClick,
+}: {
+  title: string
+  description: string
+  picture: React.ReactNode
+  value: string
+  selected: boolean
+  disabled?: boolean
+  /** Why it cannot be chosen — the tooltip of a disabled tile. */
+  reason?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      data-value={value}
+      aria-pressed={selected}
+      aria-label={title}
+      disabled={disabled}
+      title={reason}
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors disabled:opacity-50',
+        selected ? 'onboarding-announcement border-violet/60' : 'border-border bg-card hover:border-muted-foreground',
+      )}
+    >
+      <span className="grid size-12 shrink-0 place-items-center" aria-hidden="true">
+        {picture}
+      </span>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-[15px] text-foreground">{title}</span>
+        <span className="text-[12px] text-muted-foreground">{description}</span>
+      </span>
+    </button>
+  )
+}
+
+export type RailState = 'done' | 'current' | 'next'
+
+/** A thread of steps with the ones behind the current one ticked: a rail, not a wizard. */
+export function OnboardingStepRail({ steps }: { steps: ReadonlyArray<{ id: string; label: string; state: RailState }> }) {
+  return (
+    <ol data-slot="step-rail" className="flex items-center gap-2 text-[12.5px]">
+      {steps.map((step, i) => (
+        <li key={step.id} data-step={step.id} data-state={step.state} className="flex items-center gap-2">
+          {i > 0 ? <span className={cn('h-px w-6', step.state === 'next' ? 'bg-border' : 'bg-violet/60')} aria-hidden="true" /> : null}
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5',
+              step.state === 'current' ? 'text-foreground' : step.state === 'done' ? 'text-muted-foreground' : 'text-soft-foreground',
+            )}
+          >
+            <span
+              className={cn(
+                'grid size-5 place-items-center rounded-full border font-mono text-[10px]',
+                step.state === 'done' && 'border-violet/60 bg-violet/15 text-violet',
+                step.state === 'current' && 'border-violet text-foreground',
+                step.state === 'next' && 'border-border text-soft-foreground',
+              )}
+              aria-hidden="true"
+            >
+              {step.state === 'done' ? <CheckIcon className="size-3" /> : i + 1}
+            </span>
+            {step.label}
+            {step.state === 'current' ? <span className="sr-only">(current step)</span> : null}
+          </span>
+        </li>
+      ))}
+    </ol>
   )
 }
 

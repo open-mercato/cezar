@@ -163,6 +163,24 @@ describe('AutomationEditor — new', () => {
     expect(saveButton().textContent).toContain('Save and enable')
   })
 
+  it('reads the form back as a sentence, ticks the rail as it fills in, and inserts a placeholder at the caret', () => {
+    stubFetch()
+    renderEditor()
+    const summary = () => document.querySelector('[data-slot="editor-summary"]')?.textContent
+    const rail = () => [...document.querySelectorAll('[data-slot="step-rail"] li')].map((step) => step.getAttribute('data-state'))
+    expect(summary()).toBe('Every day at 04:00: a quick task on the default agent, autonomous.')
+    expect(rail()).toEqual(['done', 'current', 'next'])
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Summarize' } })
+    expect(rail()).toEqual(['done', 'done', 'current'])
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Daily digest' } })
+    expect(rail()).toEqual(['done', 'done', 'done'])
+    fireEvent.click(screen.getByRole('button', { name: '{{date}}' }))
+    expect((screen.getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe('Summarize {{date}}')
+    fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
+    expect(screen.getByRole('button', { name: '{{github.url}}' })).not.toBeNull()
+    expect(summary()).toBe('On issue.opened · every 5 min: a quick task on the default agent, autonomous.')
+  })
+
   it('opens on the trigger the explainer tile named, with the palette closed (spec 2026-10-26 § Automations)', () => {
     stubFetch()
     renderEditor({ initialKind: 'tracker' })
@@ -224,7 +242,9 @@ describe('AutomationEditor — new', () => {
     const sent = stubFetch()
     const { onSaved } = renderEditor()
     fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
-    expect(screen.getByText('How it polls')).not.toBeNull()
+    // The poll explains itself in a sentence where the interval is; no side card (spec 2026-10-26 § Automations editor).
+    expect(document.querySelector('[data-slot="editor-github-how"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="next-runs-preview"]')).toBeNull()
     expect(screen.getByText(/from a current-time baseline/)).not.toBeNull()
     fillRequired('Triage', 'Read {{github.url}}')
     fireEvent.click(screen.getByRole('button', { name: 'issue.labeled' }))
