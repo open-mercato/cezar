@@ -297,6 +297,13 @@ technical note. The form keeps every field and every data-slot and reads differe
   what enabling means for this trigger. Copy as CLI, Preview saved matches and the last run
   sit under it.
 - The template palette, when open, sits above the three parts with one line inviting either way in.
+- **The name is a form field.** A borderless light line read as a heading, and nobody typed into
+  it; it is a labelled input in the strip (`Name`, placeholder `Nightly dependency bump`).
+- **One face in the pill row.** The composer's pills come from several components — a mono,
+  semibold skill chip, a mono base branch, a bold project pill — and side by side read as four
+  typefaces. On an onboarding surface (`/new`, the editor's run-as row) one unlayered rule in
+  `index.css` sets them all to the sans face at regular weight; hierarchy comes from size and
+  the violet accent.
 
 ## Not in phase 1
 

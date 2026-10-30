@@ -636,6 +636,17 @@
     var(--card);
 }
 
+/* One face for the pill row on an onboarding surface (`/new`, the automation editor): the
+ * composer's pills come from several components — a mono, semibold skill chip, a mono base
+ * branch, a bold project pill — and side by side they read as four typefaces. Hierarchy here
+ * comes from size and the violet accent, never from weight or a second family (spec
+ * 2026-10-26-first-run-onboarding § Palette). Unlayered on purpose: it must outrank the
+ * utilities on the pills. Inputs keep their own face. */
+[data-onboarding] :is([data-slot='composer-footer-start'], [data-slot='editor-run-as']) :is(button, button *, [data-slot$='-pill'], [data-slot$='-pill'] *) {
+  font-family: var(--font-sans);
+  font-weight: 400;
+}
+
 /* ---------- composer tips (spec 2026-10-26-first-run-onboarding, § Composer tips) ----------
  * The card under the composer points at the control it explains (`.composer-tip-arrow`, placed by
  * measurement) and rings it (`.composer-tip-halo`). The pictures move once, a little: rows rise

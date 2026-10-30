@@ -11,6 +11,7 @@ import { GithubIcon } from '@/components/icons'
 import { OnboardingStepRail, SelectTile } from '@/components/onboarding-kit'
 import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
@@ -237,13 +238,18 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
             data-slot="editor-strip"
             className="sticky top-14 z-10 flex w-full flex-wrap items-center gap-x-6 gap-y-1.5 border-b border-border bg-background/95 py-2.5 backdrop-blur max-md:static"
           >
-            <input
-              aria-label="Name"
-              placeholder={editing ? 'Name' : 'Name this automation'}
-              value={draft.name}
-              onChange={(event) => patch({ name: event.target.value })}
-              className="min-w-0 flex-1 bg-transparent text-xl font-light tracking-tight text-foreground outline-none placeholder:text-soft-foreground"
-            />
+            {/* A plain form field, not a heading that happens to be editable: a borderless line
+                read as a title, and nobody typed into it. */}
+            <div className="flex min-w-0 flex-1 items-center gap-3 max-md:basis-full">
+              <span className="shrink-0 text-[13px] text-muted-foreground" aria-hidden="true">Name</span>
+              <Input
+                aria-label="Name"
+                placeholder="Nightly dependency bump"
+                value={draft.name}
+                onChange={(event) => patch({ name: event.target.value })}
+                className="h-9 w-full max-w-md text-[15px] md:text-[15px]"
+              />
+            </div>
             <OnboardingStepRail steps={rail} />
           </div>
 
