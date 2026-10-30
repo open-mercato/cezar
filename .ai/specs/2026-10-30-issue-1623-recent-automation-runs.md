@@ -25,6 +25,7 @@ A more visible View log alone would still require leaving the editor to compare 
 - Add a recent-runs component and tests under packages/web/src/routes/automations; editor.tsx mounts it only for a saved automation.
 - Reuse getAutomationLog and the existing [queryScope(), 'automation-log', automationId] cache key. The response is AutomationLogResponse from the shared contract: records plus runs metadata. No new route, type, storage, dependency, environment variable or migration.
 - Follow AutomationLog's onWorkspaceEvent subscription and invalidate only the matching automation on automation-change. Clean up on unmount; no refetchInterval or additional connection. Refetch on normal query focus/reconnect policy.
+- Read the existing useRuns cache through a selector limited to the five displayed tasks: shared SSE patches update title/status/cost without polling the log on token updates. The shell already uses this cache; log metadata remains the fallback when a task is absent or the run read fails.
 - Reuse project-router Link for task links, StatusDot, statusLabel/statusTone, shortAge, usd, Card and Button. Add no global mechanism.
 - Run now retains the saved definition and existing actions.runNow behavior, including paused schedules; View log retains its existing callback.
 
@@ -55,3 +56,4 @@ Low risk: an additive UI read and detail-card replacement. Existing log/task rou
 2. Add uniquely named recent-runs tests for multiple launch kinds, non-launch filtering, cap/dedup/order, metadata fallback, project links, empty/loading/error/retry, actions and event cleanup. Verify an editor-level test fails against the old editor.
 ### Phase 2: Verification and publication
 3. Run the configured five-command gate, documenting any independently confirmed platform baseline failures. Review with om-auto-review-pr --autofix and exercise the real browser with om-auto-qa-pr. Publish an independent implementation PR with Closes #1623, link this design-only PR and leave it unassigned, ready and review-labelled with needs-qa.
+
