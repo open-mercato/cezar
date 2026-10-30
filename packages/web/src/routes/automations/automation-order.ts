@@ -1,5 +1,6 @@
 import {
   AUTOMATION_ORDER_LIMIT,
+  automationScheduleSchema,
   nextOccurrence,
   type AutomationListEntry,
   type AutomationListPreferences,
@@ -27,10 +28,21 @@ export function normalizeAutomationOrder(value: unknown): AutomationOrder {
 /** Shared by the display and sort so unavailable instants cannot disagree (#1819). */
 export function nextAutomationRun(automation: AutomationListEntry, timeZone: string, now: number): number | null {
   if (!automation.enabled || automation.kind !== 'schedule') return null
-  const value = automation.nextRunAt !== undefined
-    ? Date.parse(automation.nextRunAt)
-    : automation.schedule ? nextOccurrence(automation.schedule, now, timeZone) : null
-  return value !== null && Number.isFinite(value) ? value : null
+  if (automation.nextRunAt !== undefined) {
+    const value = Date.parse(automation.nextRunAt)
+    return Number.isFinite(value) ? value : null
+  }
+  // A newer server may send multiple schedules before this client's response type knows
+  // that optional field. Validate each shape with the contract and use the shared clock math.
+  const raw: unknown = 'schedules' in automation ? automation.schedules : undefined
+  let earliest: number | null = null
+  for (const candidate of Array.isArray(raw) ? raw : [automation.schedule]) {
+    const schedule = automationScheduleSchema.safeParse(candidate)
+    if (!schedule.success) continue
+    const next = nextOccurrence(schedule.data, now, timeZone)
+    if (next !== null && Number.isFinite(next) && (earliest === null || next < earliest)) earliest = next
+  }
+  return earliest
 }
 
 const byName = (a: AutomationListEntry, b: AutomationListEntry) =>

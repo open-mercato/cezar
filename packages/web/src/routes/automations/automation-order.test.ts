@@ -52,6 +52,12 @@ describe('automation list ordering', () => {
     expect(ids(sorted([a, scheduled], { sort: 'nextRun' }))).toEqual(['s', 'a'])
   })
 
+  it('uses an earlier secondary schedule from a newer response when no next instant is supplied', () => {
+    const scheduled = { ...entry({ id: 's', name: 'Scheduled', kind: 'schedule', schedule: { type: 'daily', hour: 16 } }),
+      schedules: [{ type: 'daily', hour: 16 }, { type: 'daily', hour: 11 }] }
+    expect(nextAutomationRun(scheduled, TIME_ZONE, NOW)).toBe(Date.parse('2026-09-16T11:00:00Z'))
+  })
+
   it('moves a chosen position and ignores drops outside the current list', () => {
     expect(moveAutomation(['a', 'b', 'c'], 2, 0)).toEqual(['c', 'a', 'b'])
     expect(moveAutomation(['a', 'b'], -1, 0)).toEqual(['a', 'b'])
