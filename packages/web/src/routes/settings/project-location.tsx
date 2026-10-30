@@ -1,10 +1,11 @@
 import { useMutation } from '@tanstack/react-query'
 
 import { openProjectIn } from '@/api/client'
-import { useOpenTargets, useProjects } from '@/api/queries'
+import { useHealth, useOpenTargets, useProjects } from '@/api/queries'
 import { OpenInMenu, cliTargetRunner } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { useActiveProjectId } from '@/lib/project-router'
+import { withServedBootProject } from '@/lib/served-boot-project'
 import { SettingsField } from './settings-field'
 import { writeClipboard } from '@/lib/clipboard'
 
@@ -31,7 +32,7 @@ import { writeClipboard } from '@/lib/clipboard'
 /** The active project's absolute root, or `null` while the registry cannot name it. */
 export function useActiveProjectRoot(): string | null {
   const projectId = useActiveProjectId()
-  const registry = useProjects().data
+  const registry = withServedBootProject(useProjects().data, projectId, useHealth().data)
   if (projectId === null) return null
   return registry?.projects.find((project) => project.id === projectId)?.root ?? null
 }
