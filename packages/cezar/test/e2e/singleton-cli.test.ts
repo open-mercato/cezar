@@ -121,6 +121,7 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
   } finally {
     if (primary) await stop(primary);
     if (recovery) await stop(recovery);
-    await rm(root, { recursive: true, force: true });
+    // Windows holds a just-exited child's handles briefly; retry instead of failing on EBUSY.
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
