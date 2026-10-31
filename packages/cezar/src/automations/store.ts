@@ -1,16 +1,17 @@
+import { deferredCreationRecordSchema, schedulesOf, type DeferredCreationRecord } from '@open-mercato/cezar-contract';
 import {
   closeSync,
   existsSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import lockfile from 'proper-lockfile';
+import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { join } from 'node:path';
 import {
@@ -34,8 +35,15 @@ const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const MUTATION_LOCK = 'automation-mutation.lock';
 const GUARD_SUFFIX = '.guard';
-/** proper-lockfile enforces a 2s minimum; this bounds crash recovery without stealing live owners. */
-const GUARD_STALE_MS = 2_000;
+/**
+ * Keep a contending process from reclaiming a live guard while its owner's event loop is stalled.
+ *
+ * The 2s proper-lockfile minimum is too short for a busy cockpit: a contender can replace the
+ * guard during a stall, then the live-pid check rejects that contender and leaves the owner
+ * compromised. Fifteen seconds is a deliberate bounded trade-off: it covers the multi-second
+ * stall we protect against, while keeping SIGKILL recovery finite and tested below.
+ */
+const GUARD_STALE_MS = 15_000;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
@@ -100,12 +108,18 @@ export class AutomationStore {
         createdAt: now,
         updatedAt: now,
       });
+      if (definition.deferredStart) {
+        const { creationKey, requestDigest } = definition.deferredStart;
+        if (this.readCreation(creationKey)) throw new Error('creation key already used');
+        this.definitionsFile.deferredCreations = { ...this.creationLedger(),
+          [creationKey]: { id, requestDigest, outcome: 'pending', runIds: [] } };
+      }
       this.definitions.set(id, definition);
       // Baseline and definition publish under one lease; readers snapshot under that lease too.
       initializeState?.(definition);
       this.persistDefinitions();
       return definition;
-    } finally { mutation.release(); }
+    } finally { this.loadDefinitions(); mutation.release(); }
   }
 
   update(
@@ -124,6 +138,10 @@ export class AutomationStore {
       const definition = automationDefinitionSchema.parse({
         ...current,
         ...input,
+        // #1818: an old client's explicit single schedule REPLACES the union. Retaining an
+        // unknown list would make its successful edit leave hidden triggers firing.
+        ...(input.schedule && input.schedules === undefined ? { schedules: undefined } : {}),
+        ...(Array.isArray(input.schedules) ? { schedule: input.schedule ?? input.schedules[0] } : {}),
         id,
         revision: current.revision + 1,
         createdAt: current.createdAt,
@@ -135,13 +153,69 @@ export class AutomationStore {
       // an edit would skip the widening re-poll that makes the narrowed filter take effect, so the very
       // remediation the log prescribes would silently do nothing (#982).
       if (this.state(id)) {
-        this.setState(id, (current) => ({ ...current, revision: definition.revision, pinnedCursor: undefined }));
+        const timingChanged = JSON.stringify(schedulesOf(current)) !== JSON.stringify(schedulesOf(definition));
+        this.setState(id, (state) => ({ ...state, revision: definition.revision, pinnedCursor: undefined,
+          ...(timingChanged ? { nextRunAt: undefined } : {}),
+        }));
       }
       // Baseline and definition publish under one lease; readers snapshot under that lease too.
       initializeState?.(definition);
       this.persistDefinitions();
       return definition;
-    } finally { mutation.release(); }
+    } finally { this.loadDefinitions(); mutation.release(); }
+  }
+
+  creation(key: string): DeferredCreationRecord | undefined {
+    this.loadDefinitions();
+    return this.readCreation(key);
+  }
+
+  /** The settled creation record of a composer start, found by its definition id. */
+  creationFor(id: string): DeferredCreationRecord | undefined {
+    this.loadDefinitions();
+    let ledger: Record<string, unknown>;
+    try { ledger = this.creationLedger(); } catch { return undefined; }
+    for (const row of Object.values(ledger)) {
+      const parsed = deferredCreationRecordSchema.safeParse(row);
+      if (parsed.success && parsed.data.id === id) return parsed.data;
+    }
+    return undefined;
+  }
+
+  /** Unknown ownership blocks every key; a damaged row blocks only its own key. */
+  private creationLedger(): Record<string, unknown> {
+    const ledger = this.definitionsFile.deferredCreations;
+    if (ledger === undefined) return {};
+    if (ledger === null || typeof ledger !== 'object' || Array.isArray(ledger)) {
+      throw new Error('corrupt deferred creation ledger: key ownership is unknown');
+    }
+    return ledger as Record<string, unknown>;
+  }
+
+  private readCreation(key: string): DeferredCreationRecord | undefined {
+    const ledger = this.creationLedger();
+    if (!Object.hasOwn(ledger, key)) return undefined;
+    const parsed = deferredCreationRecordSchema.safeParse(ledger[key]);
+    if (!parsed.success) throw new Error('corrupt deferred creation record: creation key is blocked');
+    return parsed.data;
+  }
+
+  /** Caller holds the poll lease; record + cleanup publish in the same atomic definition write. */
+  finishDeferred(id: string, outcome: 'launched' | 'cancelled', runIds: string[] = []): void {
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict');
+    try {
+      this.loadDefinitions();
+      const current = this.definitions.get(id);
+      if (!current?.deferredStart) throw new Error('scheduled task not found');
+      const { creationKey, requestDigest } = current.deferredStart;
+      // Never overwrite damaged evidence with a seemingly successful cleanup.
+      this.readCreation(creationKey);
+      this.definitionsFile.deferredCreations = { ...this.creationLedger(),
+        [creationKey]: { id, requestDigest, outcome, runIds } };
+      this.definitions.delete(id);
+      this.persistDefinitions();
+    } finally { this.loadDefinitions(); mutation.release(); }
   }
 
   delete(id: string): boolean {
@@ -156,7 +230,7 @@ export class AutomationStore {
       };
       this.persistDefinitions();
       return true;
-    } finally { mutation.release(); }
+    } finally { this.loadDefinitions(); mutation.release(); }
   }
 
   state(id: string): AutomationRuntimeState | undefined {
@@ -192,7 +266,10 @@ export class AutomationStore {
 
   latestReceipts(): Map<string, AutomationReceipt> {
     const latest = new Map<string, AutomationReceipt>();
-    for (const row of this.receipts()) latest.set(row.receiptKey, row);
+    // receiptKey is redundant with the durable identity.  Normalize from the identity rather
+    // than trusting the persisted spelling so imported or otherwise legacy rows cannot split
+    // deduplication across equivalent event identities.
+    for (const row of this.receipts()) latest.set(receiptKeyFor(row.automationId, row.eventId), row);
     return latest;
   }
 
@@ -209,7 +286,7 @@ export class AutomationStore {
     /** schedule kind: the occurrence being reserved. */
     occurrenceAt?: string;
   }): AutomationReceipt | undefined {
-    const receiptKey = `${input.automationId}:${input.eventId}`;
+    const receiptKey = receiptKeyFor(input.automationId, input.eventId);
     if (this.latestReceipts().has(receiptKey)) return undefined;
     const now = this.now().toISOString();
     const receipt = automationReceiptSchema.parse({
@@ -304,6 +381,10 @@ export class AutomationStore {
       lockfilePath: `${path}${GUARD_SUFFIX}`,
       realpath: false,
       stale: GUARD_STALE_MS,
+      // Keep compromise detection responsive even though stale recovery is deliberately longer:
+      // proper-lockfile otherwise defaults heartbeat checks to stale / 2 (7.5s here), which lets
+      // a deleted guard go unnoticed through an entire poll await.
+      update: 1_000,
       // proper-lockfile's default throws from its heartbeat timer. Never take the
       // cockpit down for a lost guard; callers check validity before launching or
       // publishing after an asynchronous compromise notification.
@@ -337,7 +418,7 @@ export class AutomationStore {
   }
 
   private load(): void {
-    mkdirSync(this.dataDir, { recursive: true });
+    // Read-only: every writer creates the dir itself, so an uncreatable one cannot fail boot (5af5aec6).
     this.loadDefinitions();
     this.stateFile = this.readJson(STATE, automationStateFileSchema, {
       version: 1,
@@ -422,7 +503,7 @@ export class AutomationStore {
     const path = join(this.dataDir, filename);
     const temporary = `${path}.tmp`;
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-    renameSync(temporary, path);
+    renameSyncWithRetry(temporary, path);
   }
 
   private appendNdjson(filename: string, value: unknown): void {
@@ -442,7 +523,7 @@ export class AutomationStore {
     writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
       mode: 0o600,
     });
-    renameSync(temporary, path);
+    renameSyncWithRetry(temporary, path);
   }
 
   private warnOnce(key: string, message: string): void {
@@ -450,6 +531,10 @@ export class AutomationStore {
     this.warned.add(key);
     this.options.warn?.(message);
   }
+}
+
+function receiptKeyFor(automationId: string, eventId: string): string {
+  return `${automationId}:${eventId}`;
 }
 
 /**

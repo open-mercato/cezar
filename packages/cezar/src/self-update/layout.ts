@@ -299,6 +299,18 @@ export function detectInstallKind(entry: string, env: NodeJS.ProcessEnv = proces
   return 'unknown';
 }
 
+/** Whether `entry` runs a source checkout's code — through its realpath, so a checkout linked
+ *  into `versions/` (which `detectInstallKind` calls `managed`) still counts. */
+export function runsFromCheckout(entry: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  let real = entry;
+  try {
+    real = realpathSync(entry);
+  } catch {
+    // A missing entry keeps its own path.
+  }
+  return detectInstallKind(real, env) === 'checkout';
+}
+
 /** The package root (the directory holding package.json) for a running entry file. */
 export function packageRootOf(entry: string): string {
   return dirname(dirname(resolve(entry)));

@@ -92,12 +92,14 @@ function normalizeRootSync(root: string): string {
  *    that stopped a live workspace dead.
  */
 export interface AccountHolds {
+  deadlines?: ReadonlyMap<string, number>;
   deadline: ReadonlySet<string>;
   inFlight: ReadonlySet<string>;
 }
 
 /** One manager's seam into the shared counter. */
 export interface SemaphoreParticipant {
+  refreshQueueReasons?(): void;
   /** Slots this manager currently holds. The #347 exemption lives in the
    *  participant's own accounting: `waiting` runs are already subtracted. */
   busySlots(): number;
@@ -128,6 +130,9 @@ export interface SemaphoreParticipant {
    * and any caller that predates the hold — keeps working; absent simply holds nothing.
    */
   accountHolds?(): AccountHolds;
+  /** Runs a restart would interrupt (queued, waiting or running) — the self-update dialog's
+   *  warning. Optional for stubs; absent counts none. */
+  activeRuns?(): number;
 }
 
 const DEFAULT_LIMITS: WorkspaceResourceLimits = {
@@ -215,7 +220,17 @@ export class WorkspaceSemaphore {
    *  `dispose()` must call it so a torn-down project stops counting. */
   register(participant: SemaphoreParticipant): () => void {
     this.participants.add(participant);
-    return () => this.participants.delete(participant);
+    return () => {
+      if (this.participants.delete(participant)) this.notifyAccountHoldsChanged();
+    };
+  }
+
+  private notifyingHolds = false;
+  notifyAccountHoldsChanged(): void {
+    if (this.notifyingHolds) return;
+    this.notifyingHolds = true;
+    try { for (const participant of this.participants) participant.refreshQueueReasons?.(); }
+    finally { this.notifyingHolds = false; }
   }
 
   /** Slots held across EVERY registered manager (waiting runs excluded by
@@ -239,15 +254,35 @@ export class WorkspaceSemaphore {
     return total;
   }
 
+  /** Runs a restart would interrupt, across every registered project — not just the boot one. */
+  activeRuns(): number {
+    let total = 0;
+    for (const participant of this.participants) total += participant.activeRuns?.() ?? 0;
+    return total;
+  }
+
+  /** No slot held and nothing queued anywhere in the workspace — when "update when idle" may
+   *  restart. Waiting runs do not count (#347): they are parked on the user, and boot resumes them. */
+  idle(): boolean {
+    for (const participant of this.participants) {
+      if (participant.busySlots() > 0 || participant.oldestQueuedAt() !== null) return false;
+    }
+    return true;
+  }
+
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;
   }
 
   /**
-   * Cached ceiling on concurrently running dispatch children, or null for "no cap".
-   * Mirrors `maxParallel()`/`memoryLimitMb()`: answered from the in-memory snapshot, refreshed
-   * by `refresh()` (boot and every `PUT /workspace/config`), never re-read per pump.
+   * Cached ADMISSION ceiling on dispatch children, or null for "no cap" — what the queue gate
+   * compares `dispatchBusy()` against; a resume never consults it (#347). Answered from the
+   * in-memory snapshot like `maxParallel()`, refreshed by `refresh()` (boot and every
+   * `PUT /workspace/config`), never re-read per pump. Like `maxMonitoringSessions()` and
+   * `autoResumeOnUsageLimit()`, this accessor reads an OPTIONAL field and collapses absent to a
+   * usable default — `null` here, where absent and `null` mean the same thing ("no cap"), unlike
+   * #810's `monitoringWakeIntervalMinutes` where collapsing them was the bug.
    */
   dispatchMaxConcurrent(): number | null {
     return this.limits.dispatchMaxConcurrent ?? null;
@@ -335,15 +370,17 @@ export class WorkspaceSemaphore {
    * whose window has reopened or leak a stampede through one that has not.
    */
   accountHolds(): AccountHolds {
+    const deadlines = new Map<string, number>();
     const deadline = new Set<string>();
     const inFlight = new Set<string>();
     for (const participant of this.participants) {
       const holds = participant.accountHolds?.();
       if (!holds) continue;
+      for (const [key, at] of holds.deadlines ?? []) deadlines.set(key, Math.min(at, deadlines.get(key) ?? Infinity));
       for (const key of holds.deadline) deadline.add(key);
       for (const key of holds.inFlight) inFlight.add(key);
     }
-    return { deadline, inFlight };
+    return { deadline, inFlight, deadlines };
   }
 
   /**
@@ -416,6 +453,7 @@ export class WorkspaceSemaphore {
     } catch {
       // keep the last good snapshot
     }
+    this.notifyAccountHoldsChanged();
     // A raised cap is capacity appearing everywhere at once — same sweep.
     await this.release();
   }

@@ -1,0 +1,65 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": "2897cb98-2f00-408f-90c2-9d0f83dd2a62",
+    "cwd": "/repo",
+    "tools": [
+      "invoke_subagent",
+      "manage_subagents",
+      "manage_task",
+      "replace_file_content",
+      "run_command",
+      "view_file",
+      "write_to_file"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_1",
+      "role": "assistant",
+      "text": "PONG"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_1",
+    "field": "text",
+    "delta": "\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_1",
+      "role": "assistant",
+      "text": "PONG\n"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 14561,
+      "output": 26,
+      "total": 14587,
+      "reasoning": 24
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 14561,
+      "output": 26,
+      "total": 14587,
+      "reasoning": 24
+    }
+  }
+]

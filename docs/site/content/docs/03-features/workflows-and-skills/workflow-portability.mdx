@@ -1,0 +1,25 @@
+---
+title: "Move workflows between projects"
+description: "Export a sequence to YAML or import an existing file."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/workflow-graph/workflow-graph.tsx
+    line: 747
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Before running an imported workflow, review its steps and referenced skills.
+
+## Where to find it
+
+Workflows → Import / Export
+
+## How to use it
+
+1. Open Workflows.
+2. Export a sequence or import a YAML file.
+3. Review the steps before running it.
+
+> **Good to know**: Before running a workflow in another environment, make sure its skills, commands, and agent CLIs are available there.

@@ -7,9 +7,26 @@ import { availablePlatformIds, getStrategy } from '../strategies.ts';
 import { runInstall, runUninstall } from '../engine.ts';
 import { loadServerState } from '../state.ts';
 import { createAutoUi } from '../ui.ts';
-import type { Runner } from '../types.ts';
+import { StepAborted } from '../steps.ts';
+import type { InstallContext, Runner, Ui } from '../types.ts';
 
 const okRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
+
+function redeployCtx(over: { runner?: Runner; ui?: Ui; dryRun?: boolean } = {}): InstallContext {
+  return {
+    state: { schema: 1, installed: true, primaryPort: 4321, steps: {} },
+    ui: over.ui ?? createAutoUi(),
+    instance: 'default',
+    runner: over.runner ?? okRunner,
+    save: async () => {},
+    dryRun: over.dryRun ?? false,
+    assumeYes: true,
+    reconfigure: new Set(),
+    repoRoot: '/repo',
+    now: '2026-09-16T00:00:00.000Z',
+    prefs: {},
+  };
+}
 
 describe('macosx-ngrok', () => {
   let home: string;
@@ -274,5 +291,35 @@ describe('macosx-ngrok review fixes (PR #423)', () => {
     expect(domainValidate?.('https://cezar.ngrok.app')).toBeDefined();
     expect(domainValidate?.('cezar.ngrok.app')).toBeUndefined();
     expect(domainValidate?.('')).toBeUndefined(); // blank = ephemeral, allowed
+  });
+});
+
+describe('macosx-ngrok redeploy restart verification (#1011)', () => {
+  it('fails when the cockpit kickstart exits non-zero', async () => {
+    const interactive = async (_program: string, args: string[]) => (args.includes('kickstart') ? 1 : 0);
+    const capture = async () => ({ code: 0, stdout: '{"tunnels":[{"public_url":"https://x.ngrok.app"}]}', stderr: '' });
+
+    await expect(macosxNgrok.redeploy!(redeployCtx({ runner: { capture, interactive } }))).rejects.toBeInstanceOf(StepAborted);
+  });
+
+  it('fails when the ngrok kickstart exits non-zero', async () => {
+    let kickstarts = 0;
+    const interactive = async () => {
+      kickstarts += 1;
+      return kickstarts === 2 ? 1 : 0;
+    };
+    const capture = async () => ({ code: 0, stdout: '', stderr: '' });
+
+    await expect(macosxNgrok.redeploy!(redeployCtx({ runner: { capture, interactive } }))).rejects.toThrow(/ngrok tunnel/);
+  });
+
+  it('fails when launchd reports the same cockpit PID after kickstart', async () => {
+    const interactive = async () => 0;
+    const capture = async (_program: string, args: string[]) =>
+      args.includes('print')
+        ? { code: 0, stdout: 'pid = 4242', stderr: '' }
+        : { code: 0, stdout: '{"tunnels":[{"public_url":"https://x.ngrok.app"}]}', stderr: '' };
+
+    await expect(macosxNgrok.redeploy!(redeployCtx({ runner: { capture, interactive } }))).rejects.toThrow(/did not actually restart/);
   });
 });

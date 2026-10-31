@@ -1,0 +1,21 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": ""
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "error"
+  },
+  {
+    "type": "session.error",
+    "message": "invalid model selection (--model \"bogus-model\" --effort \"\"): model bogus-model is not recognized as a known model or custom model in settings\nAvailable models:\n  Gemini 3.8 Flash (High)\n  Gemini 3.8 Flash (Medium)\n  Gemini 3.8 Flash (Low)\n  Claude Sonnet 4.6 (Thinking)\n  Claude Opus 4.6 (Thinking)\n  GPT-OSS 120B (Medium)",
+    "fatal": false
+  }
+]

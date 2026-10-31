@@ -10,7 +10,29 @@
  * cover one — a named row fails here.
  *
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
- * RPC protocol and therefore has its own wire-faithful fixture set.
+ * RPC protocol and therefore has its own wire-faithful fixture set. Copilot speaks ACP through
+ * the shared mapper, but keeps its own fixtures and dialect for the same reason every backend
+ * does — parity is asserted over what the wire really produces, per runner.
+ *
+ * Every row below is a hard rule for every backend — see `BACKWARD_COMPATIBILITY.md`
+ * §7 and `AGENT_PROTOCOL.md` §6 ("a new backend is not 'done' until it produces
+ * every row"). junie's `plan.updated`/reasoning rows are backed by
+ * `__fixtures__/junie/schema-plan-reasoning.*`, a fixture derived from the public
+ * ACP schema rather than a live capture (see `junie-ui-mapper.ts`'s module doc) —
+ * schema-derived is enough to satisfy the row under §7's existing fixture-provenance
+ * rule (cite the upstream schema/source, PR #443 precedent), since the row asserts
+ * the mapper CAN produce the capability, not that it was observed live. A future
+ * junie/model revision that emits either live should get a real, captured fixture
+ * replacing the schema-derived one — re-check this the next time junie's ACP surface
+ * or model lineup changes materially.
+ *
+ * "sub-agent task items" and its nesting cell cannot exist on junie's wire:
+ * junie speaks unmodified core ACP, whose `tool_call.kind` enum has no `task` value
+ * and which publishes no wire shape for `nativeSubagentSessions` (see
+ * `junie-ui-mapper.ts`'s module doc). That is `BACKWARD_COMPATIBILITY.md` §7's
+ * "provably cannot exist on that backend's own wire format", so junie takes the
+ * documented path — a cited, row-scoped `except` in `CAPABILITIES` (`AGENT_PROTOCOL.md`
+ * §6), the same one cursor uses.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +42,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -56,6 +78,9 @@ const CAPABILITIES: ReadonlyArray<
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
+    // agy's stream-json has no plan frame, and its `manage_task` tool manages BACKGROUND tasks
+    // (live agy 1.4.0 capture `__fixtures__/antigravity/subagent-turn.ndjson`, step 4), not a todo list.
+    ['antigravity'],
   ],
   ['tool status: running', (events) => hasToolStatus(events, 'running')],
   ['tool status: completed', (events) => hasToolStatus(events, 'completed')],
@@ -67,15 +92,24 @@ const CAPABILITIES: ReadonlyArray<
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
     // Cursor's docs are explicit: "`thinking` events are suppressed in print mode and will
     // not appear in any output format" (cursor.com/docs/cli/reference/output-format).
-    ['cursor'],
+    // agy's `agent_response` steps report `usage.thinking_tokens` but never the thinking text
+    // (live agy 1.4.0, `__fixtures__/antigravity/subagent-turn.ndjson`: 3139 thinking tokens, no text).
+    ['cursor', 'antigravity'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && (item.diffs?.length ?? 0) > 0),
+    // agy's write/edit steps carry only `TargetFile` — no content, no old/new text — so no diff can
+    // be reconstructed (live agy 1.4.0: `write_to_file` in tools-turn, `replace_file_content` in subagent-turn).
+    ['antigravity'],
   ],
   [
     'sub-agent task items (Task / review-mode items / subtask parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && item.toolKind === 'task'),
+    // junie's `tool_call.kind` is unmodified core ACP — read/edit/delete/move/search/execute/
+    // think/fetch/other, no `task` (agentclientprotocol.com/protocol/schema#toolkind) — and
+    // `nativeSubagentSessions` has no published wire shape, so there is nothing to map.
+    ['junie'],
   ],
   [
     'usage.updated with raw token counts',
@@ -108,11 +142,17 @@ describe('protocol v2 backend parity (all first-class mappers emit every matrix 
   }
 
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
-  // to its parent: claude `parent_tool_use_id` and opencode child-session
-  // parts under a `subtask`. Codex and Cursor print-mode wire have no parent
-  // attribution, and pi's RPC protocol carries no parent-item id either —
-  // all three's matrix cell is the task-kind tool items asserted above.
-  for (const backend of ['claude', 'opencode'] as const) {
+  // to its parent: claude `parent_tool_use_id`, opencode child-session parts
+  // under a `subtask`, and copilot's `_meta["github.com/copilot"].agentId`,
+  // which carries the delegating `task` call's own id. Codex and Cursor
+  // print-mode wire have no parent attribution, and pi's RPC protocol carries
+  // no parent-item id either — all three's matrix cell is the task-kind tool
+  // items asserted above. junie (core ACP) has no parent attribution either, and
+  // its task-kind substitute is excluded above for the same protocol reason.
+  // Antigravity runs a subagent in its OWN conversation (`subagent_info.subagents[].conversation_id`)
+  // and never streams that conversation's steps on the parent's stdout, so its cell is the
+  // task-kind item too (live agy 1.4.0, `__fixtures__/antigravity/subagent-turn.ndjson`).
+  for (const backend of ['claude', 'opencode', 'copilot'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);
     });

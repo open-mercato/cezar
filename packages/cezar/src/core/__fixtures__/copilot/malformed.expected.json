@@ -1,0 +1,30 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "9f2c4b61-7a3d-4e58-9c10-2b7e6d5a4f33",
+    "backend": "copilot",
+    "cwd": "/tmp/copilot-acp/repo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 40,
+      "output": 1,
+      "total": 41
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 40,
+      "output": 1,
+      "total": 41
+    }
+  }
+]

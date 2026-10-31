@@ -38,13 +38,19 @@ export function createQueryClient(): QueryClient {
         // arbitrary moments instead.
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
-        // The server is a process on this machine: a request either answers or the server is
-        // down, and three silent retries only delay saying so. A 4xx is never worth retrying —
-        // it is the server's considered answer.
+        // A server error gets one retry: more only delay saying so. A 4xx is never worth
+        // retrying — it is the server's considered answer.
         retry: (failureCount, error) => {
           if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false
+          // A transport failure (status 0) can be a tab racing a server restart: three quick
+          // retries (~1.75s) before the error surfaces (telemetry 4678fce9).
+          if (error instanceof ApiError && error.status === 0) return failureCount < 3
           return failureCount < 1
         },
+        retryDelay: (attemptIndex, error) =>
+          error instanceof ApiError && error.status === 0
+            ? Math.min(250 * 2 ** attemptIndex, 1_000)
+            : Math.min(1_000 * 2 ** attemptIndex, 30_000),
       },
       mutations: {
         // Mutations act (cancel, delete, start). Replaying one that may have landed is worse

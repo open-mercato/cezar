@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Resources (step 3.5): `maxParallel` and `memoryLimitMb` moved out of the
@@ -25,11 +26,14 @@ let requests: Array<{ method: string; url: string; body?: unknown }> = []
 function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
   requests = []
   const state: WorkspaceConfigResponse = {
+    branding: { name: 'cezar', logoUrl: null },
     agentDefaults: {},
     browseRoot: '~/',
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -83,10 +87,12 @@ function gateSeededClient() {
 function renderResources() {
   render(
     <QueryClientProvider client={gateSeededClient()}>
-      <MemoryRouter initialEntries={['/settings/global/resources']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/resources']}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
@@ -159,6 +165,40 @@ describe('Global settings → Resources', () => {
     expect(puts()[0]?.body).toEqual({ resources: { maxMonitoringSessions: 3 } })
   })
 
+  /**
+   * Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): one field, no dead
+   * knob. Empty means "no limit" (the shipped default is `null`), 1..16 is a real ceiling, and a
+   * value outside the window is refused locally instead of being sent to a route that would 400.
+   */
+  it('saves the dispatch admission cap, and an empty field clears it back to "no limit"', async () => {
+    serve({ dispatchMaxConcurrent: null })
+    renderResources()
+    await waitFor(() => expect(dispatchInput()).not.toBeNull())
+    expect(dispatchInput()!.value).toBe('') // null renders as empty, i.e. no cap
+
+    fireEvent.change(dispatchInput()!, { target: { value: '3' } })
+    fireEvent.click(saveDispatch()!)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { dispatchMaxConcurrent: 3 } })
+
+    fireEvent.change(dispatchInput()!, { target: { value: '' } })
+    fireEvent.click(saveDispatch()!)
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { dispatchMaxConcurrent: null } })
+  })
+
+  it('refuses a dispatch cap outside 1..16 without calling the route', async () => {
+    serve({ dispatchMaxConcurrent: 2 })
+    renderResources()
+    await waitFor(() => expect(dispatchInput()).not.toBeNull())
+    expect(dispatchInput()!.value).toBe('2')
+
+    fireEvent.change(dispatchInput()!, { target: { value: '99' } })
+    expect(saveDispatch()!.disabled).toBe(true)
+    expect(document.querySelector('[data-slot="resources-dispatch-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
+  })
+
   it('saves the waiting-session idle timeout and allows disabling it', async () => {
     serve({ idleTimeoutMinutes: 15 })
     renderResources()
@@ -192,40 +232,6 @@ describe('Global settings → Resources', () => {
     fireEvent.change(parallelSelect()!, { target: { value: '40' } })
     fireEvent.blur(parallelSelect()!)
     expect(screen.getByText('Enter a whole number from 1 to 16.')).not.toBeNull()
-    expect(puts()).toHaveLength(0)
-  })
-
-  /**
-   * Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): one field, no dead
-   * knob. Empty means "no limit" (the shipped default is `null`), 1..16 is a real ceiling, and a
-   * value outside the window is refused locally instead of being sent to a route that would 400.
-   */
-  it('saves the dispatch admission cap, and an empty field clears it back to "no limit"', async () => {
-    serve({ dispatchMaxConcurrent: null })
-    renderResources()
-    await waitFor(() => expect(dispatchInput()).not.toBeNull())
-    expect(dispatchInput()!.value).toBe('') // null renders as empty, i.e. no cap
-
-    fireEvent.change(dispatchInput()!, { target: { value: '3' } })
-    fireEvent.click(saveDispatch()!)
-    await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ resources: { dispatchMaxConcurrent: 3 } })
-
-    fireEvent.change(dispatchInput()!, { target: { value: '' } })
-    fireEvent.click(saveDispatch()!)
-    await waitFor(() => expect(puts()).toHaveLength(2))
-    expect(puts()[1]?.body).toEqual({ resources: { dispatchMaxConcurrent: null } })
-  })
-
-  it('refuses a dispatch cap outside 1..16 without calling the route', async () => {
-    serve({ dispatchMaxConcurrent: 2 })
-    renderResources()
-    await waitFor(() => expect(dispatchInput()).not.toBeNull())
-    expect(dispatchInput()!.value).toBe('2')
-
-    fireEvent.change(dispatchInput()!, { target: { value: '99' } })
-    expect(saveDispatch()!.disabled).toBe(true)
-    expect(document.querySelector('[data-slot="resources-dispatch-invalid"]')).not.toBeNull()
     expect(puts()).toHaveLength(0)
   })
 

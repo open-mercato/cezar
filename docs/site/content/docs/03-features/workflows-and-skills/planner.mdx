@@ -1,0 +1,28 @@
+---
+title: "Plan a task before starting"
+description: "Ask the agent to suggest steps based on your task description."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/workflow-graph/workflow-graph.tsx
+    line: 601
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/008-chain-from-prompt.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Choose Plan first to have the agent prepare a workflow for review. You can reorder the steps and remove any you do not need before running it.
+
+## Where to find it
+
+New task → Plan first
+
+## How to use it
+
+1. Describe the task and choose Plan first.
+2. Review the proposed steps and skills.
+3. Edit the plan, approve it, and start the task.
+
+> **Good to know**: Preparing a plan does not start the task. Cezar waits for you to review and approve the proposed steps.

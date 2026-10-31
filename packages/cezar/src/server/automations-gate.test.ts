@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from '../automations/store.ts';
 import { WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
 import { RunStore } from '../runs/store.ts';
+import * as projects from '../workspace/projects.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp, startServer, type ServerDeps } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -198,17 +199,29 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
     /** Boot on an ephemeral port, wait for `listening` to have run its warm-up, then close. */
     const boot = async (): Promise<void> => {
       const started = vi.spyOn(WorkspaceAutomationScheduler.prototype, 'start');
+      let listedResolve!: () => void;
+      const listed = new Promise<void>((resolve) => { listedResolve = resolve; });
+      const originalListProjects = projects.listProjects;
+      vi.spyOn(projects, 'listProjects').mockImplementation(async (selector) => {
+        try {
+          return await originalListProjects(selector);
+        } finally {
+          listedResolve();
+        }
+      });
       const server = startServer(
         { repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' },
         0,
       );
       try {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-        // The warm-up chain is `listProjects().then(…)`. An expected start is WAITED for — a fixed
-        // pause is a bet on the machine, and a loaded one loses it. Only the opted-out case has
-        // nothing to wait for, so it keeps the pause: long enough for the chain to return early.
-        if (process.env.CEZ_AUTOMATIONS === '0') await new Promise((resolve) => setTimeout(resolve, 50));
-        else await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1), { timeout: 4000, interval: 10 });
+        // The warm-up chain is `listProjects().then(…)`. Wait for its observable list operation;
+        // the default-on branch additionally waits for scheduler.start(), while the opt-out
+        // branch must settle without ever starting it.
+        await listed;
+        if (process.env.CEZ_AUTOMATIONS !== '0') {
+          await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1), { timeout: 4000, interval: 10 });
+        }
       } finally {
         server.close();
       }
@@ -254,9 +267,16 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       else process.env.CEZ_HOME = savedHome;
       if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
       else process.env.CEZ_DRY_RUN = savedDryRun;
+      vi.restoreAllMocks();
     });
 
     it('re-baselines a stale enabled poll before the scheduler starts, so upgrading never launches a backlog', async () => {
+      const originalStart = WorkspaceAutomationScheduler.prototype.start;
+      let stateAtSchedulerStart: ReturnType<AutomationStore['state']>;
+      const started = vi.spyOn(WorkspaceAutomationScheduler.prototype, 'start').mockImplementation(async function (this: WorkspaceAutomationScheduler) {
+        stateAtSchedulerStart = AutomationStore.open(dataDir).state(staleId);
+        await originalStart.call(this);
+      });
       const server = startServer(
         { repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' },
         0,
@@ -277,6 +297,8 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       expect(state?.baselineAt).toBeTruthy();
       expect(state?.cursor?.timestamp).toBe(state?.baselineAt);
       expect(state?.consecutiveFailures).toBe(0);
+      expect(started).toHaveBeenCalledTimes(1);
+      expect(stateAtSchedulerStart?.baselineAt).toBe(state?.baselineAt);
       // Zero launches: the backlog this poll would otherwise have resumed was forgotten, not
       // processed. No receipt exists for this automation.
       expect([...fresh.latestReceipts().values()].filter((r) => r.automationId === staleId)).toHaveLength(0);

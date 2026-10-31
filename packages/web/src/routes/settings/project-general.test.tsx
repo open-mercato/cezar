@@ -8,6 +8,7 @@ import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import { ListViewProvider } from '@/components/list-view'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Project settings → General (project-general.tsx): the dashboard the settings index became.
@@ -83,7 +84,9 @@ function seededClient({
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
-    capabilities: { localHandoff: true, followups: true, singleProject },
+    repoRoot: BOOT_ROOT,
+    repo: { root: BOOT_ROOT, branch: 'main' },
+    capabilities: { localHandoff: true, terminal: false, followups: true, singleProject },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: registry ?? [project('boot'), project('demo')],
@@ -118,9 +121,11 @@ function renderAt(entry: string, seed?: Parameters<typeof seededClient>[0]) {
       {/* The app shell normally provides it; the removal test navigates onto the tasks overview,
           which reads it. */}
       <ListViewProvider>
-        <MemoryRouter initialEntries={[entry]}>
-          <AppRoutes />
-        </MemoryRouter>
+        <ThemeProvider>
+          <MemoryRouter initialEntries={[entry]}>
+            <AppRoutes />
+          </MemoryRouter>
+        </ThemeProvider>
       </ListViewProvider>
     </QueryClientProvider>,
   )
@@ -231,10 +236,27 @@ describe('the General page', () => {
     )
   })
 
+  it('offers to add the launch folder even when the registry does not list it (#1432)', async () => {
+    // Once the user has projects the server leaves the launch folder out of the list (#1057),
+    // but `serve` still opens the cockpit on it — its Settings must not render blank.
+    renderAt('/p/boot/settings', { registry: [project('demo')] })
+
+    await waitFor(() => expect(general()).not.toBeNull())
+    expect(document.querySelector('[data-slot="project-general-unregistered"]')).not.toBeNull()
+    expect(general()?.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(BOOT_ROOT)
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Add cezar to your projects/ }))
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === 'POST')).toEqual([
+        { method: 'POST', url: '/api/v1/projects', body: { root: BOOT_ROOT } },
+      ]),
+    )
+  })
+
   it('is the project area only — global settings has no project to describe', async () => {
-    renderAt('/settings/global')
+    renderAt('/settings/global/notifications')
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="settings-index"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="settings-nav"][data-scope="global"]')).not.toBeNull()
     })
     expect(general()).toBeNull()
   })

@@ -1,0 +1,25 @@
+---
+title: "Create and switch repository branches"
+description: "Find a branch, switch the checkout, or create a branch in the Git view."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/repo-git/repo-branches.tsx
+    line: 78
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+In Git → Branches, find an existing branch and switch the project checkout to it with Switch. To create a branch, enter New branch name and choose Create.
+
+## Where to find it
+
+Git → Branches
+
+## How to use it
+
+1. Open Git for the project and go to Branches.
+2. Enter a name in Filter branches and click Switch beside the branch.
+3. To create a branch, enter New branch name and choose Create.
+
+> **Good to know**: This changes the project checkout. Git may refuse to switch when uncommitted changes conflict. A branch used by another worktree is marked in another worktree.

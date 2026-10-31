@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AutomationStore } from './store.ts';
-import { runEventPollCycle } from './event-poll-cycle.ts';
+import { launchEventCandidate, runEventPollCycle } from './event-poll-cycle.ts';
 
 describe('shared event cycle', () => {
   it('stops after the guard is compromised during awaited polling without publishing error state', async () => {
@@ -102,6 +102,25 @@ it('retry reservation persists before launch and rejects a stale retry after ano
   expect(reserved?.status).toBe('reserved');
   expect(AutomationStore.open(dir).latestReceipts().get(receipt.receiptKey)?.status).toBe('reserved');
   expect(staleProcess.reserveRetry(receipt.receiptId)).toBeUndefined();
+});
+
+it('does not replay an event after its definition revision changes', async () => {
+  const store = AutomationStore.open(mkdtempSync(join(tmpdir(), 'event-cycle-')));
+  const definition = store.create({ kind: 'github', enabled: true, name: 'test', events: ['issue.labeled'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25, changedLabels: ['agent'] }, task: { prompt: 'test' } });
+  const firstLaunch = vi.fn(async () => ({ runId: 'run-1' }));
+  await launchEventCandidate({
+    store, definition, receipt: { eventId: 'label-event' },
+    log: { event: 'issue.labeled' }, launch: firstLaunch,
+  });
+  const updated = store.update(definition.id, definition.revision, { ...definition, name: 'edited' });
+  const secondLaunch = vi.fn(async () => ({ runId: 'run-2' }));
+  await launchEventCandidate({
+    store, definition: updated, receipt: { eventId: 'label-event' },
+    log: { event: 'issue.labeled' }, launch: secondLaunch,
+  });
+  expect(firstLaunch).toHaveBeenCalledTimes(1);
+  expect(secondLaunch).not.toHaveBeenCalled();
+  expect(store.latestReceipts().size).toBe(1);
 });
 
 it('reads another process new baseline before polling the current revision', async () => {

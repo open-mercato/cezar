@@ -1,0 +1,25 @@
+---
+title: "Copy task details"
+description: "Copy a link, branch, worktree path, or resume command."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/task-palette/commands.tsx
+    line: 420
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Copy section in the palette provides the task ID and link, branch name, worktree path, resume command, and PR link when those values exist.
+
+## Where to find it
+
+Task → Task palette → Copy
+
+## How to use it
+
+1. Open the palette and find Copy.
+2. Select the information you need.
+3. Paste it into a terminal, editor, or message.
+
+> **Good to know**: An action appears only when the task has the corresponding value, such as a branch or PR.

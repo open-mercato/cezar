@@ -9,7 +9,10 @@ import {
   chooseForkBase,
   createWorktree,
   parseShortstat,
+  pruneOrphans,
   resolveBaseRef,
+  uniqueBranchName,
+  worktreeChangedPaths,
   worktreeShortstat,
   worktreeSizeBytes,
 } from './git-worktree.ts';
@@ -102,6 +105,52 @@ describe('worktreeSizeBytes (#483)', () => {
 });
 
 describe('createWorktree recovery (real git)', () => {
+  it('creates from a remote base while the shared config is locked (#1301)', async () => {
+    const repo = await fixtureRepo('cez-worktree-config-lock-');
+    const runId = '44444444-4444-4444-8444-444444444444';
+    const head = (await run('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
+    await run('git', ['remote', 'add', 'origin', repo], { cwd: repo });
+    await run('git', ['update-ref', 'refs/remotes/origin/main', head], { cwd: repo });
+    const configLock = join(repo, '.git', 'config.lock');
+    writeFileSync(configLock, 'held by another concurrent task\n');
+
+    try {
+      const created = await createWorktree(repo, runId, 'origin/main');
+      expect(created.branch).toBe(branchFor(runId));
+      expect((await run('git', ['rev-parse', 'HEAD'], { cwd: created.path })).stdout.trim()).toBe(head);
+
+      // The task branch must not depend on repository-wide upstream metadata.
+      await expect(run('git', ['config', '--get', `branch.${created.branch}.remote`], { cwd: repo })).rejects.toMatchObject({
+        code: 1,
+      });
+    } finally {
+      rmSync(configLock, { force: true });
+    }
+  });
+
+  it('forks on a named branch and reattaches it only when told the name (spec 2026-10-11-branch-naming-instructions)', async () => {
+    const repo = await fixtureRepo('cez-worktree-named-');
+    const runId = '55555555-5555-4555-8555-555555555555';
+    const created = await createWorktree(repo, runId, 'main', { branch: 'feature/fix-login' });
+    expect(created.branch).toBe('feature/fix-login');
+    const head = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: created.path });
+    expect(head.stdout.trim()).toBe('feature/fix-login');
+
+    rmSync(created.path, { recursive: true, force: true });
+    await run('git', ['worktree', 'prune'], { cwd: repo });
+    // Recovery callers pass the record's branch; without it the fork would mint cez/<id8>.
+    const recovered = await createWorktree(repo, runId, 'main', { branch: 'feature/fix-login' });
+    expect(recovered.path).toBe(created.path);
+    expect(recovered.branch).toBe('feature/fix-login');
+  });
+
+  it('refuses an option-like branch name', async () => {
+    const repo = await fixtureRepo('cez-worktree-dash-');
+    await expect(createWorktree(repo, '66666666-6666-4666-8666-666666666666', 'main', { branch: '--upload-pack=x' })).rejects.toThrow(
+      /option-like branch/,
+    );
+  });
+
   it('is idempotent when the task worktree is already registered', async () => {
     const repo = await fixtureRepo('cez-worktree-idempotent-');
     const runId = '11111111-1111-4111-8111-111111111111';
@@ -145,6 +194,53 @@ describe('createWorktree recovery (real git)', () => {
       'managed worktree path already exists and could not be repaired',
     );
     expect(readFileSync(marker, 'utf8')).toBe('do not delete\n');
+  });
+});
+
+describe('uniqueBranchName (spec 2026-10-11-branch-naming-instructions, real git)', () => {
+  const runId = '77777777-7777-4777-8777-777777777777';
+
+  it('answers the name as given when nothing holds it', async () => {
+    const repo = await fixtureRepo('cez-unique-free-');
+    expect(await uniqueBranchName(repo, 'feature/fix-login', runId)).toBe('feature/fix-login');
+  });
+
+  it('suffixes the id8 when a local or origin branch already holds the name', async () => {
+    const repo = await fixtureRepo('cez-unique-taken-');
+    await run('git', ['branch', 'feature/fix-login'], { cwd: repo });
+    expect(await uniqueBranchName(repo, 'feature/fix-login', runId)).toBe('feature/fix-login-77777777');
+    const head = (await run('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
+    await run('git', ['update-ref', 'refs/remotes/origin/feature/remote-only', head], { cwd: repo });
+    expect(await uniqueBranchName(repo, 'feature/remote-only', runId)).toBe('feature/remote-only-77777777');
+  });
+
+  it('treats a branch that blocks the name as a path prefix as taken, in both directions', async () => {
+    const repo = await fixtureRepo('cez-unique-df-');
+    await run('git', ['branch', 'feature'], { cwd: repo });
+    await run('git', ['branch', 'fix/login/redirect'], { cwd: repo });
+    // `feature` blocks `feature/x` and its suffixed twin alike, so nothing usable is left.
+    expect(await uniqueBranchName(repo, 'feature/x', runId)).toBeNull();
+    // `fix/login/redirect` blocks `fix/login`, but not the suffixed `fix/login-<id8>`.
+    expect(await uniqueBranchName(repo, 'fix/login', runId)).toBe('fix/login-77777777');
+  });
+
+  it('answers null for a name git refuses or an option-like one', async () => {
+    const repo = await fixtureRepo('cez-unique-bad-');
+    expect(await uniqueBranchName(repo, 'feature/bad..name', runId)).toBeNull();
+    expect(await uniqueBranchName(repo, '-x', runId)).toBeNull();
+  });
+});
+
+describe('pruneOrphans (spec 2026-10-11-branch-naming-instructions, real git)', () => {
+  it('deletes the branch an orphan worktree actually has checked out, not a recomputed cez/<id8>', async () => {
+    const repo = await fixtureRepo('cez-prune-named-');
+    const runId = '88888888-8888-4888-8888-888888888888';
+    await createWorktree(repo, runId, 'main', { branch: 'feature/orphaned' });
+    const removed = await pruneOrphans(repo, new Set());
+    expect(removed).toEqual([runId]);
+    await expect(run('git', ['show-ref', '--verify', '--quiet', 'refs/heads/feature/orphaned'], { cwd: repo })).rejects.toMatchObject({
+      code: 1,
+    });
   });
 });
 
@@ -465,6 +561,19 @@ describe('worktreeShortstat (real git)', () => {
   });
 });
 
+describe('worktreeChangedPaths', () => {
+  it('parses rename records and nested untracked files without corrupting paths', async () => {
+    const repo = await fixtureRepo('cez-changed-paths-');
+    await run('git', ['mv', 'base.txt', 'renamed.txt'], { cwd: repo });
+    mkdirSync(join(repo, 'generated', 'nested'), { recursive: true });
+    writeFileSync(join(repo, 'generated', 'nested', 'output.txt'), 'check\n');
+
+    expect(await worktreeChangedPaths(repo)).toEqual(
+      expect.arrayContaining(['base.txt', 'renamed.txt', 'generated/nested/output.txt']),
+    );
+  });
+});
+
 describe('resolveBaseRef (real git)', () => {
   /** A work repo cloned from an `origin` that carries a `develop` branch, so
    *  both a local `develop` and `origin/develop` remote-tracking ref exist. */
@@ -541,6 +650,15 @@ describe('resolveBaseRef (real git)', () => {
     await run('git', [...GIT_ID, 'commit', '-q', '-am', 'c4'], { cwd: origin });
   }
 
+  /** Advance `main` on the origin repo behind `work`'s back. */
+  async function advanceMain(work: string): Promise<void> {
+    const origin = (await run('git', ['remote', 'get-url', 'origin'], { cwd: work })).stdout.trim();
+    await run('git', ['checkout', '-q', 'main'], { cwd: origin });
+    writeFileSync(join(origin, 'a.txt'), 'upstream-main\n');
+    await run('git', [...GIT_ID, 'commit', '-q', '-am', 'main moved'], { cwd: origin });
+    await run('git', ['checkout', '-q', 'develop'], { cwd: origin });
+  }
+
   it('fetches origin first, so a base that advanced upstream forks from the NEW tip', async () => {
     const work = await repoWithOrigin();
     await advanceOrigin(work);
@@ -594,9 +712,40 @@ describe('resolveBaseRef (real git)', () => {
 
     it('zero config: a checked-out branch that DIVERGED (rebased, not yet pushed) keeps the local work', async () => {
       const work = await repoWithOrigin();
+      // The clone took origin's checked-out `develop` as its default — make `main` the
+      // default so `develop` is an ordinary feature branch here.
+      await run('git', ['remote', 'set-head', 'origin', 'main'], { cwd: work });
       await divergeDevelop(work);
       await run('git', ['checkout', '-q', 'develop'], { cwd: work });
       expect(await chooseForkBase(work, 'develop', undefined, note)).toBe('develop');
+    });
+
+    it('zero config: a DIVERGED default branch yields to the remote (stray local commits are not a base)', async () => {
+      const work = await repoWithOrigin();
+      // `develop` is origin's default branch in this fixture (origin/HEAD → origin/develop).
+      await divergeDevelop(work);
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      const seen: string[] = [];
+      expect(await chooseForkBase(work, 'develop', undefined, (m) => void seen.push(m))).toBe('origin/develop');
+      expect(seen).toEqual([expect.stringContaining('local-only commits are not in this task')]);
+    });
+
+    it('zero config: a default branch merely BEHIND the remote forks from it without a note', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      await advanceOrigin(work);
+      const seen: string[] = [];
+      expect(await chooseForkBase(work, 'develop', undefined, (m) => void seen.push(m))).toBe('origin/develop');
+      expect(seen).toEqual([]);
+    });
+
+    it('zero config: with no recorded remote HEAD, main counts as the default branch', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['remote', 'set-head', 'origin', '--delete'], { cwd: work });
+      writeFileSync(join(work, 'a.txt'), 'stray\n');
+      await run('git', [...GIT_ID, 'commit', '-q', '-am', 'stray local commit'], { cwd: work });
+      await advanceMain(work);
+      expect(await chooseForkBase(work, 'main', undefined, note)).toBe('origin/main');
     });
 
     it('zero config: a kept diverged branch still measures only the task\'s own changes', async () => {
@@ -639,7 +788,7 @@ describe('resolveBaseRef (real git)', () => {
       notes.length = 0;
       expect(await chooseForkBase(work, 'main', 'no-such-branch', note)).toBe('main');
       expect(notes).toEqual([
-        'configured base branch "no-such-branch" not found (locally or on origin) — using "main"',
+        'configured base branch "no-such-branch" not found (locally or on the base remote) — using "main"',
       ]);
     });
 
