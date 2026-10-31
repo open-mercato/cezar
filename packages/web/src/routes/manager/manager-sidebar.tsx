@@ -46,7 +46,7 @@ export function ManagerRow({
             {unread ? <UnreadMarker /> : null}
           </span>
           {unread ? (
-            <span className="size-2 shrink-0 self-center rounded-full bg-info" aria-hidden="true" />
+            <span data-slot="manager-unread" className="size-2 shrink-0 self-center rounded-full bg-info" aria-hidden="true" />
           ) : (
             <span className="shrink-0 text-meta text-soft-foreground">{managerTimeLabel(manager.lastActivityAt, now)}</span>
           )}
