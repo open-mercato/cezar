@@ -170,6 +170,20 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
   })
 
+  it('keeps Antigravity\'s own Claude and GPT slugs on Antigravity', () => {
+    // `agy models` (1.4.10) lists `claude-sonnet-4-6` and `gpt-oss-120b-medium` beside Gemini.
+    // Matching the server, nothing conflicts with antigravity: the engine pill used to reset such a
+    // pick to auto, and a native default with no live catalog fell back to auto too.
+    for (const model of ['claude-sonnet-4-6', 'gpt-oss-120b-medium', 'gemini-3.8-flash-high']) {
+      expect(modelConflictsWithRunner(model, 'antigravity')).toBe(false)
+      expect(resolveModel(model, 'antigravity')).toBe(model)
+      expect(resolveModel(null, 'antigravity', { antigravity: model })).toBe(model)
+    }
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4-6', 'codex')).toBe(true)
+    expect(modelConflictsWithRunner('gpt-oss-120b-medium', 'claude')).toBe(true)
+  })
+
   it('exactly the runners with a host catalog discover their models', () => {
     // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
     // list is the single source both the route and the picker compile against — this asserts they

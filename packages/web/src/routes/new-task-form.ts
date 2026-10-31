@@ -156,6 +156,8 @@ const VENDOR_ID_HOSTING_RUNNERS: readonly Runner[] = ['copilot', 'cursor']
  * (#480).
  * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
 export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
+  // Mirrors the server: `agy models` lists its own `claude-…`/`gpt-…` slugs, so no id conflicts here.
+  if (runner === 'antigravity') return false
   if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
   // Before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id.
