@@ -192,6 +192,9 @@ class CopilotAcpSession implements AgentSession {
     this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
+    this.child.once('exit', () => {
+      this.isOpen = false;
+    });
     // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
     this.child.stdin.on('error', () => {});
     this.child.on('error', (error: NodeJS.ErrnoException) => {

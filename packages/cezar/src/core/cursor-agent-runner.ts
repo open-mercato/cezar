@@ -202,6 +202,9 @@ export class CursorAgentRunner implements AgentRunner {
     let sessionId = spec.sessionId;
     let tokensUsed = 0;
     let open = true;
+    child.once('exit', () => {
+      open = false;
+    });
     let terminatedByCezar = false;
     let timedOut = false;
     // A `result` frame with `is_error: true` can still exit 0 — the stream is the source of
