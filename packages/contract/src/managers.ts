@@ -56,6 +56,8 @@ export const managerSchema = z.object({
   /** Agent account id ("Account" in the design); absent = the runner's default. */
   agentProfile: z.string().max(64).optional(),
   cronMinutes: managerCronMinutesSchema,
+  /** false silences system notifications; the chat and unread dot stay. Absent = on. */
+  notify: z.boolean().optional(),
   jobs: z.array(managerJobSchema).max(32),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -75,6 +77,10 @@ export const managerSummarySchema = managerSchema.extend({
   preview: z.string().optional(),
   /** Messages the manager produced since the user last opened this chat. */
   unread: z.number().int().min(0),
+  /** Those of them it judged worth interrupting the user for. */
+  important: z.number().int().min(0),
+  /** The newest important message's one line, for a browser notification. */
+  headline: z.string().optional(),
   pendingActions: z.number().int().min(0),
   lastCheckAt: z.string().optional(),
   /** Absent when `cronMinutes` is 0. */
@@ -108,6 +114,7 @@ export const updateManagerInputSchema = z.object({
   agentProfile: z.string().max(64).nullable().optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
   avatar: z.number().int().min(0).max(63).optional(),
+  notify: z.boolean().optional(),
   jobs: z.array(managerJobInputSchema).max(32).optional(),
 });
 export type UpdateManagerInput = z.infer<typeof updateManagerInputSchema>;
@@ -178,6 +185,9 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     turn: managerTurnKindSchema,
     jobName: z.string().optional(),
     streaming: z.boolean(),
+    /** The manager's own judgement that this should interrupt the user. */
+    important: z.boolean().optional(),
+    headline: z.string().optional(),
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),
@@ -223,6 +233,7 @@ export const managerAttentionKindSchema = z.enum([
   'task-needs-you',
   'task-failed',
   'task-review',
+  'task-finished',
   'task-stalled',
   'pr-ready',
   'pr-checks-failing',

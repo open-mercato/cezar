@@ -89,6 +89,15 @@ describe('cez manager', () => {
     });
   });
 
+  it('renames, but not from a watch check', async () => {
+    const { run, calls } = harness();
+    expect(await run('rename', 'Mobile', 'Manager')).toBe(0);
+    expect(calls.at(-1)).toMatchObject({ method: 'PATCH', body: { name: 'Mobile Manager' } });
+    const watching = harness({ CEZ_MANAGER_TURN: 'watch' });
+    expect(await watching.run('rename', 'Pwned')).toBe(1);
+    expect(watching.calls).toEqual([]);
+  });
+
   it('job add only proposes', async () => {
     const { run, calls, logs } = harness();
     expect(await run('job', 'add', '--name', 'Digest', '--every', '60', 'Summarize')).toBe(0);

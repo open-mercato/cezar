@@ -15,6 +15,7 @@ export function managerFixture(overrides: Partial<ManagerSummary> = {}): Manager
     status: 'idle',
     connectedProjectIds: ['alpha', 'beta'],
     unread: 0,
+    important: 0,
     pendingActions: 0,
     costUsd: 0,
     ...overrides,

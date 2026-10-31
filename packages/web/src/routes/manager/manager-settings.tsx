@@ -13,17 +13,19 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
-import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 import { toast } from '@/components/ui/toaster'
+import { ManagerAvatar, PERSONA_CHOICES } from './manager-avatar'
 import type { ManagerSummary, UpdateManagerInput } from '@open-mercato/cezar-api-client'
 
-import { AccountPicker, ChronPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { AccountPicker, ModelPicker, RefreshPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -136,7 +138,7 @@ export function JobsDialog({
   )
 }
 
-function RenameDialog({
+function PersonaDialog({
   manager,
   open,
   onOpenChange,
@@ -149,8 +151,9 @@ function RenameDialog({
 }) {
   const [name, setName] = useState(manager.name)
   const [instructions, setInstructions] = useState(manager.instructions)
+  const [avatar, setAvatar] = useState(manager.avatar)
   const save = () => {
-    void onSave({ name: name.trim(), instructions }).then(
+    void onSave({ name: name.trim(), instructions, avatar }).then(
       () => onOpenChange(false),
       (error: unknown) => toast(errorMessage(error), { tone: 'danger' }),
     )
@@ -159,10 +162,28 @@ function RenameDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename manager</DialogTitle>
-          <DialogDescription>The instructions become part of its system prompt.</DialogDescription>
+          <DialogTitle>Persona</DialogTitle>
+          <DialogDescription>How this manager looks and what it is for. The instructions become part of its system prompt.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
+          <div role="radiogroup" aria-label="Character" data-slot="manager-persona-picker" className="flex flex-wrap gap-1">
+            {Array.from({ length: PERSONA_CHOICES }, (_, index) => (
+              <button
+                key={index}
+                type="button"
+                role="radio"
+                aria-checked={avatar === index}
+                aria-label={`Character ${index + 1}`}
+                onClick={() => setAvatar(index)}
+                className={cn(
+                  'rounded-lg p-1 outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                  avatar === index && 'bg-muted ring-1 ring-border',
+                )}
+              >
+                <ManagerAvatar avatar={index} className="size-9" />
+              </button>
+            ))}
+          </div>
           <Label className="flex flex-col items-start gap-1.5">
             Name
             <Input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
@@ -216,9 +237,17 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
             {...(manager.agentProfile ? { agentProfile: manager.agentProfile } : {})}
             onChange={onPatch}
           />
-          <ChronPicker minutes={manager.cronMinutes} onChange={onPatch} />
+          <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
+          <label className="flex min-h-8 w-full items-center justify-between gap-2 px-1.5 text-sm text-muted-foreground">
+            Notify me when important
+            <Switch
+              aria-label="Notify me when important"
+              checked={manager.notify !== false}
+              onCheckedChange={(notify) => update.mutate({ notify })}
+            />
+          </label>
           <Separator className="my-1.5" />
-          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialog('rename')}>Rename…</Button>
+          <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialog('rename')}>Persona…</Button>
           <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialog('jobs')}>
             Jobs{manager.jobs.length > 0 ? ` (${manager.jobs.length})` : ''}…
           </Button>
@@ -232,7 +261,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
         </PopoverContent>
       </Popover>
       {dialog === 'rename' ? (
-        <RenameDialog manager={manager} open onOpenChange={closeDialog} onSave={(patch) => update.mutateAsync(patch)} />
+        <PersonaDialog manager={manager} open onOpenChange={closeDialog} onSave={(patch) => update.mutateAsync(patch)} />
       ) : null}
       {dialog === 'jobs' ? (
         <JobsDialog manager={manager} open onOpenChange={closeDialog} onSave={(jobs) => update.mutateAsync({ jobs })} />

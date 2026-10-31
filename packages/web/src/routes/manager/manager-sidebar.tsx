@@ -34,7 +34,7 @@ export function ManagerRow({
       aria-current={active ? 'page' : undefined}
       onClick={onNavigate}
       className={cn(
-        'flex min-h-14 items-center gap-2.5 rounded-lg px-2 py-1.5 outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'flex min-h-16 items-center gap-2.5 rounded-xl px-2 py-1.5 outline-none transition-colors hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
         active && 'bg-muted',
       )}
     >

@@ -99,6 +99,8 @@ export function taskAttention(projectId: string, runs: RunRecord[], now: number)
       items.push({ ...base, key: `task-failed:${projectId}:${run.id}:${finished}`, kind: 'task-failed', since: finished });
     } else if (run.status === 'review' && unseenSince(run, finished)) {
       items.push({ ...base, key: `task-review:${projectId}:${run.id}:${finished}`, kind: 'task-review', since: finished });
+    } else if (run.status === 'done' && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
+      items.push({ ...base, key: `task-finished:${projectId}:${run.id}:${finished}`, kind: 'task-finished', since: finished });
     } else if (run.status === 'running' && now - Date.parse(lastActivityAt(run)) > STALLED_MS) {
       const since = lastActivityAt(run);
       items.push({ ...base, key: `task-stalled:${projectId}:${run.id}:${since}`, kind: 'task-stalled', since });

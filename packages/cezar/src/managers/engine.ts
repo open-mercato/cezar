@@ -29,7 +29,7 @@ import { createRunner } from '../core/runner-factory.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir } from '../paths.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
-import { chatPrompt, jobPrompt, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
+import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerStore } from './store.ts';
 
@@ -54,6 +54,8 @@ export interface ManagerEngineDeps {
   /** The cockpit's own routes, in process: POST /runs, merge, enable have exactly one implementation. */
   request: LoopbackRequest;
   costVisible: () => boolean;
+  /** Raises the OS notification; absent where there is nobody at the machine. */
+  notifySystem?: (title: string, body: string) => void;
   runnerFor?: (runner: RunnerId) => AgentRunner;
   now?: () => number;
 }
@@ -152,6 +154,18 @@ const onePlainLine = (text: string): string =>
     .replace(/[`*_#>]/g, '').replace(/\s+/g, ' ').trim().slice(0, PREVIEW_LIMIT);
 
 const QUIET_LINE = new RegExp(`(^|\\n)\\s*${MANAGER_QUIET}\\s*$`);
+const IMPORTANT_LINE = new RegExp(`^\\s*${MANAGER_IMPORTANT}\\b[ \\t:]*(.*)(?:\\n|$)`, 'm');
+const HEADLINE_LIMIT = 140;
+/** Long enough for an open tab to mark the message read, so nobody is told what they are reading. */
+const SYSTEM_NOTIFY_DELAY_MS = 3_000;
+
+function judged(raw: string): { text: string; important: boolean; headline?: string } {
+  const match = IMPORTANT_LINE.exec(raw);
+  if (!match) return { text: raw, important: false };
+  const text = raw.replace(IMPORTANT_LINE, '').trim();
+  const headline = (match[1] ?? '').trim().slice(0, HEADLINE_LIMIT);
+  return { text, important: true, ...(headline ? { headline } : {}) };
+}
 
 /** The end of a task's assistant text, off its event file. Best effort: a task may have none. */
 function lastAssistantText(root: string, runId: string): string | undefined {
@@ -191,6 +205,8 @@ export class ManagerEngine {
   private recoveryTimer?: NodeJS.Timeout;
   private started = false;
   private disposed = false;
+
+  private readonly alerts = new Set<NodeJS.Timeout>();
 
   constructor(private readonly deps: ManagerEngineDeps) {}
 
@@ -259,6 +275,8 @@ export class ManagerEngine {
     this.disposed = true;
     if (this.timer) clearTimeout(this.timer);
     if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    for (const timer of this.alerts) clearTimeout(timer);
+    this.alerts.clear();
     this.timer = undefined;
     for (const runtime of this.runtimes.values()) {
       if (runtime.retry) clearTimeout(runtime.retry);
@@ -349,6 +367,8 @@ export class ManagerEngine {
     const working = runtime?.active?.started === true || (runtime?.queue.length ?? 0) > 0;
     const preview = lastTalk && 'text' in lastTalk ? onePlainLine(lastTalk.text) : '';
     const dueAt = this.checkDueAt(manager, state);
+    const important = messages.flatMap((message) =>
+      message.kind === 'assistant' && message.important && !message.streaming && message.seq > state.readSeq ? [message] : []);
     return {
       ...manager,
       status: working ? 'working' : lastAssistant?.kind === 'assistant' && lastAssistant.error ? 'error' : 'idle',
@@ -356,6 +376,8 @@ export class ManagerEngine {
       ...(last ? { lastActivityAt: last.at } : {}),
       ...(preview ? { preview } : {}),
       unread: messages.filter((message) => message.seq > state.readSeq && message.kind !== 'user' && !(message.kind === 'assistant' && message.streaming)).length,
+      important: important.length,
+      ...(important.at(-1)?.headline ? { headline: important.at(-1)!.headline } : {}),
       pendingActions: messages.filter((message) => message.kind === 'action' && message.status === 'pending').length,
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
@@ -423,7 +445,8 @@ export class ManagerEngine {
       id,
       name: input.name ?? 'Manager',
       instructions: input.instructions,
-      avatar: input.avatar ?? (parseInt(id.slice(0, 8), 16) % 64),
+      // The first character nobody wears: two managers must never look alike by accident.
+      avatar: input.avatar ?? firstFreeAvatar(this.deps.store.list()),
       projects: input.projects,
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
@@ -464,6 +487,7 @@ export class ManagerEngine {
       ...(input.projects !== undefined ? { projects: input.projects } : {}),
       ...(input.cronMinutes !== undefined ? { cronMinutes: input.cronMinutes } : {}),
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
+      ...(input.notify !== undefined ? { notify: input.notify } : {}),
       ...(input.jobs
         ? {
             jobs: input.jobs.map((job): ManagerJob => {
@@ -657,8 +681,14 @@ export class ManagerEngine {
     let latest: { text: string; commands: ManagerCommand[] } = { text: '', commands: [] };
     const flush = () => {
       throttle = undefined;
-      // Output stays for the final frame: every open tab parses these ten times a second.
-      this.publish(id, { ...base, text: latest.text, commands: latest.commands.map(({ output: _output, ...command }) => command), streaming: true }, false);
+      // Output stays for the final frame: every open tab parses these ten times a second. A task
+      // start keeps its line, so the card appears while the turn is still running.
+      const commands = latest.commands.map((command) => {
+        if (/\btask create\b/.test(command.summary)) return command;
+        const { output: _output, ...rest } = command;
+        return rest;
+      });
+      this.publish(id, { ...base, text: judged(latest.text).text, commands, streaming: true }, false);
     };
     const result = await this.drive(id, manager, prompt, turn, (progress) => {
       latest = progress;
@@ -670,16 +700,33 @@ export class ManagerEngine {
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
-    const text = result.text.replace(QUIET_LINE, '').trim();
+    const { text, important, headline } = judged(result.text.replace(QUIET_LINE, '').trim());
     this.publish(id, {
       ...base,
       text,
+      ...(important ? { important } : {}),
+      ...(headline ? { headline } : {}),
       streaming: false,
       commands: result.commands,
       ...(turn.stopped ? { stopped: true } : {}),
       ...(result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
+    if (important) this.alert(id, base.seq, headline ?? onePlainLine(text));
+  }
+
+  /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
+  private alert(id: string, seq: number, body: string): void {
+    const { notifySystem, store } = this.deps;
+    if (!notifySystem) return;
+    const timer = setTimeout(() => {
+      this.alerts.delete(timer);
+      const manager = store.get(id);
+      if (!manager || manager.notify === false || store.state(id).readSeq >= seq) return;
+      notifySystem(manager.name, body);
+    }, SYSTEM_NOTIFY_DELAY_MS);
+    timer.unref?.();
+    this.alerts.add(timer);
   }
 
   private async watchTurn(
@@ -719,22 +766,27 @@ export class ManagerEngine {
       watchFailures: 0,
       reported: { ...state.reported, ...Object.fromEntries(snapshot.attention.map((item) => [item.key, reportedAt])) },
     }));
-    const text = result.text.trim();
-    if (!text || QUIET_LINE.test(text)) {
+    const raw = result.text.trim();
+    if (!raw || QUIET_LINE.test(raw)) {
       if (forced) this.addNotice(id, 'Checked: nothing needs you right now.');
       return;
     }
+    const { text, important, headline } = judged(raw);
+    const seq = store.nextSeq(id);
     this.publish(id, {
       id: randomUUID(),
-      seq: store.nextSeq(id),
+      seq,
       at: this.iso(),
       kind: 'assistant',
       turn: 'watch',
       text,
+      ...(important ? { important } : {}),
+      ...(headline ? { headline } : {}),
       streaming: false,
       commands: result.commands,
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
+    if (important) this.alert(id, seq, headline ?? onePlainLine(text));
   }
 
   private addCost(id: string, usd: number): void {
@@ -1042,6 +1094,8 @@ export class ManagerEngine {
     };
     this.publish(id, message, true);
     this.emitChange(id);
+    // An approval always waits on the user, so it never needs the agent's judgement.
+    this.alert(id, message.seq, `Needs your approval: ${describe(action)}`);
     return { actionId: message.id, status: 'pending' };
   }
 
@@ -1123,6 +1177,12 @@ export class ManagerEngine {
     return { ok: true as const };
   }
 }
+
+const firstFreeAvatar = (managers: readonly Manager[]): number => {
+  const taken = new Set(managers.map((manager) => manager.avatar));
+  const free = Array.from({ length: 64 }, (_, index) => index).find((index) => !taken.has(index));
+  return free ?? managers.length % 64;
+};
 
 const SUMMARY_LIMIT = 8_000;
 

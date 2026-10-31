@@ -53,6 +53,33 @@ describe('parseManagerText', () => {
     })
   })
 
+  it('follows the block that names a task with its card, once per task', () => {
+    const text = 'Started [[task:a/1]] for you.\nStill going.\n\nThat [[task:a/1]] again.\n\n[[task:a/1]]\n\nDone.'
+    const kinds = parseManagerText(text).map((segment) => segment.kind)
+    expect(kinds).toEqual(['markdown', 'task', 'markdown', 'markdown'])
+  })
+
+  it('keeps a list whole and puts its cards after it', () => {
+    expect(parseManagerText('- one [[task:a/1]]\n- two [[task:a/2]]\n\nEnd')).toEqual([
+      { kind: 'markdown', text: '- one [task](#cez-task/a/1)\n- two [task](#cez-task/a/2)' },
+      { kind: 'task', projectId: 'a', runId: '1' },
+      { kind: 'task', projectId: 'a', runId: '2' },
+      { kind: 'markdown', text: 'End' },
+    ])
+  })
+
+  it('cards a task the agent started without naming it', () => {
+    const started = { summary: 'cez-manager task create --project a "x"', output: '[[task:a/9]]' }
+    expect(parseManagerText('On it.', [started]).at(-1)).toEqual({ kind: 'task', projectId: 'a', runId: '9' })
+    expect(parseManagerText('On it [[task:a/9]].', [started]).filter((segment) => segment.kind === 'task')).toHaveLength(1)
+  })
+
+  it('never cards what other commands printed, or a failed start', () => {
+    const pasted = { summary: 'gh pr view 3', output: '[[task:a/9]]' }
+    const failed = { summary: 'cez-manager task create "x"', output: '[[task:a/9]]', isError: true }
+    expect(parseManagerText('Hi', [pasted, failed]).map((segment) => segment.kind)).toEqual(['markdown'])
+  })
+
   it('leaves fenced code literal', () => {
     const text = '```\n[[task:a/1]]\n```'
     expect(parseManagerText(text)).toEqual([{ kind: 'markdown', text }])

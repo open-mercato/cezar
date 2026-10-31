@@ -26,7 +26,7 @@ import { isNearBottom } from '@/routes/task-thread/thread-scroll'
 import type { ManagerListResponse, ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-client'
 
 import { ManagerMessageRow } from './manager-message'
-import { ChronPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
+import { ModelPicker, ProjectsPicker, RefreshPicker, type ManagerPatch } from './manager-pickers'
 import { ManagerSettings, pickModel } from './manager-settings'
 
 /** Older history loads this far before the reader reaches the top. */
@@ -214,12 +214,13 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
                 size="icon-sm"
                 aria-disabled="true"
                 aria-label="Attach files"
-                className="mb-0.5 size-8 shrink-0 cursor-not-allowed text-muted-foreground opacity-60 hover:bg-transparent"
+                className="size-10 shrink-0 cursor-not-allowed rounded-full bg-muted text-muted-foreground opacity-60 hover:bg-muted md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent md:hover:bg-transparent"
               >
                 <PlusIcon aria-hidden="true" className="size-4" />
               </Button>
             </IconTooltip>
           }
+          footerEnd={<ModelPicker {...pickModel(manager)} onChange={onPatch} pill />}
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -234,8 +235,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           {...(working ? { stop: { label: 'Stop', onStop: stop } } : {})}
         />
         <div data-slot="manager-footer" className="mt-1 flex min-h-8 items-center justify-end gap-1 md:gap-3">
-          <ChronPicker minutes={manager.cronMinutes} onChange={onPatch} />
-          <ModelPicker {...pickModel(manager)} onChange={onPatch} />
+          <RefreshPicker minutes={manager.cronMinutes} onChange={onPatch} />
+          <div className="hidden md:block"><ModelPicker {...pickModel(manager)} onChange={onPatch} /></div>
           {working ? (
             <span role="status" aria-label="Working" className="flex">
               <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin text-info motion-reduce:animate-none" />

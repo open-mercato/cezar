@@ -113,11 +113,14 @@ export function ModelPicker({
   model,
   effort,
   onChange,
+  pill = false,
 }: {
   runner?: string
   model?: string
   effort?: ManagerEffort
   onChange: (patch: ManagerPatch) => void
+  /** The phone composer's round control. */
+  pill?: boolean
 }) {
   const runner = useManagerRunner(pinnedRunner)
   // Pi fails closed on `bashAllowlist`, so a Pi manager would have no `cez-manager` to act with.
@@ -130,7 +133,7 @@ export function ModelPicker({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" data-slot="manager-model-picker" aria-label="Model and effort" className={PICKER_TRIGGER}>
+        <button type="button" data-slot="manager-model-picker" aria-label="Model and effort" className={cn(PICKER_TRIGGER, pill && 'h-10 max-w-44 rounded-full bg-muted px-3')}>
           <TriggerLabel>
             <span className="text-foreground">{label}</span>
             {effortApplies && effort ? <span className="ml-1.5">{effortLabel(effort)}</span> : null}
@@ -214,7 +217,7 @@ export function AccountPicker({
   )
 }
 
-export function ChronPicker({
+export function RefreshPicker({
   minutes,
   onChange,
   className,
@@ -227,7 +230,7 @@ export function ChronPicker({
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" data-slot="manager-chron-picker" aria-label="Watch check cadence" className={cn(PICKER_TRIGGER, className)}>
-          <TriggerLabel>Chron: {cronLabel(minutes)}</TriggerLabel>
+          <TriggerLabel>Refresh: {cronLabel(minutes)}</TriggerLabel>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">

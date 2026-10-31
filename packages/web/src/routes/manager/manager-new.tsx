@@ -12,26 +12,29 @@ import { AccountPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from '.
 export const MANAGER_PRESETS = [
   {
     label: 'Watch my repositories',
+    name: 'Repository Watcher',
     prompt: 'Watch my repositories and tell me when something needs my attention: failing tasks, stalled work, pull requests ready to merge.',
   },
   {
     label: 'Keep PRs moving',
+    name: 'PR Manager',
     prompt: 'Keep an eye on open pull requests. Tell me which are ready to merge, which have failing checks, and which wait on a review.',
   },
   {
     label: 'Run big tasks',
+    name: 'Task Manager',
     prompt: 'Help me run large tasks: start them, follow their dispatched subtasks, and report back here when they need me.',
   },
 ] as const
 
 const NAME_LIMIT = 40
 
-/** Every manager called "Manager" can't be told apart in the sidebar. A preset names itself; a typed
- *  prompt lends its first line, cut at a word. */
+/** Every manager called "Manager" can't be told apart in the sidebar. A preset names a role; a typed
+ *  prompt lends its first line, cut at a word, until the manager picks a role for itself. */
 export function managerNameFrom(prompt: string): string {
   const text = prompt.trim()
   const preset = MANAGER_PRESETS.find((entry) => entry.prompt === text)
-  if (preset) return preset.label
+  if (preset) return preset.name
   const line = (text.split('\n')[0] ?? '').replace(/[.!?:,;]+$/, '').trim()
   if (line.length <= NAME_LIMIT) return line
   const cut = line.slice(0, NAME_LIMIT)

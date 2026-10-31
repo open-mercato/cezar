@@ -12,6 +12,7 @@ import {
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
+import { sendSystemNotification } from '../managers/system-notify.ts';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
@@ -8260,6 +8261,9 @@ export function createApp(deps: ServerDeps) {
       return managerLoopback.request(path, init);
     },
     costVisible: () => capabilities().costMetrics,
+    notifySystem: (title, body) => {
+      if (capabilities().managerSystemNotifications) sendSystemNotification(title, body);
+    },
     ...(deps.managerRunnerFor ? { runnerFor: deps.managerRunnerFor } : {}),
   });
   deps.onManagerEngine?.(managerEngine);

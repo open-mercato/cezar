@@ -63,7 +63,7 @@ A dot on **Manager** means a manager has an unread message or an approval waitin
 2. Describe the job in **What should this manager do?**, or pick a preset: **Watch my repositories**, **Keep PRs moving**, or **Run big tasks**.
 3. Choose the projects, model, effort, and account, then select **Create**.
 
-Your text becomes the manager's standing instructions and its first message, so it starts working right away. To change the name or the instructions later, open the gear and select **Rename…**.
+Your text becomes the manager's standing instructions and its first message, so it starts working right away. Each manager gets its own character in the sidebar. To change its character, name or instructions later, open the gear and select **Persona…**.
 
 Type `/` in the chat for commands:
 
@@ -84,9 +84,9 @@ A manager starts with **All projects**, which covers every project registered in
 
 Cezar refuses any `cez-manager` command that targets a project the manager is not connected to. An approval also fails if you disconnected its project after the manager proposed it.
 
-## Chron watching
+## Refresh
 
-**Chron** sets how often a manager checks its connected projects. The default is 15 minutes. Change it in the footer under the composer: **Off**, 5, 15, or 30 minutes, 1 or 4 hours, or 1 day.
+**Refresh** sets how often a manager checks its connected projects. The default is 15 minutes. Change it in the footer under the composer: **Off**, 5, 15, or 30 minutes, 1 or 4 hours, or 1 day.
 
 A check reads the task stores and the same GitHub data the GitHub tab uses, then looks for attention items:
 
@@ -107,14 +107,14 @@ Cezar reports each item once. The same task failing again is a new item, and so 
 > **Good to know**:
 >
 > - Checks run while Cezar runs. Checks missed while it was closed collapse into one.
-> - After a failed check, the interval doubles, up to 16 times the Chron setting. The chat shows one error line for the whole run of failures.
+> - After a failed check, the interval doubles, up to 16 times the Refresh setting. The chat shows one error line for the whole run of failures.
 > - Connected projects with no GitHub access still get task checks.
 
 ## Jobs
 
 A job is a saved prompt the manager runs on its own interval, for example a morning summary of open pull requests. Open the gear, select **Jobs…**, then add a name, a prompt, and an interval from 5 to 10,080 minutes. You can also ask the manager in chat to add one, and it proposes the job as a card you approve. A manager holds up to 32 jobs.
 
-Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore the attention gate and keep running with **Chron** set to **Off**, so **every due job spends a model turn**. Use the switch in **Jobs…** to pause a job.
+Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore the attention gate and keep running with **Refresh** set to **Off**, so **every due job spends a model turn**. Use the switch in **Jobs…** to pause a job.
 
 ## What a manager can do
 
@@ -135,9 +135,15 @@ Merging, enabling an automation and adding a job happen only when you approve. T
 
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
 
+## Notifications
+
+Everything a manager writes appears in its chat with an unread dot. When it judges something important, such as a task blocked on you or a big task finishing, it also raises a system notification. So does any approval card. On your own Mac, Windows or Linux machine this is the operating system's notification and needs no open tab. On a hosted Cezar it is a browser notification, which you turn on in Settings. If you are reading that chat, Cezar does not notify you.
+
+To silence a manager, open the gear and turn off **Notify me when important**.
+
 ## Open a task from a card
 
-The manager references tasks as cards in the chat. A card shows the task's title, live status, and added and removed lines. Dispatched tasks appear as their root task, and you can ask the manager about the subtasks.
+Every task the manager names or starts appears as a card in the chat. A card shows the task's title, live status, and added and removed lines. Dispatched tasks appear as their root task, and you can ask the manager about the subtasks.
 
 Select a card to open that task's own thread and keep working there. The task then shows a `Back to <manager>` link, which stays for the browser session as you move between the task's tabs. A pull request chip opens the pull request in the GitHub tab.
 
@@ -155,7 +161,7 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 
 > **Good to know**:
 >
-> - Managers are available by default, and nothing runs until you create one. The default 15-minute Chron then spends tokens only when a check finds a new item.
+> - Managers are available by default, and nothing runs until you create one. The default 15-minute Refresh then spends tokens only when a check finds a new item.
 > - `CEZ_MANAGERS=0` turns managers off. It removes the Manager mode, stops the timers, and makes the API answer `409`. Cezar reads it at boot, only the exact value `0` opts out, and your managers stay in `~/.cezar/` for when you turn the feature back on.
 > - Definitions live in `~/.cezar/managers.json` and chats in `~/.cezar/managers/`. Deleting a manager removes its chat and jobs. Tasks it started stay where they are.
 > - The effort picker applies to Claude only.

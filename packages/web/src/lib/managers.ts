@@ -1,4 +1,9 @@
-import type { ManagerActionRequest, ManagerProjects, ManagerSummary } from '@open-mercato/cezar-api-client'
+import type {
+  ManagerActionRequest,
+  ManagerCommand as ContractManagerCommand,
+  ManagerProjects,
+  ManagerSummary,
+} from '@open-mercato/cezar-api-client'
 
 /** Pure helpers behind the Manager surface (spec `2026-10-31-managers`): no React, no clock. */
 
@@ -8,6 +13,8 @@ export function isManagerPathname(pathname: string): boolean {
 }
 
 // ---- `[[task:…]]` / `[[pr:…]]` -------------------------------------------------------------
+
+type ManagerCommandRow = Pick<ContractManagerCommand, 'summary' | 'output' | 'isError'>
 
 export type ManagerSegment =
   | { kind: 'markdown'; text: string }
@@ -30,15 +37,38 @@ function inlineReferences(line: string): string {
   })
 }
 
-/** A task alone on its line is a card; everything else stays markdown. Fenced code is literal. */
-export function parseManagerText(text: string): ManagerSegment[] {
+const STARTED_TASK = /^\[\[task:([^\]/\s]+)\/([^\]\s]+)\]\]$/gm
+
+/** What `cez-manager task create` printed. Only that command: other output is text anyone wrote. */
+function startedTasks(commands: readonly ManagerCommandRow[]): Array<{ projectId: string; runId: string }> {
+  return commands
+    .filter((command) => !command.isError && /\btask create\b/.test(command.summary))
+    .flatMap((command) => [...(command.output ?? '').matchAll(STARTED_TASK)])
+    .map((match) => ({ projectId: match[1]!, runId: match[2]! }))
+}
+
+/**
+ * Every task a reply names or started gets a card, however the agent worded it: alone on its line
+ * the card replaces it, in a sentence the chip stays and the card follows that block, and a task
+ * it started without naming closes the reply. One card per task. Fenced code is literal.
+ */
+export function parseManagerText(text: string, commands: readonly ManagerCommandRow[] = []): ManagerSegment[] {
   const segments: ManagerSegment[] = []
+  const carded = new Set<string>()
+  let pending: Array<{ projectId: string; runId: string }> = []
   let buffer: string[] = []
   let fenced = false
+  const card = (projectId: string, runId: string) => {
+    if (carded.has(`${projectId}/${runId}`)) return
+    carded.add(`${projectId}/${runId}`)
+    segments.push({ kind: 'task', projectId, runId })
+  }
   const flush = () => {
     const joined = buffer.join('\n').trim()
     if (joined !== '') segments.push({ kind: 'markdown', text: joined })
     buffer = []
+    for (const task of pending) card(task.projectId, task.runId)
+    pending = []
   }
   for (const line of text.replace(TRAILING_PARTIAL, '').split('\n')) {
     if (/^\s*(```|~~~)/.test(line)) {
@@ -50,17 +80,20 @@ export function parseManagerText(text: string): ManagerSegment[] {
       buffer.push(line)
       continue
     }
-    const card = CARD_LINE.exec(line)
-    if (!card) {
+    const alone = CARD_LINE.exec(line)
+    if (!alone) {
+      if (pending.length > 0 && line.trim() === '') flush()
+      for (const match of line.matchAll(TOKEN)) {
+        if (match[1] === 'task') pending.push({ projectId: match[2]!, runId: match[3]! })
+      }
       buffer.push(inlineReferences(line))
       continue
     }
     flush()
-    for (const match of card[1]!.matchAll(TOKEN)) {
-      segments.push({ kind: 'task', projectId: match[2]!, runId: match[3]! })
-    }
+    for (const match of alone[1]!.matchAll(TOKEN)) card(match[2]!, match[3]!)
   }
   flush()
+  for (const task of startedTasks(commands)) card(task.projectId, task.runId)
   return segments
 }
 

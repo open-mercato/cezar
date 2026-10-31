@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 
 import { queryKeys, useWorkspaceUiState } from '@/api/queries'
 import { managerKeys } from '@/api/managers'
+import { useHealth } from '@/api/queries'
 import type { ApiRun, ManagerListResponse, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   describeManagerNotification,
@@ -46,6 +47,8 @@ export function RunNotifications() {
   // cache subscription and lose the status map — the whole "never replay" guarantee.
   const enabledRef = useRef(enabled)
   enabledRef.current = enabled
+  const systemRef = useRef(false)
+  systemRef.current = useHealth().data?.capabilities.managerSystemNotifications === true
   const statusesRef = useRef<ReadonlyMap<string, RunStatus>>(new Map())
   const managerCountsRef = useRef<ReadonlyMap<string, number> | null>(null)
 
@@ -58,7 +61,8 @@ export function RunNotifications() {
       if (!list) return
       const { entering, counts } = diffManagerAttention(managerCountsRef.current, list.managers)
       managerCountsRef.current = counts
-      if (entering.length === 0 || !notificationsAllowed()) return
+      // The server raises the OS's own here, tab or no tab; a second one would be a double.
+      if (entering.length === 0 || systemRef.current || !notificationsAllowed()) return
       for (const manager of entering) fireNotification(describeManagerNotification(manager))
     }
     const notificationsAllowed = () => shouldNotify({

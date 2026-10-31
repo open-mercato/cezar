@@ -473,6 +473,71 @@ describe('ManagerEngine', () => {
     });
   });
 
+  it('gives each new manager a character nobody else wears', async () => {
+    const engine = makeEngine();
+    const avatars = [];
+    for (let index = 0; index < 4; index += 1) {
+      const created = await engine.create({ instructions: '', projects: 'all' });
+      if ('error' in created) throw created;
+      avatars.push(created.avatar);
+    }
+    expect(avatars).toEqual([0, 1, 2, 3]);
+  });
+
+  describe('importance', () => {
+    const raised: Array<[string, string]> = [];
+    const noisy = (extra = {}) => makeEngine({ notifySystem: (title: string, body: string) => raised.push([title, body]), ...extra });
+    beforeEach(() => { raised.length = 0; vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('strips the marker, keeps the headline and notifies the OS', async () => {
+      const engine = noisy();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you\nIt asks which branch to use.'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(assistants(id)[0]).toMatchObject({ text: 'It asks which branch to use.', important: true, headline: 'Task blocked on you' });
+      expect((await engine.summary(id))).toMatchObject({ important: 1, headline: 'Task blocked on you' });
+      vi.advanceTimersByTime(3_000);
+      expect(raised).toEqual([[store.get(id)!.name, 'Task blocked on you']]);
+    });
+
+    it('stays quiet for routine replies', async () => {
+      const engine = noisy();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('All fine.'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(raised).toEqual([]);
+      expect(assistants(id)[0]).not.toHaveProperty('important');
+    });
+
+    it('does not interrupt someone reading the chat, or a manager told to hush', async () => {
+      const engine = noisy();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('MANAGER:IMPORTANT Read me'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      engine.read(id);
+      vi.advanceTimersByTime(3_000);
+      await engine.update(id, { notify: false });
+      backend.scripts.push(say('MANAGER:IMPORTANT Hush'));
+      engine.send(id, 'again');
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(raised).toEqual([]);
+    });
+
+    it('always raises an approval', async () => {
+      const engine = noisy();
+      const id = await create(engine);
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      vi.advanceTimersByTime(3_000);
+      expect(raised[0]?.[1]).toContain('Needs your approval');
+    });
+  });
+
   describe('jobs', () => {
     it('runs a due job through the queue and never repeats it within its interval', async () => {
       let now = Date.parse('2026-10-31T12:00:00.000Z');

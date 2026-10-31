@@ -109,7 +109,7 @@ describe('Managers', () => {
 
     const [manager] = await managers()
     firstId = manager!.id
-    expect(manager!.name).toBe('Watch my repositories')
+    expect(manager!.name).toBe('Repository Watcher')
     expect(manager!.pendingActions).toBe(1)
     expect(browser.url()).toContain(`/manager/${firstId}`)
   }, 120_000)
@@ -199,7 +199,7 @@ describe('Managers', () => {
     browser.click('[data-slot="manager-settings"]')
     browser.waitForFunction(`document.querySelector('[data-slot="manager-settings-menu"]') !== null`)
     browser.screenshot(`${artifactsDir}/manager-settings.png`)
-    clickText('Rename', '[data-slot="manager-settings-menu"]')
+    clickText('Persona', '[data-slot="manager-settings-menu"]')
     browser.waitForFunction(`document.querySelector('[role="dialog"] input') !== null`)
     browser.fill('[role="dialog"] input', 'Global Manager')
     clickText('Save', '[role="dialog"]')

@@ -35,7 +35,8 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
                                                  always paused, editing one pauses it; enable proposes
   cez manager job add --name <name> --every <minutes> "<prompt>"
                                                  proposes a job; the user approves it in the chat
-  cez manager job list | job remove <id>`;
+  cez manager job list | job remove <id>
+  cez manager rename "<role>"                    a short role the user recognizes it by`;
 
 /** All a watch check may run; an allowlist, so a new subcommand is refused until someone decides. */
 const READ_ONLY_AUTOMATION = new Set(['list', 'show', 'schema', 'check']);
@@ -175,6 +176,15 @@ export async function runManagerCommand(
           ?? data.projects.find((project) => project.tasks.some((task) => task.runId === runId))?.projectId
           ?? (await projectOf(undefined)).projectId;
         printJson(await call(`/task?${new URLSearchParams({ projectId, runId })}`));
+        return 0;
+      }
+
+      case 'rename': {
+        const name = rest.join(' ').trim();
+        if (!name) fail('usage: cez manager rename "<role>"');
+        if (env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
+        await call('', { method: 'PATCH', body: { name } });
+        io.log(`renamed to ${name}`);
         return 0;
       }
 

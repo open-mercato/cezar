@@ -9,6 +9,12 @@ import type { ManagerOrigin } from '@/lib/managers'
 import { runTitle } from '@/lib/task-groups'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 
+/** The chip inside a sentence names the task; its card follows the block. */
+export function TaskChipLabel({ projectId, runId }: { projectId: string; runId: string }) {
+  const run = useRunsIndex().data?.runs.find((entry) => entry.projectId === projectId && entry.id === runId)
+  return <span className="max-w-56 truncate">{run ? runTitle(run as unknown as RunRecord) : `task ${runId.slice(0, 8)}`}</span>
+}
+
 export function taskPath(projectId: string, runId: string): string {
   return `/p/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(runId)}`
 }
@@ -39,7 +45,7 @@ export function SessionCard({
       >
         <span className="min-w-0 flex-1">
           <span className="block truncate text-sm font-semibold">
-            {run ? runTitle(run as unknown as RunRecord) : `Session ${runId.slice(0, 8)}`}
+            {run ? runTitle(run as unknown as RunRecord) : `Task ${runId.slice(0, 8)}`}
           </span>
           {attention || stat ? (
             <span className="mt-0.5 flex min-h-4 items-center gap-2">

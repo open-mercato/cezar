@@ -57,6 +57,14 @@ describe('snapshotTasks', () => {
   });
 });
 
+describe('taskAttention', () => {
+  it('reports a finished task once it is unseen, so a promise to report it can be kept', () => {
+    const now = Date.parse('2026-10-31T12:00:00.000Z');
+    const finished = { id: 'r', title: 't', status: 'done', archived: false, finishedAt: '2026-10-31T11:00:00.000Z' } as never;
+    expect(taskAttention('p', [finished], now).map((item) => item.kind)).toEqual(['task-finished']);
+  });
+});
+
 describe('buildSnapshot', () => {
   it('a missing PR status blinds the project, so the check keeps its keys', async () => {
     const source = { id: 'p', name: 'p', root: '/p', available: true, runs: () => [], automationFailures: () => [] } as unknown as ManagerProjectSource;

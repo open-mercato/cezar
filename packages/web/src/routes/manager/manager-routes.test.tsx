@@ -118,7 +118,7 @@ describe('/manager', () => {
 
 describe('managerNameFrom', () => {
   it('names a manager after its preset, or the first line of what it was told', () => {
-    expect(managerNameFrom(MANAGER_PRESETS[1].prompt)).toBe(MANAGER_PRESETS[1].label)
+    expect(managerNameFrom(MANAGER_PRESETS[1].prompt)).toBe('PR Manager')
     expect(managerNameFrom('Watch the docs.\nAnd more')).toBe('Watch the docs')
     expect(managerNameFrom('Keep the release train moving: tell me what blocks the next cut')).toBe('Keep the release train moving: tell me…')
     expect(managerNameFrom('x'.repeat(200))).toHaveLength(41)
@@ -135,7 +135,7 @@ describe('/manager/new', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
     await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
     expect(posted('/workspace/managers')[0]?.body).toEqual({
-      name: MANAGER_PRESETS[0].label,
+      name: MANAGER_PRESETS[0].name,
       instructions: MANAGER_PRESETS[0].prompt,
       projects: 'all',
       effort: 'medium',
@@ -168,7 +168,7 @@ describe('/manager/:id', () => {
     expect(await screen.findByText('jak progres prac')).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'Ran 1 command' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects access')
-    expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Chron: 15 min')
+    expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Refresh: 15 min')
     expect(screen.queryByRole('status')).toBeNull()
     // Drawn in the frame, inert until a runner can take files (spec § Not in v1).
     expect(screen.getByRole('button', { name: 'Attach files' }).getAttribute('aria-disabled')).toBe('true')
@@ -180,8 +180,10 @@ describe('/manager/:id', () => {
     await screen.findByRole('heading', { name: 'Global Manager' })
     const row = document.querySelector('[data-slot="composer-compact-row"]')
     expect(row?.contains(composer())).toBe(true)
-    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    // Desktop waits for a draft; the phone's Send pill is always drawn.
+    expect(row?.querySelector('[data-slot="composer-compact-send"]')?.className).toContain('md:hidden')
     fireEvent.change(composer(), { target: { value: 'hi' } })
+    expect(row?.querySelector('[data-slot="composer-compact-send"]')?.className).toBe('contents')
     expect(row?.contains(screen.getByRole('button', { name: 'Send' }))).toBe(true)
   })
 

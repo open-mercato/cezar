@@ -124,8 +124,10 @@ export interface ComposerProps {
   /** Off: no attach button, and paste/drop leave files alone. For a host that cannot deliver them. */
   attachments?: boolean
   /**
-   * One row: `footerStart`, the text, then the mic and send inside at the right (the manager frame,
-   * spec 2026-10-31-managers). Send shows only once there is something to send.
+   * One row on desktop: `footerStart`, the text, then the mic and send inside at the right, send
+   * only once there is something to send (the manager frame, spec 2026-10-31-managers). On a phone
+   * the text takes its own row above round controls, with `footerEnd` beside `footerStart` and a
+   * Send pill that is always there (`composer-reference.png`).
    */
   compact?: boolean
   /** Alt+A → "Yes, approved." / Alt+C → "Continue." — the legacy quick replies, window-global
@@ -601,12 +603,17 @@ export function Composer({
     <Button
       type="button"
       size={sendLabel ? "sm" : "icon-sm"}
+      variant={compact ? 'contrast' : undefined}
       aria-label={sendAriaLabel}
       disabled={sendDisabled}
-      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
+      className={cn(
+        compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
+        sendMenu && "rounded-r-none",
+      )}
       onClick={submitDraft}
     >
       <ArrowUpIcon aria-hidden="true" />{sendLabel}
+      {compact ? <span className="md:hidden">Send</span> : null}
     </Button>
   )
   // The chord goes in the tooltip, not on the button — the way GitHub and Linear show it.
@@ -625,7 +632,7 @@ export function Composer({
   ) : sendButtonElement
 
   const micClass = compact
-    ? 'size-8 text-muted-foreground'
+    ? 'size-10 rounded-full bg-muted text-muted-foreground md:size-8 md:rounded-md md:bg-transparent'
     : 'h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground'
   const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-3.5'} />
   const micSize = compact ? 'icon-sm' : 'sm'
@@ -671,7 +678,7 @@ export function Composer({
         data-slot="composer-stop"
         aria-label={stop.label}
         disabled={stop.pending}
-        className="size-8"
+        className={compact ? 'size-10 rounded-full md:size-8 md:rounded-md' : 'size-8'}
         onClick={stop.onStop}
       >
         <SquareIcon aria-hidden="true" className="size-3 fill-current" />
@@ -706,7 +713,7 @@ export function Composer({
       className={cn(
         'block max-h-[220px] w-full resize-none bg-transparent text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm',
         compact
-          ? 'min-h-9 min-w-0 flex-1 px-1.5 py-1.5 md:min-h-9'
+          ? 'order-first min-h-11 min-w-0 basis-full px-2 py-1.5 md:order-none md:min-h-9 md:flex-1 md:basis-auto md:px-1.5'
           : 'min-h-11 px-3 pt-2.5 pb-1 md:min-h-[54px] md:px-4 md:pt-3',
       )}
       onChange={(event) => {
@@ -729,7 +736,8 @@ export function Composer({
           onDrop={onDrop}
           onDragOver={(event) => event.preventDefault()}
           className={cn(
-            'rounded-xl border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
+            compact ? 'rounded-[1.75rem] md:rounded-xl' : 'rounded-xl',
+            'border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
             'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15',
             disabled && 'opacity-80',
           )}
@@ -773,14 +781,17 @@ export function Composer({
           ) : null}
 
           {compact ? (
-            <div data-slot="composer-compact-row" className="flex items-end gap-1 px-1.5 py-1">
+            <div data-slot="composer-compact-row" className="flex flex-wrap items-end gap-1.5 p-2 md:flex-nowrap md:gap-1 md:px-1.5 md:py-1">
               {footerStart}
+              {footerEnd ? <div className="min-w-0 md:hidden">{footerEnd}</div> : null}
               {field}
               {recording ? null : (
-                <div className="flex shrink-0 items-center gap-1 pb-0.5">
+                <div className="ml-auto flex shrink-0 items-center gap-1.5 md:ml-0 md:gap-1 md:pb-0.5">
                   {micControl}
                   {stopControl}
-                  {hasDraft ? sendControl : null}
+                  <div data-slot="composer-compact-send" className={hasDraft ? 'contents' : stop ? 'hidden' : 'contents md:hidden'}>
+                    {sendControl}
+                  </div>
                 </div>
               )}
             </div>

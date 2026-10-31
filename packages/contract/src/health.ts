@@ -60,6 +60,8 @@ export const capabilitiesSchema = z.object({
   automations: z.boolean(),
   /** Managers (spec 2026-10-31-managers): default-on, `CEZ_MANAGERS=0` off. */
   managers: z.boolean().optional(),
+  /** The server can raise an OS notification here, so a manager's browser one would be a double. */
+  managerSystemNotifications: z.boolean().optional(),
   /** Project lifecycle notifications; independent of graph notify steps. */
   webhooks: z.boolean(),
   /** Present on unsupported server platforms, regardless of the opt-in flag. */

@@ -1,4 +1,4 @@
-import { ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon } from 'lucide-react'
+import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon } from 'lucide-react'
 import { memo, useContext, createContext, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
@@ -18,7 +18,7 @@ import { cn } from '@/lib/utils'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import type { ManagerActionStatus, ManagerCommand, ManagerMessage } from '@open-mercato/cezar-api-client'
 
-import { SessionCard, taskPath } from './manager-session-card'
+import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
 const OriginContext = createContext<ManagerOrigin>({ id: '', name: '' })
 
@@ -42,7 +42,7 @@ function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
   if (task) {
     return (
       <Link to={taskPath(task.projectId, task.id)} state={{ manager: origin }} data-slot="manager-task-chip" className={cn(chipClass, 'inline-flex no-underline')}>
-        task {task.id.slice(0, 8)}
+        <TaskChipLabel projectId={task.projectId} runId={task.id} />
       </Link>
     )
   }
@@ -82,13 +82,19 @@ export function CommandsRow({ commands }: { commands: readonly ManagerCommand[] 
 }
 
 function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage, { kind: 'assistant' }>; origin: ManagerOrigin }) {
-  const segments = useMemo(() => parseManagerText(message.text), [message.text])
+  const segments = useMemo(() => parseManagerText(message.text, message.commands), [message.text, message.commands])
   return (
     <article data-slot="manager-assistant" className="min-w-0">
       {message.turn === 'job' && message.jobName ? (
         <p className="mb-1 text-xs font-medium text-soft-foreground">Job: {message.jobName}</p>
       ) : null}
       {message.turn === 'watch' ? <p className="mb-1 text-xs font-medium text-soft-foreground">Watch check</p> : null}
+      {message.important ? (
+        <p data-slot="manager-important" className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-foreground">
+          <BellRingIcon aria-hidden="true" className="size-3.5 text-pending-strong" />
+          {message.headline ?? 'Important'}
+        </p>
+      ) : null}
       <CommandsRow commands={message.commands} />
       <OriginContext.Provider value={origin}>
         {segments.map((segment, index) =>

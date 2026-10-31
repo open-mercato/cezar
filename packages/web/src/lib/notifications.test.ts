@@ -187,21 +187,22 @@ describe('diffManagerAttention', () => {
   const manager = (overrides: Partial<ManagerSummary>) => managerFixture(overrides)
 
   it('records silently on first sight', () => {
-    const { entering, counts } = diffManagerAttention(null, [manager({ unread: 3 })])
+    const { entering, counts } = diffManagerAttention(null, [manager({ important: 3 })])
     expect(entering).toEqual([])
     expect(counts.get('global')).toBe(3)
   })
 
   it('fires when the count rises, not when it falls or holds', () => {
     const before = new Map([['global', 1]])
-    expect(diffManagerAttention(before, [manager({ unread: 2 })]).entering).toHaveLength(1)
-    expect(diffManagerAttention(before, [manager({ pendingActions: 1, unread: 1 })]).entering).toHaveLength(1)
+    expect(diffManagerAttention(before, [manager({ unread: 2 })]).entering).toHaveLength(0)
+    expect(diffManagerAttention(before, [manager({ unread: 2, important: 2 })]).entering).toHaveLength(1)
+    expect(diffManagerAttention(before, [manager({ pendingActions: 2 })]).entering).toHaveLength(1)
     expect(diffManagerAttention(before, [manager({ unread: 1 })]).entering).toHaveLength(0)
     expect(diffManagerAttention(before, [manager({})]).entering).toHaveLength(0)
   })
 
   it('counts a manager born since from zero', () => {
-    expect(diffManagerAttention(new Map(), [manager({ id: 'new', unread: 1 })]).entering).toHaveLength(1)
+    expect(diffManagerAttention(new Map(), [manager({ id: 'new', important: 1 })]).entering).toHaveLength(1)
   })
 })
 

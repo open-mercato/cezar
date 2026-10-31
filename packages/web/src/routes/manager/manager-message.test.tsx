@@ -64,9 +64,20 @@ describe('ManagerMessageRow', () => {
     })
   })
 
+  it('shows a task named mid-sentence as a card too, with its title in the sentence', () => {
+    renderMessage(assistantMessage(2, { text: 'The spec task is running: [[task:alpha/run-1]]. More soon.' }))
+    expect(document.querySelector('[data-slot="manager-task-chip"]')?.textContent).toBe('Session 123123')
+    expect(document.querySelectorAll('[data-slot="session-card"]')).toHaveLength(1)
+  })
+
+  it('marks what the manager judged important, with its headline', () => {
+    renderMessage(assistantMessage(2, { text: 'It asks which shell.', important: true, headline: 'Blocked on you' }))
+    expect(document.querySelector('[data-slot="manager-important"]')?.textContent).toBe('Blocked on you')
+  })
+
   it('still offers a card for a run the index does not know', () => {
     renderMessage(assistantMessage(2, { text: '[[task:alpha/abcdef0123456]]' }))
-    expect(document.querySelector('[data-slot="session-card"]')?.textContent).toContain('Session abcdef01')
+    expect(document.querySelector('[data-slot="session-card"]')?.textContent).toContain('Task abcdef01')
   })
 
   it('paints an inline pull request as a chip inside its sentence', async () => {
