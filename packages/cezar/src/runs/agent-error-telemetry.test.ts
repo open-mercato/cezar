@@ -151,6 +151,8 @@ describe('reportAgentError', () => {
 
   it('skips account and conversation state — task_failed counts it, the thread explains it', () => {
     reportAgentError('claude', { type: 'error', message: 'Credit balance is too low' });
+    reportAgentError('claude', { type: 'error', message: 'API Error: 402 This request requires more credits, or fewer max_tokens.' });
+    reportAgentError('claude', { type: 'error', message: "You've hit your 5-hour limit · resets 3:10pm (UTC)" });
     reportAgentError('codex', { type: 'session.error', message: 'ENOSPC: no space left on device, write' });
     reportAgentError('claude', { type: 'error', message: 'Failed to authenticate: OAuth session expired and could not be refreshed' });
     reportAgentError('claude', { type: 'error', message: 'Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit.' });

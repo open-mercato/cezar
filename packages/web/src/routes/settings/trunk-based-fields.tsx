@@ -103,12 +103,12 @@ export function TrunkBasedFields({ config }: { config: ConfigResponse }) {
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-ui text-muted-foreground">
             {config.landing === 'auto' ? 'Auto-land on the base branch' : 'Review — nothing lands by itself (default)'}
           </span>
         </label>
         {config.landingBlocked ? (
-          <p data-slot="tasks-landing-blocked" className="mt-2 text-[13px] text-destructive">
+          <p data-slot="tasks-landing-blocked" className="mt-2 text-ui text-destructive">
             {config.landingBlocked}
           </p>
         ) : null}
@@ -152,7 +152,7 @@ export function TrunkBasedFields({ config }: { config: ConfigResponse }) {
             disabled={save.isPending}
             onCheckedChange={(checked) => save.mutate({ teamSkills: checked })}
           />
-          <span className="text-[13px] text-muted-foreground">{config.teamSkills ? 'On' : 'Off'}</span>
+          <span className="text-ui text-muted-foreground">{config.teamSkills ? 'On' : 'Off'}</span>
         </label>
       </SettingsField>
     </>
@@ -176,7 +176,7 @@ function SkillSelect({
 }) {
   const options = value && !names.includes(value) ? [value, ...names] : names
   return (
-    <label className="flex flex-1 flex-col gap-1 text-[12px] text-muted-foreground">
+    <label className="flex flex-1 flex-col gap-1 text-label text-muted-foreground">
       {label}
       <select
         aria-label={label}
@@ -222,7 +222,7 @@ function RequiredChecksField({ config }: { config: ConfigResponse }) {
         disabled={save.isPending}
         onChange={(event) => setText(event.target.value)}
         onBlur={commit}
-        className="block w-full max-w-md rounded-md border border-input bg-card px-3 py-1.5 font-mono text-[13px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+        className="block w-full max-w-md rounded-md border border-input bg-card px-3 py-1.5 font-mono text-ui shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
       />
     </SettingsField>
   )

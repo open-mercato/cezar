@@ -55,7 +55,8 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
 
   const back = () => navigate('/automations')
   if (mode === 'new') {
-    return <AutomationEditor data={data} onBack={back} onSaved={back} />
+    // `?kind=` is the explainer's tile: the editor opens on that trigger instead of the templates.
+    return <AutomationEditor data={data} initialKind={kindOf(searchParams.get('kind'))} onBack={back} onSaved={back} />
   }
   if (mode === 'edit') {
     const automation = data?.automations.find((item) => item.id === automationId)
@@ -89,6 +90,10 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
 
 function viewOf(raw: string | null): AutomationsView {
   return raw === 'week' || raw === 'day' ? raw : 'list'
+}
+
+function kindOf(raw: string | null): 'schedule' | 'github' | 'tracker' | undefined {
+  return raw === 'schedule' || raw === 'github' || raw === 'tracker' ? raw : undefined
 }
 
 export function PageState({ text }: { text: string }) {

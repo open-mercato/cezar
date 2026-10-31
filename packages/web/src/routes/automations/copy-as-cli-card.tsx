@@ -18,17 +18,17 @@ export function CopyAsCliCard({ definition }: { definition: CliDefinition }) {
   return (
     <Card flush data-slot="copy-as-cli" className="px-3.5 py-3">
       <div className="mb-2 flex items-center">
-        <span className="text-[11px] font-semibold tracking-[.05em] uppercase text-soft-foreground">Copy as CLI</span>
+        <span className="eyebrow text-soft-foreground">Copy as CLI</span>
         <Button variant="ghost" size="sm" className="ml-auto h-6" onClick={() => void copyText(line)}>
           <CopyIcon aria-hidden="true" className="size-3" />
           Copy
         </Button>
       </div>
-      <pre className="m-0 rounded-lg border border-border bg-card-2 px-2.5 py-2 font-mono text-[11.5px] leading-[1.6] break-words whitespace-pre-wrap text-muted-foreground">
+      <pre className="m-0 rounded-lg border border-border bg-card-2 px-2.5 py-2 font-mono text-meta leading-[1.6] break-words whitespace-pre-wrap text-muted-foreground">
         {line}
       </pre>
-      <p className="mt-2 mb-0 text-[11.5px] leading-[1.5] text-soft-foreground">
-        The same definition the cockpit saves — <code className="text-[11px]">cez automation schema</code> prints its shape.
+      <p className="mt-2 mb-0 text-meta leading-[1.5] text-soft-foreground">
+        The same definition the cockpit saves — <code className="text-meta">cez automation schema</code> prints its shape.
       </p>
     </Card>
   )

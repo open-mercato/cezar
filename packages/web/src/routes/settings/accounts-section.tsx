@@ -125,7 +125,7 @@ export function AccountsSection() {
 
   if (profiles.isPending) {
     return (
-      <p data-slot="accounts-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="accounts-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading agent accounts…
       </p>
     )
@@ -168,7 +168,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
         className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-4 md:p-6"
       >
         <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
-        <p data-slot="accounts-hosted" className="text-[13px] text-soft-foreground">
+        <p data-slot="accounts-hosted" className="text-ui text-soft-foreground">
           Agent accounts are disabled for remote access. On a trusted, authenticated self-hosted
           deployment, set CEZ_REMOTE_AGENT_ACCOUNTS=1 and restart cezar.
         </p>
@@ -183,7 +183,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
     >
       <div>
         <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-ui text-muted-foreground">
           One agent per tab: whether it is installed, and which logins you have. Add a second
           config folder to keep a work account beside a personal one; each project picks which it
           uses in its own Agents settings.
@@ -292,7 +292,7 @@ function AgentTab({
     <div data-slot="accounts-provider" data-provider={provider} className="flex flex-col gap-4">
       {/* Facts about the BINARY, not about any one account: a version and an install are shared by
           every login of the same CLI, so they belong here rather than repeated on each row. */}
-      <dl className="divide-y divide-border/60 overflow-hidden rounded-md border border-border bg-card text-[13px]">
+      <dl className="divide-y divide-border/60 overflow-hidden rounded-md border border-border bg-card text-ui">
         <Row label="Installed">
           {check === undefined ? (
             <span className="text-muted-foreground">Checking…</span>
@@ -300,13 +300,13 @@ function AgentTab({
             <span data-slot="agent-installed">Yes</span>
           ) : (
             <span data-slot="agent-installed" className="text-muted-foreground">
-              No — <code className="text-[12px]">{PROVIDER_INSTALL[provider]}</code>
+              No — <code className="text-label">{PROVIDER_INSTALL[provider]}</code>
             </span>
           )}
         </Row>
         {installed && check?.version ? (
           <Row label="Version">
-            <span data-slot="agent-version" className="font-mono text-[12.5px]">
+            <span data-slot="agent-version" className="font-mono text-label">
               {check.version}
             </span>
           </Row>
@@ -321,7 +321,7 @@ function AgentTab({
       </dl>
 
       <div className="flex items-center justify-between gap-3">
-        <h3 className="text-[13px] font-semibold text-foreground">Logins</h3>
+        <h3 className="text-ui font-semibold text-foreground">Logins</h3>
         {canCarryAccounts ? (
           <Button
             type="button"
@@ -343,7 +343,7 @@ function AgentTab({
       </ul>
 
       {!canCarryAccounts ? (
-        <p data-slot="accounts-single-only" className="text-[11.5px] text-soft-foreground">
+        <p data-slot="accounts-single-only" className="text-meta text-soft-foreground">
           {PROVIDER_LABEL[provider]} can only hold one account here: it keeps its credentials
           outside its config folder, so a second folder would change settings without changing the
           login — which would say “work account” while billing the other one.
@@ -396,8 +396,8 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
   return (
     <section data-slot="accounts-defaults" className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-3.5">
       <div>
-        <h3 className="text-[13px] font-semibold text-foreground">Defaults for new projects</h3>
-        <p className="text-[13px] text-muted-foreground">
+        <h3 className="text-ui font-semibold text-foreground">Defaults for new projects</h3>
+        <p className="text-ui text-muted-foreground">
           What a project runs when it has not chosen for itself — set once instead of per
           repository. A project that has chosen keeps its own.
         </p>
@@ -496,16 +496,16 @@ function AccountRow({ account, onRemove }: { account: AgentProfile; onRemove: ()
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-foreground">{account.label}</span>
+            <span className="text-ui font-medium text-foreground">{account.label}</span>
             {account.isDefault ? (
-              <Badge variant="ghost" className="shrink-0 text-[10px] text-muted-foreground">
+              <Badge variant="ghost" className="shrink-0 text-micro text-muted-foreground">
                 discovered
               </Badge>
             ) : null}
           </div>
           <p
             data-slot="account-path"
-            className="mt-0.5 truncate font-mono text-[11.5px] text-soft-foreground"
+            className="mt-0.5 truncate font-mono text-meta text-soft-foreground"
             title={account.path}
           >
             {account.configDir}

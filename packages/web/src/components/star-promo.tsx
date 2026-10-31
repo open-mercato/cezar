@@ -193,14 +193,14 @@ export function StarAskDialog({
             </span>
           </div>
           {count !== null && (
-            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-card/80 px-2.5 py-0.5 font-mono text-[11px] text-muted-foreground backdrop-blur">
+            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-card/80 px-2.5 py-0.5 font-mono text-meta text-muted-foreground backdrop-blur">
               ⭐ {formatStarCount(count)} stars on GitHub
             </span>
           )}
         </div>
         <div className="space-y-4 p-6">
           <div className="space-y-2">
-            <span className="section-mark block font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span className="section-mark block eyebrow text-muted-foreground">
               Open source · MIT
             </span>
             <DialogTitle className="text-xl font-semibold tracking-tight">
@@ -213,7 +213,7 @@ export function StarAskDialog({
           </div>
           {stats && (
             <div className="rounded-lg border bg-card-2 p-3">
-              <span className="block font-mono text-[10.5px] uppercase tracking-[0.12em] text-soft-foreground">
+              <span className="block eyebrow text-soft-foreground">
                 Your last 30 days with cezar
               </span>
               <dl

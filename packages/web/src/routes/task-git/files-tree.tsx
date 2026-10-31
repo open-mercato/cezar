@@ -23,7 +23,7 @@ export function FilesTree({
   onSelect: (path: string) => void
 }) {
   return (
-    <nav data-slot="files-tree" aria-label="Worktree files" className="min-w-0 text-[13px]">
+    <nav data-slot="files-tree" aria-label="Worktree files" className="min-w-0 text-ui">
       <ul className="flex flex-col gap-px">
         <DirChildren runId={runId} path="" depth={0} selected={selected} onSelect={onSelect} />
       </ul>
@@ -178,7 +178,7 @@ function FileNode({
         <Icon aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{name}</span>
         {size !== undefined ? (
-          <span className="ml-auto shrink-0 pl-2 font-mono text-[11px] tabular-nums text-soft-foreground">
+          <span className="ml-auto shrink-0 pl-2 font-mono text-meta tabular-nums text-soft-foreground">
             {formatFileSize(size)}
           </span>
         ) : null}

@@ -1,15 +1,17 @@
-import { PlusIcon, ZapIcon } from 'lucide-react'
+import { PlusIcon } from 'lucide-react'
 import { useState } from 'react'
-import type { AutomationsResponse } from '@open-mercato/cezar-api-client'
+import { AUTOMATION_ORDER_LIMIT, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
-import { CenteredState } from '@/components/centered-state'
 import { Segmented, type SegmentedOption } from '@/components/segmented'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Link } from '@/lib/project-router'
 
+import { AutomationsGuideButton, AutomationsOnboarding } from './automations-onboarding'
 import { PageState, type AutomationsView } from './automations-route'
 import { AutomationsTable } from './automations-table'
+import { moveAutomation, orderAutomations, type AutomationSort } from './automation-order'
+import { useAutomationOrder } from './use-automation-order'
 import { DayView } from './day-view'
 import { NextRunsRail, nextRuns } from './next-runs-rail'
 import { StatsStrip } from './stats-strip'
@@ -47,13 +49,18 @@ export function AutomationsList({
   onViewChange: (view: AutomationsView) => void
 }) {
   const [railOpen, setRailOpen] = useState(false)
+  const { preferences, canSave, loadError, retry, setSort, setOrder } = useAutomationOrder()
   const now = Date.now()
   const upcoming = data ? nextRuns(data.automations, now, data.timeZone, 12) : []
   const pollCount = data ? data.automations.filter((automation) => automation.kind === 'github' && automation.enabled).length : 0
+  const ordered = data ? orderAutomations(data.automations, preferences, data.timeZone, now) : []
+  const withinLimit = ordered.length <= AUTOMATION_ORDER_LIMIT
 
   return (
     <div data-route="automations" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5">
+      {/* Below `md` the header may wrap onto a second row (the editor's rule): a phone cannot fit
+          the title, the view switch, How it works and New automation on one line. */}
+      <header className="sticky top-0 z-10 flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-border bg-background px-5 max-md:py-2 md:h-14 md:flex-nowrap">
         <h1 className="text-base font-semibold">Automations</h1>
         <Segmented<AutomationsView>
           slot="automations-view"
@@ -66,7 +73,7 @@ export function AutomationsList({
         {data ? (
           <span
             data-slot="automations-status"
-            className="inline-flex min-w-0 items-center gap-2 overflow-hidden text-[12.5px] text-ellipsis whitespace-nowrap text-muted-foreground max-[1280px]:hidden"
+            className="inline-flex min-w-0 items-center gap-2 overflow-hidden text-label text-ellipsis whitespace-nowrap text-muted-foreground max-[1280px]:hidden"
           >
             <StatusDot tone={data.scheduler.state === 'scheduled' ? 'success' : 'neutral'} />
             {data.scheduler.state === 'scheduled' ? 'Scheduler running' : 'Scheduler idle'}
@@ -76,6 +83,7 @@ export function AutomationsList({
             <span className="font-mono text-xs">{data.timeZone}</span>
           </span>
         ) : null}
+        <AutomationsGuideButton />
         <Button asChild className="shrink-0">
           <Link to="/automations/new">
             <PlusIcon className="size-[15px]" />
@@ -93,21 +101,11 @@ export function AutomationsList({
           <PageState text="Loading automations…" />
         </div>
       ) : data.automations.length === 0 ? (
-        <CenteredState
-          icon={<ZapIcon />}
-          tone="neutral"
-          title="No automations yet"
-          subtitle="Create one paused, preview it, then enable it."
-          heading="h2"
-          actions={
-            <Button asChild>
-              <Link to="/automations/new">
-                <PlusIcon className="size-[15px]" />
-                New automation
-              </Link>
-            </Button>
-          }
-        />
+        // The explainer (spec 2026-10-26-first-run-onboarding § Automations) rather than an
+        // empty box: what an automation is, what starts one, how it goes live.
+        <div className="flex flex-1 flex-col px-5">
+          <AutomationsOnboarding data={data} />
+        </div>
       ) : view === 'week' ? (
         <WeekView data={data} />
       ) : view === 'day' ? (
@@ -122,7 +120,45 @@ export function AutomationsList({
             railOpen={railOpen}
             onOpenRail={() => setRailOpen(true)}
           />
-          <AutomationsTable data={data} actions={actions} defaultRunner={defaultRunner} now={now} />
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-muted-foreground">Sort</span>
+            <fieldset disabled={!canSave} aria-label="Automation sort" className="min-w-0">
+              <Segmented<AutomationSort>
+                slot="automations-sort"
+                label="Sort automations"
+                value={preferences.sort}
+                options={[
+                  { value: 'manual', label: 'Manual' },
+                  { value: 'name', label: 'Name' },
+                  { value: 'nextRun', label: 'Next run' },
+                ]}
+                onChange={setSort}
+              />
+            </fieldset>
+            {!canSave ? (
+              <span role="status" className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                {loadError ? 'Saved order unavailable.' : 'Loading saved order…'}
+                {loadError ? <Button size="sm" variant="ghost" onClick={retry}>Retry</Button> : null}
+              </span>
+            ) : preferences.sort === 'manual' ? (
+              <span className="text-xs text-muted-foreground">
+                {withinLimit ? 'Drag a handle or use Move up and down.' : `Manual placement supports up to ${AUTOMATION_ORDER_LIMIT} automations.`}
+              </span>
+            ) : null}
+          </div>
+          <AutomationsTable
+            data={data}
+            automations={ordered}
+            actions={actions}
+            defaultRunner={defaultRunner}
+            now={now}
+            {...(preferences.sort === 'manual' ? {
+              reorder: {
+                enabled: canSave && withinLimit,
+                onMove: (from: number, to: number) => setOrder(moveAutomation(ordered.map((entry) => entry.id), from, to)),
+              },
+            } : {})}
+          />
           <NextRunsRail
             open={railOpen}
             onOpenChange={setRailOpen}

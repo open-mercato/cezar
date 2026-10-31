@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -88,6 +88,9 @@ function buildFixtureRepo(dir: string): void {
   git(['init', '-q', '-b', 'main'])
   git(['config', 'user.email', 'e2e@example.com'])
   git(['config', 'user.name', 'cezar e2e'])
+  // `fixtureServeEnv` keeps cezar's own home inside this folder, and the cockpit writes to it on
+  // its own (the first-run visit stamp), so it would join the changeset mid-test. Not project files.
+  appendFileSync(join(dir, '.git', 'info', 'exclude'), '.cez-home/\n')
   mkdirSync(join(dir, 'src'), { recursive: true })
   const write = (index: number, tag: string) =>
     writeFileSync(

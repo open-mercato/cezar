@@ -74,6 +74,11 @@ import type {
   StartNowResponse,
   LandResponse,
   FsBrowseResponse,
+  GithubLoginState,
+  InitProjectGitResponse,
+  PublishProjectGithubInput,
+  PublishProjectGithubResponse,
+  RepoSuggestionsResponse,
   GitCommitResponse,
   GitPushResponse,
   GitStatusResponse,
@@ -598,6 +603,40 @@ export async function browseFs(
     ),
     '/fs/browse',
   )
+}
+
+/** The first-run "Pick a project" list (spec 2026-10-26-first-run-onboarding). */
+export async function getRepoSuggestions(opts?: ReadOptions): Promise<RepoSuggestionsResponse> {
+  return unwrap(await cez.api.v1.fs.repos.$get({}, init(opts)), '/fs/repos')
+}
+
+/** "Initialize git here" — a `not-git` project becomes a repository with its files committed. */
+export async function initProjectGit(projectId: string): Promise<InitProjectGitResponse> {
+  return unwrap(
+    await cez.api.v1.projects[':projectId']['git-init'].$post({ param: { projectId: encodeURIComponent(projectId) } }),
+    `/projects/${encodeURIComponent(projectId)}/git-init`,
+  )
+}
+
+/** "Publish to GitHub" — a local repository with no remote becomes a new private GitHub repo. */
+export async function publishProjectGithub(projectId: string, input: PublishProjectGithubInput): Promise<PublishProjectGithubResponse> {
+  return unwrap(
+    await cez.api.v1.projects[':projectId']['publish-github'].$post({ param: { projectId: encodeURIComponent(projectId) }, json: input }),
+    `/projects/${encodeURIComponent(projectId)}/publish-github`,
+  )
+}
+
+/** The GitHub device flow run by cezar: start (or join the login already waiting), poll, cancel. */
+export async function startGithubLogin(): Promise<GithubLoginState> {
+  return unwrap(await cez.api.v1.github.login.$post(), '/github/login')
+}
+
+export async function getGithubLogin(opts?: ReadOptions): Promise<GithubLoginState> {
+  return unwrap(await cez.api.v1.github.login.$get({}, init(opts)), '/github/login')
+}
+
+export async function cancelGithubLogin(): Promise<GithubLoginState> {
+  return unwrap(await cez.api.v1.github.login.$delete(), '/github/login')
 }
 
 /** The authoritative run list — sorted newest-first by the server. */
