@@ -4,7 +4,7 @@ import { workspaceUiStateSchema } from '@open-mercato/cezar-contract';
 import { cezarHomeDir, workspaceConfigPath } from '../paths.ts';
 import { readUiState } from '../ui-state.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
-import { mergeWriteWorkspaceUiState } from './ui-state.ts';
+import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from './ui-state.ts';
 
 // Step 1.4 exported the global ui-state merge-write from here; step 2.7 moved
 // it to its cleaner home (src/workspace/ui-state.ts, next to the read path the
@@ -18,7 +18,9 @@ export { mergeWriteWorkspaceUiState } from './ui-state.ts';
  * migrates. Rules, verbatim from the spec:
  *
  * - **idempotent** — every migration is safe to re-run after a crash mid-way;
- * - **additive** — never deletes or rewrites the user's per-repo files;
+ * - **additive** — never deletes or rewrites the user's per-repo files; a
+ *   numbered migration may reshape workspace-owned files when that is the
+ *   compatibility path for a deliberate default change;
  * - **non-blocking** — a failing migration logs ONE warning and boot proceeds
  *   degraded with in-memory defaults; it is never a boot failure (the
  *   zero-config law "a read-only home degrades to a smaller cockpit" holds);
@@ -138,9 +140,33 @@ const migration001: WorkspaceMigration = {
   },
 };
 
+/**
+ * Migration 002 removes the pre-wide default from persisted workspace
+ * appearance state. Before the width preference existed, the appearance
+ * provider wrote its full object whenever accent or density changed, so
+ * width "narrow" on disk does not prove that a user chose Narrow. The new
+ * default is the absence of the width key; an explicit wide value remains
+ * untouched, and accent/density plus unknown workspace keys are preserved.
+ */
+const migration002: WorkspaceMigration = {
+  to: 2,
+  id: '002-appearance-width-default',
+  async run() {
+    const state = await readWorkspaceUiState();
+    if (state.appearance?.width !== 'narrow') return;
+
+    await mergeWriteWorkspaceUiState((current) => {
+      if (current.appearance?.width !== 'narrow') return;
+      const { width: _legacyWidth, ...appearance } = current.appearance;
+      if (Object.keys(appearance).length === 0) delete current.appearance;
+      else current.appearance = appearance;
+    });
+  },
+};
+
 /** All known migrations. Kept in ascending `to` order; `runMigrations` sorts
  *  defensively anyway. */
-export const WORKSPACE_MIGRATIONS: readonly WorkspaceMigration[] = [migration001];
+export const WORKSPACE_MIGRATIONS: readonly WorkspaceMigration[] = [migration001, migration002];
 
 /**
  * Run every pending workspace migration — called at boot before anything else

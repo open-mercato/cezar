@@ -271,7 +271,11 @@ describe('progressive long-session history', () => {
     const cachedArrival = navigateAndSampleArrival(RUN_B_ID)
     expect(Math.min(...cachedArrival.map(({ top }) => top))).toBeGreaterThan(40)
     expect(Math.abs(cachedArrival[0]!.top - parked)).toBeLessThan(200)
-    expect(Math.abs(cachedArrival.at(-1)!.top - parked)).toBeLessThan(200)
+    // Later frames can re-measure rows: the thread shrinks and `scrollTop` moves while the
+    // scroller keeps the reader's row in place. Hold the relative position, not the pixel offset.
+    const parkedRatio = parked / cachedArrival[0]!.maxTop
+    const last = cachedArrival.at(-1)!
+    expect(Math.abs(last.top / last.maxTop - parkedRatio)).toBeLessThan(0.05)
     browser.screenshot(join(artifactsDir, 'progressive-history-thread-switch.png'), { viewport: true })
 
     browser.setViewport(390, 844)

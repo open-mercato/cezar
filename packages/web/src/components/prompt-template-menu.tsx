@@ -118,21 +118,21 @@ export function PromptTemplateMenu({
                   }}
                 >
                   <span className="flex w-full items-center gap-1.5">
-                    <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">
+                    <span className="min-w-0 flex-1 truncate text-label font-medium text-foreground">
                       {template.label}
                     </span>
                     {template.skills && template.skills.length > 0 ? (
                       <span
                         data-slot="prompt-template-assigned"
                         title={`Applied automatically with: ${template.skills.join(', ')}`}
-                        className="inline-flex shrink-0 items-center gap-0.5 text-[10px] font-medium text-violet"
+                        className="inline-flex shrink-0 items-center gap-0.5 text-micro font-medium text-violet"
                       >
                         <SparklesIcon aria-hidden="true" className="size-2.5" />
                         {template.skills.length}
                       </span>
                     ) : null}
                   </span>
-                  <span className="line-clamp-1 text-[11px] text-soft-foreground">
+                  <span className="line-clamp-1 text-meta text-soft-foreground">
                     {template.text}
                   </span>
                 </CommandItem>
@@ -143,10 +143,10 @@ export function PromptTemplateMenu({
               <CommandItem
                 value="edit prompt templates settings"
                 data-slot="prompt-template-settings"
-                className="text-[12px] text-muted-foreground"
+                className="text-label text-muted-foreground"
                 onSelect={() => {
                   setOpen(false)
-                  void navigate('/settings/prompt-templates')
+                  void navigate('/settings/instructions#prompt-templates')
                 }}
               >
                 Edit templates…

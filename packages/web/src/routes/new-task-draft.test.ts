@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
 
 import {
+  autoLandsUnreviewed,
+  explicitWorktreeFor,
   clearStartedDraft,
   composerRunModeNote,
   handOffComposition,
@@ -24,7 +26,6 @@ const EMPTY_DRAFT = {
   agentProfile: null,
   model: null,
   variants: 1,
-  planFirst: false,
   worktree: null,
   autonomous: null,
   generateFollowups: null,
@@ -43,7 +44,6 @@ describe('resolveComposerRunMode', () => {
   const base = {
     hasGit: true,
     variants: 1,
-    planFirst: false,
     explicitAutonomous: null,
     explicitWorktree: null,
     configuredAutonomous: 'source-dependent' as const,
@@ -75,8 +75,7 @@ describe('resolveComposerRunMode', () => {
     })).toEqual({ autonomous: true, worktree: false })
   })
 
-  it('keeps plan, parallel, and no-git constraints authoritative', () => {
-    expect(resolveComposerRunMode({ ...base, planFirst: true, explicitAutonomous: true }).autonomous).toBe(false)
+  it('keeps parallel and no-git constraints authoritative', () => {
     expect(resolveComposerRunMode({ ...base, variants: 2, explicitWorktree: false }).worktree).toBe(true)
     expect(resolveComposerRunMode({ ...base, hasGit: false, explicitWorktree: true }).worktree).toBe(false)
   })
@@ -91,7 +90,6 @@ describe('resolveComposerRunMode with dispatch (spec 2026-09-10-dispatch)', () =
   const base = {
     hasGit: true,
     variants: 1,
-    planFirst: false,
     explicitAutonomous: null,
     explicitWorktree: null,
     configuredAutonomous: 'source-dependent' as const,
@@ -111,10 +109,9 @@ describe('resolveComposerRunMode with dispatch (spec 2026-09-10-dispatch)', () =
     expect(resolveComposerRunMode({ ...base, interactive: true, source: 'skill' }).autonomous).toBe(true)
   })
 
-  it('yields to an explicit Autonomous off, to plan-first, and to a missing repo', () => {
+  it('yields to an explicit Autonomous off, and to a missing repo', () => {
     expect(resolveComposerRunMode({ ...base, explicitAutonomous: false }))
       .toEqual({ autonomous: false, worktree: true })
-    expect(resolveComposerRunMode({ ...base, planFirst: true }).autonomous).toBe(false)
     expect(resolveComposerRunMode({ ...base, hasGit: false }).worktree).toBe(false)
   })
 })
@@ -128,7 +125,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: null,
       variants: 1,
-      planFirst: false,
       worktree: null,
       autonomous: null,
       generateFollowups: null,
@@ -144,7 +140,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: 'gpt-5-codex',
       variants: 2,
-      planFirst: false,
       worktree: false,
       autonomous: null,
       generateFollowups: false,
@@ -158,6 +153,13 @@ describe('the new-task draft store', () => {
     expect(readDraft().text).toBe('fix it')
   })
 
+  it('clearStartedDraft spends the branch name but keeps the New branch toggle', () => {
+    writeDraft({ ...readDraft(), text: 'go', worktree: false, newBranch: true, branchName: 'feat/once' })
+    clearStartedDraft()
+    expect(readDraft()).toMatchObject({ worktree: false, newBranch: true })
+    expect(readDraft()).not.toHaveProperty('branchName')
+  })
+
   it('clearStartedDraft spends the text AND the source, keeping the way-of-working pills', () => {
     writeDraft({
       text: 'shipped',
@@ -166,7 +168,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: 'opus',
       variants: 3,
-      planFirst: true,
       worktree: null,
       autonomous: null,
       generateFollowups: true,
@@ -179,10 +180,9 @@ describe('the new-task draft store', () => {
       source: null,
       runner: null,
       agentProfile: null,
-      // Runner/model/variants/plan-first are a way of working — they survive, as they always did.
+      // Runner/model/variants are a way of working — they survive, as they always did.
       model: 'opus',
       variants: 3,
-      planFirst: true,
       worktree: null,
       autonomous: null,
       generateFollowups: true,
@@ -198,7 +198,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: 'sonnet',
       variants: 2,
-      planFirst: true,
       worktree: false,
       autonomous: null,
       generateFollowups: false,
@@ -214,7 +213,6 @@ describe('the new-task draft store', () => {
       autonomous: null,
       generateFollowups: false,
       dispatch: null,
-      planFirst: true,
     })
   })
 
@@ -229,7 +227,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: null,
       variants: 1,
-      planFirst: false,
       worktree: null,
       autonomous: null,
       generateFollowups: null,
@@ -245,7 +242,6 @@ describe('the new-task draft store', () => {
       agentProfile: null,
       model: null,
       variants: 1,
-      planFirst: false,
       worktree: null,
       autonomous: null,
       generateFollowups: null,
@@ -325,6 +321,19 @@ describe('handOffComposition', () => {
     // departing one still holds what was typed there — switching back restores it.
     expect(readDraft('shop').text).toBe('already writing this')
     expect(readAttachments('shop')).toEqual([])
+    expect(readDraft(null).text).toBe('from cezar')
+    expect(readAttachments(null).map((a) => a.name)).toEqual(['cezar.png'])
+  })
+
+  it('refuses to clobber attachments waiting in an otherwise empty destination', () => {
+    writeDraft({ ...EMPTY_DRAFT, text: 'from cezar' }, null)
+    writeAttachments([shot('cezar.png')], null)
+    writeAttachments([shot('shop.png')], 'shop')
+
+    expect(handOffComposition(null, 'shop')).toEqual({ moved: false, reason: 'destination-busy' })
+
+    expect(readDraft('shop').text).toBe('')
+    expect(readAttachments('shop').map((a) => a.name)).toEqual(['shop.png'])
     expect(readDraft(null).text).toBe('from cezar')
     expect(readAttachments(null).map((a) => a.name)).toEqual(['cezar.png'])
   })
@@ -425,5 +434,26 @@ describe('composerRunModeNote (#793)', () => {
     for (const hasGit of [true, false]) {
       expect(composerRunModeNote({ worktree: false, hasGit })).not.toContain('isolated worktree')
     }
+  })
+})
+
+describe('explicitWorktreeFor (spec 2026-10-20-trunk-based-projects)', () => {
+  it('keeps a choice made under the current project setting', () => {
+    expect(explicitWorktreeFor({ worktree: true, worktreeBasis: 'in-place' }, 'in-place')).toBe(true)
+    expect(explicitWorktreeFor({ worktree: false }, null)).toBe(false)
+  })
+
+  it('lets the project setting win over a choice made before it changed', () => {
+    expect(explicitWorktreeFor({ worktree: true }, 'in-place')).toBeNull()
+    expect(explicitWorktreeFor({ worktree: true, worktreeBasis: 'default' }, 'in-place')).toBeNull()
+    expect(explicitWorktreeFor({ worktree: null }, 'in-place')).toBeNull()
+  })
+})
+
+describe('autoLandsUnreviewed (spec 2026-10-20-trunk-based-projects)', () => {
+  it('keeps skills from defaulting autonomous in an auto-land project', () => {
+    expect(autoLandsUnreviewed('source-dependent', true)).toBe(false)
+    expect(autoLandsUnreviewed('source-dependent', false)).toBe('source-dependent')
+    expect(autoLandsUnreviewed(true, true)).toBe(true)
   })
 })

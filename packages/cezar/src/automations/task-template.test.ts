@@ -147,11 +147,51 @@ describe('scheduled automation task templates (spec 2026-09-14)', () => {
     expect(dispatchIntentOf({ prompt: 'x' })).toBeUndefined();
     expect(dispatchIntentOf({ prompt: 'x', dispatch: {} })).toEqual({});
     expect(dispatchIntentOf({ prompt: 'x', dispatch: { maxSubtasks: 4, reviewChild: true } })).toEqual({ maxSubtasks: 4 });
-    const withReview = renderScheduleTask({ ...nightly, task: { ...nightly.task, dispatch: { reviewChild: true } } }, occurrence, { projectName: 'p', timeZone: 'UTC' });
+    const withReview = renderScheduleTask({ ...nightly, task: { ...nightly.task, dispatch: { reviewChild: true } } }, occurrence, { projectName: 'p', timeZone: 'UTC', dispatchEnabled: true });
     expect(withReview).toContain(REVIEW_CHILD_SUFFIX);
     expect(withReview.indexOf(REVIEW_CHILD_SUFFIX)).toBeLessThan(withReview.indexOf('Scheduled run context'));
-    const github = renderAutomationTask({ ...definition, task: { ...definition.task, dispatch: { reviewChild: true } } }, candidate);
+    const github = renderAutomationTask({ ...definition, task: { ...definition.task, dispatch: { reviewChild: true } } }, candidate, { dispatchEnabled: true });
     expect(github).toContain(REVIEW_CHILD_SUFFIX);
+  });
+
+  it('drops the review-child suffix when cockpit dispatch is off (#1742)', () => {
+    const reviewed = { reviewChild: true, maxSubtasks: 4 };
+    const schedule = { ...nightly, task: { ...nightly.task, dispatch: reviewed } };
+    expect(renderScheduleTask(schedule, occurrence, { projectName: 'p', timeZone: 'UTC', dispatchEnabled: false })).not.toContain(REVIEW_CHILD_SUFFIX);
+    expect(renderScheduleTask(schedule, occurrence, { projectName: 'p', timeZone: 'UTC' })).not.toContain(REVIEW_CHILD_SUFFIX);
+    const github = { ...definition, task: { ...definition.task, dispatch: reviewed } };
+    expect(renderAutomationTask(github, candidate, { dispatchEnabled: false })).not.toContain(REVIEW_CHILD_SUFFIX);
+    expect(renderAutomationTask(github, candidate)).not.toContain(REVIEW_CHILD_SUFFIX);
+  });
+
+  it('launches GitHub and scheduled runs with neither dispatch intent nor review child while dispatch is off (#1742)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-review-child-'));
+    try {
+      const store = RunStore.open(join(root, '.ai/cezar'));
+      const inputs: Array<Record<string, unknown>> = [];
+      const manager = {
+        startRun: (workflow: { name: string; steps: Array<{ id: string; name?: string; command?: string }> }, input: Record<string, unknown>) => {
+          inputs.push(input);
+          return store.createRun({ title: 'automation', workflow: workflow.name, task: String(input.task), steps: workflow.steps.map((step) => ({ id: step.id, name: step.name ?? step.id, kind: step.command ? 'check' as const : 'agent' as const })) });
+        },
+      } as unknown as RunManager;
+      const dispatch = { maxSubtasks: 3, reviewChild: true };
+      const github = { ...definition, task: { ...definition.task, workflow: 'quick-task', dispatch } };
+      const schedule = { ...nightly, task: { ...nightly.task, workflow: 'quick-task', dispatch } };
+      for (const dispatchEnabled of [false, true]) {
+        await launchAutomationRun({ root, manager, store, definition: github, candidate, receiptId: `g-${dispatchEnabled}`, dispatchEnabled });
+        await launchScheduledRun({ root, manager, store, definition: schedule, occurrence, receiptId: `s-${dispatchEnabled}`, projectName: 'p', timeZone: 'UTC', dispatchEnabled });
+      }
+      for (const input of inputs.slice(0, 2)) {
+        expect(input).not.toHaveProperty('dispatchIntent');
+        expect(String(input.task)).not.toContain(REVIEW_CHILD_SUFFIX);
+      }
+      for (const input of inputs.slice(2)) {
+        expect(input).toMatchObject({ dispatchIntent: { maxSubtasks: 3 } });
+        expect(String(input.task)).toContain(REVIEW_CHILD_SUFFIX);
+      }
+      store.flush();
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 
   it('launches a scheduled run with automationTrigger provenance and the dispatch intent only when dispatch is on', async () => {
@@ -281,6 +321,28 @@ describe('tracker automation task templates (2026-09-19)', () => {
       });
       expect(RunStore.open(join(root, '.ai/cezar')).getRun(launched.runId)?.automationTracker)
         .toEqual(store.getRun(launched.runId)?.automationTracker);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('launches with neither dispatch intent nor review child while dispatch is off, and both while on (#1742)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-tracker-review-child-'));
+    try {
+      const store = RunStore.open(join(root, '.ai/cezar'));
+      const inputs: Array<Record<string, unknown>> = [];
+      const manager = {
+        startRun: (workflow: { name: string; steps: Array<{ id: string; name?: string; command?: string }> }, input: Record<string, unknown>) => {
+          inputs.push(input);
+          return store.createRun({ title: 'automation', workflow: workflow.name, task: String(input.task), steps: workflow.steps.map((step) => ({ id: step.id, name: step.name ?? step.id, kind: step.command ? 'check' as const : 'agent' as const })) });
+        },
+      } as unknown as RunManager;
+      const definition = { ...trackerDefinition, task: { ...trackerDefinition.task, workflow: 'quick-task', dispatch: { maxSubtasks: 3, reviewChild: true } } };
+      await launchTrackerAutomationRun({ root, manager, store, definition, candidate: trackerCandidate, receiptId: 'off', dispatchEnabled: false });
+      await launchTrackerAutomationRun({ root, manager, store, definition, candidate: trackerCandidate, receiptId: 'on', dispatchEnabled: true });
+      expect(inputs[0]).not.toHaveProperty('dispatchIntent');
+      expect(String(inputs[0]!.task)).not.toContain(REVIEW_CHILD_SUFFIX);
+      expect(inputs[1]).toMatchObject({ dispatchIntent: { maxSubtasks: 3 } });
+      expect(String(inputs[1]!.task)).toContain(REVIEW_CHILD_SUFFIX);
+      store.flush();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

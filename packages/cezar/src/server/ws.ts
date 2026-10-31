@@ -135,10 +135,11 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let closed = false;
 
-  const send = (ws: WebSocket, frame: unknown): void => {
-    // OPEN as the literal 1: the check must hold for any socket implementation.
-    if (ws.readyState === 1) ws.send(JSON.stringify(frame));
+  // OPEN as the literal 1: the check must hold for any socket implementation.
+  const sendText = (ws: WebSocket, text: string): void => {
+    if (ws.readyState === 1) ws.send(text);
   };
+  const send = (ws: WebSocket, frame: unknown): void => sendText(ws, JSON.stringify(frame));
 
   const subscribe = (ws: WebSocket, client: ClientState, topic: string): void => {
     const state = topics.get(topic);
@@ -160,7 +161,8 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
     state.subscribers.add(ws);
     if (state.stop === null) {
       state.stop = state.publisher.start((data) => {
-        for (const subscriber of state.subscribers) send(subscriber, { type: 'event', topic, data });
+        const text = JSON.stringify({ type: 'event', topic, data });
+        for (const subscriber of state.subscribers) sendText(subscriber, text);
       });
     }
     // The immediate snapshot — async, so the socket or the subscription may be

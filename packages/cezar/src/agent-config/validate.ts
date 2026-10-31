@@ -5,7 +5,8 @@ import type { ConfigFormat } from './catalog.ts';
  * On save, cezar proves a config file PARSES in its own format — refusing to
  * write bytes that would break the user's agent — but it never checks the
  * vendor's *schema* (that is the drift a raw editor exists to avoid) and it
- * never re-serializes: a valid file is written back byte-for-byte as typed.
+ * never re-serializes: a valid file is written back byte-for-byte as received.
+ * (The cockpit may re-indent plain JSON before sending it — spec #404, 2026-10-26 amendment.)
  */
 
 export interface ValidationResult {

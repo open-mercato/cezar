@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -17,6 +18,7 @@ import {
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { AcpClient, type AcpContentBlock, type AcpMessage, type AcpRequestAnswer } from './acp-client.ts';
+import { acpMcpCapabilities, skippedServersNote, toAcpMcpServers } from './private-mcp.ts';
 import { abortAcpTurn, endAcpReplay, mapAcpFrame, type AcpUiMapperState } from './acp-ui-mapper.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS } from './claude-cli-runner.ts';
 import {
@@ -26,6 +28,8 @@ import {
   isCopilotAuthFailure,
 } from './copilot-ui-mapper.ts';
 import type { UiEvent } from './ui-events.ts';
+import { spawnableCommand } from './windows-shim.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 /** `initialize` / `session/new` / `session/load` are handshakes: bounded, unlike a prompt. */
@@ -42,7 +46,7 @@ const AUTO_END_DELAY_MS = 250;
 export interface CopilotAcpRunnerOptions {
   /** Override the binary; defaults to `copilot` on PATH (`CEZ_COPILOT_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -106,8 +110,18 @@ export class CopilotAcpRunner implements AgentRunner {
 export function buildCopilotArgs(spec: Pick<AgentRunSpec, 'model' | 'additionalDirectories'>): string[] {
   const args = ['--acp', '--allow-all-tools', '--no-auto-update'];
   if (spec.model) args.push('--model', spec.model);
-  for (const dir of spec.additionalDirectories ?? []) args.push('--add-dir', dir);
+  // Copilot refuses to start on an `--add-dir` that does not exist (telemetry 3db0206b); Claude
+  // tolerates one, so a missing runs dir or TMPDIR is skipped here rather than fatal.
+  for (const dir of spec.additionalDirectories ?? []) if (isDirectory(dir)) args.push('--add-dir', dir);
   return args;
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** The per-run environment: `buildChildEnv`'s least-privilege set for this backend. Copilot's own
@@ -124,10 +138,14 @@ export function buildCopilotEnv(backend: AgentBackend, extraEnv?: Record<string,
  * inventing meanings. The one case worth translating is an authentication failure, because that
  * wording is what raises `provider-auth-required`.
  */
-export function copilotExitMessage(exitCode: number | null, stderr: string): string {
+export function copilotExitMessage(exitCode: number | null, stderr: string, midTurn = false): string {
   if (isCopilotAuthFailure(stderr)) return COPILOT_AUTH_FAILURE_MESSAGE;
   const detail = stderr.trim().split('\n').slice(-3).join(' | ');
-  return `Copilot CLI exited with code ${exitCode}${detail ? ` — ${truncate(detail, 400)}` : ''}`;
+  // Mid-turn, a bare "exited with code 0" reads as success; it is a dropped prompt (telemetry 2e3b122d).
+  const head = midTurn
+    ? `Copilot CLI quit mid-turn without answering the prompt (exit code ${exitCode})`
+    : `Copilot CLI exited with code ${exitCode}`;
+  return `${head}${detail ? ` — ${truncate(detail, 400)}` : ''}`;
 }
 
 class CopilotAcpSession implements AgentSession {
@@ -147,7 +165,10 @@ class CopilotAcpSession implements AgentSession {
   private turnsCompleted = 0;
   private readonly queue: AcpContentBlock[][] = [];
   private terminatedByCezar = false;
+  /** `end()` closed stdin: a turn the CLI then drops on EOF was cezar's call, not a failure. */
+  private endedByCezar = false;
   private timedOut = false;
+  private deadline: InactivityDeadline = armInactivityDeadline(0, () => {});
   private failed: string | null = null;
   private replayDone: (() => void) | null = null;
 
@@ -167,9 +188,12 @@ class CopilotAcpSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    this.child = nodeSpawn(bin, buildCopilotArgs(spec), { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
+    const [file, argv] = spawnableCommand(bin, buildCopilotArgs(spec));
+    this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: buildCopilotEnv(backend, spec.env) });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
+    // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
+    this.child.stdin.on('error', () => {});
     this.child.on('error', (error: NodeJS.ErrnoException) => {
       this.spawnError =
         error.code === 'ENOENT'
@@ -184,14 +208,10 @@ class CopilotAcpSession implements AgentSession {
       onUnparseable: (line) => this.emit({ type: 'note', message: `copilot: skipped unparseable ACP line: ${truncate(line, 200)}` }),
     });
 
-    if (this.limitMs > 0) {
-      const deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-      }, this.limitMs);
-      deadline.unref?.();
-      this.timers.push(deadline);
-    }
+    this.deadline = armInactivityDeadline(this.limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+    });
     this.result = this.lifecycle();
   }
 
@@ -214,6 +234,7 @@ class CopilotAcpSession implements AgentSession {
   end(): void {
     if (!this.isOpen) return;
     this.isOpen = false;
+    this.endedByCezar = true;
     this.terminate(false);
   }
 
@@ -239,6 +260,7 @@ class CopilotAcpSession implements AgentSession {
 
     await reading;
     const exitCode = await exited;
+    this.deadline.clear();
     for (const timer of this.timers) clearTimeout(timer);
     if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
     this.isOpen = false;
@@ -248,9 +270,9 @@ class CopilotAcpSession implements AgentSession {
       // The agent died with a prompt unanswered: the transport rejected it, the wire never will.
       this.turnInFlight = false;
       if (this.timedOut) this.applyUi(abortAcpTurn(this.ui, copilotDialect, 'timeout'));
-      else if (this.terminatedByCezar) this.applyUi(abortAcpTurn(this.ui, copilotDialect, 'cancelled'));
+      else if (this.terminatedByCezar || this.endedByCezar) this.applyUi(abortAcpTurn(this.ui, copilotDialect, 'cancelled'));
       else {
-        const reason = copilotExitMessage(exitCode, this.stderrText());
+        const reason = copilotExitMessage(exitCode, this.stderrText(), true);
         this.applyUi(abortAcpTurn(this.ui, copilotDialect, 'error', reason));
         this.fail(reason);
       }
@@ -263,8 +285,7 @@ class CopilotAcpSession implements AgentSession {
     });
 
     if (this.timedOut) {
-      const minutes = Math.round((this.limitMs / 60_000) * 10) / 10;
-      this.emit({ type: 'error', message: `Copilot CLI timed out after ${minutes}m and was killed` });
+      this.emit({ type: 'error', message: inactivityTimeoutMessage('Copilot CLI', this.limitMs, this.deadline.expiredBy) });
       this.emit({ type: 'done' });
       return summary();
     }
@@ -301,6 +322,10 @@ class CopilotAcpSession implements AgentSession {
     const caps = isRecord(init.agentCapabilities) ? init.agentCapabilities : {};
     this.loadSupported = caps.loadSession === true;
     this.imagesSupported = isRecord(caps.promptCapabilities) && caps.promptCapabilities.image === true;
+    const { mcpServers, skipped } = toAcpMcpServers(this.spec.mcpServers ?? [], acpMcpCapabilities(init));
+    if (skipped.length) {
+      this.emit({ type: 'note', message: skippedServersNote('copilot', skipped, 'the CLI did not advertise that MCP transport') });
+    }
 
     let resumed = false;
     if (this.spec.resume && this.spec.sessionId) {
@@ -309,7 +334,7 @@ class CopilotAcpSession implements AgentSession {
           this.replayDone = resolve;
         });
         try {
-          await this.client.loadSession(this.spec.sessionId, this.spec.cwd, HANDSHAKE_TIMEOUT_MS);
+          await this.client.loadSession(this.spec.sessionId, this.spec.cwd, HANDSHAKE_TIMEOUT_MS, mcpServers);
           this.acpSessionId = this.spec.sessionId;
           resumed = true;
           await Promise.race([replayEnded, delay(REPLAY_WAIT_MS)]);
@@ -327,7 +352,7 @@ class CopilotAcpSession implements AgentSession {
       }
     }
     if (!this.acpSessionId) {
-      const created = await this.client.newSession(this.spec.cwd, HANDSHAKE_TIMEOUT_MS).catch((error: unknown) => {
+      const created = await this.client.newSession(this.spec.cwd, HANDSHAKE_TIMEOUT_MS, mcpServers).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
           isCopilotAuthFailure(`${message}\n${this.stderrText()}`)
@@ -393,6 +418,7 @@ class CopilotAcpSession implements AgentSession {
   // ---- wire → events --------------------------------------------------------------------
 
   private onFrame(dir: 'in' | 'out', frame: AcpMessage): void {
+    if (dir === 'in') this.deadline.touch();
     if (
       dir === 'in'
       && this.replayDone

@@ -1,3 +1,4 @@
+import { RunManager } from '../workflows/run.ts';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -30,6 +31,34 @@ describe('ProjectContexts', () => {
   function makeContexts(projects: ProjectContextSource[]): ProjectContexts {
     return new ProjectContexts({ listProjects: async () => projects });
   }
+
+  it('shutdown waits for opened and still-building projects, then prevents new contexts', async () => {
+    let releaseRegistry!: () => void;
+    let delayRegistry = false;
+    const contexts = new ProjectContexts({listProjects: async () => {
+      if (delayRegistry) await new Promise<void>(resolve => { releaseRegistry = resolve; });
+      return [{id: 'a', root: rootA, status: 'not-git'}, {id: 'b', root: rootB, status: 'not-git'}];
+    }});
+    const first = await contexts.context('a');
+    let finishDrain!: () => void;
+    const drain = vi.spyOn(first.manager.lifecycle, 'shutdown').mockImplementation(() => new Promise<void>(resolve => { finishDrain = resolve; }));
+    const dispose = vi.spyOn(first.manager, 'dispose');
+    delayRegistry = true;
+    const building = contexts.context('b');
+    const stopping = contexts.shutdownAll();
+    expect(contexts.shutdownAll()).toBe(stopping);
+    expect(drain).toHaveBeenCalledOnce();
+    expect(dispose).not.toHaveBeenCalled();
+    await expect(contexts.context('a')).rejects.toThrow('shutting down');
+    releaseRegistry();
+    const second = await building;
+    const secondDrain = vi.spyOn(second.manager.lifecycle, 'shutdown');
+    finishDrain();
+    await stopping;
+    expect(secondDrain).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(contexts.ids()).toEqual([]);
+  });
 
   it('builds lazily: nothing on construction, first access builds, second returns the same instance', async () => {
     const contexts = makeContexts([
@@ -180,4 +209,14 @@ describe('ProjectContexts', () => {
     expect(spyA).not.toHaveBeenCalled();
     expect(spyB).not.toHaveBeenCalled();
   });
+  it('awaits optional context preparation before manager recovery and announces readiness afterwards', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    const order: string[] = [];
+    const off = contexts.onBeforeRecover(async () => { await Promise.resolve(); order.push('prepared'); });
+    const recovered = vi.spyOn(RunManager.prototype, 'recover').mockImplementation(async () => { order.push('recover'); });
+    contexts.onContextBuilt(() => { order.push('ready'); });
+    try { await contexts.context('a'); expect(order).toEqual(['prepared', 'recover', 'ready']); }
+    finally { off(); contexts.disposeAll(); recovered.mockRestore(); }
+  });
+
 });

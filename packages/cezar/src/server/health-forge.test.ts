@@ -24,10 +24,12 @@ interface HealthBody {
   forge: { kind: string; available: boolean; reason?: string } | null;
   capabilities: {
     localHandoff: boolean;
+    terminal: boolean;
     followups: boolean;
     singleProject: boolean;
     automations: boolean;
     tokenMetrics: boolean;
+    webhooks: boolean;
     tokenUsageMetrics: boolean;
     costMetrics: boolean;
   };
@@ -110,11 +112,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     expect(body.forge).toBeNull(); // tmp dir — not a git repo, no remote
     expect(body.capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -165,11 +170,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health();
     expect(body.capabilities).toEqual({
       localHandoff: false,
+      terminal: false,
+      designMode: false,
       followups: false,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -194,11 +202,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health({ bindHost: '0.0.0.0' });
     expect(body.capabilities).toEqual({
       localHandoff: false,
+      terminal: false,
+      designMode: false,
       followups: false,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -208,11 +219,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     const body = await health({ bindHost: '127.0.0.1' });
     expect(body.capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -227,11 +241,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_FOLLOWUPS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: true,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -252,11 +269,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_AUTOMATIONS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: true,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: true,
     });
@@ -266,11 +286,14 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_TOKEN_METRICS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
+      terminal: true,
+      designMode: true,
       followups: false,
       singleProject: false,
       automations: true,
       dispatch: true,
       tokenMetrics: false,
+      webhooks: false,
       tokenUsageMetrics: false,
       costMetrics: false,
     });
@@ -280,6 +303,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_TOKEN_USAGE = '1';
     expect((await health()).capabilities).toMatchObject({
       tokenMetrics: false,
+      webhooks: false,
       tokenUsageMetrics: false,
       costMetrics: true,
     });
@@ -287,6 +311,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     process.env.CEZ_HIDE_COST = '1';
     expect((await health()).capabilities).toMatchObject({
       tokenMetrics: false,
+      webhooks: false,
       tokenUsageMetrics: true,
       costMetrics: false,
     });

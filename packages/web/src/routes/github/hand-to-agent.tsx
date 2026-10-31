@@ -30,6 +30,7 @@ import { bumpSkillUsage } from '@/lib/skills'
 import { isSubmitShortcut, submitShortcutHint } from '@/lib/use-submit-shortcut'
 
 import { readFollowupPrompt, writeFollowupPrompt } from './hand-to-agent-draft'
+import { trackMessageSent } from '@/lib/telemetry'
 
 /**
  * The detail pane's "Hand this to the agent" panel: the legacy chip walls replaced by
@@ -169,6 +170,7 @@ export function HandToAgent({
     },
     onSuccess: (created) => {
       if (created === null) return
+      trackMessageSent('github')
       // The GitHub tab never starts variants, so the answer is a single record.
       const run = 'runs' in created ? created.runs[0] : created
       if (run) onQueued(item.url, run.id)
@@ -230,7 +232,7 @@ export function HandToAgent({
 
   return (
     <section data-slot="gh-hand" className="mt-7 rounded-lg border border-border bg-card p-4">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
+      <h3 className="flex items-center gap-1.5 eyebrow text-soft-foreground">
         <ZapIcon aria-hidden="true" className="size-3.5 text-violet" />
         Hand this to the agent
       </h3>
@@ -269,7 +271,7 @@ export function HandToAgent({
               data-skill={name}
               onClick={() => toggleSkill(name)}
               title="Remove this skill"
-              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+              className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
             >
               {name}
               <XIcon aria-hidden="true" className="size-3" />
@@ -287,7 +289,7 @@ export function HandToAgent({
         onChange={(event) => setPrompt(event.target.value)}
         onKeyDown={submitShortcut}
         placeholder={`Instructions for the agent… (#${item.number} and its link are always sent)`}
-        className="mt-3 min-h-20 text-[13px]"
+        className="mt-3 min-h-20 text-ui"
       />
 
       <div className="mt-4 flex flex-wrap items-center gap-2.5">
@@ -302,7 +304,7 @@ export function HandToAgent({
         </Button>
         <kbd
           aria-hidden="true"
-          className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
+          className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-micro font-medium text-muted-foreground"
         >
           {submitShortcutHint()}
         </kbd>

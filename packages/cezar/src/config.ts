@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
 
@@ -31,6 +32,8 @@ export const DEFAULT_WORKTREE_RETENTION = 10;
 const worktreeRetentionSchema = z.number().int().min(0).max(1000);
 
 const configSchema = z.object({
+  // Runtime lifecycle gates use the strict reader, never this boot-safe fallback.
+  worktreeLifecycle: worktreeLifecycleConfigSchema.optional().catch(undefined),
   skillsRepos: z.array(skillsRepoSchema).default(DEFAULT_SKILLS_REPOS),
   /** How many tasks may run at once (spec 006). Non-git dirs always run 1. */
   maxParallel: z.number().int().min(1).max(16).default(2),
@@ -84,6 +87,12 @@ const configSchema = z.object({
    */
   systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
   /**
+   * Free-text branch naming instructions (spec 2026-10-11-branch-naming-instructions): the
+   * creation-time namer derives the task branch from the first prompt under these rules.
+   * Absent = `cez/<id8>`. `.catch(undefined)` keeps it additive-safe like `systemPrompt`.
+   */
+  branchNaming: z.string().trim().min(1).max(4_000).optional().catch(undefined),
+  /**
    * Per-runner default model preset (Settings → Agents, redesign R6 1.5): the
    * model id the composer preselects for that runner. Missing = auto (the
    * runner decides). A capability (`model`), never a vendor config format.
@@ -99,6 +108,30 @@ const configSchema = z.object({
       cursor: z.string().trim().min(1).max(200).optional(),
       pi: z.string().trim().min(1).max(200).optional(),
       copilot: z.string().trim().min(1).max(200).optional(),
+      antigravity: z.string().trim().min(1).max(200).optional(),
+    })
+    .optional()
+    .catch(undefined),
+  /**
+   * Per-runner "auto is the default" override (#906). Additive and independent
+   * of `defaultModels` on purpose: absence of a preset cannot express an
+   * explicit auto, because the answer then falls through to the coding agent's
+   * OWN settings file — so a user whose `~/.claude/settings.json` names a model
+   * had no way to say "ignore that, run with no `--model` flag" short of
+   * editing the vendor's file by hand.
+   *
+   * A separate boolean rather than an `"auto"` sentinel inside `defaultModels`
+   * because an older cezar reading this file would pass such a sentinel
+   * straight to `--model`; a key it has never heard of it simply ignores.
+   * `true` means auto; anything else is no opinion, and the writers delete the
+   * key rather than storing `false`.
+   */
+  defaultModelsAuto: z
+    .object({
+      claude: z.boolean().optional(),
+      codex: z.boolean().optional(),
+      opencode: z.boolean().optional(),
+      pi: z.boolean().optional(),
     })
     .optional()
     .catch(undefined),
@@ -108,6 +141,22 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Trunk-based projects (spec 2026-10-20-trunk-based-projects). Every key is optional and
+   * absent = today's branch-per-task behavior. `profile` only labels the preset the cockpit applied;
+   * the behavior comes from the individual keys below.
+   */
+  profile: z.enum(['branches', 'trunk']).optional().catch(undefined),
+  /** Where a task works unless the composer says otherwise: `in-place` = the repo checkout. */
+  taskWorkspace: z.enum(['worktree', 'in-place']).optional().catch(undefined),
+  /** How an in-place task's finished changes reach the base branch. `auto` commits, rebases,
+   *  runs `requiredChecks` and pushes; a git-tracked config.json cannot grant it. */
+  landing: z.enum(['review', 'auto']).optional().catch(undefined),
+  /** Shell commands every auto-land must pass, run in the checkout after the rebase. */
+  requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).optional().catch(undefined),
+  /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
+  defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
@@ -205,7 +254,7 @@ async function ownWorktreeRetention(repoRoot: string): Promise<number | undefine
  * "the user said nothing". So we probe the raw file for the key's presence — the
  * same reason `ownWorktreeRetention` below reads the raw JSON.
  */
-export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+export async function projectGatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
   const none = new Set<string>();
   let raw: string;
   try {
@@ -221,12 +270,22 @@ export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
     }
     // The user took control of the source list — nothing is gated; a value the
     // schema would refuse degrades to the default too (same as `loadConfig`).
-    if ((parsed as Record<string, unknown>).skillsRepos !== undefined) return none;
+    if ((parsed as Record<string, unknown>).skillsRepos !== undefined && configSchema.safeParse(parsed).success) {
+      return none;
+    }
     return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
   } catch {
     // Malformed JSON degrades to the default (which loadConfig also does).
     return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
   }
+}
+
+/** A repo the user added in Global settings is an explicit choice — never gated, whatever the project says. */
+export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+  const gated = await projectGatedSkillsRepos(repoRoot);
+  const org = (await loadWorkspaceConfig().catch(() => null))?.orgSkillsRepos ?? [];
+  for (const src of org) gated.delete(src.repo);
+  return gated;
 }
 
 /**

@@ -41,18 +41,18 @@ export interface ResolvedAgentProfile {
  * under its name — which is exactly what happened to `copilot` (#582). Adding a provider without
  * a row here is now a type error.
  *
- * `pi` is the one honest fallback: it ships no per-user home of its own (`agentHomePaths` has no
- * entry for it, same reason `PROFILE_ENV_VAR.pi` is `null`), so its row keeps the long-standing
- * Claude-home behavior rather than inventing a path cezar cannot verify.
+ * Pi's agent directory is discovered from `PI_CODING_AGENT_DIR` or its documented `~/.pi/agent`
+ * default. It cannot carry additional accounts because Pi has no documented profile variable.
  */
 const PROVIDER_HOME: Record<ProviderId, (home: ReturnType<typeof agentHomePaths>) => string> = {
   claude: (home) => home.claude,
   codex: (home) => home.codex,
   opencode: (home) => home.opencodeConfig,
   cursor: (home) => home.cursor,
-  pi: (home) => home.claude,
+  pi: (home) => home.pi,
   junie: (home) => home.junie,
   copilot: (home) => home.copilot,
+  antigravity: (home) => home.antigravity,
 };
 
 /**
@@ -133,6 +133,17 @@ export function selectProfile(
   if (chosen === undefined || chosen === DEFAULT_AGENT_ACCOUNT_ID) return defaultAgentProfile(provider, env);
   const stored = store.accounts.find((a) => a.id === chosen && a.provider === provider);
   return stored ? resolveStoredProfile(stored) : defaultAgentProfile(provider, env);
+}
+
+/**
+ * The id of the account a run on `provider` ends up on — `selectProfile`'s answer, as the key the
+ * usage-limit hold uses (#1722). One resolver so the hold and the spawn cannot drift apart.
+ */
+export function resolveAccountId(
+  store: AgentAccountStore,
+  options: { provider: ProviderId; repoRoot?: string; profileId?: string },
+): string {
+  return selectProfile(store, options).id;
 }
 
 /**

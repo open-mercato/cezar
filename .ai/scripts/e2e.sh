@@ -62,6 +62,27 @@ if [ "$installed" != 1 ]; then
   skip "$notes"
 fi
 
+# The provider bootstrap may need rootless-container flags and staged shared
+# libraries for every agent-browser process, not just the doctor invocation.
+browser_env=$(node -e '
+  const fs = require("fs");
+  try {
+    const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const e = (d.browser && d.browser.environment) || {};
+    for (const [key, value] of Object.entries(e)) {
+      if (value) process.stdout.write(key + "=" + value + "\n");
+    }
+  } catch {}
+' "$DESCRIPTOR" 2>/dev/null || true)
+while IFS='=' read -r key value; do
+  case "$key" in
+    LD_LIBRARY_PATH) export LD_LIBRARY_PATH="$value" ;;
+    AGENT_BROWSER_ARGS) export AGENT_BROWSER_ARGS="$value" ;;
+  esac
+done <<EOF
+$browser_env
+EOF
+
 # ---- 3. run the specs -------------------------------------------------------
 cd "$REPO_ROOT"
 if npx vitest run --config packages/web/e2e/vitest.config.ts; then

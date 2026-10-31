@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PROVIDER_IDS,
@@ -59,6 +59,8 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  // `agy models` lists the signed-in account's models (live agy 1.4.0 output).
+  antigravity: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -75,11 +77,15 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   pi: 'No models available. Use /login to authenticate.',
   junie: 'Junie version: 26.9.22 (3419.7)',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
+  antigravity: 'Please sign in',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
   if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
-  if (executable === 'agent') return 'cursor';
+  if (executable === 'agy') return 'antigravity';
+  // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
+  // Cursor installed (#1503), so match it too or the suite fails only on such machines.
+  if (executable === 'agent' || basename(executable) === 'cursor-agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
@@ -154,6 +160,7 @@ describe('workspace provider API', () => {
     workspaceEvents?: WorkspaceEventBus;
     workspaceConfig?: ReturnType<typeof memoryWorkspaceConfig>;
     contexts?: ProjectContexts;
+    loginWatchOffsetsMs?: readonly number[];
   } = {}) => createApp({
     repoRoot: root,
     store,
@@ -165,6 +172,7 @@ describe('workspace provider API', () => {
     workspaceEvents: options.workspaceEvents,
     workspaceConfig: options.workspaceConfig,
     contexts: options.contexts,
+    loginWatchOffsetsMs: options.loginWatchOffsetsMs ?? [],
   });
 
   const connect = (server: ReturnType<typeof app>, provider: unknown) => apiRequest(
@@ -209,6 +217,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'connected', enabled: true },
       ],
     });
   });
@@ -232,6 +241,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -645,16 +655,52 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
-  it('POST returns 409 plus retry guidance when status is unknown', async () => {
+  it('POST opens the login command when status is unknown, so an unreadable probe is not a dead end', async () => {
     const openTerminal = vi.fn(async () => true);
     const response = await connect(app({
       providerAuth: service({ claude: 'unknown' }),
       openTerminal,
     }), 'claude');
 
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ opened: true, command: "'claude' auth login" });
+    expect(openTerminal).toHaveBeenCalledWith(root, "'claude' auth login");
+  });
+
+  it('POST re-checks the login it opened and tells the cockpit once it is connected', async () => {
+    const states: Partial<Record<ProviderId, ProviderConnectionState>> = { codex: 'disconnected' };
+    const workspaceEvents = new WorkspaceEventBus();
+    const events: unknown[] = [];
+    workspaceEvents.on((event, data) => {
+      if (event === 'provider-status') events.push(data);
+    });
+    const server = app({
+      providerAuth: service(states),
+      openTerminal: async () => {
+        states.codex = 'connected';
+        return true;
+      },
+      workspaceEvents,
+      loginWatchOffsetsMs: [0],
+    });
+
+    expect((await connect(server, 'codex')).status).toBe(200);
+    await vi.waitFor(() => expect(events).toEqual([
+      expect.objectContaining({ provider: 'codex', status: 'connected' }),
+    ]));
+  });
+
+  it('POST returns 409 plus command for an unknown status when localHandoff is false', async () => {
+    const openTerminal = vi.fn(async () => true);
+    const response = await connect(app({
+      providerAuth: service({ claude: 'unknown' }),
+      openTerminal,
+      bindHost: '0.0.0.0',
+    }), 'claude');
+
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({
-      error: 'Authentication could not be verified. Try again.',
+      error: 'Run this command on the machine hosting cezar.',
       command: "'claude' auth login",
     });
     expect(openTerminal).not.toHaveBeenCalled();
@@ -697,6 +743,57 @@ describe('workspace provider API', () => {
     expect(openTerminal).not.toHaveBeenCalled();
   });
 
+  describe('POST /api/v1/providers/:provider/update', () => {
+    const update = (server: ReturnType<typeof app>, provider: string) =>
+      apiRequest(server, `/api/v1/providers/${provider}/update`, { method: 'POST' });
+
+    it('opens a terminal running the CLI\'s own update', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal }), 'opencode');
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ opened: true, command: "'opencode' upgrade" });
+      expect(openTerminal).toHaveBeenCalledWith(root, "'opencode' upgrade");
+    });
+
+    it('answers 409 without a command for a CLI that cannot update itself', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal }), 'codex');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'This agent has no update command of its own. Update it the way you installed it.',
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 plus command when localHandoff is false', async () => {
+      const openTerminal = vi.fn(async () => true);
+      const response = await update(app({ openTerminal, bindHost: '0.0.0.0' }), 'opencode');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'Run this command on the machine hosting cezar.',
+        command: "'opencode' upgrade",
+      });
+      expect(openTerminal).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 plus command when no terminal opens', async () => {
+      const response = await update(app({ openTerminal: async () => false }), 'claude');
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: 'No terminal emulator could be opened. Run this command manually.',
+        command: "'claude' update",
+      });
+    });
+
+    it('rejects an unknown provider', async () => {
+      expect((await update(app(), 'nope')).status).toBe(400);
+    });
+  });
+
   it('POST returns 409 plus command when the terminal launcher returns false', async () => {
     const openTerminal = vi.fn(async () => false);
     const response = await connect(app({
@@ -737,7 +834,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, or copilot' });
+    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, junie, copilot, or antigravity' });
   });
 
   it('never places request-controlled text in the opened command', async () => {

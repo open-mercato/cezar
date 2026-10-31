@@ -7,6 +7,7 @@ import {
   cezarHomeDir,
   claudeStateFilePath,
   instanceSlug,
+  isAbsolutePath,
   serverInstancesDir,
   serverLockPath,
   serverStatePath,
@@ -61,6 +62,28 @@ describe('paths', () => {
   });
 });
 
+describe('isAbsolutePath', () => {
+  it('accepts native Windows roots on win32: drive, forward-slash drive, UNC', () => {
+    expect(isAbsolutePath('C:\\projects\\ProjectName', 'win32')).toBe(true);
+    expect(isAbsolutePath('C:/Repos', 'win32')).toBe(true);
+    expect(isAbsolutePath('\\\\server\\share\\repo', 'win32')).toBe(true);
+  });
+
+  it('refuses relative and drive-relative paths on win32', () => {
+    expect(isAbsolutePath('projects\\ProjectName', 'win32')).toBe(false);
+    expect(isAbsolutePath('..\\repo', 'win32')).toBe(false);
+    expect(isAbsolutePath('C:repo', 'win32')).toBe(false);
+    expect(isAbsolutePath('~/cezar/projects', 'win32')).toBe(false);
+  });
+
+  it('keeps the POSIX rule on POSIX — a Windows spelling is not absolute there', () => {
+    expect(isAbsolutePath('/home/me/repo', 'linux')).toBe(true);
+    expect(isAbsolutePath('/Users/me/repo', 'darwin')).toBe(true);
+    expect(isAbsolutePath('C:\\projects\\ProjectName', 'linux')).toBe(false);
+    expect(isAbsolutePath('relative/repo', 'darwin')).toBe(false);
+  });
+});
+
 describe('instanceSlug', () => {
   it('lowercases and turns every non-alnum run (incl. dots) into a single dash', () => {
     expect(instanceSlug('Shop.Example.COM')).toBe('shop-example-com');
@@ -94,6 +117,7 @@ describe('agentHomePaths', () => {
     expect(paths.codex).toBe('/home/u/.codex');
     expect(paths.opencodeConfig).toBe('/home/u/.config/opencode');
     expect(paths.cursor).toBe('/home/u/.cursor');
+    expect(paths.pi).toBe('/home/u/.pi/agent');
   });
 
   it('honors agent-specific home overrides', () => {
@@ -103,11 +127,13 @@ describe('agentHomePaths', () => {
       CODEX_HOME: '/opt/codex',
       CURSOR_CONFIG_DIR: '/opt/cursor',
       XDG_CONFIG_HOME: '/xdg',
+      PI_CODING_AGENT_DIR: '/opt/pi-agent',
     } as NodeJS.ProcessEnv);
     expect(paths.claude).toBe('/opt/claude-klaudiusz');
     expect(paths.codex).toBe('/opt/codex');
     expect(paths.opencodeConfig).toBe('/xdg/opencode');
     expect(paths.cursor).toBe('/opt/cursor');
+    expect(paths.pi).toBe('/opt/pi-agent');
   });
 
   it('ignores a blank CLAUDE_CONFIG_DIR rather than yielding a relative path', () => {

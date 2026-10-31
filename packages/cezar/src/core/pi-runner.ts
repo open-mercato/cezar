@@ -17,6 +17,7 @@ import { buildChildEnv } from './agent-env.js';
 import { readNdjson } from './ndjson.js';
 import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.js';
 import { V1TextCoalescer } from './v1-text-coalescer.js';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
@@ -25,7 +26,7 @@ const AUTO_END_DELAY_MS = 250;
 export interface PiRunnerOptions {
   /** Override the binary name/path; defaults to `pi` on PATH (`CEZ_PI_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -62,6 +63,8 @@ export class PiRunner implements AgentRunner {
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
     const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
+    // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
+    child.stdin.on('error', () => {});
     let open = true;
     let settled = true;
     let timedOut = false;
@@ -157,18 +160,15 @@ export class PiRunner implements AgentRunner {
     ]);
 
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
-    const deadline =
-      limitMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            interrupt();
-          }, limitMs)
-        : undefined;
-    deadline?.unref?.();
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      interrupt();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
+          deadline.touch();
           let value: unknown;
           try {
             value = JSON.parse(line);
@@ -193,7 +193,10 @@ export class PiRunner implements AgentRunner {
               textCoalescer.append(undefined, update.delta);
             }
           } else if (value.type === 'message_end' && isRecord(value.message) && value.message.role === 'assistant') {
-            textCoalescer.complete(undefined, contentText(value.message.content));
+            // Pi's assistant snapshots can split one logical message across text content parts.
+            // Keep those bytes adjacent: control markers may land on opposite sides of a part
+            // boundary just as they can across text_delta frames.
+            textCoalescer.complete(undefined, assistantMessageText(value.message.content));
             const usage = usageValues(value.message.usage);
             if (usage) {
               tokensUsed += usage.weighted;
@@ -231,7 +234,7 @@ export class PiRunner implements AgentRunner {
           }
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (autoEndTimer) clearTimeout(autoEndTimer);
         if (killTimer) clearTimeout(killTimer);
         if (hardKillTimer) clearTimeout(hardKillTimer);
@@ -243,7 +246,7 @@ export class PiRunner implements AgentRunner {
       const exitCode = await waitForExit(child);
       if (spawnError) throw spawnError;
       if (timedOut) {
-        const message = `pi CLI timed out after ${Math.round((limitMs / 60_000) * 10) / 10}m and was killed`;
+        const message = inactivityTimeoutMessage('pi CLI', limitMs, deadline.expiredBy);
         onEvent?.({ type: 'error', message });
         onEvent?.({ type: 'done' });
         return { text: textChunks.join('\n').trim(), toolCalls, tokensUsed, sessionId };
@@ -348,6 +351,15 @@ function contentText(value: unknown): string | undefined {
     .map((part) => (isRecord(part) && part.type === 'text' ? string(part.text) : undefined))
     .filter((part): part is string => part !== undefined);
   return text.length > 0 ? text.join('\n') : undefined;
+}
+
+function assistantMessageText(value: unknown): string | undefined {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return undefined;
+  const text = value
+    .map((part) => (isRecord(part) && part.type === 'text' ? string(part.text) : undefined))
+    .filter((part): part is string => part !== undefined);
+  return text.length > 0 ? text.join('') : undefined;
 }
 
 function rpcError(value: Record<string, unknown>): string {

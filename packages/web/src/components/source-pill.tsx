@@ -110,7 +110,7 @@ export function SourcePill({
         data-source-ref={skill.name}
         onSelect={() => toggle({ source: 'skill', ref: skill.name })}
       >
-        <span className={cn('shrink-0 font-mono text-xs', emphasized && 'font-semibold')}>
+        <span className={cn('shrink-0 text-xs', emphasized && 'font-semibold')}>
           {skill.name}
         </span>
         {skill.description ? (
@@ -165,10 +165,10 @@ export function SourcePill({
       }}
       className={cn(
         chipClass,
-        'font-mono text-[11.5px]',
+        'text-meta',
         source === null
           ? 'border-dashed text-soft-foreground'
-          : 'rounded-r-none border-r-0 border-foreground/60 pr-1.5 font-semibold text-foreground',
+          : 'rounded-r-none border-r-0 border-foreground/60 pr-1.5 text-foreground',
       )}
     >
       <SourceIcon
@@ -278,7 +278,7 @@ export function SourcePill({
                         data-source-ref={workflow.name}
                         onSelect={() => toggle({ source: 'workflow', ref: workflow.name })}
                       >
-                        <span className="shrink-0 font-mono text-xs">{workflow.name}</span>
+                        <span className="shrink-0 text-xs">{workflow.name}</span>
                         {workflow.description ? (
                           <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
                             {workflow.description}

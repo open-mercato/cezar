@@ -10,7 +10,8 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
  * view must render), the log is whatever this checkout's history is, and the branch list is
  * live. Strictly READ-ONLY: no branch creation, no switching, no commits — the mutation
  * flows (switch/create incl. 409 reasons, base-branch picker) are pinned in
- * `src/routes/repo-git/repo-git.test.tsx` against fixtures.
+ * `src/routes/repo-git/repo-git.test.tsx` against fixtures. The Files segment has its own spec
+ * (`repo-files.e2e.ts`).
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
@@ -62,8 +63,8 @@ describe('the repo view against the live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="branch-chip"]') !== null`)
     expect(browser.text('[data-slot="branch-chip"]')).toContain(repo.info?.branch ?? '')
 
-    // Three segment tabs, Changes active.
-    expect(browser.count('[data-slot="repo-tabs"] a')).toBe(3)
+    // Four segment tabs (Files joined in #1279), Changes active.
+    expect(browser.count('[data-slot="repo-tabs"] a')).toBe(4)
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="repo-tabs"] a[aria-current="page"]').getAttribute('href')`,
@@ -187,7 +188,7 @@ describe('the repo view against the live dry-run server', () => {
         ),
       ).toBe('none')
       // The segments stay a tappable row and the page never scrolls sideways.
-      expect(browser.count('[data-slot="repo-tabs"] a')).toBe(3)
+      expect(browser.count('[data-slot="repo-tabs"] a')).toBe(4)
       expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
       browser.screenshot(`${artifactsDir}/repo-git-iphone.png`)

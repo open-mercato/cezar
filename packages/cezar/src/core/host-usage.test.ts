@@ -4,6 +4,8 @@ import {
   createHostSampler,
   HOST_SAMPLE_INTERVAL_MS,
   HOST_SAMPLE_STALE_MS,
+  parseDarwinSwap,
+  parseVmStatAvailable,
   type HostCpuTimes,
 } from './host-usage.ts';
 
@@ -78,6 +80,18 @@ function cpuTimesProbe(initial: HostCpuTimes = { idle: 0, total: 0 }) {
   };
 }
 
+/** `vm_stat` as macOS prints it, trimmed to the counts the parser reads plus two it must ignore. */
+const VM_STAT = [
+  'Mach Virtual Memory Statistics: (page size of 16384 bytes)',
+  'Pages free:                              128643.',
+  'Pages inactive:                          947101.',
+  'Pages wired down:                           200.',
+  'Pages purgeable:                            100.',
+  '"Translation faults":               68799011039.',
+  'File-backed pages:                       738010.',
+  'Anonymous pages:                           1000.',
+  'Pages occupied by compressor:               300.',
+].join('\n');
 const SWAP_MEMINFO = ['MemTotal:       32768 kB', 'SwapTotal:       8192 kB', 'SwapFree:        1024 kB'].join('\n');
 
 describe('host sampler', () => {
@@ -194,6 +208,7 @@ describe('host sampler', () => {
     const probe = cpuTimesProbe();
     const withSwap = createHostSampler({
       cpuTimes: probe.source,
+      platform: 'linux',
       readMeminfo: () => SWAP_MEMINFO,
       now,
     }).sampleHostUsage();
@@ -202,6 +217,7 @@ describe('host sampler', () => {
 
     const noSwap = createHostSampler({
       cpuTimes: probe.source,
+      platform: 'linux',
       readMeminfo: () => 'MemTotal: 32768 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB',
       now,
     }).sampleHostUsage();
@@ -210,11 +226,67 @@ describe('host sampler', () => {
 
     const unreadable = createHostSampler({
       cpuTimes: probe.source,
+      platform: 'linux',
       readMeminfo: () => undefined,
       now,
     }).sampleHostUsage();
     expect(unreadable.swapTotalBytes).toBeUndefined();
     expect(unreadable.swapUsedBytes).toBeUndefined();
+  });
+
+  it('counts macOS memory the way Activity Monitor does, not as total minus the free list', () => {
+    const probe = cpuTimesProbe();
+    const darwin = createHostSampler({
+      cpuTimes: probe.source,
+      platform: 'darwin',
+      readVmStat: () => VM_STAT,
+      readSwapUsage: () => 'total = 6144.00M  used = 4449.25M  free = 1694.75M  (encrypted)',
+      now,
+    }).sampleHostUsage();
+    // App (1000 − 100) + wired 200 + compressor 300 pages; free/inactive/file-backed are reclaimable.
+    expect(darwin.memUsedBytes).toBe(1400 * 16384);
+    expect(darwin.memAvailableBytes).toBe(darwin.memTotalBytes - 1400 * 16384);
+    expect(darwin.swapTotalBytes).toBe(6144 * 1024 ** 2);
+    expect(darwin.swapUsedBytes).toBe(Math.round(4449.25 * 1024 ** 2));
+    expect(hostUsageSchema.safeParse(darwin).success).toBe(true);
+
+    // A darwin sampler never reads /proc/meminfo, and a Linux one never runs vm_stat.
+    const linux = createHostSampler({
+      cpuTimes: probe.source,
+      platform: 'linux',
+      readVmStat: () => VM_STAT,
+      readMeminfo: () => undefined,
+      now,
+    }).sampleHostUsage();
+    expect(linux.memUsedBytes).not.toBe(1400 * 16384);
+  });
+
+  it('parses vm_stat defensively and falls back when a count is missing', () => {
+    expect(parseVmStatAvailable(VM_STAT, 1400 * 16384 * 4)).toBe(1400 * 16384 * 3);
+    // More used than total (a racing read) clamps at zero available, never negative.
+    expect(parseVmStatAvailable(VM_STAT, 1000)).toBe(0);
+    expect(parseVmStatAvailable(VM_STAT.replace(/^Anonymous pages:.*$/m, ''), 1e12)).toBeUndefined();
+    expect(parseVmStatAvailable('garbage', 1e12)).toBeUndefined();
+    expect(parseVmStatAvailable(undefined, 1e12)).toBeUndefined();
+
+    expect(parseDarwinSwap('total = 0.00M  used = 0.00M  free = 0.00M')).toBeUndefined();
+    expect(parseDarwinSwap('total = 2.00G  used = 512.00M  free = 1.50G')).toEqual({
+      totalBytes: 2 * 1024 ** 3,
+      usedBytes: 512 * 1024 ** 2,
+    });
+    expect(parseDarwinSwap(undefined)).toBeUndefined();
+
+    // An unreadable vm_stat keeps the os reading rather than dropping the memory fields.
+    const fallback = createHostSampler({
+      cpuTimes: cpuTimesProbe().source,
+      platform: 'darwin',
+      readVmStat: () => undefined,
+      readSwapUsage: () => undefined,
+      now,
+    }).sampleHostUsage();
+    expect(fallback.memAvailableBytes).toBeGreaterThan(0);
+    expect(fallback.memUsedBytes + fallback.memAvailableBytes).toBe(fallback.memTotalBytes);
+    expect(fallback.swapTotalBytes).toBeUndefined();
   });
 
   it('omits loadAvg on Windows and carries it elsewhere', () => {
@@ -277,6 +349,42 @@ describe('host sampler', () => {
     probe.advance({ idle: 600, busy: 400 });
     vi.advanceTimersByTime(HOST_SAMPLE_INTERVAL_MS * 5);
     expect(first).toHaveBeenCalledTimes(2); // no timer after the last unsubscribe
+    expect(vi.getTimerCount()).toBe(0);
+    sampler.dispose();
+  });
+
+  it('keeps sampling for one stale window after a route read, so a polling reader gets real deltas', () => {
+    vi.useFakeTimers();
+    const probe = cpuTimesProbe();
+    const sampler = createHostSampler({
+      cpuTimes: probe.source,
+      readMeminfo: () => undefined,
+      now: () => Date.now(),
+    });
+
+    expect(sampler.sampleHostUsage().cpuPct).toBeUndefined(); // the first read only primes
+    sampler.keepWarm();
+    for (let poll = 0; poll < 3; poll += 1) {
+      probe.advance({ idle: 500, busy: 500 });
+      vi.advanceTimersByTime(HOST_SAMPLE_INTERVAL_MS);
+      const read = sampler.sampleHostUsage();
+      sampler.keepWarm();
+      expect(read.cpuPct).toBe(50);
+      expect(read.sampledAt).toBe(new Date(Date.now()).toISOString()); // the tick's, not a replay
+    }
+
+    // A subscriber joining a warm timer must not start a second interval or re-prime it.
+    const listener = vi.fn();
+    const stop = sampler.onHostUsage(listener);
+    expect(vi.getTimerCount()).toBe(2); // the interval + the warm lease
+    probe.advance({ idle: 500, busy: 500 });
+    vi.advanceTimersByTime(HOST_SAMPLE_INTERVAL_MS);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0]?.[0]).toMatchObject({ cpuPct: 50 });
+    stop();
+
+    // The lease outlives the subscriber; once it lapses unrenewed, the timer stops on its own.
+    vi.advanceTimersByTime(HOST_SAMPLE_STALE_MS);
     expect(vi.getTimerCount()).toBe(0);
     sampler.dispose();
   });
