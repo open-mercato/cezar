@@ -30,11 +30,11 @@ import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } 
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
-import { accountStateHint, classifyAgentFailure, MAX_TRANSIENT_RETRIES, transientRetryDelayMs } from '../core/agent-failure-class.ts';
+import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
-import { modelConflictsWithRunner, modelNativeToRunner } from '../core/model-presets.ts';
+import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
   ModelIdentityError,
@@ -90,7 +90,7 @@ import {
   worktreeDiff,
   worktreeShortstat,
 } from '../git-worktree.ts';
-import { commentOnIssue, commentOnPr, fetchGithubChecks, updatePr } from '../server/forge/github.ts';
+import { commentOnIssue, commentOnPr, fetchPrHeadChecks, updatePr } from '../server/forge/github.ts';
 import { createDraftPr } from '../server/pr.ts';
 import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
@@ -141,8 +141,9 @@ import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-re
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
-import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
-import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
+import { resolveAccountId, resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { recordedProfileFor } from '../server/recorded-profile.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES } from '../workspace/config.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { SecretStore } from '../workspace/secrets.ts';
@@ -569,6 +570,10 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Number of consecutive structured questions overridden by the autonomous nudge. A clean
+   * turn resets this counter, while `lastOverriddenAsk` intentionally remains sticky for the
+   * existing verbatim-repeat guard. */
+  consecutiveOverriddenAsks?: number;
   /** Consecutive compaction-ended turns this session has been continued through (#955),
    *  bounded by `MAX_COMPACTION_CONTINUES`. Unlike `autoContinues` this is NOT a lifetime
    *  budget: any turn that ends for another reason resets it, because that turn is the proof
@@ -686,6 +691,10 @@ function landAnswer(outcome: LandResult, base: string, withAgent: boolean): Land
     message: withAgent ? `${outcome.stage} failed — sent back to the agent to fix` : `${outcome.stage} failed`,
   };
 }
+/** An autonomous run may override two consecutive questions before the third parks for an answer.
+ * This is deliberately separate from the sticky verbatim-repeat guard: wording can change while
+ * the underlying blocker remains, but a clean turn proves the agent resumed useful work. */
+export const MAX_CONSECUTIVE_OVERRIDDEN_ASKS = 2;
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
@@ -758,8 +767,9 @@ function accountHeldFor(
   run: Pick<RunRecord, 'runner' | 'agentProfile' | 'status' | 'autoResumeAttempts'>,
   holds: AccountHolds,
   fallbackRunner: RunnerId,
+  accounts?: AccountResolution,
 ): boolean {
-  const key = runAccountKey(run, fallbackRunner);
+  const key = runAccountKey(run, fallbackRunner, accounts);
   if (holds.deadline.has(key)) return true;
   return holds.inFlight.has(key) && !resumeInFlight(run);
 }
@@ -775,10 +785,29 @@ function accountHeldFor(
  * persists it), and only started runs can be holding.
  */
 export function runAccountKey(
-  run: Pick<RunRecord, 'runner' | 'agentProfile'>,
+  run: Pick<RunRecord, 'runner' | 'agentProfile'> & { steps?: RunRecord['steps'] },
   fallbackRunner: RunnerId,
+  accounts?: AccountResolution,
 ): string {
-  return `${run.runner ?? fallbackRunner}:${run.agentProfile ?? 'default'}`;
+  const runner = run.runner ?? fallbackRunner;
+  // Without the account store the old literal key stands (#1722 resolves only what it can read).
+  if (!accounts) return `${runner}:${run.agentProfile ?? 'default'}`;
+  // A holding run is keyed on the account its steps recorded; a run asking to start has no
+  // recording yet, so it resolves as the spawn will: its override, else the repo's selection.
+  const explicit = accounts.holding
+    ? recordedProfileFor({ ...run, runner, steps: run.steps ?? [] } as RunRecord, runner)
+    : run.agentProfile;
+  // A named account keeps its own key (a stale id is still its own budget to the user).
+  if (explicit !== undefined) return `${runner}:${explicit}`;
+  return `${runner}:${resolveAccountId(accounts.store, { provider: runner, repoRoot: accounts.repoRoot })}`;
+}
+
+/** What `runAccountKey` needs to resolve an absent `agentProfile` to the account that really runs (#1722). */
+export interface AccountResolution {
+  store: AgentAccountStore;
+  repoRoot: string;
+  /** True when keying a run that holds the account (reads its recorded step), false when it asks to start. */
+  holding?: boolean;
 }
 
 /**
@@ -836,8 +865,8 @@ function autoResumeReasonFor(error: string | undefined): AutoResumeReason | unde
   return classifyAgentFailure(error) === 'transient' ? 'transient' : undefined;
 }
 
-function autoResumeCap(reason: AutoResumeReason | undefined): number {
-  return reason === 'transient' ? MAX_TRANSIENT_RETRIES : MAX_AUTO_RESUMES;
+function autoResumeCap(reason: AutoResumeReason | undefined, error?: string): number {
+  return reason === 'transient' ? transientRetryCap(error) : MAX_AUTO_RESUMES;
 }
 /**
  * The wake instant as a human reads it — local, to the SECOND, with the zone named. The
@@ -1264,6 +1293,23 @@ export class RunManager {
   private readonly checkArtifactSnapshots = new Map<string, Map<string, string>>();
   /** A failed checkpoint remains unsafe when a parked run is continued. */
   private readonly autosaveCheckpointBlockedRuns = new Set<string>();
+
+  /** Release check ownership only when the record has no continuation session left to reuse it. */
+  private releaseCheckStateIfUncontinuable(runId: string): void {
+    const run = this.store.getRun(runId);
+    const canContinue = run?.steps.some((step) => Boolean(step.sessionId)) ?? false;
+    if (!canContinue || run?.archived) {
+      this.checkArtifactSnapshots.delete(runId);
+      this.autosaveCheckpointBlockedRuns.delete(runId);
+    }
+  }
+
+  /** Retire transient check ownership when archive/delete makes continuation impossible. */
+  releaseCheckState(runId: string): void {
+    this.checkArtifactSnapshots.delete(runId);
+    this.autosaveCheckpointBlockedRuns.delete(runId);
+  }
+
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.
@@ -1344,6 +1390,10 @@ export class RunManager {
   /** Unsubscribe handle for the constructor's `onUsage` subscription — released
    *  by dispose() so a torn-down manager stops receiving sampler ticks. */
   private readonly offUsage: () => void;
+
+  /** Release transient check ownership at the store lifecycle boundary so routes, bulk archive,
+   * variant cleanup, and future callers cannot forget the second half of a mutation. */
+  private readonly offStoreLifecycle: () => void;
 
   /** The stalled-queue watchdog (see `rescueStalledQueue`). */
   private readonly queueWatchdog: ReturnType<typeof setInterval>;
@@ -1444,6 +1494,16 @@ export class RunManager {
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
     // the runs table; piggyback on it to enforce the per-task memory ceiling.
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
+    const onRun = (run: RunRecord): void => {
+      if (run.archived) this.releaseCheckState(run.id);
+    };
+    const onDeleted = (runId: string): void => this.releaseCheckState(runId);
+    this.store.on('run', onRun);
+    this.store.on('deleted', onDeleted);
+    this.offStoreLifecycle = () => {
+      this.store.off('run', onRun);
+      this.store.off('deleted', onDeleted);
+    };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
   }
@@ -1464,6 +1524,7 @@ export class RunManager {
     this.store.off('deleted', this.onRunDeletedHolds);
     this.lifecycle.dispose();
     this.offUsage();
+    this.offStoreLifecycle();
     this.offSemaphore();
     clearInterval(this.queueWatchdog);
     for (const [runId, state] of this.active) {
@@ -1874,12 +1935,13 @@ export class RunManager {
    * construction site of a shared in-memory object").
    *
    * `spawnParked` says WHY it parked: `true` only when this turn dispatched children.
-   * A commander that parks again on a plain `CEZ:MONITORING` after its children reported is an
-   * ordinary watcher again, which is why the flag is rewritten on every park, never OR-ed.
+   * A commander that parks again after some children reported is still waiting on the
+   * unfinished ones, so it stays slot-exempt while any direct child is in flight (#1697);
+   * once all have settled it is an ordinary watcher again. Re-evaluated on every park, never sticky.
    */
   private enterMonitoring(runId: string, spawnParked: boolean): void {
     this.monitoring.add(runId);
-    if (spawnParked) this.unitParents.add(runId);
+    if (spawnParked || this.hasInFlightChildren(runId)) this.unitParents.add(runId);
     else this.unitParents.delete(runId);
     const state = this.active.get(runId);
     if (state) this.armMonitoringLivenessTimer(runId, state);
@@ -1979,6 +2041,7 @@ export class RunManager {
         // leaks into the next ordinary one.
         const forced = this.forceNextPump;
         this.forceNextPump = false;
+        if (this.queue.length > 0 && !forced) await this.refreshAccounts();
         const holds = this.queue.length > 0 && !forced ? this.semaphore.accountHolds() : NO_HOLDS;
         const anyHold = holds.deadline.size > 0 || holds.inFlight.size > 0;
         // Only pay for the config read when something is actually held: a queued record may name
@@ -1986,7 +2049,7 @@ export class RunManager {
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
-          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
           return capacity();
@@ -2406,6 +2469,7 @@ export class RunManager {
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
+    this.releaseCheckStateIfUncontinuable(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
     this.store.clearRunSecrets(runId);
     this.memoryPausing.delete(runId);
@@ -3197,7 +3261,7 @@ export class RunManager {
   /**
    * A transient provider failure (an overload, no response, the OAuth refresh race between two of
    * cezar's own Claude processes): resume the same session after a short backoff, at most
-   * `MAX_TRANSIENT_RETRIES` times per streak, through the usage-limit resume's timer and exits.
+   * `transientRetryCap` times per streak, through the usage-limit resume's timer and exits.
    */
   private scheduleTransientRetry(run: RunRecord): void {
     // Same refusals as a usage-limit resume: an archived task, the switch off, no session.
@@ -3206,10 +3270,13 @@ export class RunManager {
       return;
     }
     const attempts = run.autoResumeAttempts ?? 0;
-    if (attempts >= MAX_TRANSIENT_RETRIES) {
+    const cap = transientRetryCap(run.error);
+    if (attempts >= cap) {
       this.store.appendEvent(run.id, {
         type: 'note',
-        message: `the provider is still failing after ${MAX_TRANSIENT_RETRIES} automatic retries — continue this task manually`,
+        message: isOauthRefreshRace(run.error)
+          ? `Claude Code's login refresh kept colliding with another Claude Code process after ${cap} automatic retries — continue this task manually`
+          : `the provider is still failing after ${cap} automatic retries — continue this task manually`,
       });
       this.reportUnretriedTransient(run, 'retries_exhausted');
       return;
@@ -3218,7 +3285,7 @@ export class RunManager {
     this.armAutoResume(run.id, wakeAt.getTime(), 'transient');
     this.store.appendEvent(run.id, {
       type: 'lifecycle',
-      message: `temporary provider failure — retrying automatically at ${formatWakeInstant(wakeAt)} (${attempts + 1}/${MAX_TRANSIENT_RETRIES})`,
+      message: `temporary provider failure — retrying automatically at ${formatWakeInstant(wakeAt)} (${attempts + 1}/${cap})`,
     });
   }
 
@@ -3257,6 +3324,8 @@ export class RunManager {
 
   /** Publish the deadline on the record (the cockpit's only source) and arm the timer for it. */
   private armAutoResume(runId: string, deadline: number, reason: AutoResumeReason): void {
+    // The hold's key resolves an absent profile through the accounts file (#1722); load it now.
+    void this.refreshAccounts().then(() => this.onQueueHoldChange());
     this.store.updateRun(runId, { autoResumeAt: new Date(deadline).toISOString(), autoResumeReason: reason });
     const timer = setTimeout(() => this.fireAutoResume(runId), Math.max(0, deadline - Date.now()));
     timer.unref?.();
@@ -3319,7 +3388,7 @@ export class RunManager {
     this.store.appendEvent(runId, {
       type: 'lifecycle',
       message: reason === 'transient'
-        ? `retrying after a temporary provider failure (${attempts}/${MAX_TRANSIENT_RETRIES})`
+        ? `retrying after a temporary provider failure (${attempts}/${transientRetryCap(run.error)})`
         : `usage limit reset — resuming automatically (${attempts}/${MAX_AUTO_RESUMES})`,
     });
     // A deferred continuation only ENQUEUES itself; the queue moves when something pumps it, and
@@ -3417,7 +3486,7 @@ export class RunManager {
       if (
         run.archived
         || !Number.isFinite(deadline)
-        || (run.autoResumeAttempts ?? 0) >= autoResumeCap(run.autoResumeReason)
+        || (run.autoResumeAttempts ?? 0) >= autoResumeCap(run.autoResumeReason, run.error)
       ) {
         this.store.updateRun(run.id, { autoResumeAt: undefined });
         continue;
@@ -3465,7 +3534,7 @@ export class RunManager {
     // hand an in-place run straight back, re-wedging the queue the rescue had just freed.
     // `dropActive` retires the entry on every terminal path, so the set still cleans itself up.
     if (this.forceStarted.has(runId)) return false;
-    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner)) return false;
+    if (!accountHeldFor({ ...run, runner }, this.semaphore.accountHolds(), runner, this.askingAccounts())) return false;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.pendingJobs.set(runId, { workflow, input });
@@ -3570,10 +3639,11 @@ export class RunManager {
   private refreshQueueReasons(): void {
     const revision = ++this.queueReasonRevision;
     const holds = this.semaphore.accountHolds();
-    if ((holds.deadline.size > 0 || holds.inFlight.size > 0)
-      && this.store.listRuns().some((run) => run.status === 'queued' && !run.runner)) {
-      // Match admission's effective account without persisting a runner override (#1340).
-      void loadConfig(this.repoRoot).then((config) => {
+    if (holds.deadline.size > 0 || holds.inFlight.size > 0) {
+      // Publish now off the last accounts snapshot unless a queued run needs the config for its
+      // runner (#1340); the pass below corrects it against the accounts file as it is now (#1722).
+      if (!this.store.listRuns().some((run) => run.status === 'queued' && !run.runner)) this.applyQueueReasons('claude');
+      void Promise.all([loadConfig(this.repoRoot), this.refreshAccounts()]).then(([config]) => {
         if (revision === this.queueReasonRevision) this.applyQueueReasons(config.defaultRunner);
       });
       return;
@@ -3581,10 +3651,20 @@ export class RunManager {
     this.applyQueueReasons('claude');
   }
 
+  /** Snapshot of agent-accounts.json for resolving absent `agentProfile`s (#1722). Re-read per
+   *  sweep, never trusted across them; unreadable degrades to the literal-`default` key. */
+  private accountStore: AgentAccountStore | undefined;
+  private async refreshAccounts(): Promise<void> {
+    try { this.accountStore = await loadAgentAccounts(); } catch { this.accountStore = undefined; }
+  }
+  private askingAccounts(): AccountResolution | undefined {
+    return this.accountStore ? { store: this.accountStore, repoRoot: this.repoRoot } : undefined;
+  }
+
   private applyQueueReasons(defaultRunner: RunnerId): void {
     const holds = this.semaphore.accountHolds();
     for (const run of this.store.listRuns()) {
-      const key = runAccountKey(run, defaultRunner);
+      const key = runAccountKey(run, defaultRunner, this.askingAccounts());
       const until = holds.deadlines?.get(key);
       const reason: RunRecord['queueWaitReason'] = run.status !== 'queued' ? undefined
         : until !== undefined ? { kind: 'usage-reset', until: new Date(until).toISOString(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }
@@ -3600,7 +3680,7 @@ export class RunManager {
     for (const run of this.store.listRuns()) {
       // A holding run always carries the runner it actually ran on, so the fallback is unused
       // here — it is spelled out rather than `!` so a future record shape degrades, not throws.
-      const key = () => runAccountKey(run, run.runner ?? 'claude');
+      const key = () => runAccountKey(run, run.runner ?? 'claude', this.accountStore && { store: this.accountStore, repoRoot: this.repoRoot, holding: true });
       // A transient retry says nothing about the account's window, so it holds nothing.
       if (run.autoResumeReason === 'transient') continue;
       if (run.status === 'failed' && run.autoResumeAt) {
@@ -3815,7 +3895,8 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (run && (holds.deadline.size > 0 || holds.inFlight.size > 0)) {
       const { defaultRunner } = await loadConfig(this.repoRoot);
-      if (accountHeldFor(run, holds, defaultRunner ?? 'claude')) return 'held';
+      await this.refreshAccounts();
+      if (accountHeldFor(run, this.semaphore.accountHolds(), defaultRunner ?? 'claude', this.askingAccounts())) return 'held';
     }
     // The config read above awaited — the run may have started or been cancelled meanwhile.
     if (!this.queue.includes(runId)) return 'not-queued';
@@ -4560,13 +4641,11 @@ export class RunManager {
       // meaningless for the new one, which is exactly what the composer already displays (auto).
       // On a real switch only a pin native to the target survives: Claude accepts gateway ids, so
       // the conflict guard alone let OpenCode's `openai/gpt-5.1` reach `claude --model` (8e1173b1).
-      const runnerSwitched = targetRunner !== (run.runner ?? 'claude');
+      // Antigravity's names are private to it, so no pin crosses into or out of it.
       const inheritedPinIsForeign =
         opts.model === undefined &&
         run.model !== undefined &&
-        (runnerSwitched
-          ? !modelNativeToRunner(run.model, targetRunner)
-          : modelConflictsWithRunner(run.model, targetRunner));
+        !pinSurvivesRunnerSwitch(run.model, run.runner ?? 'claude', targetRunner);
       // An account belongs to ONE agent, so a runner switch that names no account must not leave
       // the previous backend's login on the record. It is inert immediately (resolution applies
       // the run's account only to steps on the run's own runner) and wrong later, when a further
@@ -4858,16 +4937,19 @@ export class RunManager {
         state.session?.interrupt();
         return;
       }
+      // Error results can report the charge after the error event. Keep accounting
+      // while the session-error guard still prevents later success transitions.
+      if (event.type === 'cost') {
+        stepCost += event.usd;
+        this.store.updateStep(runId, stepId, { costUsd: stepCost });
+        return;
+      }
       if (sessionError) return;
       if (event.type === 'session') {
         this.store.updateStep(runId, stepId, { sessionId: event.sessionId, backend });
       }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, stepId, { tokensUsed: event.tokensUsed });
-      }
-      if (event.type === 'cost') {
-        stepCost += event.usd;
-        this.store.updateStep(runId, stepId, { costUsd: stepCost });
       }
       if (event.type === 'turn-end') {
         // Belt-and-braces: v2 `turn.completed` already flushed the delta
@@ -4904,6 +4986,9 @@ export class RunManager {
           turnText,
           Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
+        // A turn without a validated ask proves the agent resumed useful work. Reset only the
+        // consecutive bound here; `lastOverriddenAsk` stays sticky for the verbatim-repeat guard.
+        if (!ask) state.consecutiveOverriddenAsks = 0;
         // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
         // children, not on the user, and it has to surrender its slot to them. An over-budget run
         // parks `waiting` instead, whatever it asked for (Q6 ii).
@@ -6308,7 +6393,11 @@ export class RunManager {
         return child && childSucceeded(child.status) ? 'done' : 'failed';
       }
       case 'git.commit': {
-        const res = await commitAll(state.cwd, render(node.message));
+        const res = await commitAll(
+          state.cwd,
+          render(node.message),
+          await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths),
+        );
         if (res.result === 'committed') {
           outputs.set(node.id, { sha: res.sha });
           note(`committed ${res.sha.slice(0, 8)}`);
@@ -6524,21 +6613,33 @@ export class RunManager {
           outputs.set(node.id, { status: 'passing' });
           return 'green';
         }
-        note(`waiting for CI on PR #${number} (up to ${Math.round(node.timeoutMs / 60_000)} min)`);
+        // #1533: the verdict is for the commit this node was entered with, never a PR's previous head.
+        const headSha = await getHeadCommit(state.cwd);
+        if (!headSha) {
+          note('cannot read the worktree HEAD — nothing to wait for', 'danger');
+          outputs.set(node.id, { status: 'no-head' });
+          return 'failed';
+        }
+        note(`waiting for CI on PR #${number} at ${headSha.slice(0, 8)} (up to ${Math.round(node.timeoutMs / 60_000)} min)`);
         let glyph = 'pending';
         const outcome = await this.parkGraphNode(runId, state, node.id, { activity: 'monitoring', timeoutMs: node.timeoutMs }, (resolve) => {
           let stopped = false;
           const poll = async () => {
             if (stopped) return;
-            const data = await fetchGithubChecks(this.repoRoot, [number]);
-            // Unavailable (offline, gh logged out) is not a verdict: keep polling until the timeout.
-            const g = data.available ? data.checks[number] : null;
-            if (g === 'passing' || g === 'failing') {
-              glyph = g;
-              resolve({ kind: 'answer', text: g });
+            const v = await fetchPrHeadChecks(this.repoRoot, number, headSha);
+            if (stopped) return;
+            // Unavailable (offline, gh logged out) and stale are not verdicts: keep polling until the timeout.
+            if (v.kind === 'conflict') {
+              glyph = 'conflict';
+              resolve({ kind: 'answer', text: 'conflict' });
               return;
             }
-            if (!stopped) timer = setTimeout(() => void poll(), node.pollMs);
+            if (v.kind === 'checks' && (v.glyph === 'passing' || v.glyph === 'failing')) {
+              glyph = v.glyph;
+              resolve({ kind: 'answer', text: v.glyph });
+              return;
+            }
+            timer = setTimeout(() => void poll(), node.pollMs);
           };
           let timer: NodeJS.Timeout | undefined = setTimeout(() => void poll(), 0);
           return () => {
@@ -6549,6 +6650,12 @@ export class RunManager {
         if (outcome.kind === 'finished') return 'finished';
         outputs.set(node.id, { status: outcome.kind === 'timeout' ? 'timeout' : glyph });
         if (outcome.kind === 'timeout') return 'timeout';
+        if (glyph === 'conflict') {
+          // Through `failed`, not a new port: a saved graph wires only the ports that existed, and an
+          // unwired `conflict` would dead-end it. `failed` is already "nothing for a fixer to retry".
+          note(`PR #${number} has merge conflicts with its base — resolve them; CI will not run on it`, 'danger');
+          return 'failed';
+        }
         return glyph === 'passing' ? 'green' : 'red';
       }
     }
@@ -6984,6 +7091,13 @@ export class RunManager {
         state.session?.interrupt();
         return;
       }
+      // Error results can report the charge after the error event. Keep accounting
+      // while the session-error guard still prevents later success transitions.
+      if (event.type === 'cost') {
+        stepCost += event.usd;
+        this.store.updateStep(runId, step.id, { costUsd: stepCost });
+        return;
+      }
       if (sessionError) return;
       if (event.type === 'session') {
         // Codex/OpenCode mint their own session id — persist it so resume works.
@@ -6991,10 +7105,6 @@ export class RunManager {
       }
       if (event.type === 'token-usage') {
         this.store.updateStep(runId, step.id, { tokensUsed: startTokens + event.tokensUsed });
-      }
-      if (event.type === 'cost') {
-        stepCost += event.usd;
-        this.store.updateStep(runId, step.id, { costUsd: stepCost });
       }
       if (event.type === 'turn-end') {
         // v2 `turn.completed` already flushed the coalescers; the v1 turn
@@ -7036,6 +7146,9 @@ export class RunManager {
           turnText,
           Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
+        // Keep this reset beside the twin in runContinuation: DONE and MONITORING are clean
+        // turns too, and both handlers must give the same K=2 guarantee.
+        if (!ask) state.consecutiveOverriddenAsks = 0;
         // Does this turn park the WORKFLOW — hold a non-final step open instead
         // of letting `execute` mark it done and run the next check (#917, #1076)?
         //
@@ -8394,14 +8507,24 @@ export class RunManager {
     if (state.cancelled) return false;
     // A question repeated verbatim after a nudge is not a preference the agent can settle on
     // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
-    // the nudge would merely make it work around, at full cost, until the cap. Park the run on
-    // the question instead, so the operator sees it now rather than after 40 more turns.
+    // the nudge would merely make it work around, at full cost. Keep this guard sticky across
+    // clean turns; the consecutive bound below is the wording-independent guard that resets on
+    // every clean turn, including DONE and MONITORING boundaries.
     const askKey = ask ? ask.questions.map((question) => question.question).join(' | ') : undefined;
     if (askKey !== undefined && askKey === state.lastOverriddenAsk) {
       this.store.appendEvent(runId, {
         type: 'note',
         stepId,
         message: `autonomous — the same question was asked again after a nudge, so the run parks on it instead of continuing: ${askKey}`,
+      });
+      return false;
+    }
+    const consecutiveAsks = state.consecutiveOverriddenAsks ?? 0;
+    if (ask && consecutiveAsks >= MAX_CONSECUTIVE_OVERRIDDEN_ASKS) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — ${MAX_CONSECUTIVE_OVERRIDDEN_ASKS} consecutive questions were overridden; the run now waits for your answer: ${askKey}`,
       });
       return false;
     }
@@ -8419,6 +8542,7 @@ export class RunManager {
     // run after it parks at the cap cannot see that one was ever asked.
     if (ask) {
       state.lastOverriddenAsk = askKey;
+      state.consecutiveOverriddenAsks = consecutiveAsks + 1;
       this.store.appendEvent(runId, {
         type: 'note',
         stepId,

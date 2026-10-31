@@ -50,7 +50,8 @@ import { flushTelemetry, initTelemetry, installCrashReporter, registerDailyInven
 import { collectFeatureInventory } from './feature-telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
-import { apiOrigin, pickPort } from './api-origin.ts';
+import { apiOrigin } from './api-origin.ts';
+import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
@@ -401,7 +402,7 @@ async function serveCommand(
       'runs.total': runs.length,
     };
   });
-  const port = await pickPort(preferredPort, bindHost);
+  const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
   webhookPort = port;
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only

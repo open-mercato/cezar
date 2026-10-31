@@ -39,7 +39,7 @@ export function CommandPaletteHint({ className }: { className?: string }) {
       <span className="truncate">Search…</span>
       <kbd
         aria-hidden="true"
-        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
+        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-micro font-medium text-muted-foreground"
       >
         {commandShortcutHint('k')}
       </kbd>

@@ -13,7 +13,7 @@ export function WebhookCard() {
   const inactive = rows.filter(row => row.state === 'inactive').length
   const pending = rows.reduce((total, row) => total + row.pendingCount, 0)
   return <SettingsField title="Webhooks" hint="Task updates sent to Slack, Discord or your own endpoint.">
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-border bg-card p-3 text-[13px]">
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border border-border bg-card p-3 text-ui">
       <div className="min-w-0">
         {health.isError ? <p>Status unavailable — could not load server health.</p>
           : !health.data ? <p>Loading webhook status…</p>

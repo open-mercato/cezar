@@ -115,7 +115,7 @@ export function WorktreeLifecycleEditor({ config }: { config: ConfigResponse }) 
   const pending = lifecycle.data?.worktrees.filter(worktree => worktree.operation && worktree.needsAttention) ?? []
 
   return <div id="worktree-lifecycle-scripts" className="flex min-w-0 flex-col gap-5" data-slot="worktree-lifecycle-editor">
-    <div className="rounded-md border border-border bg-muted/30 p-3 text-[13px] text-muted-foreground">
+    <div className="rounded-md border border-border bg-muted/30 p-3 text-ui text-muted-foreground">
       <p>Scripts apply only to this project. Saving commands opts in to running them as the Cezar host user, with that user’s local privileges.</p>
       <p className="mt-1">Runtime: noninteractive Bash, in the isolated worktree directory. Bash must be installed on the host. Commands run in order; the default timeout is 30 minutes.</p>
       <p className="mt-1" id="lifecycle-variable-help">Values are shell-escaped; do not wrap variable tokens in quotes. Use <code>{'\\{{'}</code> for literal double braces, for example <code>{"docker inspect --format '\\{{.State.Status}}' container"}</code>.</p>
