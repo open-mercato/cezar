@@ -46,12 +46,15 @@ function sourceFiles(dir: string): string[] {
  *  a poller's `run('gh', …)`, `execTool(…, 'gh', …)`, or a runner typed to take `'gh' | 'git'`. */
 const GH_SPAWN = /\b(?:exec|execFile|execFileAsync|spawn|run)\(\s*'gh'|execTool\([^)]*'gh'|'git' \| 'gh'|'gh' \| 'git'/s;
 const IMPORTS_HELPER = /from '(?:\.\.\/)*(?:\.\/)?(?:core\/)?gh-env\.ts'/;
+/** The shared project runner applies `ghEnv` to every command it spawns (`create-project.ts`,
+ *  which this guard checks itself), so a file whose `gh` calls go through it is covered too. */
+const USES_SHARED_RUNNER = /import \{[^}]*\bspawnCommandRunner\b[^}]*\} from '(?:\.\.?\/)+(?:server\/)?create-project\.ts'/;
 
 describe('every gh call site runs with ghEnv', () => {
   it('imports the helper in each file that spawns gh', () => {
     const offenders = sourceFiles(SRC)
       .map((path) => [path.slice(SRC.length + 1), readFileSync(path, 'utf8')] as const)
-      .filter(([, text]) => GH_SPAWN.test(text) && !IMPORTS_HELPER.test(text))
+      .filter(([, text]) => GH_SPAWN.test(text) && !IMPORTS_HELPER.test(text) && !USES_SHARED_RUNNER.test(text))
       .map(([name]) => name);
     expect(offenders).toEqual([]);
   });

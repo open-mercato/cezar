@@ -693,27 +693,27 @@ function DiffFileCard({
             )}
           </span>
           {badge ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               {badge}
             </span>
           ) : null}
           {file.image ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               image
             </span>
           ) : file.binary ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               binary
             </span>
           ) : null}
           {preview ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               preview
             </span>
           ) : null}
           <span className="ml-auto flex shrink-0 items-center gap-2">
             <CommentCount count={commentCount} />
-            <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
+            <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-meta" />
           </span>
         </button>
       </header>
@@ -998,7 +998,7 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
   const label = gap.count === undefined ? '⋯ unchanged lines to end of file' : `⋯ ${gap.count} unchanged ${gap.count === 1 ? 'line' : 'lines'}`
   if (!onExpand) {
     return (
-      <div data-slot="diff-gap" className="border-y border-border/40 bg-muted/20 px-4 py-0.5 text-[11px] text-soft-foreground">
+      <div data-slot="diff-gap" className="border-y border-border/40 bg-muted/20 px-4 py-0.5 text-meta text-soft-foreground">
         {label}
       </div>
     )
@@ -1008,7 +1008,7 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
       type="button"
       data-slot="diff-gap"
       onClick={() => onExpand(gap)}
-      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-[11px] text-soft-foreground hover:bg-muted/50 hover:text-foreground"
+      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-meta text-soft-foreground hover:bg-muted/50 hover:text-foreground"
     >
       {label} — expand
     </button>

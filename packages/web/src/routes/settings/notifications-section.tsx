@@ -93,7 +93,7 @@ export function NotificationsSection() {
             <h2 className="text-sm font-semibold text-foreground">
               <label htmlFor="notifications-enabled">Notify when an agent needs you</label>
             </h2>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-ui text-muted-foreground">
               A browser notification when a task starts waiting, asks for review, or fails —
               only while this tab is in the background. Off by default.
             </p>
@@ -108,13 +108,13 @@ export function NotificationsSection() {
         </div>
 
         {unsupported ? (
-          <p data-slot="notifications-unsupported" className="text-[13px] text-muted-foreground">
+          <p data-slot="notifications-unsupported" className="text-ui text-muted-foreground">
             This browser does not support notifications, so the toggle is unavailable here.
           </p>
         ) : null}
 
         {!unsupported && enabled && permission === 'denied' ? (
-          <p data-slot="notifications-denied" className="text-[13px] text-danger">
+          <p data-slot="notifications-denied" className="text-ui text-danger">
             This browser is blocking notifications for the cockpit. The preference is saved, but
             nothing will be delivered here until you allow notifications in the browser&apos;s
             site settings.

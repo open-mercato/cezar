@@ -55,6 +55,7 @@ const UNSUPPORTED_IDENTITY_REASON: Record<Exclude<ProviderId, 'claude' | 'codex'
   pi: 'cezar does not yet read Pi account details from its config folder.',
   junie: 'cezar does not yet read Junie account details from its config folder.',
   copilot: 'cezar does not yet read Copilot account details from its config folder.',
+  antigravity: 'Antigravity keeps its Google sign-in in its own store, so cezar cannot read it.',
 };
 
 /** Read a JSON file under the cap. `null` for absent, unreadable, oversized or malformed. */

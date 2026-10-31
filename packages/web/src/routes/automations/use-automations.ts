@@ -102,7 +102,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         ...(automation.description ? { description: automation.description } : {}),
         kind: automation.kind,
         ...(automation.kind === 'schedule'
-          ? { schedule: automation.schedule }
+          ? { schedule: automation.schedule, ...(automation.schedules ? { schedules: automation.schedules } : {}) }
           : automation.kind === 'tracker'
             ? { trackerTrigger: automation.trackerTrigger, intervalSeconds: automation.intervalSeconds, filters: automation.filters }
             : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
@@ -134,6 +134,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         kind: automation.kind,
         trackerTrigger: automation.trackerTrigger,
         schedule: automation.schedule,
+        schedules: automation.schedules,
         events: automation.events,
         intervalSeconds: automation.intervalSeconds,
         filters: automation.filters,

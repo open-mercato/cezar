@@ -125,7 +125,7 @@ function HostUsageWidgetRow() {
         // to each other however wide `sampling…` renders. `leading-[14px]` is load-bearing: the
         // default `normal` line box for 11px text is ~13px, and pinning it keeps the row's height
         // a property of this file rather than of the font the browser happened to pick.
-        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-md border border-border px-2 py-1 text-[11px] leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-md border border-border px-2 py-1 text-meta leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
         stale ? 'opacity-70' : null,
       )}
     >

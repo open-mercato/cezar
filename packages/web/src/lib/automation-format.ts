@@ -2,6 +2,7 @@ import {
   WEEKDAY_NAMES,
   hm,
   scheduleLabel,
+  schedulesOf,
   zonedParts,
   type AutomationDefinition,
   type RunStatus,
@@ -93,8 +94,8 @@ export function statusLabel(status: RunStatus): string {
 }
 
 /** The trigger cell: `on issue.opened · every 5 min` for a poll, `scheduleLabel` for a schedule. */
-export function triggerLabel(automation: Pick<AutomationDefinition, 'kind' | 'events' | 'intervalSeconds' | 'schedule' | 'trackerTrigger'>): string {
-  if (automation.kind === 'schedule' && automation.schedule) return scheduleLabel(automation.schedule)
+export function triggerLabel(automation: Pick<AutomationDefinition, 'kind' | 'events' | 'intervalSeconds' | 'schedule' | 'schedules' | 'trackerTrigger'>): string {
+  if (automation.kind === 'schedule') return schedulesOf(automation).map(scheduleLabel).join('; ')
   if (automation.kind === 'tracker') {
     const trigger = automation.trackerTrigger
     const provider = trigger?.association.kind === 'jira' ? 'Jira' : trigger?.association.kind === 'linear' ? 'Linear' : 'Tracker'
