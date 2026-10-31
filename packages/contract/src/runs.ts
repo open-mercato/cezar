@@ -286,6 +286,14 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** The agent parked the run on an external blocker with `CEZ:BLOCKED` (#1540); retired on resume. */
+  blocked: z
+    .object({
+      category: z.enum(['credential', 'permission', 'environment', 'external-service', 'other']),
+      resume: z.string(),
+      at: z.string(),
+    })
+    .optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z

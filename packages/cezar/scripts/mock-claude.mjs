@@ -85,6 +85,9 @@ let turn = 0;
 // rather than time out.
 let autonomousArmed = false;
 let askRepeat = false;
+// `mock:vary` → sticky: every reply differs from the last (defeats the near-identical-reply breaker, #1540).
+let vary = false;
+let toolsEachTurn = false;
 let monitoringSticky = false;
 let askRewordClean = false;
 let askRewordMonitoring = false;
@@ -158,6 +161,9 @@ async function respond(userText, imageCount) {
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
+  if (userText.includes('mock:vary')) vary = true;
+  // `mock:tools-each-turn` → every later turn makes a tool call before its (near-identical) reply (#1809).
+  if (userText.includes('mock:tools-each-turn')) toolsEachTurn = true;
   // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
   // CEZ:MONITORING: the watcher whose downstream work never finishes.
   if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
@@ -208,6 +214,12 @@ async function respond(userText, imageCount) {
   // over the old 4/4 caps, which refused the whole payload and showed the user
   // raw JSON. It must now render as exactly one card, and a dispatched child
   // parking on it must still write a run record its index parser can read.
+  // `mock:blocked` → the reply ends with a valid `CEZ:BLOCKED` marker (#1540), on this turn only.
+  const blockedMarker = userText.includes('mock:blocked-bad')
+    ? '\n\nCEZ:BLOCKED {"category":"nonsense"}'
+    : userText.includes('mock:blocked')
+      ? '\n\nCEZ:BLOCKED {"category":"credential","resume":"owner-local token is available"}'
+      : '';
   const askMarker = userText.includes('mock:ask-many')
     ? '\n\nCEZ:ASK ' +
       JSON.stringify({
@@ -636,7 +648,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
+        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${blockedMarker}${verdictMarker}` }],
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
@@ -651,12 +663,18 @@ async function respond(userText, imageCount) {
     return;
   }
 
+  if (toolsEachTurn) {
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: `toolu_mock_work_${turn}`, name: 'Bash', input: { command: 'npm test' } }], usage: { input_tokens: 60, output_tokens: 20 } } });
+    await pace(100);
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_mock_work_${turn}`, content: 'ok' }] } });
+    await pace(100);
+  }
   const imgNote = imageCount > 0 ? ` I can see ${imageCount} image(s) you attached.` : '';
   emit({
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${verdictMarker}` }],
+      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${vary ? ' ' + ['alpha','bravo','charlie','delta','echo','foxtrot','golf','hotel','india','juliet'].map((w) => w + 'x'.repeat(turn % 7)).join(' ') : ''}${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}${blockedMarker}${verdictMarker}` }],
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });
