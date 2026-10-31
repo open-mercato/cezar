@@ -1,4 +1,4 @@
-import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type { ManagerSummary, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import { deriveAttention, wantsAttention } from './attention'
 
 /* Browser notifications (R6 Step 1.7, spec §"Cross-cutting"): the pure half.
@@ -126,5 +126,33 @@ export function describeRunNotification(run: RunRecord): RunNotificationContent 
     title: run.titleSummary ?? run.title,
     body: `Task ${label}`,
     tag: `cezar-run-${run.id}`,
+  }
+}
+
+// ---- managers (spec 2026-10-31-managers) ----------------------------------------------------
+
+/** What makes a manager worth interrupting for: a new approval, or something new to read. */
+const managerAttentionCount = (manager: ManagerSummary) => manager.pendingActions + manager.unread
+
+/**
+ * The managers whose attention count rose. `previous === null` is the first observation, which only
+ * records; a manager created since has no baseline and counts from zero.
+ */
+export function diffManagerAttention(
+  previous: ReadonlyMap<string, number> | null,
+  managers: readonly ManagerSummary[],
+): { entering: ManagerSummary[]; counts: ReadonlyMap<string, number> } {
+  const counts = new Map(managers.map((manager) => [manager.id, managerAttentionCount(manager)]))
+  const entering = previous === null
+    ? []
+    : managers.filter((manager) => managerAttentionCount(manager) > (previous.get(manager.id) ?? 0))
+  return { entering, counts }
+}
+
+export function describeManagerNotification(manager: ManagerSummary): RunNotificationContent {
+  return {
+    title: manager.name,
+    body: manager.pendingActions > 0 ? 'Needs your approval' : (manager.preview ?? 'New message'),
+    tag: `cezar-manager-${manager.id}`,
   }
 }

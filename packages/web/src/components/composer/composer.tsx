@@ -119,6 +119,10 @@ export interface ComposerProps {
   ariaLabel?: string
   /** `/` opens the project-first skills autocomplete (#380). */
   autocompleteSkills?: boolean
+  /** `/` lists these instead of skills: a host whose agent has fixed commands, not skills. */
+  slashCommands?: ReadonlyArray<{ name: string; description: string }>
+  /** Off: no attach button, and paste/drop leave files alone. For a host that cannot deliver them. */
+  attachments?: boolean
   /** Alt+A → "Yes, approved." / Alt+C → "Continue." — the legacy quick replies, window-global
    *  while the composer is enabled. */
   quickReplies?: boolean
@@ -182,6 +186,8 @@ export function Composer({
   placeholder = 'Reply — / for skills, @ for files…',
   ariaLabel = 'Reply to the agent',
   autocompleteSkills = true,
+  slashCommands,
+  attachments = true,
   quickReplies = false,
   getMentionCandidates,
   ref,
@@ -233,7 +239,7 @@ export function Composer({
   const pendingCaretRef = useRef<number | null>(null)
   const menuItemRefs = useRef<Map<string, HTMLElement>>(new Map())
 
-  const skills = useSkills(autocompleteSkills && skillsWanted)
+  const skills = useSkills(autocompleteSkills && slashCommands === undefined && skillsWanted)
   // The `/` list orders most-used first (#519) and a pick bumps `skillUsage`, so this — the
   // highest-traffic skill surface — both reads and feeds the same stats as the pickers.
   const uiState = useUiState()
@@ -275,11 +281,11 @@ export function Composer({
       return
     }
     const next = detectTrigger(el.value, el.selectionStart ?? el.value.length)
-    if (next?.trigger === '/' && !autocompleteSkills) return setTrigger(null)
+    if (next?.trigger === '/' && !autocompleteSkills && slashCommands === undefined) return setTrigger(null)
     if (next?.trigger === '@' && getMentionCandidates === undefined) return setTrigger(null)
     if (next?.trigger === '/') setSkillsWanted(true)
     setTrigger(next)
-  }, [autocompleteSkills, disabled, getMentionCandidates])
+  }, [autocompleteSkills, disabled, getMentionCandidates, slashCommands])
 
   interface MenuCandidate {
     value: string
@@ -291,6 +297,17 @@ export function Composer({
 
   const candidates = useMemo((): MenuCandidate[] => {
     if (trigger === null) return []
+    if (trigger.trigger === '/' && slashCommands) {
+      return slashCommands
+        .filter((command) => fuzzyMatch(command.name, trigger.query))
+        .map((command) => ({
+          value: command.name,
+          insert: command.name,
+          label: `/${command.name}`,
+          description: command.description,
+          emphasized: false,
+        }))
+    }
     if (trigger.trigger === '/') {
       return filterSkills(skills.data ?? [], trigger.query, uiState.data?.skillUsage).map((skill) => ({
         // The path suffix keeps values unique when a project skill shadows a global one.
@@ -305,7 +322,7 @@ export function Composer({
     return paths
       .filter((path) => fuzzyMatch(path, trigger.query))
       .map((path) => ({ value: path, insert: path, label: path, emphasized: false }))
-  }, [getMentionCandidates, skills.data, trigger, uiState.data?.skillUsage])
+  }, [getMentionCandidates, skills.data, slashCommands, trigger, uiState.data?.skillUsage])
 
   const activeValue = candidates.some((c) => c.value === menuValue)
     ? menuValue
@@ -323,7 +340,7 @@ export function Composer({
     // /new's submit (#408): only bump once the CURRENT map is known. The PUT merge is shallow,
     // so bumping off an unresolved/errored ui-state query would send a one-entry map and wipe
     // every accumulated count. Fire-and-forget; a lost bump costs one count, nothing more.
-    if (trigger.trigger === '/' && uiState.data !== undefined) {
+    if (trigger.trigger === '/' && slashCommands === undefined && uiState.data !== undefined) {
       putUiState({ skillUsage: bumpSkillUsage(uiState.data.skillUsage, candidate.insert) })
         .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
         .catch(() => {})
@@ -369,7 +386,7 @@ export function Composer({
 
   const addFiles = useCallback(
     (files: readonly File[], source: 'file' | 'clipboard' = 'file') => {
-      if (disabled) return
+      if (disabled || !attachments) return
       // Side effects (screening toasts + async encode) run OUTSIDE any setState updater: React
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
@@ -395,10 +412,11 @@ export function Composer({
         })
       }
     },
-    [disabled],
+    [attachments, disabled],
   )
 
   const onPaste = (event: ClipboardEvent) => {
+    if (!attachments) return
     // `kind: 'file'` rather than an `image/` type test (#950): the clipboard carries a pasted
     // `.md` as a file item too, and `screenFiles` is what decides whether cezar takes it. The
     // text half of the clipboard is left alone so an ordinary ⌘V still types.
@@ -412,6 +430,7 @@ export function Composer({
   }
 
   const onDrop = (event: DragEvent) => {
+    if (!attachments) return
     const files = [...(event.dataTransfer?.files ?? [])]
     if (files.length === 0) return
     event.preventDefault()
@@ -493,7 +512,10 @@ export function Composer({
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
         const active = candidates.find((c) => c.value === activeValue)
-        if (active) {
+        // A fixed command typed out in full is finished: Enter runs it, not a completion of itself.
+        if (active && slashCommands && event.key === 'Enter' && trigger?.query === active.insert) {
+          closeMenu()
+        } else if (active) {
           event.preventDefault()
           pick(active)
           return
@@ -687,7 +709,7 @@ export function Composer({
                   pill group is a single flex item that wraps as a block, stranding the
                   paperclip alone on the line above it (#composer-attach-line). */}
               <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
-                <AttachButton disabled={disabled} onFiles={addFiles} />
+                {attachments ? <AttachButton disabled={disabled} onFiles={addFiles} /> : null}
                 {footerStart}
               </div>
               <div className="ml-auto flex items-center gap-1">
@@ -791,9 +813,11 @@ export function Composer({
               <p className="px-3 py-4 text-center text-xs text-muted-foreground">
                 {trigger?.trigger === '@'
                   ? 'No files seen in this session yet — full file search arrives with the Files tab.'
-                  : skills.isPending
-                    ? 'Loading skills…'
-                    : 'No matching skills.'}
+                  : slashCommands
+                    ? 'No matching commands.'
+                    : skills.isPending
+                      ? 'Loading skills…'
+                      : 'No matching skills.'}
               </p>
             ) : (
               candidates.map((candidate) => (
