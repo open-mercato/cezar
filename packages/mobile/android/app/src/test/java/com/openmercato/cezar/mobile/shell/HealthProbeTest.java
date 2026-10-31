@@ -94,6 +94,14 @@ public class HealthProbeTest {
     }
 
     @Test
+    public void aChallengeFreeRefusalIsNotAnOutage() throws Exception {
+        HealthProbe probe = new HealthProbe((url, headers) -> {
+            throw new java.net.ProtocolException("No authentication challenges found");
+        }, "ua");
+        assertEquals(HealthAnswer.Kind.NOT_CEZAR, probe.probe(origin(), null, null, null).kind);
+    }
+
+    @Test
     public void theRealTransportDoesNotFollowARedirect() throws Exception {
         AtomicInteger followed = new AtomicInteger();
         String base = serve("HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", followed);
