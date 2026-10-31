@@ -10,6 +10,7 @@ const HOME: AgentHomePaths = {
   junie: '/home/u/.junie',
   antigravity: '/home/u/.gemini/antigravity-cli',
   pi: '/home/u/.pi/agent',
+  gemini: '/home/u/.gemini',
 };
 
 describe('agent-config catalog', () => {
@@ -88,6 +89,8 @@ describe('agent-config catalog', () => {
       'copilot.user.mcp',
       'cursor.project.mcp',
       'cursor.user.mcp',
+      'gemini.project.settings',
+      'gemini.user.settings',
       'opencode.project.config',
       'opencode.user.config',
     ]);

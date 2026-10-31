@@ -9,8 +9,9 @@ import type { AgentConfigFile, Runner } from '@open-mercato/cezar-api-client'
  * #405: one table entry per agent, extension by design). A new agent is one entry
  * here plus its catalog files — no layout or route work.
  *
- * Pi's documented settings and instruction files are catalogued alongside its descriptor. The
- * tab list only ever offers ids from this table, so `descriptorFor` stays exhaustive.
+ * Pi's documented settings and instruction files are catalogued alongside its descriptor, and
+ * `gemini` (#581) has one because its `settings.json` and `GEMINI.md` are catalogued. The tab
+ * list only ever offers ids from this table, so `descriptorFor` stays exhaustive.
  * `copilot` (#582) is the opposite case and IS here: the catalog names its settings,
  * MCP and instruction files, so all three groups have something to show — and so
  * does `antigravity` (settings.json, mcp_config.json, GEMINI.md + AGENTS.md).
@@ -154,6 +155,21 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
     id: 'pi',
     label: 'Pi',
     groups: [group('pi', 'settings', 'Settings'), group('pi', 'memory', 'Memory & instructions')],
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini CLI',
+    note: EDITOR_PLUS_COMMIT,
+    groups: [
+      group('gemini', 'settings', 'Settings'),
+      group(
+        'gemini',
+        'mcp',
+        'MCP',
+        'Under the "mcpServers" key in settings.json — the same file as Gemini CLI’s settings.',
+      ),
+      group('gemini', 'memory', 'Memory & instructions'),
+    ],
   },
 ]
 

@@ -516,6 +516,28 @@ const SAVE_DEBOUNCE_MS = 1_000;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
 const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
+/**
+ * A record this version cannot read, kept verbatim (spec 2026-09-19-runner-seam-native-backends,
+ * Phase 0 — `runs.json` downgrade safety). A newer cezar may have written a runner id, a status or
+ * a field this one does not know; parsing the index as one array used to fail on that element,
+ * start empty, and the next save then overwrote every run. Salvaged records are invisible to the
+ * read API — nothing that consumes a `RunRecord` can be handed a shape it does not know — but not
+ * to lifecycle: `deleteRun` and `pruneOldRuns` address them through this header, and `saveNow`
+ * writes `raw` back unchanged, so an upgrade reads the record again exactly as it was.
+ */
+interface SalvagedRecord {
+  id: string;
+  createdAt: string;
+  archived: boolean;
+  raw: unknown;
+}
+/** The minimal header a record needs to be addressed and ordered; anything less is dropped as today. */
+const salvageHeaderSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string().min(1),
+  archived: z.boolean().catch(false),
+});
+
 // Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
 const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
 const ISSUE_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
@@ -1180,6 +1202,8 @@ export class RunStore extends EventEmitter {
   private sessionBackends = new Map<string, string>();
   /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
   private persisted = new Map<string, string>();
+  /** Records preserved unread — see `SalvagedRecord`. Keyed like `runs`; an id is in one or the other. */
+  private readonly salvaged = new Map<string, SalvagedRecord>();
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -1223,16 +1247,37 @@ export class RunStore extends EventEmitter {
     if (existsSync(indexPath)) {
       try {
         const raw = JSON.parse(readFileSync(indexPath, 'utf8'));
-        const parsed = z.array(runRecordSchema).safeParse(raw);
-        if (parsed.success) {
-          for (const run of parsed.data) {
-            store.persisted.set(run.id, JSON.stringify(run));
-            store.runs.set(run.id, reconcileLoadedRun(run, opts));
+        if (Array.isArray(raw)) {
+          // Per-record salvage: one element this version cannot read costs only itself. It is kept
+          // verbatim under its header (see `SalvagedRecord`) so the next save carries it over and a
+          // later version reads it again; an element without a usable header cannot be addressed
+          // or ordered and is dropped, as the whole-array parse used to drop everything.
+          let dropped = 0;
+          for (const entry of raw) {
+            const parsed = runRecordSchema.safeParse(entry);
+            if (parsed.success) {
+              // A readable copy wins over an unreadable one of the same id, whichever came first.
+              store.salvaged.delete(parsed.data.id);
+              store.persisted.set(parsed.data.id, JSON.stringify(parsed.data));
+              store.runs.set(parsed.data.id, reconcileLoadedRun(parsed.data, opts));
+              continue;
+            }
+            const header = salvageHeaderSchema.safeParse(entry);
+            if (header.success && !store.runs.has(header.data.id)) store.salvaged.set(header.data.id, { ...header.data, raw: entry });
+            else dropped++;
+          }
+          if (store.salvaged.size > 0 || dropped > 0) {
+            const preserved = store.salvaged.size;
+            console.warn(
+              `[cez] runs.json: ${preserved} task record${preserved === 1 ? '' : 's'} this version cannot read ${preserved === 1 ? 'was' : 'were'} preserved unread` +
+                (dropped > 0 ? `; ${dropped} without a usable id/createdAt header ${dropped === 1 ? 'was' : 'were'} dropped` : ''),
+            );
+            store.indexReadHealth = { state: 'complete', omittedRuns: preserved + dropped, reason: 'Some task records could not be read by this server' };
           }
           // Only behind an index that actually loaded — an unreadable one would orphan every layout.
-          pruneOrphanLayouts(dataDir, new Set(store.runs.keys()), ORPHAN_LAYOUT_GRACE_MS);
+          pruneOrphanLayouts(dataDir, new Set([...store.runs.keys(), ...store.salvaged.keys()]), ORPHAN_LAYOUT_GRACE_MS);
         } else {
-          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
         store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
@@ -2002,7 +2047,8 @@ export class RunStore extends EventEmitter {
   }
 
   deleteRun(id: string): boolean {
-    const existed = this.forget(id);
+    // A record this version cannot read is still the user's to delete, prompt text included.
+    const existed = this.forget(id) || this.salvaged.delete(id);
     if (existed) {
       try {
         rmSync(this.eventsPath(id), { force: true });
@@ -2155,9 +2201,13 @@ export class RunStore extends EventEmitter {
    *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
    *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
-    const all = this.listRuns();
+    // Retention covers salvaged headers too, so records this version cannot read are bounded by
+    // the same caps and cannot pile up across downgrade/upgrade cycles.
+    const runs = this.listRuns();
+    const all: Array<{ id: string; createdAt: string; archived: boolean }> = [...runs, ...this.salvaged.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const pinned = new Set<string>();
-    for (const run of all) {
+    for (const run of runs) {
       if (!LIVE_STATUSES.has(run.status)) continue;
       pinned.add(run.id);
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
@@ -2169,6 +2219,7 @@ export class RunStore extends EventEmitter {
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
+      this.salvaged.delete(stale.id);
       try {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
@@ -2228,18 +2279,31 @@ export class RunStore extends EventEmitter {
    * separate durable tombstone protocol; it is not provided here. An unreadable index retains
    * the historical best-effort behavior of preserving our local records.
    */
-  private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
+  private mergeWithIndexOnDisk(indexPath: string): unknown[] {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { return this.listRuns(); }
-    if (!Array.isArray(raw)) return this.listRuns();
+    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { raw = undefined; }
     const merged = new Map<string, RunRecord>();
-    for (const entry of raw) {
-      const id: unknown = (entry as { id?: unknown } | null)?.id;
-      if (typeof id !== 'string' || this.forgotten.has(id)) continue;
-      const parsed = runRecordSchema.safeParse(entry);
-      if (parsed.success) merged.set(id, parsed.data);
+    // Rows this version cannot read (salvaged at open, or written since by a newer cezar) go back
+    // verbatim instead of being dropped (spec 2026-09-19-runner-seam-native-backends, Phase 0).
+    const verbatim = new Map<string, { createdAt: string; value: unknown }>();
+    for (const record of this.salvaged.values()) verbatim.set(record.id, { createdAt: record.createdAt, value: record.raw });
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        const id: unknown = (entry as { id?: unknown } | null)?.id;
+        if (typeof id !== 'string' || this.forgotten.has(id)) continue;
+        const parsed = runRecordSchema.safeParse(entry);
+        if (parsed.success) {
+          merged.set(id, parsed.data);
+          verbatim.delete(id);
+          continue;
+        }
+        if (this.runs.has(id)) continue;
+        const header = salvageHeaderSchema.safeParse(entry);
+        if (header.success) verbatim.set(id, { createdAt: header.data.createdAt, value: entry });
+      }
     }
     for (const mine of this.runs.values()) {
+      verbatim.delete(mine.id);
       const before = this.persisted.get(mine.id);
       const disk = merged.get(mine.id);
       if (!before || !disk || disk.createdAt !== mine.createdAt) {
@@ -2256,6 +2320,12 @@ export class RunStore extends EventEmitter {
       }
       merged.set(mine.id, combined as RunRecord);
     }
-    return [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const entries: Array<{ id: string; createdAt: string; value: unknown }> = [
+      ...[...merged.values()].map((run) => ({ id: run.id, createdAt: run.createdAt, value: run as unknown })),
+      ...[...verbatim].map(([id, row]) => ({ id, createdAt: row.createdAt, value: row.value })),
+    ];
+    return entries
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+      .map((entry) => entry.value);
   }
 }

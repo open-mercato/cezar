@@ -1,7 +1,8 @@
-import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
 import { isOutdatedBackendError } from '@/lib/agent-errors'
 import {
+  runnerSchema,
   toolDisplay,
   type PlanEntry,
   type PlanStatus,
@@ -73,7 +74,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'cursor' | 'pi' | 'copilot' | 'antigravity'
+  provider: Runner
   authFailureId: string
   /** The named agent account the rejection came from; absent for the default login. */
   profileId?: string
@@ -242,18 +243,8 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return (
-    value === 'claude' ||
-    value === 'codex' ||
-    value === 'junie' ||
-    value === 'opencode' ||
-    value === 'cursor' ||
-    value === 'pi' ||
-    value === 'copilot' ||
-    value === 'antigravity'
-  )
-    ? value
-    : undefined
+  const parsed = runnerSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>

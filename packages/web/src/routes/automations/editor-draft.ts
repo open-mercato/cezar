@@ -1,5 +1,6 @@
 import {
   normalizeSchedule,
+  runnerSchema,
   type AutomationDefinition,
   type AutomationEvent,
   type AutomationFilters,
@@ -243,15 +244,7 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
   }
 }
 
-const isRunner = (value: string): value is Runner =>
-  value === 'claude' ||
-  value === 'codex' ||
-  value === 'junie' ||
-  value === 'opencode' ||
-  value === 'cursor' ||
-  value === 'pi' ||
-  value === 'copilot' ||
-  value === 'antigravity'
+const isRunner = (value: string): value is Runner => runnerSchema.safeParse(value).success
 
 /** "Use this": the template fills name, kind, trigger (filters too), prompt and task source; the rest stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {

@@ -360,6 +360,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity CLI',
+  gemini: 'Gemini CLI',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -431,7 +432,9 @@ function AccountAuthRequiredCard({
 
 /** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
  *  update the way they were installed, so the card says so instead of offering a 409. */
-const SELF_UPDATING = new Set<ThreadProviderAuthRequired['provider']>(['claude', 'opencode', 'cursor'])
+const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
+  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, antigravity: false, gemini: false,
+}
 
 /** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
  *  or shows the command to run when no terminal can be opened. */
@@ -462,7 +465,7 @@ export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpd
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
       <p className="text-ui font-semibold text-foreground">{label} needs an update</p>
-      {SELF_UPDATING.has(incident.provider) ? (
+      {SELF_UPDATING[incident.provider] ? (
         <>
           <p className="mt-1 text-xs text-muted-foreground">
             Update it, then continue the task.

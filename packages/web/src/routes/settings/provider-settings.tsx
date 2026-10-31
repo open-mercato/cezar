@@ -27,6 +27,8 @@ export const PROVIDERS = [
   { id: 'pi', label: 'pi', login: 'pi /login' },
   { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
   { id: 'antigravity', label: 'Antigravity', login: 'agy' },
+  // No login subcommand: `/auth` inside the interactive CLI, or GEMINI_API_KEY in the environment.
+  { id: 'gemini', label: 'Gemini CLI', login: 'gemini' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -38,6 +40,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   pi: value,
   copilot: value,
   antigravity: value,
+  gemini: value,
 })
 
 const STATUS_PRESENTATION = {

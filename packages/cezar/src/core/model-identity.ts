@@ -123,6 +123,9 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // unknown ones fail loudly in the CLI. As with junie, the default provider names the backend
   // so a bare slug resolves instead of being rejected as ambiguous.
   antigravity: { defaultProvider: 'antigravity' },
+  // Gemini CLI serves Google's models only; a bare id (`gemini-3-flash-preview`) is Google's and
+  // goes to `--model` bare (#581).
+  gemini: { defaultProvider: 'google' },
 };
 
 const SLASH = '/';

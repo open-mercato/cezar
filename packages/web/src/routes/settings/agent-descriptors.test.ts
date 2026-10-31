@@ -29,7 +29,7 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id'>): A
 
 describe('AGENT_DESCRIPTORS', () => {
   it('has one entry per config-owning runner; Cursor has settings+mcp and Pi has settings+memory', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'antigravity', 'opencode', 'cursor', 'pi'])
+    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'antigravity', 'opencode', 'cursor', 'pi', 'gemini'])
     for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor' && d.id !== 'pi')) {
       expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
       expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()

@@ -23,6 +23,7 @@ const LABEL: Record<ProviderId, string> = {
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
 };
 
 export function providersRequiredByWorkflow(

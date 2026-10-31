@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import {
   mergeProviderAuthDismissals,
@@ -40,6 +41,21 @@ describe('visibleProviderAuthIncidents', () => {
       { provider: 'claude', label: 'Claude Code', authFailureId: 'claude-1' },
       { provider: 'opencode', label: 'OpenCode', authFailureId: 'open-1' },
     ])
+  })
+
+  it('surfaces and dismisses an incident for every runner in the contract', () => {
+    const status: ProviderStatusResponse = {
+      providers: RUNNER_IDS.map((provider) => ({
+        provider,
+        status: 'disconnected',
+        enabled: true,
+        authFailureId: `${provider}-1`,
+      })),
+    }
+    const incidents = visibleProviderAuthIncidents(status, {})
+    expect(incidents.map((incident) => incident.provider)).toEqual(RUNNER_IDS)
+    const dismissals = providerAuthDismissals(mergeProviderAuthDismissals({}, incidents))
+    expect(visibleProviderAuthIncidents(status, dismissals)).toEqual([])
   })
 
   it('hides only the matching incident and resurfaces a different id', () => {
