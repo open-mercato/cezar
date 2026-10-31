@@ -35,6 +35,12 @@
             android:windowSoftInputMode="adjustResize"
             android:exported="false" />
 
+        <activity
+            android:name=".shell.RestartActivity"
+            android:process=":restart"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
