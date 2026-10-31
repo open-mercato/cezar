@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -10,7 +10,7 @@ import type { ManagerMessage, ManagerSummary } from '@open-mercato/cezar-api-cli
 import { ManagerChatRoute } from './manager-chat'
 import { actionMessage, assistantMessage, managerFixture, userMessage } from './manager-fixtures'
 import { ManagerIndexRoute } from './manager-index'
-import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS } from './manager-new'
+import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
 
 let server: { managers: ManagerSummary[]; messages: ManagerMessage[]; hasMore: boolean }
 const calls: Array<{ method: string; path: string; body?: unknown }> = []
@@ -116,6 +116,15 @@ describe('/manager', () => {
   })
 })
 
+describe('managerNameFrom', () => {
+  it('names a manager after its preset, or the first line of what it was told', () => {
+    expect(managerNameFrom(MANAGER_PRESETS[1].prompt)).toBe(MANAGER_PRESETS[1].label)
+    expect(managerNameFrom('Watch the docs.\nAnd more')).toBe('Watch the docs')
+    expect(managerNameFrom('Keep the release train moving: tell me what blocks the next cut')).toBe('Keep the release train moving: tell me…')
+    expect(managerNameFrom('x'.repeat(200))).toHaveLength(41)
+  })
+})
+
 describe('/manager/new', () => {
   it('fills the box from a preset, creates, sends the prompt first and opens the chat', async () => {
     server.managers = []
@@ -126,6 +135,7 @@ describe('/manager/new', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create manager' }))
     await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/made'))
     expect(posted('/workspace/managers')[0]?.body).toEqual({
+      name: MANAGER_PRESETS[0].label,
       instructions: MANAGER_PRESETS[0].prompt,
       projects: 'all',
       effort: 'medium',
@@ -136,6 +146,7 @@ describe('/manager/new', () => {
   it('reads as a second manager once one exists', async () => {
     renderAt('/manager/new')
     expect(await screen.findByRole('heading', { name: 'New manager' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: 'Setup Your first manager' })).toBeNull()
   })
 
   it('folds picker patches, null meaning back to the default', () => {
@@ -145,7 +156,8 @@ describe('/manager/new', () => {
 })
 
 describe('/manager/:id', () => {
-  const seedChat = () => {
+  const seedChat = (patch: Partial<ManagerSummary> = {}) => {
+    server.managers = [managerFixture(patch)]
     server.messages = [userMessage(1), assistantMessage(2, { text: 'Reply body', commands: [{ id: 'c', tool: 'Bash', summary: 'gh pr list' }] })]
   }
 
@@ -158,7 +170,61 @@ describe('/manager/:id', () => {
     expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects access')
     expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Chron: 15 min')
     expect(screen.queryByRole('status')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Attach files' })).toBeNull()
+    // Drawn in the frame, inert until a runner can take files (spec § Not in v1).
+    expect(screen.getByRole('button', { name: 'Attach files' }).getAttribute('aria-disabled')).toBe('true')
+  })
+
+  it('renders the composer as one row, with Send only once there is a draft', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const row = document.querySelector('[data-slot="composer-compact-row"]')
+    expect(row?.contains(composer())).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+    fireEvent.change(composer(), { target: { value: 'hi' } })
+    expect(row?.contains(screen.getByRole('button', { name: 'Send' }))).toBe(true)
+  })
+
+  it('leaves for the list when the manager it shows is deleted', async () => {
+    seedChat()
+    const client = renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    server.managers = []
+    act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', deleted: true })))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager'))
+    expect(screen.queryByText('This manager no longer exists')).toBeNull()
+  })
+
+  it('keeps the dead end for a link that never resolved', async () => {
+    renderAt('/manager/nope')
+    expect(await screen.findByText('This manager no longer exists')).toBeTruthy()
+  })
+
+  it('does not let the second click of a double-click on Send stop the turn it started', async () => {
+    seedChat({ status: 'working' })
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    send('go')
+    await waitFor(() => expect(posted('/messages')).toHaveLength(1))
+    fireEvent.click(document.querySelector('[data-slot="composer-stop"]')!)
+    expect(posted('/stop')).toHaveLength(0)
+  })
+
+  it('names a project that is gone instead of showing its id, and unticks it on the next pick', async () => {
+    seedChat({ projects: ['gone'] })
+    renderAt('/manager/global')
+    const picker = await screen.findByRole('button', { name: 'Connected projects' })
+    expect(picker.textContent).toContain('Project removed')
+    fireEvent.click(picker)
+    fireEvent.click(await screen.findByText('Beta'))
+    await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ projects: ['beta'] }))
+  })
+
+  it('tells an empty chat what to do', async () => {
+    seedChat()
+    server.messages = []
+    renderAt('/manager/global')
+    expect((await screen.findByText(/what needs you/)).closest('[data-slot="manager-empty"]')).toBeTruthy()
   })
 
   it('sends a message', async () => {

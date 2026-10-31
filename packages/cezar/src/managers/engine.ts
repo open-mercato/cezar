@@ -236,6 +236,7 @@ export class ManagerEngine {
         for (const message of messages) {
           if (message.kind === 'assistant' && message.streaming) {
             this.publish(manager.id, { ...message, streaming: false, stopped: true }, true);
+            this.addNotice(manager.id, 'cezar restarted during this reply.');
           } else if (message.kind === 'action' && message.status === 'running') {
             this.publish(manager.id, { ...message, status: 'failed', result: 'cezar restarted before this finished. Check it before trying again.' }, true);
           }

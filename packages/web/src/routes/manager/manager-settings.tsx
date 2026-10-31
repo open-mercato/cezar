@@ -1,6 +1,5 @@
 import { PlusIcon, SettingsIcon, Trash2Icon } from 'lucide-react'
 import { useState } from 'react'
-import { useNavigate } from 'react-router'
 
 import { checkManager, useDeleteManager, useUpdateManager } from '@/api/managers'
 import {
@@ -186,7 +185,6 @@ function RenameDialog({
 export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary; onPatch: (patch: ManagerPatch) => void }) {
   const update = useUpdateManager(manager.id)
   const remove = useDeleteManager(manager.id)
-  const navigate = useNavigate()
   const [dialog, setDialog] = useState<'rename' | 'jobs' | 'delete' | null>(null)
   const closeDialog = (open: boolean) => {
     if (!open) setDialog(null)
@@ -199,7 +197,6 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
   }
   const confirmDelete = () => {
     remove.mutate(undefined, {
-      onSuccess: () => navigate('/manager', { replace: true }),
       onError: (error) => toast(errorMessage(error), { tone: 'danger' }),
     })
   }

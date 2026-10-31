@@ -99,7 +99,7 @@ function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage
           ),
         )}
       </OriginContext.Provider>
-      {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped by the user.</p> : null}
+      {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.error ? (
         <p role="alert" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
           <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
