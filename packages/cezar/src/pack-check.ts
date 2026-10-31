@@ -8,6 +8,19 @@
  *  `npm pack` invocation and the exit code.
  */
 
+/** One package's entry in `npm pack --json` output. */
+export interface PackReport {
+  filename?: string;
+  files?: { path: string }[];
+}
+
+/** The first package report from `npm pack --json`, whatever npm's shape: an
+ *  array up to npm 11, an object keyed by package name from npm 12. */
+export function firstPackReport(packJson: unknown): PackReport | undefined {
+  if (!packJson || typeof packJson !== 'object') return undefined;
+  return (Array.isArray(packJson) ? packJson : Object.values(packJson))[0] as PackReport | undefined;
+}
+
 /** Human-readable problems with a would-be tarball; empty array = publishable.
  *
  *  Requirements (spec `.ai/specs/2026-07-14-cockpit-ui-redesign.md`, Serving):

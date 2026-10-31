@@ -1,0 +1,25 @@
+---
+title: "Search Jira and Linear issues"
+description: "Find an issue by text, state, and labels."
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/tracker/tracker.tsx
+    line: 125
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Jira or Linear view lists issues from the connected project or team. Switch Active to All states to include every state. You can also enter a query and select labels. Issue details open beside the list.
+
+## Where to find it
+
+Project panel → Jira / Linear
+
+## How to use it
+
+1. Open the connected tracker.
+2. Enter a query and choose Search. Narrow the results with labels or state.
+3. Open an issue. Load more fetches another page.
+
+> **Good to know**: When New changes are available appears, you can apply the list refresh. Cezar does not silently replace pages you have already loaded.

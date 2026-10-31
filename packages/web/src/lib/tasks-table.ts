@@ -449,8 +449,8 @@ function synthesizeUrl(
 /** The strongest known tracker reference — what a row with space for exactly one shows (the
  *  sidebar row, the per-project table). PRs win once one exists; issue-driven queued runs still
  *  expose their already-known issue immediately. */
-export function taskReference(run: TaskReferenceInput): TaskReference | undefined {
-  return taskReferences(run)[0]
+export function taskReference(run: TaskReferenceInput, repoBase?: string): TaskReference | undefined {
+  return taskReferences(run, repoBase)[0]
 }
 
 /** The PR chip's `#402`. Null when the URL's last segment is not a number — a forge we don't

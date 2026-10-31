@@ -19,7 +19,13 @@ import {
 } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 
+import { useMutation } from '@tanstack/react-query'
+import { Link as GlobalLink } from 'react-router'
+import { ApiError, updateProvider } from '@/api/client'
+import { useAgentProfiles } from '@/api/queries'
+import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { toast } from '@/components/ui/toaster'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
 import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } from '@open-mercato/cezar-api-client'
@@ -33,7 +39,14 @@ import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-gr
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
 import { MessageTime, clockLabel, elapsedSince, exactLabel, useNow } from './thread-time'
-import type { ThreadEntry, ThreadImage, ThreadNote, ThreadProviderAuthRequired } from './thread-state'
+import type {
+  ThreadAgentUpdateRequired,
+  ThreadEntry,
+  ThreadImage,
+  ThreadNote,
+  ThreadProviderAuthRequired,
+} from './thread-state'
+import { writeClipboard } from '@/lib/clipboard'
 
 // The stick rule lives with the rest of the scroll math now; re-exported because this is
 // where the live tail below consumes it.
@@ -178,7 +191,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -196,7 +209,7 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13.5px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-ui outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
@@ -224,7 +237,7 @@ export function UserBubble({
   return (
     <div
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-ui leading-[1.55] md:max-w-[70%]"
     >
       {onEdit || onRemove ? (
         <span
@@ -318,7 +331,7 @@ function UserText({ text }: { text: string }) {
 /** An assistant message item, as markdown. */
 export function AssistantMessage({ text }: { text: string }) {
   return (
-    <div data-slot="assistant-message" className="min-w-0 text-[15px] leading-[1.65]">
+    <div data-slot="assistant-message" className="min-w-0 text-lead leading-[1.65]">
       <Markdown>{text}</Markdown>
     </div>
   )
@@ -346,6 +359,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  antigravity: 'Antigravity CLI',
   gemini: 'Gemini CLI',
 }
 
@@ -355,6 +369,7 @@ export function ProviderAuthRequiredCard({
 }: {
   incident: ThreadProviderAuthRequired
 }) {
+  if (incident.profileId !== undefined) return <AccountAuthRequiredCard incident={incident} profileId={incident.profileId} />
   const label = PROVIDER_LABEL[incident.provider]
   return (
     <div
@@ -362,7 +377,7 @@ export function ProviderAuthRequiredCard({
       data-slot="provider-auth-required"
       className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
     >
-      <p className="text-[13px] font-semibold text-foreground">
+      <p className="text-ui font-semibold text-foreground">
         This run needed {label} authorization
       </p>
       <p className="mt-1 text-xs text-muted-foreground">
@@ -374,6 +389,116 @@ export function ProviderAuthRequiredCard({
       >
         Open provider settings
       </Link>
+    </div>
+  )
+}
+
+/** A named account was rejected, not the default login (telemetry 9e4a95db): name it and send the
+ *  user to the pane that can sign it in — the Providers card describes the default login only. */
+function AccountAuthRequiredCard({
+  incident,
+  profileId,
+}: {
+  incident: ThreadProviderAuthRequired
+  profileId: string
+}) {
+  const profiles = useAgentProfiles()
+  const label = PROVIDER_LABEL[incident.provider]
+  const account = profiles.data?.profiles
+    .find((p) => p.id === profileId && p.provider === incident.provider)?.label ?? profileId
+  return (
+    <div
+      role="alert"
+      data-slot="provider-auth-required"
+      data-profile-id={profileId}
+      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
+    >
+      <p className="text-ui font-semibold text-foreground">
+        This run needed {label} account “{account}” to be signed in
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Sign that account in again before retrying.
+      </p>
+      {/* Global settings sit outside every project scope — react-router's own Link. */}
+      <GlobalLink
+        to="/settings/global/accounts"
+        className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
+      >
+        Open agent accounts
+      </GlobalLink>
+    </div>
+  )
+}
+
+/** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
+ *  update the way they were installed, so the card says so instead of offering a 409. */
+const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
+  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, antigravity: false, gemini: false,
+}
+
+/** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,
+ *  or shows the command to run when no terminal can be opened. */
+export function AgentUpdateRequiredCard({ incident }: { incident: ThreadAgentUpdateRequired }) {
+  const label = PROVIDER_LABEL[incident.provider]
+  const [manual, setManual] = useState<{ message: string; command?: string } | null>(null)
+  const update = useMutation({
+    mutationFn: () => updateProvider(incident.provider),
+    onSuccess: () => {
+      setManual(null)
+      toast(`Updating ${label} in a terminal. Continue the task once it finishes.`)
+    },
+    onError: (error: Error) =>
+      setManual({ message: error.message, command: error instanceof ApiError ? error.command : undefined }),
+  })
+  const copy = async (command: string) => {
+    try {
+      await writeClipboard(command)
+      toast('Command copied')
+    } catch {
+      toast('Could not copy the command', { tone: 'danger' })
+    }
+  }
+  return (
+    <div
+      role="alert"
+      data-slot="agent-update-required"
+      className="rounded-md border border-danger/30 bg-danger/5 px-3.5 py-3"
+    >
+      <p className="text-ui font-semibold text-foreground">{label} needs an update</p>
+      {SELF_UPDATING[incident.provider] ? (
+        <>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Update it, then continue the task.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            disabled={update.isPending}
+            onClick={() => update.mutate()}
+          >
+            Update {label}
+          </Button>
+        </>
+      ) : (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Update it the way you installed it, then continue the task.
+        </p>
+      )}
+      {manual ? (
+        <div data-slot="agent-update-manual" className="mt-2 text-xs text-muted-foreground">
+          <p>{manual.message}</p>
+          {manual.command ? (
+            <div className="mt-1 flex items-center gap-2">
+              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-foreground">{manual.command}</code>
+              <Button type="button" variant="ghost" size="sm" onClick={() => void copy(manual.command!)}>
+                Copy
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -393,7 +518,7 @@ export function ReasoningItem({ text }: { text: string }) {
     <Collapsible data-slot="reasoning" className="group/reasoning min-w-0">
       <div
         id={previewId}
-        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-[13px] text-soft-foreground hover:text-muted-foreground"
+        className="relative flex w-full items-center gap-1.5 rounded-md p-0.5 text-left text-ui text-soft-foreground hover:text-muted-foreground"
       >
         <ChevronRightIcon
           aria-hidden
@@ -412,7 +537,7 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-[13px] leading-[1.6] text-soft-foreground">
+        <div className="px-6 py-1.5 text-ui leading-[1.6] text-soft-foreground">
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -441,7 +566,7 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
     <div
       data-slot="working-indicator"
       // Wraps rather than overflows: with both stamps the line outgrows a 320px phone column.
-      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-[13px] text-soft-foreground"
+      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-ui text-soft-foreground"
     >
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>
@@ -531,7 +656,7 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-meta font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
         </button>
@@ -550,7 +675,7 @@ export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
     <>
       {diffs.map((diff, index) => (
         <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-[11px] text-soft-foreground">
+          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-meta text-soft-foreground">
             {diff.path}
           </div>
           <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
@@ -623,10 +748,12 @@ function CopyCommandButton({ command }: { command: string }) {
       type="button"
       aria-label={copied ? 'Copied' : 'Copy command'}
       onClick={() => {
-        void navigator.clipboard?.writeText(command).then(() => {
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        })
+        void writeClipboard(command)
+          .then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
       }}
       className="mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
     >
@@ -706,7 +833,7 @@ export function ToolCard({
       <CollapsibleTrigger
         disabled={!hasDetail}
         className={cn(
-          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-[13px] enabled:hover:bg-muted',
+          'group flex min-h-[28px] w-full min-w-0 gap-1.5 px-2.5 py-0.5 text-left text-ui enabled:hover:bg-muted',
           // A wrapped multi-line command pins the chevron, verb and chips to its first line.
           expandedCommand !== undefined ? 'items-start [&>svg]:mt-[7px] [&>span]:mt-[2px]' : 'items-center',
         )}
@@ -751,7 +878,7 @@ export function ToolCard({
             <span
               data-slot="tool-exit"
               className={cn(
-                'rounded-full px-2 py-px font-mono text-[10.5px] font-semibold',
+                'rounded-full px-2 py-px font-mono text-micro font-semibold',
                 item.exitCode === 0 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger',
               )}
             >
@@ -789,7 +916,7 @@ export function ToolCard({
 export function ContextGroup({ group, scope }: { group: ContextGroupBlock; scope?: string }) {
   return (
     <Collapsible data-slot="ctx-group" className="min-w-0">
-      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-[13px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
+      <CollapsibleTrigger className="group flex h-[34px] w-full items-center gap-2 rounded-md px-2 -mx-2 text-left text-ui font-medium text-muted-foreground hover:bg-muted hover:text-foreground">
         <ChevronRightIcon
           aria-hidden
           className="size-3.5 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-90"

@@ -122,15 +122,15 @@ export function GithubTemplateInput({
                     {s.label}
                     {chosen ? <CircleCheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" /> : null}
                   </span>
-                  <span className="min-w-0 truncate text-[11px] text-muted-foreground">{s.description}</span>
+                  <span className="min-w-0 truncate text-meta text-muted-foreground">{s.description}</span>
                 </span>
-                <span className="truncate font-mono text-[11px] text-soft-foreground">{s.slug}</span>
+                <span className="truncate font-mono text-meta text-soft-foreground">{s.slug}</span>
               </li>
             )
           })}
         </ul>
       ) : (
-        <p data-slot="create-template-no-match" className="px-1 text-[12px] text-muted-foreground">
+        <p data-slot="create-template-no-match" className="px-1 text-label text-muted-foreground">
           No suggested template matches — any <span className="font-mono">owner/repo</span> or GitHub URL works.
         </p>
       )}

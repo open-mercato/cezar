@@ -186,7 +186,13 @@ describe('linked checkouts', () => {
     await buildCheckout({ worktree, packageRoot: pkg }, () => {}, npm);
     expect(calls).toEqual(['install --no-audit', 'run build:server', 'run build:web']);
 
+    // An empty node_modules is not an install (the parent checkout's packages would resolve).
     mkdirSync(join(worktree, 'node_modules'), { recursive: true });
+    calls.length = 0;
+    await buildCheckout({ worktree, packageRoot: pkg }, () => {}, npm);
+    expect(calls).toEqual(['install --no-audit', 'run build:server', 'run build:web']);
+
+    writeFileSync(join(worktree, 'node_modules', '.package-lock.json'), '{}');
     calls.length = 0;
     await buildCheckout({ worktree, packageRoot: pkg }, () => {}, npm);
     expect(calls).toEqual(['run build:server', 'run build:web']);
@@ -199,6 +205,7 @@ describe('linked checkouts', () => {
     const pkg = fakeCheckout(worktree, '0.13.0', true);
     writeFileSync(join(worktree, 'package.json'), JSON.stringify({ scripts: { 'build:server': 'x', 'build:web': 'x' } }));
     mkdirSync(join(worktree, 'node_modules'), { recursive: true });
+    writeFileSync(join(worktree, 'node_modules', '.package-lock.json'), '{}');
     const npm = async (args: string[]) => {
       if (args[1] !== 'build:web') return;
       rmSync(join(pkg, 'web', 'dist'), { recursive: true, force: true }); // vite's emptyOutDir

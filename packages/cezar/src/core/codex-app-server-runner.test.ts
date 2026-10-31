@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
-import { CodexAppServerRunner } from './codex-app-server-runner.js';
+import { CodexAppServerRunner, userInputAnswers } from './codex-app-server-runner.js';
 import { RunStore } from '../runs/store.ts';
 
 /** Only the escalation tests below swap the child out; every other test in this
@@ -78,6 +78,80 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+
+  it('surfaces a turn/completed whose status is failed as an AgentEvent error', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-completed-failed', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+});
+
+describe('a model the ChatGPT-plan login cannot use (1350055f)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  it('names the model cezar sent and where to change it', async () => {
+    const events: AgentEvent[] = [];
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'mock:chatgpt-model', cwd: process.cwd(), model: 'gpt-5.1-codex' },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    const error = events.find((e) => e.type === 'error');
+    expect(error).toEqual({
+      type: 'error',
+      message:
+        "400 invalid_request_error: The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account."
+        + ' — "gpt-5.1-codex" needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default),'
+        + ' check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key',
+    });
+  }, 15_000);
+});
+
+/** Telemetry 4c9de01a: Continue resumed a thread a still-live app-server held the writer lock for. */
+describe('resuming a thread another Codex process still holds', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+  const resume = async (locked: string) => {
+    const events: AgentEvent[] = [];
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0, resumeLockRetryMs: [5, 5] }).startSession(
+      { userPrompt: 'continue', cwd: process.cwd(), sessionId: 'th_old', resume: true, env: { MOCK_CODEX_RESUME_LOCKED: locked } },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    return { events, result };
+  };
+
+  it('resumes the same thread once the other writer lets go', async () => {
+    const { events, result } = await resume('2');
+    expect(result.sessionId).toBe('th_old');
+    expect(events).toContainEqual({ type: 'session', sessionId: 'th_old' });
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(result.text).toBe('Checking the working tree.');
+  }, 15_000);
+
+  it('continues in a fork of the thread when the lock is never released', async () => {
+    const { events, result } = await resume('always');
+    expect(result.sessionId).toBe('fork_of_th_old');
+    expect(events).toContainEqual({ type: 'session', sessionId: 'fork_of_th_old' });
+    expect(events.some((e) => e.type === 'note' && e.message.includes('continuing in a fork'))).toBe(true);
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(result.text).toBe('Checking the working tree.');
   }, 15_000);
 });
 
@@ -426,5 +500,24 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       vi.advanceTimersByTime(KILL_GRACE_MS);
       expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
     });
+  });
+});
+
+describe('userInputAnswers — the ask card answer read back for requestUserInput', () => {
+  const questions = [
+    { id: 'library', header: 'Library', question: 'Which library?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: false },
+    { id: 'parts', header: 'Parts', question: 'Which parts?', options: [{ label: 'A' }, { label: 'B' }], multiSelect: true },
+  ];
+
+  it('keeps a single-select answer whole, so the user\'s own text survives its commas', () => {
+    expect(userInputAnswers(questions, 'Library: Temporal, once it ships\nParts: A, B')).toEqual({
+      library: { answers: ['Temporal, once it ships'] },
+      parts: { answers: ['A', 'B'] },
+    });
+  });
+
+  it('passes a request for more information through as the answer', () => {
+    const more = 'I need more information to answer this — please explain the context and ask again.';
+    expect(userInputAnswers(questions, `Library: ${more}\nParts: A`).library).toEqual({ answers: [more] });
   });
 });

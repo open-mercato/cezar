@@ -1,3 +1,4 @@
+import { resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
@@ -95,6 +96,61 @@ describe('TasksOverview — the branch cell', () => {
     expect(cell('queued')?.textContent).toBe('—')
     expect(cell('inplace')?.querySelector('[data-slot="branch-skeleton"]')).toBeNull()
     expect(cell('named')?.textContent).toBe('feature/fix-login')
+  })
+})
+
+describe('TasksOverview — sorting', () => {
+  it('sorts by recent activity by default, and by creation (Created) from the toolbar', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'new-idle', createdAt: ago(3_600_000), finishedAt: ago(3_000_000) }),
+        // Created a week ago, finished a minute ago.
+        run({ id: 'old-busy', status: 'failed', createdAt: ago(7 * 86_400_000), finishedAt: ago(60_000) }),
+      ],
+    })
+    const ids = () =>
+      [...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) => row.getAttribute('data-run-id'))
+    const timeHeader = () => document.querySelector('th[data-column-id="started"]')?.textContent
+    const timeCell = (id: string) => tableRow(id)?.querySelector('td[data-column-id="started"]')?.textContent
+
+    const sortBy = within(document.querySelector('[data-slot="sort-by"]') as HTMLElement)
+    expect(sortBy.getByRole('button', { name: 'Recent' }).getAttribute('aria-pressed')).toBe('true')
+    expect(ids()).toEqual(['old-busy', 'new-idle'])
+    expect(timeHeader()).toContain('Updated')
+    expect(timeCell('old-busy')).toBe('1m')
+
+    fireEvent.click(sortBy.getByRole('button', { name: 'Created' }))
+
+    expect(ids()).toEqual(['new-idle', 'old-busy'])
+    expect(timeHeader()).toContain('Created')
+    expect(timeCell('old-busy')).toBe('7d')
+  })
+})
+
+describe('TasksOverview — the table reads in time order', () => {
+  // The review's repro: a status-ranked Recent put a running task above newer finished ones, so
+  // the Updated column jumped around. Pins stay on top; below them, time alone decides.
+  const mixed = () => [
+    run({ id: 'pinned-old', pinned: true, createdAt: ago(9 * 86_400_000), finishedAt: ago(5 * 86_400_000) }),
+    run({ id: 'running', status: 'running', createdAt: ago(3 * 3_600_000), startedAt: ago(3 * 3_600_000) }),
+    run({ id: 'done-now', createdAt: ago(2 * 86_400_000), finishedAt: ago(60_000) }),
+    run({ id: 'waiting', status: 'waiting', createdAt: ago(30 * 60_000), startedAt: ago(30 * 60_000) }),
+    run({ id: 'failed-old', status: 'failed', createdAt: ago(86_400_000), finishedAt: ago(6 * 3_600_000) }),
+  ]
+  const ids = () =>
+    [...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) => row.getAttribute('data-run-id'))
+
+  it('Recent: pins first, then newest activity — not needs-you or running first', () => {
+    renderOverview({ runs: mixed() })
+    expect(ids()).toEqual(['pinned-old', 'done-now', 'waiting', 'running', 'failed-old'])
+  })
+
+  it('Created: pins first, then newest creation', () => {
+    renderOverview({ runs: mixed() })
+    fireEvent.click(
+      within(document.querySelector('[data-slot="sort-by"]') as HTMLElement).getByRole('button', { name: 'Created' }),
+    )
+    expect(ids()).toEqual(['pinned-old', 'waiting', 'running', 'failed-old', 'done-now'])
   })
 })
 
@@ -295,7 +351,7 @@ describe('TasksOverview — the table', () => {
     const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
       (cell) => cell.textContent,
     )
-    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Started'])
+    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Updated'])
     expect(cellsOf('hidden')).toEqual([
       'done',
       'Hidden metrics',
@@ -1529,3 +1585,81 @@ describe('TasksOverview — origin and facet filters', () => {
   })
 })
 
+
+/** #1340: the overview and sidebar ask `GET /automations` only when a schedule is known. */
+describe('TasksOverviewRoute — scheduled tasks gate', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const health = {
+    version: '0', repoRoot: '/r', repo: null, checks: [], defaultRunner: 'claude', forge: null,
+    capabilities: { localHandoff: true, followups: true, singleProject: false, automations: true, dispatch: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true },
+    projects: [{ id: 'boot', name: 'r' }], bootProject: 'boot',
+  }
+  const scheduled = {
+    id: 'later', name: 'Later', kind: 'schedule', enabled: true, revision: 1, task: { prompt: 'Later' },
+    deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [], binding: { accounts: [] } },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  function renderApp(automations: unknown[] = [scheduled], loseCancel = false) {
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      if (loseCancel && init?.method === 'DELETE' && url.includes('/automations/later')) {
+        automations = []
+        return new Response(JSON.stringify({ error: 'This scheduled task already started.', runIds: ['started-run'] }), { status: 409 })
+      }
+      const body = url === '/api/v1/health' ? health
+        : url.endsWith('/automations') ? { automations }
+          : url === '/api/v1/runs' ? [run({ id: 'mine', title: 'My task', status: 'running' })] : []
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ListViewProvider>
+            <TaskQuickListContainer />
+            <TasksOverviewRoute />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+  const asked = () => fetchMock.mock.calls.some((call) => String(call[0]).endsWith('/automations'))
+
+  it('asks once per session for a project with no automation runs and no schedule', async () => {
+    resetScheduledTasksGate()
+    renderApp([])
+    await screen.findAllByText('My task')
+    await waitFor(() => expect(asked()).toBe(true))
+    const count = fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length).toBe(count)
+    expect(screen.queryByRole('region', { name: 'Scheduled tasks' })).toBeNull()
+  })
+
+  it('shows the Scheduled group in both lists when the project has a schedule', async () => {
+    resetScheduledTasksGate()
+    renderApp()
+    await waitFor(() => expect(screen.getAllByRole('region', { name: 'Scheduled tasks' })).toHaveLength(2))
+  })
+  it('keeps completed-run links after the last scheduled row disappears during cancellation', async () => {
+    resetScheduledTasksGate()
+    renderApp([scheduled], true)
+    await waitFor(() => expect(screen.getAllByRole('region', { name: 'Scheduled tasks' })).toHaveLength(2))
+    fireEvent.click(screen.getByText('Later', { selector: 'span.font-medium' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByText('Later', { selector: 'span.font-medium' })).toBeNull())
+    expect(screen.getByRole('link', { name: 'View run 1' }).getAttribute('href')).toBe('/tasks/started-run')
+  })
+
+})

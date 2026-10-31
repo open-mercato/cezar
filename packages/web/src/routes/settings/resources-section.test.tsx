@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Global settings → Resources (step 3.5): `maxParallel` and `memoryLimitMb` moved out of the
@@ -31,6 +32,8 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -83,10 +86,12 @@ function gateSeededClient() {
 function renderResources() {
   render(
     <QueryClientProvider client={gateSeededClient()}>
-      <MemoryRouter initialEntries={['/settings/global/resources']}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/resources']}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }

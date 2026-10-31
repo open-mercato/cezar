@@ -63,6 +63,20 @@ describe('telemetry routes', () => {
     expect(track).not.toHaveBeenCalled();
   });
 
+  it('labels archive and pin with the button that sent them, never the task status', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'sidebar' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_pinned', { label: 'sidebar' }, { sid: undefined });
+    expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: true, surface: 'task_view' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_archived', { label: 'task_view' }, { sid: undefined });
+    expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: false })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_unarchived', { label: 'api' }, { sid: undefined });
+
+    vi.mocked(track).mockClear();
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'my-secret-repo' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
   it('relays only the closed event labels', async () => {
     expect((await post('/api/v1/telemetry/event', { event: 'message_sent', label: 'github' })).status).toBe(204);
     expect(track).toHaveBeenCalledWith('message_sent', { label: 'github' }, { sid: undefined });
@@ -82,6 +96,57 @@ describe('telemetry routes', () => {
     expect((await post('/api/v1/telemetry/event', { event: 'add_project_opened', label: 'my-secret-repo' })).status).toBe(400);
     expect(track).not.toHaveBeenCalled();
   });
+
+  /** Telemetry 7054e5f2: attachment counts as buckets, re-stage outcomes — closed sets only. */
+  it('relays attachments_sent and attachments_restaged with their closed labels only', async () => {
+    for (const label of ['1', '2-4', '5-10', '11-20']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'attachments_sent', label })).status).toBe(204);
+      expect(track).toHaveBeenCalledWith('attachments_sent', { label }, { sid: undefined });
+    }
+    for (const label of ['recovered', 'failed']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'attachments_restaged', label })).status).toBe(204);
+    }
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'attachments_sent', label: '7' })).status).toBe(400);
+    expect((await post('/api/v1/telemetry/event', { event: 'attachments_restaged', label: 'shot.png' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  it('relays skills_update_apply_dropped with its closed outcome labels only', async () => {
+    for (const label of ['recovered', 'not_applied', 'unreachable', 'timed_out']) {
+      expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label })).status).toBe(204);
+      expect(track).toHaveBeenCalledWith('skills_update_apply_dropped', { label }, { sid: undefined });
+    }
+    vi.mocked(track).mockClear();
+    expect((await post('/api/v1/telemetry/event', { event: 'skills_update_apply_dropped', label: 'fetch failed' })).status).toBe(400);
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  /** Spec 2026-10-17-task-palette: palette usage, closed labels only; counts only where batched. */
+  it('relays the palette events with their closed labels, and a count only on the batched ones', async () => {
+    expect((await post('/api/v1/telemetry/event', { event: 'palette_opened', label: 'task' })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('palette_opened', { label: 'task' }, { sid: undefined })
+    expect((await post('/api/v1/telemetry/event', { event: 'task_shortcut_used', label: 'tab', value: 12 })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('task_shortcut_used', { label: 'tab', value: 12 }, { sid: undefined })
+    expect((await post('/api/v1/telemetry/event', { event: 'task_command_run', label: 'git:push' })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('task_command_run', { label: 'git:push' }, { sid: undefined })
+    for (const [event, label] of [['task_switched', 'cycle'], ['palette_mode_used', 'pr_number'], ['palette_dismissed', 'files'], ['shortcut_rebound', 'pin']]) {
+      expect((await post('/api/v1/telemetry/event', { event, label })).status).toBe(204)
+    }
+    vi.mocked(track).mockClear()
+    // Free text, an open-ended id, a count where none belongs, a count out of range: all refused.
+    expect((await post('/api/v1/telemetry/event', { event: 'task_command_run', label: 'layout:My secret layout' })).status).toBe(400)
+    expect((await post('/api/v1/telemetry/event', { event: 'palette_mode_used', label: 'fix login' })).status).toBe(400)
+    expect((await post('/api/v1/telemetry/event', { event: 'task_shortcut_used', label: 'tab', value: 5000 })).status).toBe(400)
+    expect((await post('/api/v1/telemetry/event', { event: 'palette_opened', label: 'task', value: 3 })).status).toBe(204)
+    expect(track).toHaveBeenCalledWith('palette_opened', { label: 'task' }, { sid: undefined })
+  })
+
+  it('a pin from a keyboard shortcut is labelled `shortcut`, apart from the palette', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] })
+    expect((await post(`/api/v1/runs/${run.id}/pin`, { pinned: true, surface: 'shortcut' })).status).toBe(200)
+    expect(track).toHaveBeenCalledWith('task_pinned', { label: 'shortcut' }, expect.anything())
+  })
 
   it('relays a cockpit error and rejects an oversized context', async () => {
     const res = await post('/api/v1/telemetry/error', { type: 'TypeError', message: 'boom', context: { 'page.route': '/tasks' } });

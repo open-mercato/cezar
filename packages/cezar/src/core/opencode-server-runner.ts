@@ -1,4 +1,7 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { realpathSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -13,6 +16,8 @@ import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
+import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { userInputAnswers } from './codex-app-server-runner.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   OpencodeTransportError,
@@ -28,15 +33,24 @@ import {
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
 import { opencodeConfigContent } from './private-mcp.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 export interface OpencodeRunnerOptions {
   /** Override the binary name/path; defaults to `opencode` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
-const SERVER_START_TIMEOUT_MS = 30_000;
+/** Startup fails after this long with no sign of life — re-armed by any output,
+ *  so a server busy with a one-time migration is not killed mid-way. */
+export const SERVER_START_TIMEOUT_MS = 30_000;
+/** Hard cap on startup however chatty the server is. */
+export const SERVER_START_MAX_MS = 180_000;
+/** How often the port cezar asked for is probed while waiting for the URL line. */
+export const SERVER_PROBE_INTERVAL_MS = 500;
+/** Spawns per session before a taken port is fatal (see `listen()`). */
+export const SERVER_PORT_ATTEMPTS = 3;
 
 /** Grace between the teardown SIGTERM and the SIGKILL that follows it. */
 export const KILL_GRACE_MS = 4_000;
@@ -50,9 +64,21 @@ export const KILL_GRACE_MS = 4_000;
  * from: an opencode build that does not emit it still ends its turn. Every
  * `message.*` frame re-arms the window, so a session that is genuinely working
  * — the case this whole fix is about — never trips it. This is NOT the
- * configurable agent-step wall clock (#880); that deadline is untouched.
+ * agent-step inactivity deadline (#880, cf2191f1); that deadline is untouched.
  */
 export const TURN_IDLE_GRACE_MS = 5_000;
+
+/**
+ * A `session.status` retry scheduled further out than this ends the turn as an error. OpenCode
+ * retries a refused prompt silently on its own schedule — a spent free tier until the next day —
+ * and an interactive step has no wall clock, so four runs held their slots for 11 h. A duration,
+ * not a clock time: `next` is an epoch instant, so the resume it books is zone-independent.
+ */
+export const RETRY_GIVE_UP_MS = 10 * 60_000;
+
+/** `action.reason`s that mean a spent quota — OpenCode 1.19 sends `free_tier_limit` and
+ *  `account_rate_limit`. Any other action still fails the turn, but books no auto-resume. */
+const QUOTA_REASON_RE = /limit|quota/i;
 
 /**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
@@ -64,8 +90,9 @@ export const TURN_IDLE_GRACE_MS = 5_000;
  * /session` and does not read `spec.sessionId`; resuming a server-side session
  * id is not implemented.
  *
- * Auth = the host's opencode config/logins. The agent runs autonomously
- * (auto-approved permissions); OpenCode has no per-tool allowlist, so
+ * Auth = the host's opencode config/logins. The agent runs autonomously:
+ * nothing can answer a permission prompt, so the runner answers each one
+ * itself (`opencodePermissionReply`). OpenCode has no per-tool allowlist, so
  * `spec.allowedTools` is ignored. `spec.model` is `provider/model`.
  */
 export class OpencodeServerRunner implements AgentRunner {
@@ -99,19 +126,38 @@ export class OpencodeServerRunner implements AgentRunner {
   }
 }
 
+/** The server answered with a non-2xx status — an answer, unlike `OpencodeTransportError`. */
+class OpencodeStatusError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'OpencodeStatusError';
+  }
+}
+
+/** The installed `opencode serve` has no 1.x session route — in practice OpenCode 2.x. */
+export function unsupportedServerMessage(status: number): string {
+  return (
+    `this OpenCode server has no POST /session route (HTTP ${status}). ` +
+    'OpenCode 2.x replaced the server API cezar drives and is not supported yet — ' +
+    'install OpenCode 1.x (npm install -g opencode-ai@1) to run OpenCode tasks.'
+  );
+}
+
 /** One live `opencode serve` process driving a single session. */
 class OpencodeSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
 
-  private readonly child!: ChildProcessWithoutNullStreams;
+  private child!: ChildProcessWithoutNullStreams;
+  private serverPort!: number;
   /** "Has the server actually terminated?" — never `child.killed`, which only
    *  reports delivery and would disarm the escalation (#844/#858). */
-  private readonly hasExited: () => boolean;
+  private hasExited!: () => boolean;
+  private closed!: Promise<void>;
+  private stderrChunks: string[] = [];
   private serverOpen = true;
   private baseUrl: string | undefined;
   private sessionId: string | undefined;
   private ready!: Promise<void>;
-  private resolveExit!: () => void;
   private exited!: Promise<void>;
   private readonly sse = new AbortController();
   private readonly toolCalls: AgentToolCallRecord[] = [];
@@ -127,6 +173,9 @@ class OpencodeSession implements AgentSession {
     this.emit({ type: 'text', text });
   });
   private readonly toolsSeen = new Set<string>();
+  private readonly permissionsAnswered = new Set<string>();
+  /** The native `question` tool call the session is blocked on; the next user message answers it (#1652). */
+  private pendingQuestion: { id: string; questions: AskQuestion[] } | undefined;
   /** messageID → role. Parts carry no role; only assistant parts are surfaced
    *  (the user's own message also streams as parts over the same SSE feed). */
   private readonly msgRole = new Map<string, string>();
@@ -157,6 +206,9 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  private deadline: InactivityDeadline = armInactivityDeadline(0, () => {});
+  /** Set once `giveUpOnLongRetry` has reported the failure — the held POST's hang-up is not news. */
+  private retryGaveUp = false;
   /** One teardown per session — see `terminate()`. */
   private signalled = false;
 
@@ -167,56 +219,14 @@ class OpencodeSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    // Random high port; the actual bound URL is read back from stdout.
-    const port = 40000 + Math.floor(Math.random() * 20000);
-    try {
-      const env = buildChildEnv({ backend: 'opencode', extraEnv: spec.env });
-      // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
-      // OPENCODE_CONFIG_CONTENT after the project config, so these are added and win on a clash.
-      if (spec.mcpServers?.length) {
-        env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
-      }
-      const [file, argv] = disclaimedCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
-      this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
-    } catch (err) {
-      throw wrapSpawnError(err, bin);
-    }
-    this.hasExited = trackChildExit(this.child);
-
-    this.child.on('error', (err: NodeJS.ErrnoException) => {
-      this.spawnFailed = wrapSpawnError(err, bin);
-    });
-
-    this.exited = new Promise<void>((resolve) => {
-      this.resolveExit = resolve;
-    });
-    // A server that is gone will never send `session.idle`, so the turn ends
-    // here rather than waiting for a signal that cannot arrive.
-    this.child.once('exit', () => {
-      this.finishTurn();
-      this.resolveExit();
-    });
-    this.child.once('close', () => {
-      this.finishTurn();
-      this.resolveExit();
-    });
-
-    const stderrChunks: string[] = [];
-    this.child.stderr.setEncoding('utf8');
-    this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
-
-    // The server prints its URL on stdout once listening.
-    const urlReady = this.waitForServerUrl();
+    this.spawnServer(randomServerPort());
+    const urlReady = this.listen();
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    this.deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+    });
 
     this.ready = (async () => {
       this.baseUrl = await urlReady;
@@ -229,12 +239,12 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut) {
+        if (!this.timedOut && !this.retryGaveUp) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        this.deadline.clear();
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.sse.abort();
         this.serverOpen = false;
@@ -256,8 +266,7 @@ class OpencodeSession implements AgentSession {
         sessionId: this.sessionId ?? spec.sessionId,
       };
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `opencode timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('opencode', limitMs, this.deadline.expiredBy) });
       }
       this.emit({ type: 'done' });
       return base;
@@ -280,6 +289,12 @@ class OpencodeSession implements AgentSession {
     }
     const text = textOf(content);
     if (!text) return true;
+    if (this.pendingQuestion) {
+      const pending = this.pendingQuestion;
+      this.pendingQuestion = undefined;
+      void this.replyQuestion(pending, text);
+      return true;
+    }
     void this.ready
       .then(() => this.prompt(text))
       .catch((err: unknown) => {
@@ -342,39 +357,174 @@ class OpencodeSession implements AgentSession {
 
   // ---- server lifecycle ---------------------------------------------------
 
-  private waitForServerUrl(): Promise<string> {
-    return new Promise((resolve, reject) => {
-      let buffer = '';
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error(`opencode serve did not report a listening URL within ${SERVER_START_TIMEOUT_MS / 1000}s`));
-      }, SERVER_START_TIMEOUT_MS);
-      timer.unref?.();
-      const onData = (chunk: string) => {
-        buffer += chunk;
-        const m = /https?:\/\/[\d.]+:\d+/.exec(buffer);
-        if (m) {
-          cleanup();
-          resolve(m[0]);
+  /** Spawn `opencode serve` on `port` and make it the session's server. Every
+   *  handler closes over its own child, so a replaced one cannot end the session. */
+  private spawnServer(port: number): void {
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      const env = buildChildEnv({ backend: 'opencode', extraEnv: this.spec.env });
+      // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
+      // OPENCODE_CONFIG_CONTENT after the project config, so these are added and win on a clash.
+      if (this.spec.mcpServers?.length) {
+        env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
+      }
+      const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
+      child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env });
+    } catch (err) {
+      throw wrapSpawnError(err, this.bin);
+    }
+    this.child = child;
+    this.serverPort = port;
+    this.hasExited = trackChildExit(child);
+
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      this.spawnFailed = wrapSpawnError(err, this.bin);
+    });
+
+    let resolveExit!: () => void;
+    this.exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    this.closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+    // A server that is gone will never send `session.idle`, so the turn ends
+    // here rather than waiting for a signal that cannot arrive.
+    const gone = () => {
+      this.finishTurn();
+      resolveExit();
+    };
+    child.once('exit', gone);
+    child.once('close', gone);
+
+    const stderrChunks: string[] = [];
+    this.stderrChunks = stderrChunks;
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
+  }
+
+  /**
+   * The server's base URL, respawning on a fresh port when the random one was
+   * already taken — it sits in the OS ephemeral range, and opencode 1.19 exits
+   * with a bare `ServeError` instead of picking another (release 0.16.1 CI).
+   */
+  private async listen(): Promise<string> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.waitForServerUrl(this.serverPort);
+      } catch (err) {
+        const retry = attempt < SERVER_PORT_ATTEMPTS && this.hasExited() && (await this.lostPort());
+        if (!retry || !this.serverOpen) {
+          // Local transcript only: the stderr tail can name paths, so it stays
+          // out of the error message that telemetry groups on.
+          const tail = this.stderrChunks.join('').trim().slice(-800);
+          if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
+          throw err;
         }
-      };
-      const onExit = () => {
+        this.spawnServer(randomServerPort());
+      }
+    }
+  }
+
+  /** Did the server that just exited lose its port? Its stderr says so, or the
+   *  port still cannot be bound. */
+  private async lostPort(): Promise<boolean> {
+    // stderr can still be flushing at `exit`; `close` means it is all in.
+    await Promise.race([this.closed, new Promise((resolve) => setTimeout(resolve, 1_000).unref?.())]);
+    if (/EADDRINUSE|address already in use|ServeError/i.test(this.stderrChunks.join(''))) return true;
+    return portTaken(this.serverPort);
+  }
+
+  /**
+   * Resolve the server's base URL from whichever comes first: the URL line on
+   * stdout or stderr, or the port cezar asked for answering `GET /path` with
+   * this run's own directory (#1179 made a missing line fatal; a slow or
+   * differently-worded start must not be). Fails only on exit, on
+   * `SERVER_START_TIMEOUT_MS` of silence, or at `SERVER_START_MAX_MS`.
+   */
+  private waitForServerUrl(port: number): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const probeUrl = `http://127.0.0.1:${port}`;
+      const ownDir = canonicalPath(this.spec.cwd ?? process.cwd());
+      const probeAbort = new AbortController();
+      let buffer = '';
+      let settled = false;
+      const fail = (message: string) => {
+        if (settled) return;
         cleanup();
-        reject(new Error('opencode serve exited before it started listening'));
+        reject(new Error(message));
+      };
+      const succeed = (url: string) => {
+        if (settled) return;
+        cleanup();
+        resolve(url);
+      };
+      // Fixed messages, never the elapsed time: each distinct string is its own telemetry group.
+      let heardOutput = false;
+      const stallFail = () =>
+        fail(
+          heardOutput
+            ? `opencode serve went silent for ${SERVER_START_TIMEOUT_MS / 1000}s without reporting a listening URL`
+            : `opencode serve did not report a listening URL within ${SERVER_START_TIMEOUT_MS / 1000}s`,
+        );
+      let stall = setTimeout(stallFail, SERVER_START_TIMEOUT_MS);
+      stall.unref?.();
+      const cap = setTimeout(
+        () => fail(`opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s`),
+        SERVER_START_MAX_MS,
+      );
+      cap.unref?.();
+      const onData = (chunk: string) => {
+        heardOutput = true;
+        clearTimeout(stall);
+        stall = setTimeout(stallFail, SERVER_START_TIMEOUT_MS);
+        stall.unref?.();
+        buffer = (buffer + chunk).slice(-4096);
+        const m = SERVER_URL_RE.exec(buffer);
+        if (m) succeed(m[0].replace('//localhost:', '//127.0.0.1:'));
+      };
+      const probe = setInterval(() => {
+        void opencodeRequest(`${probeUrl}/path`, { method: 'GET', signal: AbortSignal.any([probeAbort.signal, AbortSignal.timeout(2_000)]) })
+          .then((res) => {
+            if (res.status !== 200) return;
+            const dir = stringField(parseRecord(res.body), 'directory');
+            if (dir && canonicalPath(dir) === ownDir) succeed(probeUrl);
+          })
+          .catch(() => undefined);
+      }, SERVER_PROBE_INTERVAL_MS);
+      probe.unref?.();
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        // The stderr tail rides a local note in listen(), never this telemetry-grouped message.
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `exit code ${code}`;
+        fail(`opencode serve exited before it started listening (${detail})`);
       };
       const cleanup = () => {
-        clearTimeout(timer);
+        settled = true;
+        clearTimeout(stall);
+        clearTimeout(cap);
+        clearInterval(probe);
+        probeAbort.abort();
         this.child.stdout.off('data', onData);
+        this.child.stderr.off('data', onData);
         this.child.off('exit', onExit);
       };
       this.child.stdout.setEncoding('utf8');
       this.child.stdout.on('data', onData);
+      this.child.stderr.on('data', onData);
       this.child.once('exit', onExit);
     });
   }
 
   private async bootstrap(): Promise<void> {
-    const created = await this.http('POST', '/session', { title: 'cezar task' });
+    let created: Record<string, unknown>;
+    try {
+      created = await this.http('POST', '/session', { title: 'cezar task' });
+    } catch (err) {
+      // OpenCode 2.x moved its whole server API under `/api` with new payloads
+      // and events, so its server refuses the 1.x route (telemetry dc1a91a6).
+      if (err instanceof OpencodeStatusError && (err.status === 404 || err.status === 405)) {
+        throw new Error(unsupportedServerMessage(err.status));
+      }
+      throw err;
+    }
     this.sessionId = stringField(created, 'id');
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     this.emit({ type: 'session', sessionId: this.sessionId });
@@ -547,6 +697,8 @@ class OpencodeSession implements AgentSession {
     } catch {
       return;
     }
+    // The bus's own keep-alives prove the server is up, not that the agent is working.
+    if (evt.type !== 'server.heartbeat' && evt.type !== 'server.connected') this.deadline.touch();
     this.emitUi((state) => mapOpencodeEvent(evt, state));
     this.handleEvent(evt);
   }
@@ -564,11 +716,104 @@ class OpencodeSession implements AgentSession {
     } else if (type === 'message.part.updated' || type === 'message.part.created') {
       this.handlePart((props.part as Record<string, unknown>) ?? props);
       this.armTurnGrace();
+    } else if (type === 'permission.asked' || type === 'permission.updated') {
+      void this.answerPermission(props);
+    } else if (type === 'question.asked') {
+      this.handleQuestion(props);
     } else if (type === 'session.idle') {
       // The turn boundary (#897). A subtask session going idle closes only its
       // own scope, exactly as the v2 mapper reads it.
       const sid = stringField(props, 'sessionID');
       if (sid === undefined || sid === this.sessionId) this.finishTurn(true);
+    } else if (type === 'session.status') {
+      const sid = stringField(props, 'sessionID');
+      if (sid === undefined || sid === this.sessionId) this.giveUpOnLongRetry(props.status);
+    }
+  }
+
+  /** Fail the turn on a retry that needs a human (`action`) or waits past `RETRY_GIVE_UP_MS`.
+   *  A quota `action` is worded as a usage limit and books the auto-resume; any other action never
+   *  does (resuming meets the same refusal). A long backoff without one auto-resumes only when
+   *  OpenCode's own text names a limit, else it waits for a manual Continue. */
+  private giveUpOnLongRetry(status: unknown): void {
+    if (!isRecord(status) || status.type !== 'retry' || !this.serverOpen) return;
+    const next = typeof status.next === 'number' && Number.isFinite(status.next) ? status.next : undefined;
+    const action = isRecord(status.action) ? status.action : undefined;
+    if (!action && (next === undefined || next - Date.now() < RETRY_GIVE_UP_MS)) return;
+    const quota = QUOTA_REASON_RE.test(action ? stringField(action, 'reason') ?? '' : '');
+    const reason = stringField(status, 'message') ?? 'the provider refused the request';
+    const at = next === undefined ? '' : ` — ${action && !quota ? 'next attempt' : 'retry at'} ${new Date(next).toISOString()}`;
+    this.retryGaveUp = true;
+    this.emit({ type: 'error', message: `opencode: ${quota ? 'usage limit reached: ' : ''}${reason}${at}` });
+    this.interrupt();
+  }
+
+  /** An unanswered prompt parks `opencode serve` forever — c3d30076 sat 21 h on
+   *  `external_directory` for its own handoff file. Every prompt gets a reply. */
+  private async answerPermission(props: Record<string, unknown>): Promise<void> {
+    const id = stringField(props, 'id');
+    if (!id || this.permissionsAnswered.has(id)) return;
+    this.permissionsAnswered.add(id);
+    const reply = opencodePermissionReply(props, this.spec.env);
+    if (reply === 'reject') {
+      const what = stringField(props, 'permission') ?? stringField(props, 'type') ?? 'unknown';
+      const path = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
+      this.emit({ type: 'note', message: `opencode: refused ${what} permission${path ? ` for ${path}` : ''}` });
+    }
+    try {
+      await this.http('POST', `/permission/${encodeURIComponent(id)}/reply`, { reply });
+    } catch {
+      // Servers before the permission rework only know the session-scoped route.
+      const sid = stringField(props, 'sessionID') ?? this.sessionId;
+      if (!sid) return;
+      await this.http('POST', `/session/${encodeURIComponent(sid)}/permissions/${encodeURIComponent(id)}`, {
+        response: reply,
+      }).catch(() => undefined);
+    }
+  }
+
+  /** OpenCode's native `question` tool blocks the session until it is answered; show it as an
+   *  ask card and hold the next message back as the answer (#1652). */
+  private handleQuestion(props: Record<string, unknown>): void {
+    const id = stringField(props, 'id');
+    if (!id) return;
+    const sid = stringField(props, 'sessionID');
+    if (sid !== undefined && sid !== this.sessionId) return;
+    const raw = Array.isArray(props.questions) ? props.questions : [];
+    const questions = parseAskRequest({
+      questions: raw.map((q, i) => {
+        const r = isRecord(q) ? q : {};
+        const text = stringField(r, 'question') ?? '';
+        return {
+          id: String(i),
+          header: (stringField(r, 'header') ?? text).slice(0, 12),
+          question: text,
+          options: (Array.isArray(r.options) ? r.options : []).filter(isRecord).map((o) => ({
+            label: stringField(o, 'label') ?? '',
+            ...(stringField(o, 'description') ? { description: stringField(o, 'description') } : {}),
+          })),
+          multiSelect: r.multiple === true,
+        };
+      }),
+    })?.questions;
+    if (!questions) {
+      // A card needs 2+ options; refuse rather than leave the session blocked.
+      this.emit({ type: 'note', message: 'opencode: declined a question the cockpit cannot render' });
+      void this.http('POST', `/question/${encodeURIComponent(id)}/reject`, undefined).catch(() => undefined);
+      return;
+    }
+    this.pendingQuestion = { id, questions };
+    this.opts.onUiEvent?.({ type: 'ask.requested', requestId: `opencode-${id}`, questions });
+  }
+
+  private async replyQuestion(pending: { id: string; questions: AskQuestion[] }, text: string): Promise<void> {
+    const byId = userInputAnswers(pending.questions, text);
+    const answers = pending.questions.map((q, i) => byId[q.id ?? String(i)]?.answers ?? []);
+    try {
+      await this.http('POST', `/question/${encodeURIComponent(pending.id)}/reply`, { answers });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({ type: 'note', message: `opencode: question reply failed: ${message}` });
     }
   }
 
@@ -629,7 +874,9 @@ class OpencodeSession implements AgentSession {
       }
     }
     const cost = info.cost;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && (this.lastCost === undefined || cost > this.lastCost)) {
+    // A turn the provider turned away for a usage limit spent nothing, whatever list-price estimate
+    // OpenCode stamped on it (#1756); costs of earlier messages and of other failures stay (#1346).
+    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && !isUsageLimitRejection(info.error) && (this.lastCost === undefined || cost > this.lastCost)) {
       this.emit({ type: 'cost', usd: cost - (this.lastCost ?? 0) });
       this.lastCost = cost;
     }
@@ -654,7 +901,12 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      const envelope = parseRecord(res.body);
+      const data = isRecord(envelope.data) ? envelope.data : {};
+      const name = stringField(envelope, 'name');
+      const message = stringField(data, 'message');
+      const detail = name && message ? `${name}: ${message}`.slice(0, 300) : res.body.slice(0, 200);
+      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${detail}`);
     }
     if (!res.body) return {};
     try {
@@ -696,6 +948,95 @@ function textOf(content: ContentBlock[]): string {
     .map((b) => b.text)
     .join('\n')
     .trim();
+}
+
+/**
+ * The reply to one OpenCode permission prompt. Only this run's own state
+ * outside the worktree is granted: its handoff file (`CEZ_HANDOFF_FILE`), the
+ * files in its pasted-attachments folder (`runs/<CEZ_TASK_ID>-images/`), and
+ * its scratch directory when cezar set `TMPDIR` to it (#785). A config rule
+ * cannot do this — OpenCode matches rules against the whole parent directory
+ * (`runs/*`), which would expose every other task's transcript. Paths are
+ * compared after following symlinks. Everything else is refused, `once` so no
+ * grant outlives the call.
+ */
+export function opencodePermissionReply(
+  props: Record<string, unknown>,
+  env: Record<string, string> | undefined,
+): 'once' | 'reject' {
+  const permission = stringField(props, 'permission') ?? stringField(props, 'type');
+  const filepath = isRecord(props.metadata) ? stringField(props.metadata, 'filepath') : undefined;
+  const handoffFile = env?.CEZ_HANDOFF_FILE;
+  const taskId = env?.CEZ_TASK_ID;
+  if (permission !== 'external_directory' || !filepath || !handoffFile || !taskId) return 'reject';
+  const target = canonicalPath(filepath);
+  const handoff = canonicalPath(handoffFile);
+  if (target === handoff) return 'once';
+  const runsDir = dirname(handoff);
+  if (dirname(target) === join(runsDir, `${taskId}-images`)) return 'once';
+  const tmp = join(dirname(runsDir), 'tmp', taskId);
+  if (env.TMPDIR && canonicalPath(env.TMPDIR) === tmp && (target === tmp || target.startsWith(tmp + sep))) {
+    return 'once';
+  }
+  return 'reject';
+}
+
+/** Random high port, clear of opencode's own 4096 (#1179); the bound URL is read back from
+ *  the server's output or a `/path` probe. */
+/** An assistant message's `error` that says the quota, not the model, ended the turn. */
+export function isUsageLimitRejection(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const data = isRecord(error.data) ? error.data : {};
+  const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
+  if (status === 429 || status === 402) return true;
+  return QUOTA_REASON_RE.test(`${stringField(error, 'name') ?? ''} ${stringField(data, 'message') ?? ''}`);
+}
+
+function randomServerPort(): number {
+  return 40000 + Math.floor(Math.random() * 20000);
+}
+
+/** Is `port` held on loopback right now — the bind the server itself attempts? */
+function portTaken(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code === 'EADDRINUSE'));
+    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(false)));
+  });
+}
+
+/** `realpath` of the deepest existing ancestor, rest re-appended — the file a
+ *  prompt names may not exist yet (a write), but its directories decide where it lands. */
+function canonicalPath(path: string): string {
+  const abs = resolve(path);
+  const rest: string[] = [];
+  let dir = abs;
+  for (;;) {
+    try {
+      return join(realpathSync.native(dir), ...rest.reverse());
+    } catch {
+      const parent = dirname(dir);
+      if (parent === dir) return abs;
+      rest.push(basename(dir));
+      dir = parent;
+    }
+  }
+}
+
+/** The URL line opencode prints once listening — matched on stdout or stderr. */
+const SERVER_URL_RE = /https?:\/\/(?:[\d.]+|localhost):\d+/;
+
+function parseRecord(text: string): Record<string, unknown> {
+  try {
+    const value: unknown = JSON.parse(text);
+    return isRecord(value) ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {

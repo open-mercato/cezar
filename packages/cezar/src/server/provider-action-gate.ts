@@ -10,7 +10,10 @@ import { loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-ac
 import { selectProfile } from '../workspace/agent-profiles.ts';
 import { stepKind, type WorkflowDef } from '../workflows/types.ts';
 
+export { recordedProfileFor } from './recorded-profile.ts';
+
 const ORDER: readonly ProviderId[] = PROVIDER_IDS;
+const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<ProviderId> = new Set(['junie', 'antigravity']);
 const LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
@@ -19,6 +22,7 @@ const LABEL: Record<ProviderId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
+  antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
 };
 
@@ -69,6 +73,12 @@ export interface ProviderAccountScope {
   profileFor?: (provider: ProviderId) => string | undefined;
 }
 
+/** Rows judged against the selected accounts; a row re-answered for a NAMED account carries its
+ *  `profileId`, and `accountLabels` names it so a refusal can say which login is signed out. */
+export interface JudgedProviderStatus extends ProviderStatusResponse {
+  accountLabels?: Partial<Record<ProviderId, string>>;
+}
+
 /**
  * Re-answer each required provider's row for the account the action will actually use.
  *
@@ -82,13 +92,14 @@ export async function withSelectedAccounts(
   scope: ProviderAccountScope,
   auth: Pick<ProviderAuthService, 'profileStatus' | 'forgetProfileStatus'>,
   options: { refresh?: boolean; loadStore?: () => Promise<AgentAccountStore> } = {},
-): Promise<ProviderStatusResponse> {
+): Promise<JudgedProviderStatus> {
   let store: AgentAccountStore;
   try {
     store = await (options.loadStore ?? loadAgentAccounts)();
   } catch {
     return response;
   }
+  const accountLabels: Partial<Record<ProviderId, string>> = {};
   const providers = await Promise.all(response.providers.map(async (row) => {
     if (!required.includes(row.provider) || row.enabled === false || row.authFailureId) return row;
     const profile = selectProfile(store, {
@@ -99,36 +110,38 @@ export async function withSelectedAccounts(
     if (profile.isDefault) return row;
     if (options.refresh) auth.forgetProfileStatus(row.provider, profile.id);
     const account = await auth.profileStatus(row.provider, { id: profile.id, configDir: profile.path });
-    const answered: ProviderStatus = { ...row, status: account.status };
+    const answered: ProviderStatus = { ...row, status: account.status, profileId: profile.id };
     if (account.hint !== undefined) answered.hint = account.hint;
     else delete answered.hint;
+    accountLabels[row.provider] = profile.label || profile.id;
     return answered;
   }));
-  return { providers };
+  return Object.keys(accountLabels).length > 0 ? { providers, accountLabels } : { providers };
 }
 
-/** The account a step of an existing run is bound to: its recorded one, else the run's override. */
-export function recordedProfileFor(run: RunRecord, provider: ProviderId): string | undefined {
-  const runner = run.runner ?? 'claude';
-  for (let index = run.steps.length - 1; index >= 0; index -= 1) {
-    const step = run.steps[index];
-    if (step?.profileId && (step.backend ?? runner) === provider) return step.profileId;
-  }
-  return provider === runner ? run.agentProfile : undefined;
+/** The refusal for a signed-out NAMED account. Pointing at Providers sent users to a card that
+ *  showed the default login connected — a dead end they retried and restarted on (ac53a6ef). */
+export function signedOutAccountMessage(provider: ProviderId, account: string): string {
+  // Quoted, so the cockpit's toast scrubber masks the label before an error report (no quote may
+  // end it early).
+  return `${LABEL[provider]} account "${account.replace(/"/g, '')}" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.`;
 }
 
 export function unavailableProviderMessage(
   required: readonly ProviderId[],
-  response: ProviderStatusResponse,
+  response: JudgedProviderStatus,
 ): string | null {
   for (const provider of required) {
     const row = response.providers.find(({ provider: id }) => id === provider);
     if (row?.enabled === false) {
       return `${LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`;
     }
-    // Junie has no read-only auth-status command: its probe deliberately reports unknown.
-    // Let ACP authenticate at run startup; a real runtime rejection is still latched as disconnected.
-    if (row?.status !== 'connected' && !(provider === 'junie' && row?.status === 'unknown')) {
+    // Junie has no read-only auth-status command, and Antigravity's (`agy models`) needs the
+    // network, so `unknown` is inconclusive for both: let the run surface the real rejection,
+    // which is still latched as disconnected.
+    if (row?.status !== 'connected' && !(RUNNABLE_WHEN_UNVERIFIED.has(provider) && row?.status === 'unknown')) {
+      const account = row?.profileId ? response.accountLabels?.[provider] : undefined;
+      if (account) return signedOutAccountMessage(provider, account);
       return `${LABEL[provider]} credentials are unavailable. Authorize it in Settings → Agents → Providers.`;
     }
   }

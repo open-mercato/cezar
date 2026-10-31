@@ -46,6 +46,13 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 - NDJSON event logs are append-only; readers skip unparseable lines. Never rewrite or reorder an existing event file.
 - Renaming/removing an API route, an event `type`, or a persisted field is a breaking change — route it through `BACKWARD_COMPATIBILITY.md`.
 
+### Release lines
+
+- A fix for a bug that exists on a released line carries `backport release/vX.Y.x` (`SDLC.md` § Release lines and backports); a feature or refactor does not.
+- A PR into `release/v*` is a blocker unless the Backport workflow opened it (it carries the `backport` label) or it is the documented can't-wait hotfix labelled `backport main`.
+- A backport PR changes only what the original fix changed, and that change still fits the line's code. A hand-edited version, workspace lockfile entry or released changelog entry is a blocker — the release workflows own them.
+- Every PR carries the category label its release-note section needs (`bug`, `feature`, `security`, `refactor`, `dependencies`, `documentation`; bookkeeping `skip-changelog`). Apply or correct it yourself; report it when you cannot write labels. Never a blocking finding.
+
 ### Code quality
 
 - Comments cite the spec or issue that motivated the code (`spec 006`, `#348`); non-obvious behavior in the diff should too.

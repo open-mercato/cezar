@@ -1,0 +1,25 @@
+---
+title: "Create and report subtasks from the CLI"
+description: "Create a subtask, inspect its tree, and return a structured result."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/dispatch/task-cli.ts
+    line: 27
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+cez task commands create subtasks, display their list and tree, and return a result in a defined format. A subtask report contains its status and result.
+
+## Where to find it
+
+Agent terminal → cez task
+
+## How to use it
+
+1. In a task context, use cez task create "goal".
+2. Check cez task list or cez task tree &lt;id>.
+3. Return cez task report --status done --result "result".
+
+> **Good to know**: The commands require a running cockpit and `CEZ_API_URL`. Creation also requires `CEZ_TASK_ID`. Headless `cezar run` does not expose Dispatch.

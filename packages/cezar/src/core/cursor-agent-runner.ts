@@ -28,12 +28,14 @@ import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts'
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
+import { resolveCursorAgentBin } from './cursor-bin.ts';
 import {
   createCursorUiState,
   mapCursorMessage,
   mapCursorStreamEvent,
   type CursorUiMapping,
 } from './cursor-ui-mapper.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 /** The exact hand-off line of Cursor's bash launcher (`~/.local/share/cursor-agent/versions/<v>/cursor-agent`). */
 const CURSOR_LAUNCHER_EXEC = 'exec -a "$0" "$NODE_BIN" --use-system-ca "$SCRIPT_DIR/index.js" "$@"';
@@ -109,12 +111,7 @@ export function mockCursorAgentPath(): string {
   return resolvePath(here, '..', '..', 'scripts', 'mock-cursor-agent.mjs');
 }
 
-/** The real Cursor binary name — `CEZ_CURSOR_AGENT_BIN` override, else `agent` on PATH. Shared
- *  by every call site that shells out to the real CLI (identity, model discovery, detection),
- *  so an operator's override is honored consistently instead of four separate `?? 'agent'`s. */
-export function resolveCursorAgentBin(optsBin?: string): string {
-  return optsBin || process.env.CEZ_CURSOR_AGENT_BIN || 'agent';
-}
+export { resolveCursorAgentBin };
 
 /** Like {@link resolveCursorAgentBin}, but under `CEZ_DRY_RUN=1` substitutes the bundled mock —
  *  only for actually spawning a run turn. The mock does not implement `status`/`about`/`models`
@@ -124,7 +121,7 @@ export function resolveCursorBin(optsBin?: string): string {
   if (optsBin) return optsBin;
   if (process.env.CEZ_CURSOR_AGENT_BIN) return process.env.CEZ_CURSOR_AGENT_BIN;
   if (process.env.CEZ_DRY_RUN === '1') return mockCursorAgentPath();
-  return 'agent';
+  return resolveCursorAgentBin();
 }
 
 function wrapSpawnError(err: unknown, bin: string): Error {
@@ -237,32 +234,29 @@ export class CursorAgentRunner implements AgentRunner {
     };
 
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
-    let deadline: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        timedOut = true;
-        terminatedByCezar = true;
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      terminatedByCezar = true;
+      try {
+        child.kill('SIGTERM');
+      } catch {
+        /* ignore */
+      }
+      killTimer = setTimeout(() => {
         try {
-          child.kill('SIGTERM');
+          child.kill('SIGKILL');
         } catch {
           /* ignore */
         }
-        killTimer = setTimeout(() => {
-          try {
-            child.kill('SIGKILL');
-          } catch {
-            /* ignore */
-          }
-        }, CURSOR_KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+      }, CURSOR_KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
+          deadline.touch();
           let parsed: unknown;
           try {
             parsed = JSON.parse(line);
@@ -277,7 +271,7 @@ export class CursorAgentRunner implements AgentRunner {
           /* premature close — fall through to exit handling */
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         open = false;
       }
@@ -288,8 +282,7 @@ export class CursorAgentRunner implements AgentRunner {
       if (spawnFailed) throw spawnFailed;
 
       if (timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        onEvent?.({ type: 'error', message: `cursor agent timed out after ${mins}m and was killed` });
+        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('cursor agent', limitMs, deadline.expiredBy) });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId };
       }

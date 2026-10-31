@@ -6,7 +6,7 @@ import type {
 import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 
 const PROVIDERS: readonly ProviderId[] = RUNNER_IDS
-const LABELS: Record<ProviderId, string> = {
+export const PROVIDER_LABELS: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
@@ -14,6 +14,7 @@ const LABELS: Record<ProviderId, string> = {
   pi: 'pi',
   junie: 'Junie',
   copilot: 'GitHub Copilot CLI',
+  antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
 }
 
@@ -55,7 +56,7 @@ export function visibleProviderAuthIncidents(
     ) return []
     return [{
       provider,
-      label: LABELS[provider],
+      label: PROVIDER_LABELS[provider],
       authFailureId: row.authFailureId,
     }]
   })

@@ -17,7 +17,7 @@ import {
   TagIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 import { Virtualizer } from 'virtua'
 
@@ -70,7 +70,9 @@ import {
   type GithubSort,
 } from './github-filter'
 import { GithubLoading } from './github-loading'
+import { IssueOwnership } from './issue-ownership'
 import { HandToAgent } from './hand-to-agent'
+import { SwipeLaunchSheet, SwipeReveal, useRowSwipe } from './swipe-launch'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
 
 /**
@@ -359,6 +361,17 @@ export function GithubRoute({
     [skillsData, skillUsage],
   )
   const [queued, setQueued] = useState<ReadonlyMap<string, string>>(new Map())
+  // The swipe launcher (touch): the item stays set while the sheet animates closed.
+  const [swipeItem, setSwipeItem] = useState<GithubItem | null>(null)
+  const [swipeOpen, setSwipeOpen] = useState(false)
+  const openSwipeLaunch = useCallback((item: GithubItem) => {
+    setSwipeItem(item)
+    setSwipeOpen(true)
+  }, [])
+  const markQueued = useCallback(
+    (url: string, runId: string) => setQueued((current) => new Map(current).set(url, runId)),
+    [],
+  )
   // List filtering (#gh-filter): free-text search (by #id or any text) + a label narrow.
   const [query, setQuery] = useState('')
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
@@ -554,14 +567,14 @@ export function GithubRoute({
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="text-lg font-semibold">GitHub</h1>
             {gh.repo ? (
-              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-[11px] text-soft-foreground">
+              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-meta text-soft-foreground">
                 {gh.repo}
               </span>
             ) : null}
             {automationsAvailable ? (
               <Link
                 to="/automations/new"
-                className="ml-auto shrink-0 text-[10px] font-medium text-primary hover:underline"
+                className="ml-auto shrink-0 text-micro font-medium text-primary hover:underline"
               >
                 Set up automations
               </Link>
@@ -575,7 +588,7 @@ export function GithubRoute({
               // The automations link owns the `ml-auto` that pushes this cluster right; with the
               // link gated away this button inherits it, so the header does not re-flow.
               className={cn(
-                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
+                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-micro font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
                 !automationsAvailable && 'ml-auto',
               )}
             >
@@ -611,7 +624,7 @@ export function GithubRoute({
                 placeholder="Search #id, title, author…"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-ui outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </div>
             <LabelFilter
@@ -669,6 +682,7 @@ export function GithubRoute({
                     active={selected?.url === item.url}
                     queued={queued.has(item.url)}
                     checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                    onSwipe={openSwipeLaunch}
                   />
                 </div>
               ))
@@ -683,6 +697,7 @@ export function GithubRoute({
                       active={selected?.url === item.url}
                       queued={queued.has(item.url)}
                       checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                      onSwipe={openSwipeLaunch}
                     />
                   </div>
                 ))}
@@ -722,7 +737,7 @@ export function GithubRoute({
             whether a row came from the open list or from a search that reached past it. */}
         {searchHits.length > 0 ? (
           <div data-slot="gh-search-hits">
-            <p className="px-4 pt-2 pb-1 text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+            <p className="px-4 pt-2 pb-1 eyebrow text-soft-foreground">
               Found on GitHub{searchPayload?.truncated ? ' (first matches)' : ''}
             </p>
             <ul className="flex flex-col gap-0.5 px-2 pb-2">
@@ -735,11 +750,22 @@ export function GithubRoute({
                   active={selected?.url === item.url}
                   queued={queued.has(item.url)}
                   checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                  onSwipe={openSwipeLaunch}
                 />
               ))}
             </ul>
           </div>
         ) : null}
+
+        <SwipeLaunchSheet
+          item={swipeItem}
+          open={swipeOpen}
+          onOpenChange={setSwipeOpen}
+          workflows={workflows.data?.workflows ?? []}
+          skills={skillList}
+          engine={engine}
+          onQueued={markQueued}
+        />
     </>} detail={<>
         {selected ? (
           <GithubDetail
@@ -761,7 +787,7 @@ export function GithubRoute({
               engine={engine}
               onEngineChange={setEngine}
               queuedRunId={queued.get(selected.url) ?? null}
-              onQueued={(url, runId) => setQueued((current) => new Map(current).set(url, runId))}
+              onQueued={markQueued}
             />
           </GithubDetail>
         ) : (
@@ -789,14 +815,7 @@ function countLabel(count: number): string {
   return String(count)
 }
 
-function GithubRow({
-  item,
-  view,
-  colors,
-  active,
-  queued,
-  checks,
-}: {
+interface GithubRowProps {
   item: GithubItem
   view: GithubView
   colors: Record<string, string>
@@ -804,9 +823,27 @@ function GithubRow({
   queued: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
-}) {
+  /** Touch swipe-left opens the run launcher for this row. Must be referentially stable. */
+  onSwipe?: (item: GithubItem) => void
+}
+
+/**
+ * Memoized, but not virtualized: a row's height depends on whether it carries labels and how many
+ * lines they wrap to, so there is no fixed row height to window by. `colors` is rebuilt every
+ * render of the page, so only the entries for this row's own labels are compared.
+ */
+const GithubRow = memo(function GithubRow({
+  item,
+  view,
+  colors,
+  active,
+  queued,
+  checks,
+  onSwipe,
+}: GithubRowProps) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
+  const swipe = useRowSwipe(() => onSwipe?.(item))
 
   // Warm the thread on hover/focus (#664) so opening the row is usually instant — best-effort,
   // deduped by React Query, and it re-uses the mounted detail's exact query key/staleTime.
@@ -830,11 +867,15 @@ function GithubRow({
   }
 
   return (
-    <li>
+    // Clip only mid-swipe: an always-clipped <li> would cut off the link's default focus ring.
+    <li className={cn('relative rounded-md', swipe.offset !== 0 && 'overflow-hidden')}>
+      {onSwipe ? <SwipeReveal offset={swipe.offset} /> : null}
       <Link
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
         onDragStart={onDragStart}
+        {...(onSwipe ? swipe.handlers : {})}
+        style={swipe.offset ? { transform: `translateX(${swipe.offset}px)` } : undefined}
         onMouseEnter={prefetchThread}
         onFocus={prefetchThread}
         data-slot="gh-row"
@@ -842,7 +883,7 @@ function GithubRow({
         aria-current={active ? 'page' : undefined}
         title="Drag into the composer to prefill a task"
         className={cn(
-          'flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted',
+          'relative flex touch-pan-y flex-col gap-1 rounded-md bg-background px-2.5 py-2 transition-colors hover:bg-muted',
           active && 'bg-muted',
         )}
       >
@@ -851,11 +892,11 @@ function GithubRow({
             aria-hidden="true"
             className={cn('size-3.5 shrink-0', item.kind === 'issue' ? 'text-success' : 'text-violet')}
           />
-          <span className={cn('min-w-0 truncate text-[13px] font-medium', active && 'font-semibold')}>
+          <span className={cn('min-w-0 truncate text-ui font-medium', active && 'font-semibold')}>
             {item.title}
           </span>
         </span>
-        <span className="flex items-center gap-2 pl-[22px] font-mono text-[10.5px] text-muted-foreground">
+        <span className="flex items-center gap-2 pl-[22px] font-mono text-micro text-muted-foreground">
           <span>#{item.number}</span>
           <span className="min-w-0 truncate">{item.author}</span>
           <span>{shortAge(item.createdAt)}</span>
@@ -875,7 +916,20 @@ function GithubRow({
           </span>
         ) : null}
       </Link>
+      <IssueOwnership item={item} />
     </li>
+  )
+}, sameGithubRow)
+
+function sameGithubRow(previous: GithubRowProps, next: GithubRowProps): boolean {
+  return (
+    previous.item === next.item &&
+    previous.view === next.view &&
+    previous.active === next.active &&
+    previous.queued === next.queued &&
+    previous.checks === next.checks &&
+    previous.onSwipe === next.onSwipe &&
+    next.item.labels.every((label) => previous.colors[label] === next.colors[label])
   )
 }
 
@@ -903,7 +957,7 @@ function LabelFilter({
           data-slot="gh-label-filter"
           disabled={options.length === 0}
           className={cn(
-            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
+            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-label font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
             selected.length > 0 && 'border-primary/60 text-foreground',
           )}
         >
@@ -949,7 +1003,7 @@ function LabelChip({ label, color }: { label: string; color: string | undefined 
       data-slot="gh-label"
       data-label={label}
       style={labelChipStyle(color)}
-      className="rounded-full border px-1.5 py-px text-[10px] font-medium"
+      className="rounded-full border px-1.5 py-px text-micro font-medium"
     >
       {label}
     </span>
@@ -989,7 +1043,7 @@ function GithubDetail({
         Back to the list
       </Link>
 
-      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
+      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-micro text-soft-foreground">
         <span>#{item.number}</span>·<span>{kindWord}</span>·<span>opened by {item.author}</span>·
         <span>{shortAge(item.createdAt)} ago</span>
         {item.comments ? (
@@ -1174,7 +1228,7 @@ function GithubMergeBox({ number }: { number: number }) {
               Refresh
             </Button>
           </div>
-          <p className="mt-1 font-mono text-[11px] text-soft-foreground">
+          <p className="mt-1 font-mono text-meta text-soft-foreground">
             {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
           </p>
           <ul className="mt-3 space-y-2 text-xs">
@@ -1414,7 +1468,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
     <section data-slot="gh-thread" className="mt-6 border-t border-border pt-5">
       <h3
         data-slot="gh-thread-header"
-        className="mb-4 text-[11px] font-semibold tracking-wide text-soft-foreground uppercase"
+        className="mb-4 eyebrow text-soft-foreground"
       >
         {/* "Activity", not "Comments": heading a twenty-row list `Comments · 2` would be
             incoherent once events render. The comment count stays as a secondary. This is a
@@ -1520,7 +1574,7 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
             type="button"
             aria-expanded={true}
             onClick={() => setOpen(false)}
-            className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+            className="flex items-center gap-1.5 font-mono text-meta text-soft-foreground hover:text-foreground"
           >
             <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
             <span className="font-sans font-medium text-foreground">{actor}</span>
@@ -1540,7 +1594,7 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
         type="button"
         aria-expanded={false}
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+        className="flex items-center gap-1.5 font-mono text-meta text-soft-foreground hover:text-foreground"
       >
         <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
         <span className="font-sans font-medium text-foreground">{actor}</span>
@@ -1579,7 +1633,7 @@ function EventRow({ event, colors }: { event: GithubTimelineEvent; colors: Recor
       data-slot="gh-event-row"
       data-kind={event.kind}
       className={cn(
-        'flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-soft-foreground',
+        'flex min-w-0 items-center gap-1.5 font-mono text-meta text-soft-foreground',
         event.kind === 'merged' && 'text-accent-foreground',
       )}
     >
@@ -1628,7 +1682,7 @@ function EventPhrase({ event, colors }: { event: GithubTimelineEvent; colors: Re
             <span
               data-slot="gh-event-label"
               style={labelChipStyle(event.label.color ?? colors[event.label.name])}
-              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-[10px]"
+              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-micro"
             >
               {event.label.name}
             </span>
@@ -1698,7 +1752,7 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
   const chip = comment.reviewState ? REVIEW_CHIP[comment.reviewState] : null
   return (
     <li data-slot="gh-thread-entry" data-kind={comment.kind} className="min-w-0">
-      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground">
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-meta text-soft-foreground">
         <Avatar url={comment.avatarUrl} login={comment.author} />
         <span className="font-sans font-medium text-foreground">{comment.author}</span>
         <span>{shortAge(comment.createdAt)}</span>
@@ -1706,7 +1760,7 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
           <span
             data-slot="gh-review-chip"
             data-review-state={comment.reviewState}
-            className={cn('rounded-full border px-1.5 py-px font-sans text-[10px] font-medium', chip.tone)}
+            className={cn('rounded-full border px-1.5 py-px font-sans text-micro font-medium', chip.tone)}
           >
             {chip.label}
           </span>
@@ -1788,7 +1842,7 @@ function CommentCount({ count }: { count: number }) {
 /** The checks badge — the legacy tab's three phrases, tinted by outcome. Links out
  *  to the PR's checks tab on GitHub (issue #415) when a URL is available. */
 function ChecksBadge({ checks, url }: { checks: Checks; url?: string }) {
-  const className = cn('text-[11px] font-medium', CHECKS_TONE[checks], url && 'hover:underline')
+  const className = cn('text-meta font-medium', CHECKS_TONE[checks], url && 'hover:underline')
   const label = `${CHECKS_GLYPH[checks]} checks ${checks}`
 
   if (!url) {
@@ -1823,7 +1877,7 @@ function ChecksGlyph({ checks }: { checks: Checks }) {
       data-checks={checks}
       title={`checks ${checks}`}
       aria-label={`checks ${checks}`}
-      className={cn('shrink-0 font-sans text-[11px] font-semibold', CHECKS_TONE[checks])}
+      className={cn('shrink-0 font-sans text-meta font-semibold', CHECKS_TONE[checks])}
     >
       {CHECKS_GLYPH[checks]}
     </span>

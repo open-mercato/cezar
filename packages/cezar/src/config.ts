@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { perRunner } from '@open-mercato/cezar-contract';
+import { worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
 
@@ -32,6 +33,8 @@ export const DEFAULT_WORKTREE_RETENTION = 10;
 const worktreeRetentionSchema = z.number().int().min(0).max(1000);
 
 const configSchema = z.object({
+  // Runtime lifecycle gates use the strict reader, never this boot-safe fallback.
+  worktreeLifecycle: worktreeLifecycleConfigSchema.optional().catch(undefined),
   skillsRepos: z.array(skillsRepoSchema).default(DEFAULT_SKILLS_REPOS),
   /** How many tasks may run at once (spec 006). Non-git dirs always run 1. */
   maxParallel: z.number().int().min(1).max(16).default(2),
@@ -129,6 +132,22 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Trunk-based projects (spec 2026-10-20-trunk-based-projects). Every key is optional and
+   * absent = today's branch-per-task behavior. `profile` only labels the preset the cockpit applied;
+   * the behavior comes from the individual keys below.
+   */
+  profile: z.enum(['branches', 'trunk']).optional().catch(undefined),
+  /** Where a task works unless the composer says otherwise: `in-place` = the repo checkout. */
+  taskWorkspace: z.enum(['worktree', 'in-place']).optional().catch(undefined),
+  /** How an in-place task's finished changes reach the base branch. `auto` commits, rebases,
+   *  runs `requiredChecks` and pushes; a git-tracked config.json cannot grant it. */
+  landing: z.enum(['review', 'auto']).optional().catch(undefined),
+  /** Shell commands every auto-land must pass, run in the checkout after the rebase. */
+  requiredChecks: z.array(z.string().trim().min(1).max(2_000)).max(10).optional().catch(undefined),
+  /** Skill the composer preselects for a new task, and for a read-only (Ask) task. */
+  defaultSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
+  askSkill: z.string().trim().min(1).max(200).optional().catch(undefined),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
@@ -226,7 +245,7 @@ async function ownWorktreeRetention(repoRoot: string): Promise<number | undefine
  * "the user said nothing". So we probe the raw file for the key's presence — the
  * same reason `ownWorktreeRetention` below reads the raw JSON.
  */
-export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+export async function projectGatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
   const none = new Set<string>();
   let raw: string;
   try {
@@ -242,12 +261,22 @@ export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
     }
     // The user took control of the source list — nothing is gated; a value the
     // schema would refuse degrades to the default too (same as `loadConfig`).
-    if ((parsed as Record<string, unknown>).skillsRepos !== undefined) return none;
+    if ((parsed as Record<string, unknown>).skillsRepos !== undefined && configSchema.safeParse(parsed).success) {
+      return none;
+    }
     return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
   } catch {
     // Malformed JSON degrades to the default (which loadConfig also does).
     return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
   }
+}
+
+/** A repo the user added in Global settings is an explicit choice — never gated, whatever the project says. */
+export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+  const gated = await projectGatedSkillsRepos(repoRoot);
+  const org = (await loadWorkspaceConfig().catch(() => null))?.orgSkillsRepos ?? [];
+  for (const src of org) gated.delete(src.repo);
+  return gated;
 }
 
 /**

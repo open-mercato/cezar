@@ -6,7 +6,6 @@ import {
   LayoutDashboardIcon,
   MenuIcon,
   PlusIcon,
-  SearchIcon,
   SettingsIcon,
   XIcon,
 } from 'lucide-react'
@@ -20,10 +19,10 @@ import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
 import { trackAddProjectOpened } from '@/lib/telemetry'
-import { openCommandPalette } from '@/components/command-palette'
+import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
-import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
@@ -37,18 +36,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
-import {
-  DEFAULT_SIDEBAR_WIDTH,
-  MAX_SIDEBAR_WIDTH,
-  MIN_SIDEBAR_WIDTH,
-  SIDEBAR_WIDTH_STEP,
-  clampSidebarWidth,
-  readStoredSidebarWidth,
-  writeStoredSidebarWidth,
-} from '@/lib/sidebar-width'
+import { SidebarDrawer, SidebarFrame, useDesktopShell, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -73,6 +64,8 @@ export type AppShellProps = {
   unreadCount?: number | null
   /** A quiet, accessible marker on Skills when a checked update remains actionable. */
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started and is not opened yet. */
+  newNavItems?: ReadonlySet<string>
   /** cezar version for the footer chip. Null until Step 3.1 reads it from `/api/health`. */
   version?: string | null
   /** The npm registry's newer version, when the server's update check found one (#368). The
@@ -89,6 +82,8 @@ export type AppShellProps = {
    *  SLOT because `AppShell` stays presentational and QueryClient-free - the container supplies a
    *  node whose own viewport/transport gate decides whether anything mounts at all. */
   hostWidget?: ReactNode
+  /** The footer's "What's new" row (spec 2026-10-26-first-run-onboarding, "Coming back"). */
+  whatsNew?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
@@ -155,6 +150,8 @@ export function useSidebarNavigate(): (() => void) | undefined {
 }
 
 /** The main transcript owns cached/tail arrival; every other routed surface uses shell-top. */
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function routeOwnsScrollArrival(pathname: string): boolean {
   return matchPath({ path: '/tasks/:id', end: true }, stripProjectPrefix(pathname)) !== null
 }
@@ -186,11 +183,13 @@ export const AppShell = React.memo(function AppShell({
   inboxCount = null,
   unreadCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
   version = null,
   latestVersion = null,
   starCount = null,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
@@ -212,21 +211,18 @@ export const AppShell = React.memo(function AppShell({
   const current = currentBase?.to === '/tracker' && tracker
     ? { ...currentBase, label: TRACKER_PROVIDERS[tracker].label }
     : currentBase
+  // Settings is CHROMELESS (spec 2026-10-13-unified-settings): on any settings URL the sidebar
+  // column, the drawer and the mobile top bar are not rendered at all — the settings frame
+  // supplies its own header, nav and way back. The banner row stays (provider failures link
+  // INTO settings, so hiding the banner there would hide the fix from the person about to apply
+  // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
+  const chromeless = isSettingsPathname(pathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
-  // The desktop column's width (#788). Read once, lazily, from `localStorage` — it is a
-  // browser-local preference like the theme, so there is nothing to fetch and nothing to wait
-  // for, and the first paint is already the user's width rather than a default that jumps.
-  const [sidebarWidth, setSidebarWidth] = React.useState(readStoredSidebarWidth)
-  const changeSidebarWidth = React.useCallback((next: number) => {
-    const width = clampSidebarWidth(next)
-    setSidebarWidth(width)
-    // Persist on every change rather than on drag end: a drag is a stream of small writes to one
-    // key, which localStorage is fine with, and it means a tab closed mid-drag still remembers.
-    writeStoredSidebarWidth(width)
-  }, [])
+  // The desktop column's width (#788) — one preference shared with the settings sidebar.
+  const [sidebarWidth, changeSidebarWidth] = useSidebarWidth()
 
   // The scroller PERSISTS across routes (it is the shell's, not the view's), so without this
   // a deep scroll on one page carries into the next — most visibly on mobile, where Tasks or
@@ -273,11 +269,13 @@ export const AppShell = React.memo(function AppShell({
     inboxCount: inboxAvailable ? inboxCount : null,
     unreadCount,
     skillsUpdateAvailable,
+    newNavItems,
     version,
     latestVersion,
     starCount,
     taskQuickList,
     hostWidget,
+    whatsNew,
     toolsMenu,
     projectGroups,
     singleProject,
@@ -291,6 +289,7 @@ export const AppShell = React.memo(function AppShell({
     <div
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
+      data-chromeless={chromeless ? '' : undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
     >
       {/* Desktop shell (packages/desktop, macOS): the native title bar is a transparent overlay
@@ -311,7 +310,9 @@ export const AppShell = React.memo(function AppShell({
           ) : null}
         </div>
       ) : null}
-      <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
+      {chromeless ? null : (
+        <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
+      )}
       <div
         className={cn(
           'grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
@@ -320,12 +321,16 @@ export const AppShell = React.memo(function AppShell({
       >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
             context so a sidebar update cannot propagate through the routed view. */}
-        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-          <MobileTopBar title={current?.label ?? brandName} />
-          {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
-              there is no second column to trade width with and no pointer to drag a border. */}
-          <MobileNavDrawer {...nav} onNavigate={closeMenu} />
-        </Sheet>
+        {/* Row 1 stays EMPTY in chromeless mode — the explicit `row-start-*` placement is what
+            keeps the scroller in row 3 either way. */}
+        {chromeless ? null : (
+          <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+            <MobileTopBar title={current?.label ?? brandName} />
+            {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
+                there is no second column to trade width with and no pointer to drag a border. */}
+            <MobileNavDrawer {...nav} onNavigate={closeMenu} />
+          </Sheet>
+        )}
 
         {banner ? (
           <div data-slot="banner-slot" className="row-start-2">
@@ -364,7 +369,7 @@ function TitlebarUpdateButton({ latestVersion, brandName }: { latestVersion: str
         data-slot="titlebar-update"
         onClick={() => setOpen(true)}
         title={`Update ${brandName} to v${latestVersion} and restart`}
-        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-[11px] font-semibold text-foreground transition-colors hover:bg-primary/30"
+        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-meta font-semibold text-foreground transition-colors hover:bg-primary/30"
       >
         <StatusDot tone="pending" pulse className="size-[5px] shrink-0" />
         Update {brandName}
@@ -375,17 +380,6 @@ function TitlebarUpdateButton({ latestVersion, brandName }: { latestVersion: str
   )
 }
 
-/** Which desktop shell hosts this page, read once from the init script's `data-cez-desktop`
- *  (packages/desktop). Null in every browser. */
-function useDesktopShell(): 'macos' | 'windows' | 'linux' | null {
-  const [platform] = React.useState<'macos' | 'windows' | 'linux' | null>(() => {
-    if (typeof document === 'undefined') return null
-    const value = document.documentElement.dataset.cezDesktop
-    return value === 'macos' || value === 'windows' || value === 'linux' ? value : null
-  })
-  return platform
-}
-
 type NavProps = {
   activeTo: string | null
   items: NavItem[]
@@ -393,11 +387,13 @@ type NavProps = {
   inboxCount: number | null
   unreadCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   version: string | null
   latestVersion: string | null
   starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
+  whatsNew?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   brandName: string
@@ -405,18 +401,7 @@ type NavProps = {
   singleProject: boolean
 }
 
-/**
- * The desktop frame, from `md` up — 264px by default and draggable up to 420px (#788).
- *
- * The width is the user's, not the layout's: the sidebar is the app's primary navigation and its
- * rows carry task names, so the right column width depends on the screen someone is sitting at.
- * It lives in `localStorage` rather than in the workspace config for exactly that reason — see
- * `lib/sidebar-width.ts`.
- *
- * An inline `width` rather than a Tailwind class because the value is a number from state, and
- * the class is left off entirely below `md`, where `hidden` takes the element out of flow and the
- * drawer (a fixed 264px) is the sidebar instead.
- */
+/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content. */
 const Sidebar = React.memo(function Sidebar({
   width,
   onWidthChange,
@@ -424,152 +409,18 @@ const Sidebar = React.memo(function Sidebar({
   ...props
 }: NavProps & SidebarResize & { desktop?: 'macos' | 'windows' | 'linux' | null }) {
   return (
-    <aside
-      data-slot="sidebar"
-      style={{ width }}
-      className={cn(
-        'relative hidden shrink-0 flex-col border-r border-border bg-sidebar md:flex',
-        desktop === 'macos' && 'pt-[28px]',
-      )}
-    >
+    <SidebarFrame width={width} onWidthChange={onWidthChange} titlebarInset={desktop === 'macos'}>
       <SidebarContent {...props} compactHeader={desktop === 'macos'} />
-      <SidebarResizeHandle width={width} onWidthChange={onWidthChange} />
-    </aside>
+    </SidebarFrame>
   )
 })
 
-type SidebarResize = {
-  width: number
-  onWidthChange: (width: number) => void
-}
-
-/**
- * The drag handle on the sidebar's right border (#788).
- *
- * A `separator` with `aria-orientation="vertical"` — the ARIA window-splitter pattern — which is
- * the one role that is BOTH focusable and carries a value range, so the same affordance serves a
- * pointer and a keyboard. Arrow keys step it, Home/End go to the bounds, and a double-click puts
- * it back to the default, which is the cheap way out of a width you dragged by accident.
- *
- * Pointer capture rather than window listeners: the drag must survive the pointer leaving a 5px
- * hit area (it will, immediately, on any real drag), and capture is how the browser keeps
- * delivering the moves to this element without us installing and remembering to remove global
- * handlers. `touch-none` stops a touch-drag from scrolling the page instead of resizing — the
- * handle is `md`-only, but `md` includes touch laptops and tablets.
- *
- * Rendered inside the `<aside>` and absolutely positioned over its border, so it inherits the
- * column's height without a second element having to track it.
- */
-function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
-  // The width the drag started from, plus the pointer x it started at. Refs, not state: they
-  // change on every pointermove and nothing renders from them.
-  const origin = React.useRef<{ x: number; width: number } | null>(null)
-
-  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    // Primary button only — a right-click on the border must not start a resize.
-    if (event.button !== 0) return
-    origin.current = { x: event.clientX, width }
-    event.currentTarget.setPointerCapture(event.pointerId)
-    // Without this the drag selects the sidebar's text as it passes over it.
-    event.preventDefault()
-    // …but preventing the default also suppresses the focus the press would have given a
-    // `tabIndex=0` element, which would leave someone who grabbed the handle with a mouse unable
-    // to fine-tune with the arrow keys immediately afterwards. Focus it explicitly instead.
-    event.currentTarget.focus()
-  }
-
-  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    const start = origin.current
-    if (!start) return
-    onWidthChange(clampSidebarWidth(start.width + (event.clientX - start.x)))
-  }
-
-  const endDrag = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!origin.current) return
-    origin.current = null
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-  }
-
-  const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    const next =
-      event.key === 'ArrowLeft'
-        ? width - SIDEBAR_WIDTH_STEP
-        : event.key === 'ArrowRight'
-          ? width + SIDEBAR_WIDTH_STEP
-          : event.key === 'Home'
-            ? MIN_SIDEBAR_WIDTH
-            : event.key === 'End'
-              ? MAX_SIDEBAR_WIDTH
-              : null
-    if (next === null) return
-    // Only for the keys we handled: Tab, Escape and the rest stay the browser's.
-    event.preventDefault()
-    onWidthChange(clampSidebarWidth(next))
-  }
-
-  return (
-    <div
-      data-slot="sidebar-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the sidebar"
-      aria-valuenow={width}
-      aria-valuemin={MIN_SIDEBAR_WIDTH}
-      aria-valuemax={MAX_SIDEBAR_WIDTH}
-      tabIndex={0}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onKeyDown={onKeyDown}
-      onDoubleClick={() => onWidthChange(DEFAULT_SIDEBAR_WIDTH)}
-      title="Drag to resize the sidebar — double-click to reset"
-      // A 5px grab strip straddling the border, invisible until you reach for it. `touch-none`
-      // is load-bearing rather than decorative: without it a touch drag is claimed by the
-      // browser's own panning and scrolls the page instead of resizing the column.
-      className="absolute inset-y-0 -right-[2px] z-20 w-[5px] cursor-col-resize touch-none bg-transparent transition-colors hover:bg-violet/40 focus-visible:bg-violet/60 focus-visible:outline-none"
-    />
-  )
-}
-
-/**
- * The `<md` frame for the *same* `SidebarContent` the desktop column renders — the spec's mobile
- * rule is that the sidebar "becomes an overlay drawer", not that mobile gets its own nav.
- *
- * Radix's Dialog (via the Sheet primitive) supplies the parts that are easy to get wrong by hand:
- * `role="dialog"`, the accessible name, the focus trap, the Escape handler, the backdrop's
- * dismiss-on-tap, and `aria-hidden` on everything outside the portal — which is how it delivers
- * modality (it does not set `aria-modal`; `hideOthers` is the stronger guarantee).
- */
+/** The `<md` drawer: the shared `SidebarDrawer` around the SAME content the column renders. */
 const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {
   return (
-    <SheetContent
-      side="left"
-      data-slot="mobile-nav-drawer"
-      showCloseButton={false}
-      // The drawer is the sidebar: same width, same surface token, and no padding of its own —
-      // SidebarContent brings its own. `sm:max-w-none` sheds the primitive's sheet width cap.
-      className="w-[264px] gap-0 border-border bg-sidebar p-0 sm:max-w-none md:hidden"
-      // Nav needs no prose description, and Radix warns when it cannot find the one it links to.
-      aria-describedby={undefined}
-    >
-      {/* The dialog's accessible name. Visually redundant with the brand lockup below. */}
-      <SheetTitle className="sr-only">Navigation</SheetTitle>
-      <SidebarContent
-        {...props}
-        onNavigate={onNavigate}
-        headerAction={
-          <SheetClose asChild>
-            {/* size-11: the ≥44px touch target the spec's mobile rules require. */}
-            <Button variant="ghost" size="icon" aria-label="Close menu" className="-mr-2 size-11">
-              <XIcon className="size-[17px]" aria-hidden="true" />
-            </Button>
-          </SheetClose>
-        }
-      />
-    </SheetContent>
+    <SidebarDrawer slot="mobile-nav-drawer" title="Navigation">
+      {(closeButton) => <SidebarContent {...props} onNavigate={onNavigate} headerAction={closeButton} />}
+    </SidebarDrawer>
   )
 })
 
@@ -588,11 +439,13 @@ function SidebarContent({
   inboxCount,
   unreadCount,
   skillsUpdateAvailable,
+  newNavItems,
   version,
   latestVersion,
   starCount,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   projectGroups,
   singleProject,
@@ -631,7 +484,7 @@ function SidebarContent({
         {repo && !projectGroups ? (
           <span
             data-slot="repo-chip"
-            className="ml-auto truncate font-mono text-[11px] font-medium text-soft-foreground"
+            className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
           >
             {repo.name} / {repo.branch}
           </span>
@@ -655,7 +508,7 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-micro font-medium text-contrast-foreground/60"
             >
               C
             </kbd>
@@ -710,7 +563,7 @@ function SidebarContent({
                   className={cn(
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
                     isActive && 'bg-muted font-semibold text-foreground'
                   )}
                 >
@@ -719,7 +572,7 @@ function SidebarContent({
                   {item.badge === 'inbox-count' && inboxCount ? (
                     <span
                       data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {inboxCount}
                     </span>
@@ -730,7 +583,7 @@ function SidebarContent({
                     <span
                       data-slot="nav-unread-badge"
                       title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {unreadCount}
                     </span>
@@ -742,6 +595,12 @@ function SidebarContent({
                     >
                       <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
                       <span className="sr-only">Skills update available</span>
+                    </span>
+                  ) : null}
+                  {newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
                     </span>
                   ) : null}
                 </Link>
@@ -769,6 +628,7 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        {whatsNew}
         {hostWidget}
         <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
@@ -800,7 +660,7 @@ function SidebarContent({
  * only when active, `md:h-[34px]`) and are deliberately NOT peers of these two.
  */
 const SIDEBAR_SECTION_LINK_CLASS =
-  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
+  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
 
 /**
  * The accent icon of a top-level door — violet, the same hue the tag chips and the Tasks page's
@@ -984,44 +844,10 @@ function AddProjectMenu() {
   )
 }
 
-/**
- * The ⌘K discoverability affordance (Step 4.3): the footer's first row, shaped like a search
- * input — magnifier, a muted `Search…` label, the chord parked on the right. It was a chip
- * cut from the version chip's cloth until #702, where the footer's five chips overflowed the
- * 264px column; giving search the whole line is what makes the remaining controls fit on one
- * row, and it reads as the launcher it is rather than as a keyboard-shortcut footnote.
- *
- * Still a button, not an input: there is no search *here*: clicking opens the palette through
- * the same programmatic seam anything else would, and the palette owns the real input.
- *
- * No `aria-label`: the visible `Search…` already names it, and an override that merely drops
- * the ellipsis would make the accessible name diverge from the label a speech user reads
- * aloud (WCAG 2.5.3). The chord rides `commandShortcutHint` so the kbd shows Ctrl+K off Apple
- * hardware, per the spec's platform-symbol rule.
- */
-function CommandPaletteHint() {
-  return (
-    <button
-      type="button"
-      data-slot="command-palette-hint"
-      title="Search — command palette (⌘K / Ctrl+K)"
-      onClick={() => openCommandPalette()}
-      className="flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-xs font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
-    >
-      <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="truncate">Search…</span>
-      <kbd
-        aria-hidden="true"
-        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-      >
-        {commandShortcutHint('k')}
-      </kbd>
-    </button>
-  )
-}
 
 /**
- * The footer's `v{version}` chip. When the server's npm-registry check found something newer
+ * The footer's `v{version}` chip — exported, with `StarChip`, for the settings sidebar's footer,
+ * which mirrors this one (spec 2026-10-13-unified-settings). When the server's npm-registry check found something newer
  * (`latestVersion`, #368), the chip grows a pulsing pending-tone dot and names the version in
  * its tooltip — an affordance, not an alert: updating is optional, so the chrome stays quiet.
  *
@@ -1034,7 +860,7 @@ function CommandPaletteHint() {
  * the semver, and the `title` keeps the whole string — which is why the tooltip is now there
  * even with no update to announce.
  */
-function VersionChip({ version, latestVersion, brandName }: { version: string; latestVersion: string | null; brandName: string }) {
+export function VersionChip({ version, latestVersion, brandName }: { version: string; latestVersion: string | null; brandName: string }) {
   const updateAvailable = Boolean(latestVersion && latestVersion !== version)
   // The chip opens the self-update dialog (PoC): channel, latest, and a version picker.
   const [open, setOpen] = React.useState(false)
@@ -1047,7 +873,7 @@ function VersionChip({ version, latestVersion, brandName }: { version: string; l
         title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
         aria-label={updateAvailable ? `${brandName} v${version}, update to v${latestVersion} available — open updater` : `${brandName} v${version} — open updater`}
         onClick={() => setOpen(true)}
-        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-micro font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
         <span className="truncate">v{version}</span>
@@ -1073,7 +899,7 @@ function VersionChip({ version, latestVersion, brandName }: { version: string; l
  * `rel="noreferrer"` alongside `noopener`: a local cockpit's URL is nobody's business, and the
  * whole point of the ask is that github.com learns nothing about the person making it.
  */
-function StarChip({ count }: { count: number }) {
+export function StarChip({ count }: { count: number }) {
   const formatted = formatStarCount(count)
   return (
     <a
@@ -1083,7 +909,7 @@ function StarChip({ count }: { count: number }) {
       rel="noopener noreferrer"
       title={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
       aria-label={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
-      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-micro font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <span aria-hidden="true">⭐</span>
       <span>{formatted}</span>
@@ -1114,7 +940,7 @@ function MobileTopBar({ title }: { title: string }) {
             <MenuIcon className="size-[17px]" aria-hidden="true" />
           </Button>
         </SheetTrigger>
-        <span className="truncate text-[14.5px] font-semibold">{title}</span>
+        <span className="truncate text-body font-semibold">{title}</span>
         {/* SLOT — the run status dot / kebab land with the thread view (Step R3). */}
         <div data-slot="mobile-status" className="ml-auto flex items-center gap-2" />
       </div>

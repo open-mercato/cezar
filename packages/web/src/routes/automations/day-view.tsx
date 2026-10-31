@@ -82,7 +82,7 @@ export function DayView({ data }: { data: AutomationsResponse }) {
         </div>
       </Card>
       <Card flush data-slot="agenda" className="py-3">
-        <div className="px-3.5 pb-2 text-[11px] font-semibold tracking-[.05em] text-soft-foreground uppercase">Agenda</div>
+        <div className="px-3.5 pb-2 eyebrow text-soft-foreground">Agenda</div>
         {polls.map((automation) => (
           <button
             key={automation.id}
@@ -91,13 +91,13 @@ export function DayView({ data }: { data: AutomationsResponse }) {
             onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
             className="grid w-full cursor-pointer grid-cols-[48px_1fr] gap-2.5 px-3.5 py-2 text-left hover:bg-muted"
           >
-            <span className="font-mono text-[10.5px] font-medium text-soft-foreground">poll</span>
+            <span className="font-mono text-micro font-medium text-soft-foreground">poll</span>
             <span className="min-w-0">
-              <span className="flex items-center gap-2 text-[13px] font-medium">
+              <span className="flex items-center gap-2 text-ui font-medium">
                 <GithubIcon className="size-3 shrink-0 text-violet" />
                 <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
               </span>
-              <span className="mt-0.5 block overflow-hidden font-mono text-[11.5px] leading-[1.4] text-ellipsis whitespace-nowrap text-soft-foreground">
+              <span className="mt-0.5 block overflow-hidden font-mono text-meta leading-[1.4] text-ellipsis whitespace-nowrap text-soft-foreground">
                 {triggerLabel(automation)} · continuous
               </span>
             </span>
@@ -119,11 +119,11 @@ export function DayView({ data }: { data: AutomationsResponse }) {
                 {hm(occurrence.parts.hour, occurrence.parts.minute)}
               </span>
               <span className="min-w-0">
-                <span className={cn('flex items-center gap-2 text-[13px] font-medium', past && 'text-muted-foreground')}>
+                <span className={cn('flex items-center gap-2 text-ui font-medium', past && 'text-muted-foreground')}>
                   <StatusDot tone={past && automation.lastRun ? statusTone(automation.lastRun.status) : 'neutral'} />
                   <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
                 </span>
-                <span className="mt-0.5 block overflow-hidden text-[11.5px] leading-[1.4] text-ellipsis whitespace-nowrap text-soft-foreground">
+                <span className="mt-0.5 block overflow-hidden text-meta leading-[1.4] text-ellipsis whitespace-nowrap text-soft-foreground">
                   {automation.task.prompt}
                 </span>
               </span>
@@ -131,7 +131,7 @@ export function DayView({ data }: { data: AutomationsResponse }) {
           )
         })}
         {events.length === 0 ? (
-          <p className="px-3.5 py-2 text-[12.5px] text-soft-foreground">
+          <p className="px-3.5 py-2 text-label text-soft-foreground">
             {polls.length ? 'Nothing scheduled — the GitHub polls above still run.' : 'Nothing scheduled.'}
           </p>
         ) : null}

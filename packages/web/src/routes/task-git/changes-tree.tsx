@@ -26,7 +26,7 @@ export function ChangesTree({
 }) {
   return (
     <CommentCountsContext.Provider value={commentCounts}>
-    <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0 text-[13px]">
+    <nav data-slot="changes-tree" aria-label="Changed files" className="min-w-0 text-ui">
       <ul className="flex flex-col gap-px">
         {root.dirs.map((dir) => (
           <DirNode key={dir.path} dir={dir} depth={0} selected={selected} onSelect={onSelect} />
@@ -54,7 +54,7 @@ function dirCommentCount(dir: TreeDir, counts: ReadonlyMap<string, number>): num
 /** ±12/−3 in miniature — the tree's per-row counts (the aggregate label lives in the toolbar). */
 function Counts({ adds, dels }: { adds: number; dels: number }) {
   return (
-    <span className="shrink-0 font-mono text-[11px] font-medium tabular-nums">
+    <span className="shrink-0 font-mono text-meta font-medium tabular-nums">
       {adds > 0 ? <span className="text-success">+{adds}</span> : null}
       {adds > 0 && dels > 0 ? ' ' : null}
       {dels > 0 ? <span className="text-danger">−{dels}</span> : null}

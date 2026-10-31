@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  WebhookIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -20,12 +21,13 @@ import {
 import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import { AccountsSection } from './accounts-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
+import { GlobalInstructionsSection } from './global-instructions-section'
 import { InstructionsSection } from './instructions-section'
+import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { PrivacySection } from './privacy-section'
@@ -36,6 +38,7 @@ import { TasksSection } from './tasks-section'
 import { WorktreesSection } from './worktrees-section'
 import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
+import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
 
 /**
@@ -50,8 +53,8 @@ import { IntegrationsSection } from './integrations-section'
  * tasks, worktrees, bookmarklets) or the person/machine (appearance, notifications, host
  * resources, the project registry)?
  *
- * `hidden` sections are declared but not routed and not listed: keyboard remains a later
- * phase; MCP now lives inside Agent config as a per-agent subsection.
+ * `hidden` sections are declared but not routed and not listed: MCP now lives inside Agent
+ * config as a per-agent subsection.
  */
 
 export type SettingsSectionId =
@@ -61,6 +64,7 @@ export type SettingsSectionId =
   | 'agents'
   | 'agent-config'
   | 'instructions'
+  | 'global-instructions'
   | 'tasks'
   | 'resources'
   | 'worktrees'
@@ -71,6 +75,7 @@ export type SettingsSectionId =
   | 'tracker'
   | 'secrets'
   | 'integrations'
+  | 'webhooks'
   | 'workspace-secrets'
   | 'privacy'
 
@@ -90,21 +95,6 @@ export interface SettingsSection {
   hidden?: boolean
 }
 
-/** A registry entry whose real section arrives in a later Step — routable, honest about it. */
-function comingSoon(title: string, Icon: ComponentType<SVGProps<SVGSVGElement>>): ComponentType {
-  return function ComingSoonSection() {
-    return (
-      <CenteredState
-        icon={<Icon />}
-        tone="neutral"
-        title={title}
-        subtitle="This section arrives in a later phase of the redesign."
-        heading="h2"
-      />
-    )
-  }
-}
-
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
   {
@@ -121,6 +111,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Encrypted values for this project’s check steps and cezar — never for agents.',
     icon: KeyRoundIcon,
     component: ProjectSecretsSection,
+    scope: 'project',
+  },
+  {
+    id: 'webhooks',
+    title: 'Webhooks',
+    description: 'Send task updates to Slack, Discord or your own endpoint.',
+    icon: WebhookIcon,
+    component: WebhooksSection,
     scope: 'project',
   },
   {
@@ -150,7 +148,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'tasks',
     title: 'Tasks',
-    description: 'Base branch, review before finishing, live titles.',
+    description: 'Development model, landing, required checks, base branch, review, live titles.',
     icon: ListChecksIcon,
     component: TasksSection,
     scope: 'project',
@@ -197,6 +195,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'keyboard',
+    title: 'Keyboard',
+    description: 'Shortcuts for task commands.',
+    icon: KeyboardIcon,
+    component: KeyboardSection,
+    scope: 'global',
+  },
+  {
     id: 'resources',
     title: 'Resources',
     description: 'Parallel tasks and per-task memory limit, across every project.',
@@ -210,6 +216,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Updates for skills installed on this machine.',
     icon: PackageCheckIcon,
     component: SkillsSection,
+    scope: 'global',
+  },
+  {
+    id: 'global-instructions',
+    title: 'Instructions',
+    description: 'A system prompt for every task in every project; a project’s own wins where they conflict.',
+    icon: MessageSquareTextIcon,
+    component: GlobalInstructionsSection,
     scope: 'global',
   },
   {
@@ -244,15 +258,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     component: PrivacySection,
     scope: 'global',
   },
-  {
-    id: 'keyboard',
-    title: 'Keyboard',
-    description: 'Shortcuts.',
-    icon: KeyboardIcon,
-    component: comingSoon('Keyboard', KeyboardIcon),
-    scope: 'global',
-    hidden: true,
-  },
 ]
 
 /**
@@ -270,4 +275,15 @@ export function visibleSettingsSections(
       section.scope === scope &&
       !(capabilities?.singleProject === true && section.id === 'projects'),
   )
+}
+
+/** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
+ *  global sections as flat rows, the project sections under every project in the tree. */
+export function settingsSectionsByScope(
+  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+): Record<SettingsScope, SettingsSection[]> {
+  return {
+    global: visibleSettingsSections('global', capabilities),
+    project: visibleSettingsSections('project', capabilities),
+  }
 }

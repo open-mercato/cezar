@@ -1,6 +1,7 @@
 import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import { claudeModelSettingsStrategy } from './model-settings/claude.ts';
 import { codexModelSettingsStrategy } from './model-settings/codex.ts';
+import { antigravityModelSettingsStrategy } from './model-settings/antigravity.ts';
 import { junieModelSettingsStrategy } from './model-settings/junie.ts';
 import { copilotModelSettingsStrategy } from './model-settings/copilot.ts';
 import { cursorModelSettingsStrategy } from './model-settings/cursor.ts';
@@ -25,6 +26,7 @@ const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = 
   pi: piModelSettingsStrategy,
   junie: junieModelSettingsStrategy,
   copilot: copilotModelSettingsStrategy,
+  antigravity: antigravityModelSettingsStrategy,
   gemini: geminiModelSettingsStrategy,
 };
 

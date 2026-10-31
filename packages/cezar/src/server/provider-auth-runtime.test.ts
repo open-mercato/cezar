@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -51,6 +51,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  antigravity: 'Please sign in',
   // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
   gemini: '0.60.0',
 };
@@ -64,7 +65,7 @@ const providerForExecutable = (executable: string): ProviderId => {
 
 /** A service whose Claude CLI agrees the credentials are gone, so the latch's self-check confirms
  *  the rejection instead of clearing it. */
-function loggedOutClaudeProviderAuth(): ProviderAuthService {
+function loggedOutClaudeProviderAuth(createAuthFailureId: () => string = () => 'auth-incident-1'): ProviderAuthService {
   return new ProviderAuthService({
     platform: 'linux',
     runCommand: vi.fn<RunProviderCommand>(async (executable) => (
@@ -72,7 +73,7 @@ function loggedOutClaudeProviderAuth(): ProviderAuthService {
         ? { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 }
         : { stdout: CONNECTED_OUTPUT[providerForExecutable(executable)], stderr: '', exitCode: 0 }
     )),
-    createAuthFailureId: () => 'auth-incident-1',
+    createAuthFailureId,
   });
 }
 
@@ -268,6 +269,212 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
   });
 
+  it('does not reread the transcript for repeated auth-shaped events', () => {
+    const onInvalidated = watch();
+    const run = store.createRun({
+      title: 'no transcript scan',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    const readEvents = vi.spyOn(store, 'readEvents');
+
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+    readEvents.mockClear();
+    for (const type of ['session.error', 'note', 'error']) {
+      store.appendEvent(run.id, {
+        type,
+        message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+      });
+    }
+
+    expect(readEvents).not.toHaveBeenCalled();
+    expect(onInvalidated).toHaveBeenCalledTimes(1);
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('retains dedupe across reopening a transcript under one observer', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const onInvalidated = vi.fn();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'reopen',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+    store.flush();
+
+    const reopened = RunStore.open(store.getDataDir());
+    observer.watch(reopened);
+    reopened.appendEvent(run.id, {
+      type: 'session.error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+
+    expect(reopened.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('does not seed the cache from an older persisted incident', () => {
+    providerAuth = loggedOutClaudeProviderAuth(() => 'fresh-incident');
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+    const run = store.createRun({
+      title: 'cold cache',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    store.appendEvent(run.id, {
+      type: 'provider-auth-required',
+      provider: 'claude',
+      authFailureId: 'old-incident',
+    });
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+      .toEqual([
+        expect.objectContaining({ authFailureId: 'old-incident' }),
+        expect.objectContaining({ authFailureId: 'fresh-incident' }),
+      ]);
+  });
+
+  it('records a new incident after the previous latch is cleared', () => {
+    let incident = 0;
+    providerAuth = loggedOutClaudeProviderAuth(() => `incident-${++incident}`);
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+    const run = store.createRun({
+      title: 'new incident',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    observer.watch(store);
+    const authEvent = {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    };
+    store.appendEvent(run.id, authEvent);
+    expect(providerAuth.clearRuntimeAuthFailure('claude', 'incident-1')).toBe(true);
+    store.appendEvent(run.id, { ...authEvent, type: 'session.error' });
+
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+      .toEqual([
+        expect.objectContaining({ authFailureId: 'incident-1' }),
+        expect.objectContaining({ authFailureId: 'incident-2' }),
+      ]);
+  });
+
+  it('keeps copied run ids in different transcript directories independent', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const onInvalidated = vi.fn();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'copied id',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    store.flush();
+    const otherRoot = mkdtempSync(join(tmpdir(), 'cez-provider-auth-other-'));
+    const otherDataDir = join(otherRoot, '.ai/cezar');
+    try {
+      const otherStore = RunStore.open(otherDataDir);
+      copyFileSync(join(store.getDataDir(), 'runs.json'), join(otherDataDir, 'runs.json'));
+      const copiedStore = RunStore.open(otherDataDir);
+      observer.watch(store);
+      observer.watch(copiedStore);
+      for (const watchedStore of [store, copiedStore]) {
+        watchedStore.appendEvent(run.id, {
+          type: 'error',
+          message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+        });
+      }
+      expect(copiedStore.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+      expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+      otherStore.flush();
+    } finally {
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('clears only the deleted transcript keys', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
+    const run = store.createRun({
+      title: 'deleted',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    observer.watch(store);
+    store.appendEvent(run.id, {
+      type: 'error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+    store.flush();
+    const runsIndex = readFileSync(join(store.getDataDir(), 'runs.json'), 'utf8');
+    expect(store.deleteRun(run.id)).toBe(true);
+
+    // Reintroduce the same run id as a fresh transcript after deletion. Cleanup must permit the
+    // incident marker to be recorded again, while the observer remains the same instance.
+    writeFileSync(join(store.getDataDir(), 'runs.json'), runsIndex, 'utf8');
+    const reopened = RunStore.open(store.getDataDir());
+    observer.watch(reopened);
+    reopened.appendEvent(run.id, {
+      type: 'session.error',
+      message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',
+    });
+
+    expect(reopened.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+  });
+
+  it('rolls back a failed append and suppresses reentrant duplicates', () => {
+    providerAuth = loggedOutClaudeProviderAuth();
+    const onInvalidated = vi.fn();
+    const unwatch = watchProviderRuntimeAuthFailures(store, providerAuth, onInvalidated);
+    const run = store.createRun({
+      title: 'rollback',
+      workflow: 'quick-task',
+      task: 'work',
+      runner: 'claude',
+      steps: [],
+    });
+    const message = 'Failed to authenticate. API Error: 401 OAuth token has been revoked.';
+    const originalAppend = store.appendEvent.bind(store);
+    const append = vi.spyOn(store, 'appendEvent')
+      .mockImplementationOnce(() => {
+        store.emit('event', { runId: run.id, event: { seq: 1, ts: new Date().toISOString(), type: 'error', message } });
+        throw new Error('simulated append failure');
+      })
+      .mockImplementation((runId, event) => originalAppend(runId, event));
+
+    expect(() => store.emit('event', { runId: run.id, event: { seq: 1, ts: new Date().toISOString(), type: 'error', message } }))
+      .toThrow('simulated append failure');
+    store.emit('event', { runId: run.id, event: { seq: 2, ts: new Date().toISOString(), type: 'error', message } });
+
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required')).toHaveLength(1);
+    unwatch();
+  });
+
   it('records the current incident on each affected task but invalidates the workspace once', () => {
     const onInvalidated = watch();
     const first = store.createRun({
@@ -300,6 +507,115 @@ describe('watchProviderRuntimeAuthFailures', () => {
           authFailureId: 'auth-incident-1',
         })]);
     }
+  });
+
+  describe('a rejection on a named agent account (telemetry 9e4a95db)', () => {
+    const MESSAGE = 'claude: Failed to authenticate: OAuth session expired and could not be refreshed';
+
+    it('latches the account the step ran on, never the default login', async () => {
+      const onProviderStatus = watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+      const run = store.createRun({
+        title: 'work account',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateStep(run.id, 'work', { backend: 'claude', profileId: 'work' });
+
+      store.appendEvent(run.id, { type: 'error', stepId: 'work', message: MESSAGE });
+
+      // The default login's card is never told it was rejected, and is never self-checked.
+      expect(onProviderStatus).not.toHaveBeenCalled();
+      expect(verifying).not.toHaveBeenCalled();
+      await expect(providerAuth.status()).resolves.toMatchObject({
+        providers: expect.arrayContaining([{ provider: 'claude', status: 'connected' }]),
+      });
+      expect(providerAuth.peekProfileStatus('claude', 'work')).toMatchObject({
+        provider: 'claude',
+        status: 'disconnected',
+        authFailureId: 'auth-incident-1',
+        profileId: 'work',
+      });
+      expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+        .toEqual([expect.objectContaining({ provider: 'claude', profileId: 'work', stepId: 'work' })]);
+    });
+
+    it('falls back to the run override when no step recorded an account', () => {
+      const onProviderStatus = watch();
+      const run = store.createRun({
+        title: 'override',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        agentProfile: 'work',
+        steps: [],
+      });
+
+      store.appendEvent(run.id, { type: 'error', message: MESSAGE });
+
+      expect(onProviderStatus).not.toHaveBeenCalled();
+      expect(providerAuth.peekProfileStatus('claude', 'work')).toMatchObject({ status: 'disconnected' });
+    });
+
+    // `claude auth status` answers `loggedIn: true` from the dead token still on disk, so the
+    // account's probes (here: every CLI connected) must not lift it until the user rechecks.
+    it('keeps a dead login latched through automatic probes until the user rechecks', async () => {
+      watch();
+      const run = store.createRun({
+        title: 'dead refresh token',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateStep(run.id, 'work', { backend: 'claude', profileId: 'work' });
+      store.appendEvent(run.id, { type: 'error', stepId: 'work', message: MESSAGE });
+
+      // The action gate's verify-before-refuse: evict, then probe.
+      providerAuth.forgetProfileStatus('claude', 'work');
+      await expect(providerAuth.profileStatus('claude', { id: 'work', configDir: '/accounts/work' }))
+        .resolves.toMatchObject({ status: 'disconnected', authFailureId: 'auth-incident-1' });
+
+      // The pane's Check again.
+      providerAuth.forgetProfileStatus('claude', 'work');
+      providerAuth.recheckProfileAuthFailure('claude', 'work');
+      await expect(providerAuth.profileStatus('claude', { id: 'work', configDir: '/accounts/work' }))
+        .resolves.toEqual({ provider: 'claude', status: 'connected', profileId: 'work' });
+    });
+
+    it('still lifts an ordinary rejection on the next connected probe', async () => {
+      watch();
+      const run = store.createRun({
+        title: 'transient',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        agentProfile: 'work',
+        steps: [],
+      });
+      store.appendEvent(run.id, { type: 'error', message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.' });
+
+      await expect(providerAuth.profileStatus('claude', { id: 'work', configDir: '/accounts/work' }))
+        .resolves.toMatchObject({ status: 'connected' });
+    });
+
+    it('treats an explicit default account as the default login', () => {
+      const onProviderStatus = watch();
+      const run = store.createRun({
+        title: 'default',
+        workflow: 'quick-task',
+        task: 'work',
+        runner: 'claude',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateStep(run.id, 'work', { backend: 'claude', profileId: 'default' });
+
+      store.appendEvent(run.id, { type: 'error', stepId: 'work', message: MESSAGE });
+
+      expect(onProviderStatus).toHaveBeenCalledWith(expect.objectContaining({ provider: 'claude', status: 'disconnected' }));
+    });
   });
 
   describe('the latch checks itself against the CLI before it stands', () => {
@@ -357,6 +673,35 @@ describe('watchProviderRuntimeAuthFailures', () => {
       });
     });
 
+    it('does not self-check away a login the vendor called dead (telemetry 9e4a95db)', async () => {
+      // Every CLI answers connected — exactly what `claude auth status` says with a dead refresh token.
+      const onProviderStatus = watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+      const run = store.createRun({ title: 'dead', workflow: 'quick-task', task: 'work', runner: 'claude', steps: [] });
+
+      store.appendEvent(run.id, {
+        type: 'error',
+        message: 'claude: Failed to authenticate: OAuth session expired and could not be refreshed',
+      });
+      await verifying.mock.results[0]!.value;
+      // A later ordinary auth line under the same incident does not soften it.
+      store.appendEvent(run.id, { type: 'note', message: 'unauthorized: 401 token expired' });
+
+      expect(onProviderStatus).toHaveBeenCalledTimes(1);
+      await expect(providerAuth.status({ refresh: true })).resolves.toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'disconnected', authFailureId: 'auth-incident-1' }),
+        ]),
+      });
+      await expect(providerAuth.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+
+      // Settings' Try again is the user's word that they signed in again.
+      expect(providerAuth.clearRuntimeAuthFailure('claude', 'auth-incident-1')).toBe(true);
+      await expect(providerAuth.status({ refresh: true })).resolves.toMatchObject({
+        providers: expect.arrayContaining([{ provider: 'claude', status: 'connected' }]),
+      });
+    });
+
     it('self-checks once for a burst of auth-shaped lines under one latch', async () => {
       watch();
       const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
@@ -395,6 +740,8 @@ describe('watchProviderRuntimeAuthFailures', () => {
     });
 
     unwatch();
+    expect(store.listenerCount('event')).toBe(0);
+    expect(store.listenerCount('deleted')).toBe(0);
     store.appendEvent(run.id, {
       type: 'error',
       message: 'Failed to authenticate. API Error: 401 OAuth token has been revoked.',

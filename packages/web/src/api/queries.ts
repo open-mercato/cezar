@@ -7,6 +7,12 @@ import { mergeRun } from './events'
 import {
   ApiError,
   browseFs,
+  cancelGithubLogin,
+  getGithubLogin,
+  getRepoSuggestions,
+  initProjectGit,
+  publishProjectGithub,
+  startGithubLogin,
   checkoutProject,
   createProject,
   getGithubOwners,
@@ -38,6 +44,7 @@ import {
   getRepo,
   getRunCommit,
   getRunCommits,
+  getRunTree,
   getRepoChanges,
   getRepoCommit,
   getRepoFile,
@@ -73,6 +80,8 @@ import {
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
+  scheduleSelfUpdate,
+  cancelScheduledSelfUpdate,
   checkSkillsUpdate,
   applySkillsUpdate,
   getWorktrees,
@@ -97,14 +106,17 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
   searchTrackerItems,
+  getRepoSync,
+  runRepoSyncAction,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
-import type { ContinueOptions } from './client'
+import type { ContinueOptions, RepoSyncAction } from './client'
 import type {
+  RunsIndexResponse,
   CheckoutProjectInput,
   CreateProjectInput,
   CreateAgentProfileInput,
@@ -117,12 +129,14 @@ import type {
   OpenAgentAccountFileInput,
   ProjectListEntry,
   ProjectsResponse,
+  GithubLoginState,
   GithubRefStatusData,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
   SelectAgentProfileInput,
   SetAgentConfigInput,
+  TaskActionSurface,
   UpdateAgentProfileInput,
   UpdateProjectInput,
   TrackerAssociation,
@@ -194,6 +208,7 @@ export const queryKeys = {
      *  background — see `useRunDrafts`. */
     drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
+    tree: (id: string) => [queryScope(), 'runs', 'tree', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
   groups: {
@@ -234,6 +249,10 @@ export const queryKeys = {
     return [queryScope(), 'repo', 'changes'] as const
   },
   repoCommit: (sha: string) => [queryScope(), 'repo', 'commit', sha] as const,
+  /** Under `repo`, so a branch switch or a pull refreshes ahead/behind with everything else. */
+  get repoSync() {
+    return [queryScope(), 'repo', 'sync'] as const
+  },
   /** The Files sub-tab's path index (#1279) — also under `repo`, so a branch switch invalidates
    *  the tree along with the diff. */
   get repoTree() {
@@ -413,6 +432,10 @@ export const workspaceQueryKeys = {
   projects: ['workspace', 'projects'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
   githubOwners: ['workspace', 'github-owners'] as const,
+  /** `POST/GET/DELETE /api/v1/github/login` — the device flow cezar runs for the user. */
+  githubLogin: ['workspace', 'github-login'] as const,
+  /** `GET /api/v1/fs/repos` — the first-run "Pick a project" list. */
+  repoSuggestions: ['workspace', 'repo-suggestions'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
@@ -439,6 +462,7 @@ export const workspaceQueryKeys = {
   /** One account's auth state — a child of `agentProfiles`, so removing an account drops it too. */
   agentAccountStatus: (routeId: string) =>
     ['workspace', 'agent-profiles', 'status', routeId] as const,
+  skillsUpdateAll: ['workspace', 'skills-update'] as const,
   skillsUpdate: (projectId: string) => ['workspace', 'skills-update', projectId] as const,
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
   selfUpdate: ['workspace', 'self-update'] as const,
@@ -500,8 +524,9 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
+  const antigravity = useRunnerModels('antigravity', enabled)
   const gemini = useRunnerModels('gemini', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot, gemini }
+  return { claude, codex, junie, opencode, cursor, pi, copilot, antigravity, gemini }
 }
 
 export function useProviderStatus() {
@@ -828,7 +853,7 @@ export function useConnectAgentAccount() {
 }
 
 /**
- * Re-probe ONE account for real (`?refresh=1`), for the "Check again" the pane offers beside
+ * Re-probe ONE account for real (`?refresh=1&recheck=1`), for the "Check again" the pane offers beside
  * Connect — the affordance the cached-by-default listing is designed around.
  *
  * Writes the answer straight into the per-account status cache so the row updates without a second
@@ -837,7 +862,7 @@ export function useConnectAgentAccount() {
 export function useRecheckAgentAccount() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { refresh: true }),
+    mutationFn: (routeId: string) => getAgentAccountStatus(routeId, { recheck: true }),
     retry: false,
     onSuccess: (answer, routeId) => {
       queryClient.setQueryData(workspaceQueryKeys.agentAccountStatus(routeId), answer)
@@ -877,6 +902,114 @@ export function useCreateProject() {
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
   })
+}
+
+/** Repositories the first-run "Pick a project" list offers (spec 2026-10-26-first-run-onboarding).
+ *  Asked only while that screen is up; the list does not change while it is open. */
+export function useRepoSuggestions(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.repoSuggestions,
+    queryFn: ({ signal }) => getRepoSuggestions({ signal }),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/** "Initialize git here". A git init changes what the project IS, so every reader of its git
+ *  state — the registry status, the scoped repo info, health — is refetched. No retry: a second
+ *  attempt would only meet the 409 the first one caused. */
+export function useInitProjectGit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (projectId: string) => initProjectGit(projectId),
+    retry: false,
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ]),
+  })
+}
+
+/** "Publish to GitHub". The project gains a GitHub remote, so the registry (forge), the scoped repo
+ *  info (remote) and health (forge availability) are refetched. No retry: a second attempt would
+ *  try to create the GitHub repository twice. */
+export function usePublishProjectGithub() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projectId, owner, name }: { projectId: string; owner: string; name: string }) =>
+      publishProjectGithub(projectId, { owner, name }),
+    retry: false,
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ]),
+  })
+}
+
+/**
+ * The GitHub sign-in cezar runs (spec 2026-10-26-first-run-onboarding, "Sign in does the work").
+ * `start` resolves with the one-time code; the query then polls every two seconds while `gh`
+ * waits for GitHub, and stops on `done`, `failed` or `idle`. `done` refetches everything that
+ * reads the signed-in state — owners, the GitHub tab, the registry's forge flags, health — and
+ * is reported through `onDone` exactly once, so the dialog can close itself.
+ */
+export function useGithubLogin(onDone?: (login: string | undefined) => void) {
+  const queryClient = useQueryClient()
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  // A login THIS hook started. Until it starts, nothing is read: the server keeps answering the
+  // previous login's `done` or `failed`, and a dialog must not close or fail on that before its
+  // own login has even begun. The cache is reset to `starting` the moment it does.
+  const watched = useRef(false)
+  const start = useMutation({
+    mutationFn: startGithubLogin,
+    retry: false,
+    onMutate: () => {
+      watched.current = true
+      queryClient.setQueryData<GithubLoginState>(workspaceQueryKeys.githubLogin, { status: 'starting' })
+    },
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.githubLogin, state),
+  })
+  const cancel = useMutation({
+    mutationFn: cancelGithubLogin,
+    retry: false,
+    onMutate: () => {
+      watched.current = false
+    },
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.githubLogin, state),
+  })
+  const query = useQuery({
+    queryKey: workspaceQueryKeys.githubLogin,
+    queryFn: ({ signal }) => getGithubLogin({ signal }),
+    enabled: start.isSuccess,
+    refetchInterval: (state) => {
+      const status = state.state.data?.status
+      return status === 'pending' || status === 'starting' ? 2_000 : false
+    },
+    staleTime: 0,
+    retry: false,
+  })
+  const state = watched.current || start.isPending || start.isSuccess ? query.data : undefined
+  const status = state?.status
+  const login = state?.status === 'done' ? state.login : undefined
+  useEffect(() => {
+    if (status !== 'done' || !watched.current) return
+    watched.current = false
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.githubOwners }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: [queryScope(), 'github'] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+    ])
+    doneRef.current?.(login)
+  }, [status, login, queryClient])
+  return { state, start, cancel }
 }
 
 /** The GitHub accounts (login + orgs) a new repo may belong to. Cached for the session: org
@@ -944,13 +1077,29 @@ export function useHealthSubscription(): void {
  * A pure read: the HTTP query is the authoritative bootstrap and the reconcile target
  * (global-events.tsx invalidates it on reconnect/visibility), and live updates arrive by the
  * one local-only `useHealthSubscription` at the root folding pushed `/api/v1/ws` frames into this same cache
- * (#369 — this replaced the old 5 s `refetchInterval` per tab). Safe to call from as many
+ * (#369 — this replaced the old 5 s `refetchInterval` per tab; the one timer left is the remote
+ * forge recheck below, #1412). Safe to call from as many
  * components as need health; they all read one cache and none of them touches the socket. */
 export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
     queryFn: ({ signal }) => getHealth({ signal }),
+    refetchInterval: (query) => healthRecheckInterval(query.state.data),
   })
+}
+
+/** How often a remote cockpit re-reads health while its forge probe is unresolved (#1412). */
+export const FORGE_RECHECK_MS = 30_000
+
+/**
+ * Remote cockpits get no health push (`useHealthSubscription` is local-only), so a forge probe
+ * that was cold or failing when health was read would stay that way until a reload — hiding PR
+ * actions long after GitHub answered (#1412). Re-read only while a recognized forge is unconfirmed.
+ */
+export function healthRecheckInterval(health: HealthResponse | undefined): number | false {
+  // Only an explicit remote answer polls — the same fail-closed read as useHealthSubscription.
+  if (health?.capabilities?.localHandoff !== false) return false
+  return health.forge != null && health.forge.available !== true ? FORGE_RECHECK_MS : false
 }
 
 /**
@@ -1015,7 +1164,10 @@ export function useRuns<TData = ApiRun[]>(select?: (runs: ApiRun[]) => TData) {
  * open, and re-opening it seconds later should not re-ask the whole workspace. The active
  * project's rows come from `useRuns()` anyway, so the live half of the list is never this stale.
  */
-export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
+export function useRunsIndex(
+  enabled = true,
+  refetchIntervalMs?: number | ((data: RunsIndexResponse | undefined) => number | false),
+) {
   return useQuery({
     queryKey: workspaceQueryKeys.runsIndex,
     queryFn: ({ signal }) => getRunsIndex({ signal }),
@@ -1028,7 +1180,14 @@ export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
     // dropped socket, a frozen tab, a run that ended while the connection was down), not the only
     // freshness mechanism. Only the global Tasks page (a live view rather than a glance) asks for
     // one; the palette leaves it off and keeps its 30s staleness.
-    ...(refetchIntervalMs === undefined ? {} : { refetchInterval: refetchIntervalMs }),
+    ...(refetchIntervalMs === undefined
+      ? {}
+      : {
+          refetchInterval:
+            typeof refetchIntervalMs === 'function'
+              ? (query: { state: { data: RunsIndexResponse | undefined } }) => refetchIntervalMs(query.state.data)
+              : refetchIntervalMs,
+        }),
     // No `refetchOnWindowFocus` here on purpose, though the tab-comes-back case is real (the
     // interval above does not run in a hidden tab). `global-events.tsx` already reconciles this
     // key on `visibilitychange`, which is the same event with better manners — one reconcile for
@@ -1162,6 +1321,18 @@ export function useRunGitStatus(id: string, enabled: boolean, live = false) {
     retry: false,
     refetchInterval: live ? 10_000 : false,
     refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** A run's whole path index for the ⌘P palette's `#` file search. Read only while the palette is
+ *  in that mode; same freshness override as `useRepoTree` — the agent may be adding files. */
+export function useRunTree(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.runs.tree(id ?? ''),
+    queryFn: ({ signal }) => getRunTree(id as string, { signal }),
+    enabled: enabled && Boolean(id),
+    retry: false,
     staleTime: 0,
   })
 }
@@ -1351,6 +1522,32 @@ export function useRepo() {
   })
 }
 
+/** The main checkout's sync state (spec 2026-10-19-repo-git-sync). Offline on the server, so
+ *  refetching on focus is cheap — it catches a commit or `git pull` made in a terminal. */
+export function useRepoSync() {
+  return useQuery({
+    queryKey: queryKeys.repoSync,
+    queryFn: ({ signal }) => getRepoSync({ signal }),
+    refetchOnWindowFocus: true,
+  })
+}
+
+/** Fetch / pull / push / sync. The answer carries the fresh status; a pull also moved HEAD, so
+ *  the log, diff and tree under `repo` are refetched too. */
+export function useRepoSyncAction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (action: RepoSyncAction) => runRepoSyncAction(action),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.repoSync, result.sync)
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.repo,
+        predicate: (q) => q.queryKey[2] !== 'sync',
+      })
+    },
+  })
+}
+
 /** The main working tree's structured diff behind the repo view's Changes section (R5 1.7).
  *  Same 409 stance as `useRunChanges`: "not a git repository" is an answer, not a hiccup. */
 export function useRepoChanges() {
@@ -1532,6 +1729,10 @@ export function useTelemetryConsent() {
   })
 }
 
+/** Idle reads a skills snapshot gets before its poll stands down — five minutes at the cadence
+ *  below, enough to cover a check queued behind a handful of others. */
+const SKILLS_UPDATE_IDLE_READ_LIMIT = 6
+
 export function useSkillsUpdate(projectId: string, enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.skillsUpdate(projectId),
@@ -1542,11 +1743,15 @@ export function useSkillsUpdate(projectId: string, enabled = true) {
     // response converges. Checks may legitimately take tens of seconds, so a one-minute cadence
     // avoids repeatedly challenging authenticated remote sessions while still converging after
     // a long-running operation. The initial mount remains the session's one automatic check.
+    // `idle` means no check has completed yet (`checkedAt` null), and the check the first GET
+    // started can queue behind another project's on the server, so a single follow-up read is not
+    // enough to catch it. Idle reads are capped rather than unbounded: after that the reconcile
+    // on reconnect and on tab return owns the update, so the poll cannot run all session.
     refetchInterval: (query) => {
       const status = query.state.data?.status
-      return status === undefined || status === 'idle' || status === 'checking' || status === 'updating'
-        ? 60_000
-        : false
+      if (status === undefined || status === 'checking' || status === 'updating') return 60_000
+      if (status !== 'idle') return false
+      return query.state.dataUpdateCount < SKILLS_UPDATE_IDLE_READ_LIMIT ? 60_000 : false
     },
   })
 }
@@ -1574,7 +1779,9 @@ export function useSelfUpdate(enabled = true) {
     queryKey: workspaceQueryKeys.selfUpdate,
     queryFn: ({ signal }) => getSelfUpdate({ signal }),
     enabled,
-    refetchInterval: (query) => (query.state.data?.job?.status === 'running' ? 1_000 : false),
+    // A scheduled update can start while the dialog is open: watch for its job to appear.
+    refetchInterval: (query) =>
+      query.state.data?.job?.status === 'running' ? 1_000 : query.state.data?.scheduled ? 5_000 : false,
   })
 }
 
@@ -1617,6 +1824,22 @@ export function useApplySelfUpdate() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (version: string) => applySelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useScheduleSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => scheduleSelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useCancelScheduledSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => cancelScheduledSelfUpdate(),
     onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
   })
 }
@@ -1800,12 +2023,17 @@ function withoutReceipt(run: RunRecord): RunRecord {
  *    project id: `useProjectRuns` caches the boot project under `'default'`, because that is the
  *    scope it mounts unscoped under, and invalidating `[<bootId>, 'runs']` would leave the
  *    sidebar's boot group showing the pre-pin order.
+ *
+ * `surface` names the button for telemetry (`task_pinned`'s label).
  */
-export function usePinRun(projectId?: string, cacheScope?: string) {
+export function usePinRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
-      projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
+    // `surface` per call when one control can be reached two ways (⌘P: a row, or a shortcut).
+    mutationFn: ({ id, pinned, surface: via }: { id: string; pinned: boolean; surface?: TaskActionSurface }) =>
+      projectId === undefined
+        ? pinRun(id, pinned, via ?? surface)
+        : pinProjectRun(projectId, id, pinned, via ?? surface),
     // Hierarchical keys: this covers the list AND the open thread's own record.
     onSuccess: () =>
       queryClient.invalidateQueries({
@@ -1816,11 +2044,13 @@ export function usePinRun(projectId?: string, cacheScope?: string) {
 
 /** Archive or restore one run from a list row — `usePinRun`'s twin, same two parameters and the
  *  same invalidate-rather-than-patch rule (the answer moves the row between views). */
-export function useArchiveRun(projectId?: string, cacheScope?: string) {
+export function useArchiveRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
-      projectId === undefined ? archiveRun(id, archived) : archiveProjectRun(projectId, id, archived),
+      projectId === undefined
+        ? archiveRun(id, archived, surface)
+        : archiveProjectRun(projectId, id, archived, surface),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
@@ -1909,12 +2139,20 @@ export function useGithubInfinite(limit = 50, enabled = true) {
   return useInfiniteQuery({
     queryKey: queryKeys.githubPages(limit),
     queryFn: ({ pageParam, signal }) =>
-      getGithub({ limit, issuesCursor: pageParam.issuesCursor, prsCursor: pageParam.prsCursor }, { signal }),
-    initialPageParam: { issuesCursor: undefined as string | undefined, prsCursor: undefined as string | undefined },
+      getGithub({ limit, ...pageParam }, { signal }),
+    initialPageParam: {
+      issuesCursor: undefined as string | undefined,
+      prsCursor: undefined as string | undefined,
+      issuesDone: false,
+      prsDone: false,
+    },
+    // A side with no next cursor is marked done so the server does not restart it (#1750).
     getNextPageParam: (last) => {
       const issuesCursor = last.issuesNextCursor ?? undefined
       const prsCursor = last.prsNextCursor ?? undefined
-      return issuesCursor || prsCursor ? { issuesCursor, prsCursor } : undefined
+      return issuesCursor || prsCursor
+        ? { issuesCursor, prsCursor, issuesDone: !issuesCursor, prsDone: !prsCursor }
+        : undefined
     },
     enabled,
     staleTime: 60_000,
@@ -2306,8 +2544,9 @@ export function useReferenceStatuses(
     })),
   })
 
-  const byRef = useMemo(() => {
+  const { byRef, learned } = useMemo(() => {
     const map = new Map<string, ReferenceStatusEntry>()
+    const learned: Array<{ key: string; status: ReferenceStatus; conflicting: boolean | undefined }> = []
     results.forEach((result, index) => {
       const group = groups[index]
       if (!group) return
@@ -2337,11 +2576,7 @@ export function useReferenceStatuses(
             // A server from before the field omits `conflicts` entirely, and that absence is not
             // an answer: leave the memory alone rather than clearing it to "merges cleanly".
             const conflicting = data.conflicts ? data.conflicts.includes(ref.number) : undefined
-            // Written during render on purpose: this is a cache, not state — the write is
-            // idempotent, derived solely from the response, and re-running it (StrictMode's
-            // double invoke) lands on the same value.
-            rememberStatus(key, status)
-            if (conflicting !== undefined) rememberConflict(key, conflicting)
+            learned.push({ key, status, conflicting })
             map.set(key, {
               state: 'ready',
               status,
@@ -2374,9 +2609,17 @@ export function useReferenceStatuses(
         }
       }
     })
-    return map
+    return { byRef: map, learned }
     // `results` is a fresh array identity every render; its DATA is what the map is built from.
   }, [groups, results.map((result) => `${result.dataUpdatedAt}:${result.status}`).join(',')])
+
+  // Committed answers only: a render React throws away must not teach the shared memory.
+  useEffect(() => {
+    for (const { key, status, conflicting } of learned) {
+      rememberStatus(key, status)
+      if (conflicting !== undefined) rememberConflict(key, conflicting)
+    }
+  }, [learned])
 
   return useCallback(
     (ref: ReferenceStatusRequest): ReferenceStatusEntry => {

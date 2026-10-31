@@ -86,7 +86,20 @@ describe('the flat tier (small changesets)', () => {
 
     const rows = document.querySelector<HTMLElement>('[data-slot="diff-rows"]')!
     expect(rows.style.minInlineSize).toMatch(/^calc\(\d+ch \+ 7rem\)$/)
-    expect(rows.className).toContain('[content-visibility:auto]')
+  })
+
+  it('skips off-screen rows in blocks, not one by one, each sized at the real row height', async () => {
+    // Per row, a 3,000-line file meant thousands of skip boundaries checked every frame, and a
+    // fast scroll showed tinted rows with no text. 150 rows (+ the hunk header) → 3 blocks.
+    await renderDiff(<Diff files={[file('a.ts', 150)]} />, 'a.ts')
+
+    const rows = document.querySelector<HTMLElement>('[data-slot="diff-rows"]')!
+    expect(rows.className).not.toContain('content-visibility')
+    const chunks = [...rows.children] as HTMLElement[]
+    expect(chunks.map((chunk) => chunk.dataset.slot)).toEqual(['diff-row-chunk', 'diff-row-chunk', 'diff-row-chunk'])
+    expect(chunks.every((chunk) => chunk.className.includes('[content-visibility:auto]'))).toBe(true)
+    expect(chunks.map((chunk) => chunk.children.length)).toEqual([64, 64, 22])
+    expect(chunks[0]!.style.containIntrinsicBlockSize).toBe(`auto ${Math.round(64 * 20.4)}px`)
   })
 
   it('drops the width floor when wrapping, where rows never exceed the box', async () => {
@@ -116,6 +129,13 @@ describe('the virtualized tier (large changesets)', () => {
   // virtua reads its scroll element once, at mount. When the consumer swaps it (the Changes tab's
   // own column from md up, the app shell's `main` below), the LIST must be rebuilt on the new one,
   // while the view around it, holding the comment editor and collapse state, stays mounted.
+  it('picks the renderer from every file, held-back ones included — loading one never swaps it', async () => {
+    // 1,200 held back (past LARGE_DIFF_LINES) + 400 open. Counting only open rows would start flat
+    // and flip to virtua on "Load diff", remounting the list under the reader.
+    await renderVirtualDiff(<Diff files={[file('big.ts', 1200), file('small.ts', 400)]} />)
+    expect(document.querySelector('[data-slot="diff-files"]')!.getAttribute('data-virtualized')).toBe('true')
+  })
+
   it('rebinds only the virtualized list when its scroller changes', async () => {
     const files = [file('a.ts', 900), file('b.ts', 900)]
     const view = await renderVirtualDiff(

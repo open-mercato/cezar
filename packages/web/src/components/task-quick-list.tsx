@@ -1,6 +1,9 @@
+import { queueWaitLabel } from '@/lib/queue-wait-label'
+import { ScheduledTasks } from '@/components/scheduled-tasks'
+import { useScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useArchiveRun, useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '@/api/queries'
+import { useArchiveRun, useHealth, usePinRun, useProjectRepoBase, useReferenceProjectId, useRunsForProject } from '@/api/queries'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -19,6 +22,7 @@ import { isRunActive } from '@/lib/run-status'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
+  lastActivityAt,
   listCounts,
   refPrefixMatches,
   runTitle,
@@ -43,6 +47,10 @@ import { cn } from '@/lib/utils'
  * group collapses) is made by `lib/task-groups.ts` and `lib/attention.ts`, which are pure and
  * table-tested. What is left here is markup, the router, and the expand/collapse toggle.
  */
+/** The repo web root of the project a list of rows belongs to — what turns a reference known only
+ *  by number into a link. Provided by whichever container knows the project; absent = no link. */
+export const RepoBaseContext = React.createContext<string | undefined>(undefined)
+
 export function TaskQuickList({
   runs,
   view,
@@ -152,7 +160,7 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          <h2 className="px-3 pt-2.5 pb-1 eyebrow text-soft-foreground">
             {bucket.label}
           </h2>
           {nestRows(bucket.rows).map((node) => (
@@ -225,13 +233,13 @@ function ViewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-[12.5px] font-medium text-muted-foreground',
+        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-label font-medium text-muted-foreground',
         isActive && 'bg-card font-semibold text-foreground shadow-xs'
       )}
     >
       {children}
       {/* No "0": an empty bucket says so by being empty. */}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      {count > 0 ? <span className="font-mono text-meta tabular-nums">{count}</span> : null}
     </button>
   )
 }
@@ -301,8 +309,8 @@ function Row({
           />
           {/* Same width-priority rule as `RunRow`: the shared title has a floor, and the `×N`
               badge and the compare link give way before it does. */}
-          <span className="min-w-[7rem] flex-1 truncate text-[13px] font-medium">{row.title}</span>
-          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
+          <span className="min-w-[7rem] flex-1 truncate text-ui font-medium">{row.title}</span>
+          <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-micro font-semibold text-muted-foreground">
             ×{row.members.length}
           </span>
         </button>
@@ -437,7 +445,8 @@ const RunRow = React.memo(function RunRow({
   // The strongest tracker reference the run knows about — the PR once one exists, else the issue
   // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
   // prefix (#788, option C): the number is painted once, as a link, instead of twice as digits.
-  const reference = taskReference(run)
+  // With the row's project repo, so a PR known only by number (`CEZ:PR=…`) is still a link.
+  const reference = taskReference(run, React.useContext(RepoBaseContext))
   const title = runTitle(run)
   // Only when the two numbers are the same number — see `refPrefixMatches`. A run opened on issue
   // #788 that shipped as PR #790 keeps its prefix, because the chip is no longer saying it.
@@ -453,7 +462,7 @@ const RunRow = React.memo(function RunRow({
     ? ''
     : queuePosition !== null
       ? `#${queuePosition}`
-      : shortAge(run.finishedAt ?? run.createdAt, now)
+      : shortAge(lastActivityAt(run), now)
 
   const subtasks = subtaskLabel(childCount)
   const dispatchKind = dispatchKindLabel(run)
@@ -490,7 +499,7 @@ const RunRow = React.memo(function RunRow({
           run={run}
           reference={reference}
           compact
-          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
         />
       ) : null}
       <Link
@@ -513,12 +522,13 @@ const RunRow = React.memo(function RunRow({
           className={cn(
             // `min-w-[7rem]`: the floor of the width-priority rule above. The title never gives
             // way past ~17 characters; metadata drops instead.
-            'min-w-[7rem] flex-1 truncate text-[13px]',
+            'min-w-[7rem] flex-1 truncate text-ui',
             hasActions && ROW_TITLE_YIELD_CLASS,
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
+          {run.queueWaitReason && <span className="block truncate text-meta font-normal text-muted-foreground">{queueWaitLabel(run.queueWaitReason)}</span>}
         </span>
         {/* The trailing metadata, as one unit that gives its place to the row's actions whenever
             they show — see `ROW_ACTIONS_CLASS`. `contents`, so each item still lays out in the
@@ -531,7 +541,7 @@ const RunRow = React.memo(function RunRow({
             {dispatchKind ? (
               <span
                 data-slot="dispatch-kind"
-                className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+                className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
               >
                 {dispatchKind}
               </span>
@@ -554,7 +564,7 @@ const RunRow = React.memo(function RunRow({
             {run.diffStat ? (
               <DiffStatLabel
                 stat={run.diffStat}
-                className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
+                className="hidden shrink-0 text-micro @min-[23rem]/sidebar:inline"
               />
             ) : null}
             {/* What this task dispatched, counted rather than listed — the children are the indented
@@ -564,7 +574,7 @@ const RunRow = React.memo(function RunRow({
               <span
                 data-slot="subtask-count"
                 title={subtasks}
-                className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground @min-[19rem]/sidebar:inline"
+                className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground @min-[19rem]/sidebar:inline"
               >
                 {childCount}
               </span>
@@ -589,7 +599,7 @@ const RunRow = React.memo(function RunRow({
             <span
               data-slot="task-row-age"
               className={cn(
-                'shrink-0 text-[11px] text-soft-foreground tabular-nums',
+                'shrink-0 text-meta text-soft-foreground tabular-nums',
                 dispatchKind && depth > 0 && queuePosition === null && 'hidden @min-[19rem]/sidebar:inline',
               )}
             >
@@ -645,9 +655,11 @@ export function TaskQuickListContainer() {
   const health = useHealth()
   const activeProjectId = useActiveProjectId()
   const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
-  const pinMutation = usePinRun()
+  const pinMutation = usePinRun('sidebar')
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  // Mounted only once a schedule is known, so the sidebar costs no `GET /automations` (#1340).
+  const scheduledGate = useScheduledTasksGate()
   // The remembered Regular | Automations | All split the Tasks tables set — the sidebar shows the
   // same list they do. Memoized so the chip-status request below keys off a stable list.
   const [origin] = useTaskOrigin()
@@ -667,7 +679,7 @@ export function TaskQuickListContainer() {
       ),
     [pinMutation.mutate],
   )
-  const archiveMutation = useArchiveRun()
+  const archiveMutation = useArchiveRun('sidebar')
   const onToggleArchive = React.useCallback(
     (run: RunRecord, archived: boolean) =>
       archiveMutation.mutate(
@@ -679,6 +691,7 @@ export function TaskQuickListContainer() {
   // The sidebar's chips are the same chips as the tables', so they get their status the same way:
   // one batched request for the whole list, mounted here where the list is.
   const projectId = useReferenceProjectId()
+  const repoBase = useProjectRepoBase()
   const referenceRequests = React.useMemo(
     () =>
       projectId === undefined
@@ -699,6 +712,8 @@ export function TaskQuickListContainer() {
 
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <RepoBaseContext.Provider value={repoBase}>
+      {view === 'active' && scheduledGate && <ScheduledTasks compact />}
       <TaskQuickList
         runs={shown}
         view={view}
@@ -713,6 +728,7 @@ export function TaskQuickListContainer() {
         onTogglePin={onTogglePin}
         onToggleArchive={onToggleArchive}
       />
+      </RepoBaseContext.Provider>
     </ReferenceStatusProvider>
   )
 }

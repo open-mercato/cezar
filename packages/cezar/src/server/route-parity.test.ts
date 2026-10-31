@@ -213,7 +213,8 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     }
   });
 
-  it('answers every GET route byte-identically across the three spellings', async () => {
+  // Three requests per GET route, run back to back: ~1 s alone, past 5 s under the full suite.
+  it('answers every GET route byte-identically across the three spellings', { timeout: 30_000 }, async () => {
     const manifest = projectRouteManifest(app);
     const gets = manifest.filter((r: ProjectRouteInfo) => r.method === 'GET' && !r.path.endsWith('/events'));
     expect(gets.length).toBeGreaterThanOrEqual(20);

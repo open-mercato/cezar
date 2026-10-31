@@ -122,6 +122,64 @@ describe('Diff facade', () => {
     expect(document.querySelector('[data-slot="diff-loading"]')).toBeNull()
   })
 
+  it('renders a remount synchronously once the renderer has loaded — no "Loading diff…" flash', async () => {
+    await renderDiff(<Diff files={[MODIFIED]} />)
+    cleanup()
+
+    render(<Diff files={[MODIFIED]} />)
+    expect(document.querySelector('[data-slot="diff-loading"]')).toBeNull()
+    expect(document.querySelector('[data-slot="diff-file-body"]')).not.toBeNull()
+  })
+
+  it('re-highlights a changed file in the same render, never flashing it back to plain text', async () => {
+    const colored = () =>
+      [...document.querySelectorAll('[data-slot="diff-file-body"] span[style]')].some((el) =>
+        (el.getAttribute('style') ?? '').includes('var(--syn'),
+      )
+    const view = render(<Diff files={[MODIFIED]} />)
+    await waitFor(() => expect(colored()).toBe(true), { timeout: 5000 })
+
+    // A polled patch (or expanded context) gives the mounted file new lines — and a new cache key.
+    view.rerender(<Diff files={[{ ...MODIFIED, patch: MODIFIED.patch.replace('const two = 3', 'const two = 7') }]} />)
+    expect(document.querySelector('[data-slot="diff-file-body"]')?.textContent).toContain('const two = 7')
+    expect(colored()).toBe(true)
+  })
+
+  describe('a large file', () => {
+    // Past LARGE_DIFF_LINES changed lines: one file's rows are a single virtualized item, so a
+    // big one rendered in full is what froze the cockpit on opening a large change.
+    const LARGE: DiffFileChange = { ...MODIFIED, path: 'src/big.ts', adds: 900, dels: 300 }
+
+    it('opens collapsed behind "Load diff", rendering none of its rows', async () => {
+      await renderDiff(<Diff files={[LARGE, ADDED]} />, 'src/big.ts')
+      const card = [...document.querySelectorAll<HTMLElement>('[data-slot="diff-file"]')].find((el) => el.dataset.path === 'src/big.ts')!
+      expect(card.querySelector('[data-slot="diff-file-held"]')?.textContent).toContain('1,200 changed lines')
+      expect(card.querySelector('[data-slot="diff-line"]')).toBeNull()
+      expect(card.querySelector('[data-slot="diff-file-header"]')?.getAttribute('aria-expanded')).toBe('false')
+      // The small file beside it renders as before.
+      expect(document.querySelectorAll('[data-slot="diff-file-held"]')).toHaveLength(1)
+    })
+
+    it('renders its rows on "Load diff", and a reader can close it again', async () => {
+      await renderDiff(<Diff files={[LARGE]} />, 'src/big.ts')
+      fireEvent.click(screen.getByRole('button', { name: 'Load diff' }))
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-line"]')).not.toBeNull())
+      expect(document.querySelector('[data-slot="diff-file-held"]')).toBeNull()
+
+      fireEvent.click(document.querySelector('[data-slot="diff-file-header"]')!)
+      await waitFor(() => expect(document.querySelector('[data-slot="diff-line"]')).toBeNull())
+      // Closed by the reader, it is not "held back" — no Load diff note comes back.
+      expect(document.querySelector('[data-slot="diff-file-held"]')).toBeNull()
+    })
+
+    it('opens anyway when it carries a comment — the reader must see it', async () => {
+      const comment = { id: 'c1', path: 'src/big.ts', side: 'new' as const, line: 4, body: 'look here' }
+      await renderDiff(<Diff files={[LARGE]} comments={[comment]} />, 'src/big.ts')
+      expect(document.querySelector('[data-slot="diff-file-held"]')).toBeNull()
+      expect(document.querySelector('[data-slot="diff-line"]')).not.toBeNull()
+    })
+  })
+
   it('soft-wraps line content when wrap is set', async () => {
     await renderDiff(<Diff files={[MODIFIED]} wrap />)
 
@@ -216,13 +274,51 @@ describe('Diff facade — image previews (#365)', () => {
     expect(onOpenInApp).toHaveBeenCalledWith('assets/logo.png')
   })
 
-  it('never renders a preview for a deleted image — only the new side is ever servable', async () => {
+  it('never renders a preview for a deleted image without oldImageSrc', async () => {
     const imageSrc = vi.fn((path: string) => `/raw/${path}`)
     await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} />, 'assets/gone.png')
 
     expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
     expect(imageSrc).not.toHaveBeenCalled()
     expect(screen.getByText(/only the new side can be previewed/)).not.toBeNull()
+  })
+
+  it('previews a deleted image from its old side when oldImageSrc is wired', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    const sides = document.querySelectorAll('[data-slot="diff-image-side"]')
+    expect(sides).toHaveLength(1)
+    expect(sides[0]?.getAttribute('data-side')).toBe('old')
+    expect(sides[0]?.querySelector('img')?.getAttribute('src')).toBe('/old/assets/gone.png')
+    expect(sides[0]?.querySelector('figcaption')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+  })
+
+  it('shows before | after for a modified image, and the new side alone for an added one', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    const { rerender } = await renderDiff(
+      <Diff files={[IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />,
+      'assets/logo.png',
+    )
+    const srcs = [...document.querySelectorAll('[data-slot="diff-image-side"] img')].map((img) => img.getAttribute('src'))
+    expect(srcs).toEqual(['/old/assets/logo.png', '/raw/assets/logo.png'])
+
+    rerender(<Diff files={[{ ...IMAGE, status: 'added' }]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />)
+    expect(document.querySelectorAll('[data-slot="diff-image-side"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="diff-image-preview"] img')?.getAttribute('src')).toBe('/raw/assets/logo.png')
+  })
+
+  it('a side the server refuses shows a note instead of a broken image', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    fireEvent.error(document.querySelector('[data-slot="diff-image-side"] img')!)
+    expect(document.querySelector('[data-slot="diff-image-side"] img')).toBeNull()
+    expect(screen.getByText(/can’t be previewed/)).not.toBeNull()
   })
 })
 

@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
-import { TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { RepoBaseContext, TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { markScheduledTasks, resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -20,9 +21,11 @@ const HEALTH: HealthResponse = {
   forge: null,
   capabilities: {
     localHandoff: true,
+    terminal: false,
+    designMode: false,
     followups: true,
     singleProject: false,
-    automations: false,
+    automations: false, webhooks: false,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,
@@ -802,7 +805,7 @@ describe('TaskQuickListContainer', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pin task' }))
     await waitFor(() =>
-      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true } }]),
+      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true, surface: 'sidebar' } }]),
     )
   })
 
@@ -974,5 +977,94 @@ describe('dispatched subtasks in the quick-list', () => {
     })
     const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
     expect(kind.className).not.toContain('hidden')
+  })
+})
+
+describe('a PR known only by number', () => {
+  it('links to the repo the list provides, and stays a plain chip without one', () => {
+    const marked = run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)
+    const { unmount } = render(
+      <MemoryRouter>
+        <RepoBaseContext.Provider value="https://github.com/o/shop">
+          <TaskQuickList runs={[marked]} view="active" now={NOW} onViewChange={vi.fn()} />
+        </RepoBaseContext.Provider>
+      </MemoryRouter>,
+    )
+    expect(document.querySelector('[data-slot="pr-chip"]')?.closest('a')?.getAttribute('href')).toBe('https://github.com/o/shop/pull/1497')
+    unmount()
+    renderList({ runs: [run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)] })
+    expect(document.querySelector('[data-slot="pr-chip"]')?.closest('a')).toBeNull()
+  })
+})
+
+/** #1340: the Scheduled group must not cost every user a `GET /automations`. */
+describe('TaskQuickListContainer — scheduled tasks gate', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const scheduled = {
+    id: 'later', name: 'Later', kind: 'schedule', enabled: true,
+    deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [] },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  function renderContainer(automations: unknown[]) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      const body = path === '/api/v1/health'
+        ? { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } }
+        : path.endsWith('/automations') ? { automations } : [run({ id: 'live', title: 'A real run', status: 'running' })]
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/']}>
+          <ListViewProvider><TaskQuickListContainer /></ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+  const asked = () => fetchMock.mock.calls.some((call) => String(call[0]).endsWith('/automations'))
+
+  const asks = () => fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length
+
+  it('asks once per session and stops once the list holds no scheduled task', async () => {
+    resetScheduledTasksGate()
+    const first = renderContainer([])
+    await waitFor(() => expect(asks()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    first.unmount()
+    renderContainer([])
+    await screen.findByText('A real run').catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(asks()).toBe(1)
+    expect(screen.queryByRole('region', { name: 'Scheduled tasks' })).toBeNull()
+  })
+
+  it('shows the Scheduled group, including one made in another browser', async () => {
+    resetScheduledTasksGate()
+    renderContainer([scheduled])
+    expect(await screen.findByRole('region', { name: 'Scheduled tasks' })).not.toBeNull()
+    expect(asked()).toBe(true)
+  })
+
+  it('asks again after this cockpit schedules a task', async () => {
+    resetScheduledTasksGate()
+    const first = renderContainer([])
+    await waitFor(() => expect(asks()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    first.unmount()
+    markScheduledTasks('default')
+    renderContainer([scheduled])
+    await waitFor(() => expect(asks()).toBe(2))
   })
 })

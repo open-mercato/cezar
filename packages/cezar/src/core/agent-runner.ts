@@ -17,6 +17,7 @@
  */
 
 import { runnerSchema, type Runner } from '@open-mercato/cezar-contract';
+import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
 import type { PrivateMcpServer } from './private-mcp.ts';
 
@@ -41,6 +42,8 @@ export function isRunnerId(value: string): value is RunnerId {
 }
 
 export interface AgentRunSpec {
+  /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
+  onUsageWindows?: (observation: UsageWindowsObservation) => void;
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;
   userPrompt: string;
@@ -65,7 +68,7 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
-  /** Wall-clock kill switch for the run (ms). */
+  /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**
    * Stable session id (UUID) so the user can take over interactively later:

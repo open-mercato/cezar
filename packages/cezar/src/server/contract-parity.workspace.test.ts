@@ -2,6 +2,7 @@ import type { InferRequestType, InferResponseType } from 'hono/client';
 import { hc } from 'hono/client';
 import type { JSONParsed, JSONValue } from 'hono/utils/types';
 import { describe, expect, it } from 'vitest';
+import { runnerSchema, workspaceConfigResponseSchema as workspaceConfigResponseValue } from '@open-mercato/cezar-contract';
 import type { z } from 'zod';
 import type { brandingLogoUploadSchema } from './server.ts';
 import type {
@@ -15,7 +16,11 @@ import type {
 } from '@open-mercato/cezar-contract';
 import type {
   fsBrowseResponseSchema,
+  initProjectGitResponseSchema,
+  publishProjectGithubResponseSchema,
+  githubLoginStateSchema,
   launchKeyResponseSchema,
+  repoSuggestionsResponseSchema,
   projectsResponseSchema,
   registerProjectResponseSchema,
   removeProjectResponseSchema,
@@ -28,17 +33,22 @@ import type {
   openProjectInResponseSchema,
   openTargetsResponseSchema,
   providerConnectResponseSchema,
+  providerUpdateResponseSchema,
   providerStatusResponseSchema,
   runnerModelCatalogResponseSchema,
   setConfigResponseSchema,
   skillsUpdateStateSchema,
   selfUpdateStatusSchema,
   starCountSchema,
+  designProxyResponseSchema,
   setTelemetryConsentInputSchema,
   telemetryConsentSchema,
   uiStateSchema,
   workspaceConfigResponseSchema,
   workspaceBrandingLogoResponseSchema,
+  attachmentInputSchema,
+  deleteUploadResponseSchema,
+  stagedUploadSchema,
   workspaceUiStateSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
@@ -62,6 +72,23 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : 'route-is-wider') : 'schema-is-wider';
   type Exact<Schema, Route> = Mutual<Schema, Route>;
   type Assert<T extends true> = T;
+
+  /**
+   * Every dotted key path, optional keys included. `Mutual` is blind to an omitted OPTIONAL key
+   * (absent is assignable both ways), which is how the route's `models` lost two providers while
+   * the suite stayed green (#1234); comparing path sets closes that for the pair it is used on.
+   * Index signatures are skipped: the stored `models` is a passthrough bag, so the route's type
+   * carries `[x: string]: JSONValue` that the closed schema rightly does not name.
+   */
+  type Named<T> = { [K in keyof T as string extends K ? never : K]: T[K] };
+  type KeyPaths<T, P extends string = ''> = T extends readonly unknown[]
+    ? KeyPaths<T[number], `${P}[].`>
+    : T extends object
+      ? {
+          [K in keyof Named<T> & string]-?: `${P}${K}` | KeyPaths<NonNullable<Named<T>[K]>, `${P}${K}.`>;
+        }[keyof Named<T> & string]
+      : never;
+  type SameKeys<Schema, Route> = Mutual<KeyPaths<Schema>, KeyPaths<Route>>;
 
   /**
    * `Exact`, for the two OPEN bags — the only schemas here with a catchall.
@@ -92,6 +119,12 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type UpdateProject200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['$patch'], 200>;
   type RemoveProject200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['$delete'], 200>;
   type FsBrowse200 = InferResponseType<typeof client.api.v1.fs.browse.$get, 200>;
+  type FsRepos200 = InferResponseType<typeof client.api.v1.fs.repos.$get, 200>;
+  type InitProjectGit200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['git-init']['$post'], 200>;
+  type PublishGithub200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['publish-github']['$post'], 200>;
+  type GithubLoginStart200 = InferResponseType<typeof client.api.v1.github.login.$post, 200>;
+  type GithubLoginRead200 = InferResponseType<typeof client.api.v1.github.login.$get, 200>;
+  type GithubLoginCancel200 = InferResponseType<typeof client.api.v1.github.login.$delete, 200>;
   type LaunchKey200 = InferResponseType<(typeof client.api.v1)['launch-key']['$get'], 200>;
 
   // ---- workspace settings + the per-repo agent knobs ---------------------------------------
@@ -100,6 +133,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type BrandingLogoUpload200 = InferResponseType<(typeof client.api.v1.workspace)['branding-logo']['$post'], 200>;
   type BrandingLogoUploadBody = InferRequestType<(typeof client.api.v1.workspace)['branding-logo']['$post']>['form'];
   type BrandingLogoDelete200 = InferResponseType<(typeof client.api.v1.workspace)['branding-logo']['$delete'], 200>;
+  type StageUpload200 = InferResponseType<typeof client.api.v1.workspace.uploads.$post, 200>;
+  type StageUploadBody = InferRequestType<typeof client.api.v1.workspace.uploads.$post>['json'];
+  type DeleteUpload200 = InferResponseType<(typeof client.api.v1.workspace.uploads)[':uploadId']['$delete'], 200>;
   type HostUsage200 = InferResponseType<(typeof client.api.v1.workspace)['host-usage']['$get'], 200>;
   type UiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$get'], 200>;
   type SetUiState200 = InferResponseType<(typeof client.api.v1)['ui-state']['$put'], 200>;
@@ -124,9 +160,13 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type SelfUpdateRefresh200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['refresh']['$post'], 200>;
   type SelfUpdateChannel200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['channel']['$put'], 200>;
   type SelfUpdateApply200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['apply']['$post'], 200>;
+  type SelfUpdateCancelScheduled200 = InferResponseType<(typeof client.api.v1.workspace)['self-update']['scheduled']['$delete'], 200>;
 
   // ---- the star ask -------------------------------------------------------------------------
   type StarCount200 = InferResponseType<(typeof client.api.v1)['star-count']['$get'], 200>;
+
+  // ---- Design Mode --------------------------------------------------------------------------
+  type DesignProxy200 = InferResponseType<(typeof client.api.v1.preview)['design-proxy']['$post'], 200>;
 
   // ---- telemetry consent --------------------------------------------------------------------
   type TelemetryConsent200 = InferResponseType<typeof client.api.v1.telemetry.consent.$get, 200>;
@@ -144,6 +184,10 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     200
   >;
   type ProviderConnect200 = InferResponseType<typeof client.api.v1.providers.connect.$post, 200>;
+  type ProviderUpdate200 = InferResponseType<
+    (typeof client.api.v1.providers)[':provider']['update']['$post'],
+    200
+  >;
   type Models200 = InferResponseType<typeof client.api.v1.models.$get, 200>;
   type OpenTargets200 = InferResponseType<(typeof client.api.v1)['open-targets']['$get'], 200>;
   type OpenProjectIn200 = InferResponseType<(typeof client.api.v1)['open-in']['$post'], 200>;
@@ -197,12 +241,23 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof updateProjectResponseSchema>, UpdateProject200>>,
     Assert<Exact<z.infer<typeof removeProjectResponseSchema>, RemoveProject200>>,
     Assert<Exact<z.infer<typeof fsBrowseResponseSchema>, FsBrowse200>>,
+    Assert<Exact<z.infer<typeof repoSuggestionsResponseSchema>, FsRepos200>>,
+    Assert<Exact<z.infer<typeof initProjectGitResponseSchema>, InitProjectGit200>>,
+    Assert<Exact<z.infer<typeof publishProjectGithubResponseSchema>, PublishGithub200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginStart200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginRead200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginCancel200>>,
     Assert<Exact<z.infer<typeof launchKeyResponseSchema>, LaunchKey200>>,
     // workspace settings + prefs
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
+    Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
+    Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoUpload200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoDelete200>>,
+    Assert<Exact<z.infer<typeof stagedUploadSchema>, StageUpload200>>,
+    Assert<Exact<z.input<typeof attachmentInputSchema>, StageUploadBody>>,
+    Assert<Exact<z.infer<typeof deleteUploadResponseSchema>, DeleteUpload200>>,
     // the request half: a real `File`, not whatever `parseBody()` used to hand the handler
     Assert<Exact<z.input<typeof brandingLogoUploadSchema>, BrandingLogoUploadBody>>,
     Assert<Exact<z.infer<typeof hostUsageSchema>, HostUsage200>>,
@@ -222,8 +277,11 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateRefresh200>>,
     Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateChannel200>>,
     Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateApply200>>,
+    Assert<Exact<z.infer<typeof selfUpdateStatusSchema>, SelfUpdateCancelScheduled200>>,
     // the star ask
     Assert<Exact<z.infer<typeof starCountSchema>, StarCount200>>,
+    // Design Mode
+    Assert<Exact<z.infer<typeof designProxyResponseSchema>, DesignProxy200>>,
     // telemetry consent
     Assert<Exact<z.infer<typeof telemetryConsentSchema>, TelemetryConsent200>>,
     Assert<Exact<z.infer<typeof telemetryConsentSchema>, SetTelemetryConsent200>>,
@@ -233,6 +291,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderEnabled200>>,
     Assert<Exact<z.infer<typeof providerStatusResponseSchema>, ProviderRetry200>>,
     Assert<Exact<z.infer<typeof providerConnectResponseSchema>, ProviderConnect200>>,
+    Assert<Exact<z.infer<typeof providerUpdateResponseSchema>, ProviderUpdate200>>,
     Assert<Exact<z.infer<typeof runnerModelCatalogResponseSchema>, Models200>>,
     Assert<Exact<z.infer<typeof openTargetsResponseSchema>, OpenTargets200>>,
     Assert<Exact<z.infer<typeof openProjectInResponseSchema>, OpenProjectIn200>>,
@@ -252,6 +311,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // assertion above vacuous, exactly the trap this file is meant to avoid.
     const wider: Mutual<{ a: string }, { a: string; b: number }> = 'schema-is-wider';
     const narrower: Mutual<{ a: string; b: number }, { a: string }> = 'route-is-wider';
+    // The blind spot `SameKeys` exists for: an omitted optional key is invisible to `Mutual`.
+    const blind: Mutual<{ m?: { a?: string; b?: string } }, { m?: { a?: string } }> = true;
+    const caught: SameKeys<{ m?: { a?: string; b?: string } }, { m?: { a?: string } }> = 'schema-is-wider';
     // And `ExactOpen`, which normalizes ONLY the JSON round trip: an open bag still fails when a
     // key it names disagrees with the route (here `a: number` against the route's `a: string`),
     // and still fails when it makes a key required that the route never sends. (Both pins spell
@@ -269,5 +331,11 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
       'schema-is-wider',
       'route-is-wider',
     ]);
+  });
+
+  it('names a default-model key for every runner', () => {
+    // The `models` keys are spelled by hand, so a new runner would otherwise drift it silently (#1234).
+    const models = workspaceConfigResponseValue.shape.agentDefaults.shape.models.unwrap();
+    expect(Object.keys(models.shape).sort()).toEqual([...runnerSchema.options].sort());
   });
 });

@@ -14,6 +14,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Settings → Agents (R6 Step 1.5): the form round-trip against a stateful `/api/v1/config` stub
@@ -28,6 +29,7 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
@@ -129,6 +131,7 @@ function serve({
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
+    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
     ...config,
   }
   const json = (payload: unknown, status = 200) =>
@@ -232,10 +235,12 @@ function renderAt(entry: string) {
   const client = gateSeededClient()
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
@@ -525,6 +530,7 @@ describe('the agents form', () => {
         'cursor',
         'pi',
         'copilot',
+        'antigravity',
         'gemini',
       ])
       // …and it is still called what it always was, because there is no account in play.
@@ -535,7 +541,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(9))
+      await waitFor(() => expect(rows()).toHaveLength(10))
       expect(rows().map((r) => r.textContent)).toEqual([
         'claude · Default/home/u/.claude',
         'claude · Klaudiusz~/.claude-klaudiusz',
@@ -545,6 +551,7 @@ describe('the agents form', () => {
         'cursorCursor Agent CLI',
         'pipi CLI (provider/model)',
         'copilotGitHub Copilot CLI (ACP)',
+        'antigravityGoogle Antigravity CLI (agy)',
         'geminiGemini CLI (ACP)',
       ])
       // The discovered account is the checked row until the repo says otherwise.
@@ -568,7 +575,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(9))
+      await waitFor(() => expect(rows()).toHaveLength(10))
       fireEvent.click(rowFor('claude', 'klaudiusz')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -591,7 +598,7 @@ describe('the agents form', () => {
 
       // Wait for the SPLIT state: until the accounts land, claude is one plain row, and clicking
       // that one writes no selection — which is correct, and would make this pass for no reason.
-      await waitFor(() => expect(rows()).toHaveLength(9))
+      await waitFor(() => expect(rows()).toHaveLength(10))
       fireEvent.click(rowFor('claude', '')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -606,7 +613,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(9))
+      await waitFor(() => expect(rows()).toHaveLength(10))
       fireEvent.click(rowFor('codex')!)
 
       await waitFor(() => expect(puts()).toHaveLength(1))
@@ -638,7 +645,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(9))
+      await waitFor(() => expect(rows()).toHaveLength(10))
       const pane = document.querySelector('[data-slot="agents-runner"]')?.closest('section')
       expect(pane?.textContent).toContain('never committed')
       // The consequence a reader cannot guess: sessions live in the account's own folder.

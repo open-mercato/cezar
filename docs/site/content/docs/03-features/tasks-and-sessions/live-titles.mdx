@@ -1,0 +1,28 @@
+---
+title: "Enable automatic task titles"
+description: "A task's title can change as the conversation progresses."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/tasks-section.tsx
+    line: 104
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-17-task-auto-naming.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Rename the task manually if you want its title to stay fixed.
+
+## Where to find it
+
+Settings → project → Tasks → Live title updates
+
+## How to use it
+
+1. Enable Live title updates.
+2. Start a task.
+3. Rename it manually if you want to keep a fixed title.
+
+> **Good to know**: A manual rename stops automatic title updates for that task.

@@ -7,9 +7,11 @@ import { reportError, telemetryEnabled, track } from '../telemetry.ts';
  * never CLI output, paths or account ids (docs/telemetry.md).
  */
 
-/** One error group per provider and reason: an unparseable vendor format is a parser to fix. */
+/** One error group per provider and reason: an unparseable vendor format is a parser to fix. A
+ *  timeout is not reported: it already survived a 30s re-ask, says nothing cezar can fix, and
+ *  only ever arrived as one-off groups (1ba77383, ff609bf9). */
 export async function reportInconclusiveProbe(probe: InconclusiveProbe): Promise<void> {
-  if (!telemetryEnabled()) return;
+  if (probe.reason === 'timeout' || !telemetryEnabled()) return;
   const cliVersion = await probe.cliVersion().catch(() => null);
   const error = new Error(`${probe.provider} authentication status could not be read (${probe.reason})`);
   error.name = 'ProviderAuthProbeInconclusive';
@@ -49,6 +51,13 @@ export function trackLoginOpened(provider: ProviderId, prior: ConnectPriorStatus
 
 export function trackLoginNotOpened(provider: ProviderId, reason: ConnectNotOpenedReason, sid?: string): void {
   track('provider_login_not_opened', { label: `${provider}:${reason}` }, { sid });
+}
+
+export type UpdateOutcome = 'opened' | 'unsupported' | 'hosted' | 'no_terminal';
+
+/** What an agent's **Update** (offered next to an outdated-CLI error) did. */
+export function trackUpdateOpened(provider: ProviderId, outcome: UpdateOutcome, sid?: string): void {
+  track('provider_update_opened', { label: `${provider}:${outcome}` }, { sid });
 }
 
 /**

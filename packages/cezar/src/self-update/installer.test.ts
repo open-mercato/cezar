@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { installFromRegistry, type InstallOptions } from './installer.ts';
+import { installFromRegistry, type InstallOptions, npmCacheUnwritable, npmFallbackCache } from './installer.ts';
 import { ensurePathHook } from './launcher.ts';
 import { listInstalled, readManifest, versionDir, versionEntry, versionsDir } from './layout.ts';
 import { SelfUpdateService } from './service.ts';
@@ -64,6 +64,57 @@ describe('installing into the managed layout', () => {
     expect(staged()).toEqual([]);
     expect(existsSync(versionDir('0.12.1', env))).toBe(false);
     expect(listInstalled(env)).toEqual([]);
+  });
+
+  // telemetry 7a3f659a: a root-owned ~/.npm failed every install.
+  const rootOwnedCache = [
+    'npm error code EACCES',
+    'npm error syscall mkdir',
+    'npm error path /Users/ann/.npm/_cacache/index-v5/57/89',
+    'npm error Your cache folder contains root-owned files, due to a bug in previous versions of npm which has since been addressed.',
+  ];
+
+  it('retries with a cache cezar owns when npm cannot write its own', async () => {
+    const seen: string[][] = [];
+    await installFromRegistry('0.12.1', {
+      env,
+      runNpm: async (args, cwd, onLog) => {
+        seen.push(args);
+        if (!args.includes('--cache')) {
+          rootOwnedCache.forEach((line) => onLog?.(line));
+          throw new Error('npm install failed (exit 1)');
+        }
+        await npmThatInstalls()(args, cwd, onLog);
+      },
+    });
+    expect(seen).toHaveLength(2);
+    expect(seen[1]?.[seen[1].indexOf('--cache') + 1]).toBe(npmFallbackCache(env));
+    expect(seen[1]?.at(-1)).toBe('@open-mercato/cezar@0.12.1');
+    expect(existsSync(versionEntry('0.12.1', env))).toBe(true);
+    expect(staged()).toEqual([]);
+  });
+
+  it('does not retry an npm failure that is not about its cache', async () => {
+    let runs = 0;
+    await expect(
+      installFromRegistry('0.12.1', {
+        env,
+        runNpm: async (_args, _cwd, onLog) => {
+          runs += 1;
+          onLog?.('npm error code ETARGET');
+          throw new Error('npm install failed (exit 1): ETARGET');
+        },
+      }),
+    ).rejects.toThrow('ETARGET');
+    expect(runs).toBe(1);
+  });
+
+  it('recognizes only permission failures inside npm cache folders', () => {
+    expect(npmCacheUnwritable(rootOwnedCache)).toBe(true);
+    expect(npmCacheUnwritable(['npm ERR! code EPERM', 'npm ERR! path C:\\Users\\ann\\AppData\\Local\\npm-cache\\_cacache\\tmp'])).toBe(true);
+    expect(npmCacheUnwritable([])).toBe(false);
+    expect(npmCacheUnwritable(['npm error code EACCES', 'npm error path /Users/ann/.cezar/versions/.staging-1'])).toBe(false);
+    expect(npmCacheUnwritable(['npm error code ETIMEDOUT', 'npm error path /Users/ann/.npm/_cacache/tmp'])).toBe(false);
   });
 
   it('refuses an install whose entry file never appeared', async () => {

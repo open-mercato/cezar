@@ -88,7 +88,7 @@ export function DiffCommentChips({
             </TooltipTrigger>
             <TooltipContent side="top" sideOffset={6} className="max-w-[320px] text-left">
               <div data-slot="diff-comment-tooltip" className="flex flex-col gap-1">
-                <span className="font-mono text-[11px] text-contrast-foreground/80">
+                <span className="font-mono text-meta text-contrast-foreground/80">
                   {comment.path} · {where}
                 </span>
                 <span className="line-clamp-6 break-words whitespace-pre-wrap">{comment.body}</span>

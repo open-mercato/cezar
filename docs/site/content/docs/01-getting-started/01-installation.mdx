@@ -1,0 +1,59 @@
+---
+title: Installation
+description: Check the requirements, then open the Cezar cockpit in your project with one command.
+related:
+  links:
+    - getting-started/first-task
+    - features/setup-and-integrations/headless
+sources:
+  - label: Quick start
+    path: README.md
+    line: 123
+---
+
+Cezar runs from `npx`, so there is nothing to install globally. It starts a local server and opens the cockpit in your browser.
+
+## Requirements
+
+- Node.js 20 or later.
+- At least one agent CLI that you have signed in to: [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai), [Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli), or [pi](https://github.com/badlogic/pi-mono).
+- Optional: `git`, so each task can work in its own worktree, and `gh`, for GitHub issues and pull requests.
+
+## Open the cockpit
+
+Run Cezar from the folder of the project you want to change:
+
+```bash title="Terminal"
+cd your-repo
+npx cezar-run
+```
+
+The cockpit opens at `http://localhost:4321`. If that port is busy, Cezar uses the next free one.
+
+> **Good to know**: `npx cezar-cli` starts the same package under its older name.
+
+## Try Cezar without signing in
+
+Set `CEZ_DRY_RUN=1` to use a built-in mock agent. Every screen works, and no agent CLI or login is needed:
+
+```bash title="Terminal"
+CEZ_DRY_RUN=1 npx cezar-run
+```
+
+## Other commands
+
+```bash title="Terminal"
+npx cezar-run run "add a --json flag to the export command"   # run one task without the browser
+npx cezar-run init                                            # create .ai/cezar/ in the project
+npx cezar-run@nightly                                         # try the latest nightly build
+```
+
+## Run Cezar on a server
+
+To reach the cockpit from anywhere, including your phone, install it as a service with HTTPS and a login:
+
+```bash title="Terminal"
+npx cezar-run server-install --platform ubuntu-vps
+```
+
+The repository has step-by-step instructions for an [Ubuntu VPS](https://github.com/open-mercato/cezar/blob/main/docs/server-install/ubuntu-vps.md) and for [macOS with ngrok](https://github.com/open-mercato/cezar/blob/main/docs/server-install/macosx-ngrok.md).

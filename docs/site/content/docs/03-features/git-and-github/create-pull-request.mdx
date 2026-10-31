@@ -1,0 +1,25 @@
+---
+title: "Create a pull request from a task"
+description: "Publish worktree changes as a regular or draft pull request."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/lib/git-actions.ts
+    line: 123
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+After reviewing the worktree changes, choose Create PR. Use Create draft PR in the adjacent menu to publish a draft. The step result links to the associated PR.
+
+## Where to find it
+
+Task → Git action in the header → Create PR
+
+## How to use it
+
+1. Review the task changes.
+2. Choose Create PR, or Create draft PR in the adjacent menu.
+3. Follow the step execution and open the linked PR.
+
+> **Good to know**: The action depends on the task state and GitHub support. The task agent usually runs the command; when unavailable, some operations have a server-side path. Creating a PR does not merge it.

@@ -52,7 +52,7 @@ const DENSITY_OPTIONS: Array<{ value: Density; label: string }> = [
 
 const WIDTH_OPTIONS: Array<{ value: Width; label: string }> = [
   { value: 'narrow', label: 'Narrow' },
-  { value: 'wide', label: 'Wide' },
+  { value: 'wide', label: 'Full' },
 ]
 
 /** One segmented radio group — the shared chassis of all three controls. */
@@ -87,7 +87,7 @@ function Segmented<V extends string>({
             data-value={option.value}
             onClick={() => onChange(option.value)}
             className={cn(
-              'flex items-center gap-2 rounded-sm px-3 py-1.5 text-[13px] font-medium transition-colors',
+              'flex items-center gap-2 rounded-sm px-3 py-1.5 text-ui font-medium transition-colors',
               checked
                 ? 'bg-muted text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
@@ -114,7 +114,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-ui text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>
@@ -253,7 +253,7 @@ export function AppearanceSection() {
 
       <Field
         title="Reading width"
-        hint="Wide gives task sessions, commits, and skill content more room. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
+        hint="Full gives task sessions, commits, and skill content the whole available area. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
       >
         <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
       </Field>

@@ -1,3 +1,233 @@
+# 0.17.0 (2026-10-29)
+
+## Highlights
+Tasks can start later: schedule one for a date or for when a usage limit resets, straight from the split Send button, or start a queued task now over the parallel cap. Projects can go trunk-based, so tasks work in the checkout and you commit to the base branch after review. You can answer an agent's question in your own words, set global instructions that every task receives, and add your organisation's skills repositories. Projects can send webhook notifications to Slack, Discord or your own receiver, and a self-hosted cockpit can manage agent accounts. Agent failures that are not bugs, such as an overloaded API, billing, a usage limit or a full disk, are retried or explained instead of reported as crashes. The cockpit gets faster on big workspaces, and conversations render Mermaid diagrams. The rest is fixes: `cezar serve` opens the project it was started in, workflows resume after a usage limit, a task's leftover processes are stopped when it settles, and monitoring runs no longer wait on a human to leave that state.
+
+## ⚠️ Breaking
+- ⚠️ `GET /api/v1/runs` no longer embeds each run's `workflowDef` (about 1.3 MB per run); pass `?full=1` to get it back. `GET /runs/:id` is unchanged. (#1609) *(@rareba)*
+
+## ✨ Features
+- ✨ Trunk-based development model per project: tasks work in the checkout, then you review and Commit to the base branch. (#1597) *(@patzick)*
+- ✨ Schedule a task's start for a date and time or for after a Claude/Codex usage limit resets, and manage scheduled tasks from the Tasks view (fixes #1340). (#1434) *(@matwiatrzyk)*
+- ✨ Scheduling moves into a split Send button (Now / Pick date & time / After usage limit resets). (#1657) *(@patzick)*
+- ✨ Start now: run a queued task right away, over the `maxParallel` cap. (#1653) *(@patzick)*
+- ✨ Answer an agent's question card with your own text, or tell it you need more context. (#1605) *(@pat-lewczuk)*
+- ✨ Global instructions in General settings, merged into every task's system prompt ahead of the project's own. (#1693) *(@patzick)*
+- ✨ Organisation skills repositories in Global settings, loaded as team skills in every project and grouped by repository. (#1479) *(@adam-the-hero)*
+- ✨ Project-scoped webhooks (`CEZ_WEBHOOKS=1`): signed JSON, Slack or Discord notifications when a task needs attention, reaches review, completes, fails or is cancelled. (#1604) *(@matwiatrzyk)*
+- ✨ Manage agent accounts on an authenticated self-hosted cockpit (`CEZ_REMOTE_AGENT_ACCOUNTS=1`) (supersedes #970). (#1631) *(@piotrchabros, via @pat-lewczuk)*
+- ✨ Transient agent failures (overloaded, no response, model at capacity) are retried, and account, billing, usage-limit, context-size and disk-full failures are explained instead of reported as crashes. (#1690) *(@pat-lewczuk)*
+- ✨ Design Mode collects notes and sends them to the agent together, deletes only on purpose, and toggles with ⌥D. (#1658) *(@patzick)*
+- ✨ Mermaid diagrams render as previews in conversations (fixes #1691). (#1692) *(@dominikpalatynski)*
+- ✨ Swipe a GitHub issue or PR row on mobile to start a run with a workflow or skill in one tap. (#1683) *(@pat-lewczuk)*
+- ✨ The file tree on the Changes and Files views can be dragged wider. (#1650) *(@pat-lewczuk)*
+- ✨ The Changes tab previews the old side of deleted and modified images. (#1568) *(@martaradziszewska)*
+- ✨ JSON agent config files are autoformatted on save. (#1695) *(@martaradziszewska)*
+- ✨ Telemetry (opt-in) measures use of automations, workflows, skills and dispatch, with closed label sets that never carry your names. (#1676) *(@pat-lewczuk)*
+
+## ⚡ Performance
+- ⚡ The task tables re-render only changed rows, and the idle cockpit stops polling what the stream already updates. (#1191) *(@lbajsarowicz)*
+- ⚡ Workspace run frames carry only summary fields and are serialized once for every open stream. (#1190) *(@lbajsarowicz)*
+- ⚡ The base-branch picker is virtualized, so it opens fast with thousands of branches. (#1694) *(@martaradziszewska)*
+
+## 🔒 Security
+- 🔒 The local request-origin guard accepts IPv4-mapped IPv6 loopback authorities and rejects malformed dotted tails, keeping DNS-rebinding and CSRF protection. (#1371) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 `cezar serve` opens the project it was started in instead of the last one this browser used (fixes #1432) (supersedes #1471). (#1712) *(@alwoodm, via @pat-lewczuk)*
+- 🐛 An installed `CEZ_REMOTE=1` service keeps its configured port instead of moving to the next free one (fixes #1007). (#1128) *(@pat-lewczuk)*
+- 🐛 A hosted cockpit can run the task's app from the Preview and preview it through an SSH tunnel. (#1684) *(@pat-lewczuk)*
+- 🐛 A run parked on `CEZ:MONITORING` can leave that state without a human. (#1183) *(@lbajsarowicz)*
+- 🐛 A workflow interrupted by a usage limit resumes its remaining steps after recovery (fixes #1300). (#1315) *(@MarkiEC13)*
+- 🐛 Processes a task leaves running are stopped when it settles (fixes #1411). (#1419) *(@pat-lewczuk)*
+- 🐛 Reported costs are kept when a runner errors. (#1346) *(@strzesniewski)*
+- 🐛 cezar no longer crashes when an agent CLI exits before reading its prompt. (#1598) *(@rareba)*
+- 🐛 Run retention is configurable with `CEZ_RUNS_KEEP` and `CEZ_ARCHIVED_RUNS_KEEP`. (#1609) *(@rareba)*
+- 🐛 Fixes for 15 telemetry error groups across message delivery, the cockpit, auth probes and runners. (#1689) *(@pat-lewczuk)*
+- 🐛 OpenCode errors name the server's error and the early-exit cause instead of a bare status (telemetry 919887a0, d75fcecc). (#1576, #1714) *(@pat-lewczuk)*
+- 🐛 Cursor and pi read as not installed when the binary on PATH isn't their CLI (telemetry 8d304c50, f67df9d2). (#1548) *(@patzick)*
+- 🐛 The cockpit follows the active project's forge, not the boot folder's (fixes #1410). (#1465) *(@alwoodm)*
+- 🐛 The GitHub tab stays for a recognized remote while the forge probe is cold or failing (fixes #1412). (#1427) *(@alwoodm)*
+- 🐛 `gh` runs without a session bus, so no `dbus-daemon` is left behind per call. (#1469) *(@michalgacek-espeo)*
+- 🐛 The workspace config is never overwritten with defaults when it could not be read. (#1629) *(@Exsilium122)*
+- 🐛 The nginx vhost written by the server install forwards `Host` with its port. (#1570) *(@krzysztofr)*
+- 🐛 Task detail uses the full width by default; Narrow is still available in Settings → Appearance. (#976) *(@matgren)*
+- 🐛 Relative file links in transcripts are no longer shown as `[blocked]`. (#1425) *(@matgren)*
+- 🐛 The folder browser's Back keeps Windows drive and UNC share roots. (#1335) *(@matwiatrzyk)*
+- 🐛 A dashboard project name links to its Tasks overview (fixes #1496). (#1569) *(@mszewcz)*
+- 🐛 The dashboard's Delivered card shows large line counts compactly instead of cutting them off. (#1715) *(@pat-lewczuk)*
+- 🐛 The build reads npm 12's object-keyed `npm pack --json` output. (#1682) *(@rafalwolak)*
+
+## 📝 Specs & Documentation
+- 📝 Searchable feature reference and guides on the docs site. (#1648) *(@zielivia)*
+- 📝 Spec for showing a tool card's full command when expanded (#1306). (#1309) *(@kmrosiek)*
+- 📝 A runbook for resolving a conflicted backport, and the backport decision as part of opening a fix PR, with a PR template. (#1644, #1535) *(@patzick)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 Backports run from a scan of merged PRs, so fork PRs and labels added after a merge are covered. (#1699) *(@patzick)*
+- 🚀 The nightly publish workflow is skipped on forks. (#1628) *(@Exsilium122)*
+- 🚀 vitest's tmpdir stays outside every git work tree. (#1630) *(@Exsilium122)*
+- 🚀 Desktop shell bumped to 0.1.11. (#1638) *(@patzick)*
+
+## 👥 Contributors
+
+- @rareba
+- @patzick
+- @matwiatrzyk
+- @pat-lewczuk
+- @adam-the-hero
+- @piotrchabros
+- @dominikpalatynski
+- @martaradziszewska
+- @lbajsarowicz
+- @alwoodm
+- @MarkiEC13
+- @strzesniewski
+- @michalgacek-espeo
+- @Exsilium122
+- @krzysztofr
+- @matgren
+- @mszewcz
+- @rafalwolak
+- @zielivia
+- @kmrosiek
+
+# 0.16.3 (2026-10-24)
+
+<!-- Release notes generated using configuration in .github/release.yml at d99fc243f631754e4f20371c7d4d1b82eec57f06 -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(composer): keep the thread still while the composer autosizes by @patzick in https://github.com/open-mercato/cezar/pull/1607
+* fix(preview): follow in-page URL changes in the address bar and Reload by @patzick in https://github.com/open-mercato/cezar/pull/1637
+* fix(runs): carry pasted attachments into a fresh-session continuation by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1646
+* fix(models): know `fable` as a Claude tier alias so a runner switch clears it by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1647
+* fix(auto-resume): resume now when a clock-only usage-limit reset just passed by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1649
+* fix(cli): preserve the cockpit API origin for dispatch by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1651
+* fix(opencode): fail a turn stuck in a long session.status retry by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1656
+* fix(agents): attribute errors to the step's backend; copilot add-dir and mid-turn exit by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1671
+* fix(provider-auth): read probe failures as what they are by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1670
+* fix(agents): latch real vendor auth failures, read JSON error envelopes (+ spec) by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1674
+* fix(engine): drop a foreign model pin when Continue switches runner by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1675
+* fix: deliver Continue through a settling run, a lost POST and a refused history write by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1672
+* fix(cockpit): fix toast bugs and stop reporting expected outcomes as errors by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1673
+* fix(desktop): boot the sidecar from home, take wry's drag-drop fix; guard child stdin EPIPE by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1677
+* fix(provider-auth): recognize configured Codex API keys by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1679
+* fix(models): accept Copilot/Cursor vendor ids; automations drop a cross-runner model by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1680
+### 🧹 Maintenance
+* ci(release): GitHub App token, tag-triggered publish, resume-safe release lines by @open-mercato-assistant[bot] in https://github.com/open-mercato/cezar/pull/1642
+
+## New Contributors
+* @open-mercato-assistant[bot] made their first contribution in https://github.com/open-mercato/cezar/pull/1642
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.2...v0.16.3
+
+# 0.16.2 (2026-10-21)
+
+<!-- Release notes generated using configuration in .github/release.yml at 9e3f35c7 -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(opencode): name OpenCode 2.x instead of failing with a bare 405 (telemetry dc1a91a6) by @patzick in https://github.com/open-mercato/cezar/pull/1577
+* fix(provider-auth): stop reporting an OpenCode CLI that fails to start as unrecognized output (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1582
+* fix(web): retry a transient transport failure on background reads before surfacing it (telemetry 4678fce9) by @patzick in https://github.com/open-mercato/cezar/pull/1583
+* fix(dispatch): don't hand a child another runner's model (telemetry 43bdda11) by @patzick in https://github.com/open-mercato/cezar/pull/1593
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.1...v0.16.2
+
+# 0.16.1 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c2d4ba0cb8769bb05640755fd18ccbf1016c836c -->
+
+## What's Changed
+### 🐛 Fixes
+* fix(desktop): load the task Preview in the app, keep colored ports in detected addresses (shell 0.1.9) by @patzick in https://github.com/open-mercato/cezar/pull/1545
+* fix(provider-auth): hold Copilot's probe stdin open until session/new is answered (telemetry 298c2e1f) by @patzick in https://github.com/open-mercato/cezar/pull/1547
+* fix(provider-auth): report Cursor and pi not-installed when the binary on PATH isn't the CLI (telemetry 8d304c50, f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1549
+* fix(codex): wait out or fork a thread another app-server still holds on resume (telemetry 4c9de01a) by @patzick in https://github.com/open-mercato/cezar/pull/1557
+* fix(telemetry): group usage-limit agent errors across reset instants; honor a weekly reset's day (telemetry 987e8238) by @patzick in https://github.com/open-mercato/cezar/pull/1562
+* fix(provider-auth): ask OpenCode 2.x with a private server when its background service fails (telemetry 107e44a9) by @patzick in https://github.com/open-mercato/cezar/pull/1563
+* fix(settings): disable Add project for a launch folder the server refuses (telemetry 48dc0f71) by @patzick in https://github.com/open-mercato/cezar/pull/1564
+* fix(telemetry): scrub every attachable file name from toast reports (telemetry 5fc3ffbb, d77d0047) by @patzick in https://github.com/open-mercato/cezar/pull/1565
+* fix(provider-auth): keep a dead Claude login latched instead of self-checking it away (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1566
+### Other changes
+* fix(desktop): let the macOS app use the microphone for dictation (shell 0.1.10, telemetry c55c7b0b) by @patzick in https://github.com/open-mercato/cezar/pull/1558
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.16.0...v0.16.1
+
+# 0.16.0 (2026-10-20)
+
+<!-- Release notes generated using configuration in .github/release.yml at c4c3ebab5f17426abaa8c4d2f54a12ffe3930da9 -->
+
+## What's Changed
+### ✨ Features
+* feat(telemetry): label task archive/pin events with the button used by @patzick in https://github.com/open-mercato/cezar/pull/1452
+* feat: task terminal and workspace layouts from brutus, with the terminal as a view by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1424
+* feat(telemetry): report agent errors shown in a thread; offer Update for an outdated agent CLI by @patzick in https://github.com/open-mercato/cezar/pull/1481
+* feat(worktrees): run lifecycle scripts with explicit recovery by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1495
+* feat(settings): one full-screen settings surface with a shared sidebar by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1413
+* feat(web): ⌘P task palette — act on tasks, switch fast, keyboard shortcuts by @patzick in https://github.com/open-mercato/cezar/pull/1505
+* feat(self-update): update when idle by @patzick in https://github.com/open-mercato/cezar/pull/1512
+* feat(web): task tab row, Terminal as a view, layouts saved by name for every task by @patzick in https://github.com/open-mercato/cezar/pull/1525
+* feat(web): agent-driven git steps with loading states in the run header by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1529
+* ci(release): release lines — cut, patch-first release and backport workflows; main → 0.16.0 by @patzick in https://github.com/open-mercato/cezar/pull/1531
+### 🐛 Fixes
+* fix: accept attachment-only tasks on POST /runs (telemetry 18c930de) by @patzick in https://github.com/open-mercato/cezar/pull/1451
+* feat(attachments): stage uploads on attach — up to 20 per message, 20 MB of images by @patzick in https://github.com/open-mercato/cezar/pull/1448
+* fix(dictation): hide the mic where it can't work, group dictation failures as one (telemetry 38ccdbdc) by @patzick in https://github.com/open-mercato/cezar/pull/1453
+* fix(provider-auth): probe Copilot with --no-auto-update and name a non-ACP copilot by @patzick in https://github.com/open-mercato/cezar/pull/1456
+* fix(cockpit): reload once when a stale shell's chunk fails to load by @patzick in https://github.com/open-mercato/cezar/pull/1454
+* fix(cockpit): hide Terminal resume in hosted mode (telemetry f179cc7d) by @patzick in https://github.com/open-mercato/cezar/pull/1455
+* fix(pr): survive a dropped response to the PR publish (telemetry 9119d21a) by @patzick in https://github.com/open-mercato/cezar/pull/1458
+* fix(repo): don't offer to switch to a branch another worktree holds (telemetry da5ca728) by @patzick in https://github.com/open-mercato/cezar/pull/1462
+* fix(install): retry with a cezar-owned npm cache when ~/.npm is root-owned (telemetry 7a3f659a) by @patzick in https://github.com/open-mercato/cezar/pull/1461
+* fix(spawn): run Windows npm .cmd shims as node <script> (telemetry a330744e) by @patzick in https://github.com/open-mercato/cezar/pull/1460
+* fix(pr): don't offer or push an empty branch as a PR (telemetry 16aef26d) by @patzick in https://github.com/open-mercato/cezar/pull/1459
+* fix(provider-auth): re-ask a CLI that exits 0 having printed nothing (telemetry 35838a52) by @patzick in https://github.com/open-mercato/cezar/pull/1466
+* fix(thread): wait out a session gap instead of failing a reply with 409 session closed (telemetry 1408d7cb) by @patzick in https://github.com/open-mercato/cezar/pull/1467
+* fix(spawn): run npm's .ps1 and native-binary shims without a shell (telemetry 3626ac13) by @patzick in https://github.com/open-mercato/cezar/pull/1470
+* fix(thread): a one-click Continue on an already-live run is not a failure (telemetry 77117b95) by @patzick in https://github.com/open-mercato/cezar/pull/1473
+* test(thread): address #1473 review — pin review send-back recovery, keep footer Continue out of message_sent by @patzick in https://github.com/open-mercato/cezar/pull/1474
+* fix(automations): copy filters and skill steps from another project's automation; flag prompt-only author conditions by @patzick in https://github.com/open-mercato/cezar/pull/1472
+* fix(composer): accept HTML, CSV, JSON and source files as attachments (telemetry 6c4b3066) by @patzick in https://github.com/open-mercato/cezar/pull/1482
+* fix(provider-gate): name a signed-out selected account, and check it before Start (telemetry ac53a6ef) by @patzick in https://github.com/open-mercato/cezar/pull/1497
+* fix(opencode): answer permission prompts so a run never hangs on one by @patzick in https://github.com/open-mercato/cezar/pull/1500
+* fix(provider-auth): resolve Cursor's cursor-agent first, read older CLIs' plain status (telemetry 8d304c50) by @patzick in https://github.com/open-mercato/cezar/pull/1503
+* fix(telemetry): scrub file names from toast reports so attachment refusals group (telemetry 0f1255b6) by @patzick in https://github.com/open-mercato/cezar/pull/1502
+* fix(provider-auth): a version-manager shim with nothing behind it is not-installed (telemetry f67df9d2) by @patzick in https://github.com/open-mercato/cezar/pull/1504
+* fix(web): highlight each diff hunk and side separately by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1457
+* fix(attachments): take any file as a path-only binary attachment instead of refusing it (telemetry 48850f4a) by @patzick in https://github.com/open-mercato/cezar/pull/1510
+* fix(provider-auth): latch a runtime auth rejection on the agent account that ran (telemetry 9e4a95db) by @patzick in https://github.com/open-mercato/cezar/pull/1511
+* fix(windows): retry transient EPERM in the async atomic writers too by @patzick in https://github.com/open-mercato/cezar/pull/1515
+* fix(provider-auth): re-ask a status probe a signal interrupted instead of reporting it (telemetry ce0c5d1f) by @patzick in https://github.com/open-mercato/cezar/pull/1516
+* fix(provider-auth): ask a timed-out status probe once more with a longer budget (telemetry e316b141) by @patzick in https://github.com/open-mercato/cezar/pull/1517
+* fix(agent-profiles): resolve an unregistered boot project when saving an account selection (telemetry d81f8db7) by @patzick in https://github.com/open-mercato/cezar/pull/1518
+* fix(provider-auth): a hung status probe keeps a recent connected answer (telemetry b28d2993) by @patzick in https://github.com/open-mercato/cezar/pull/1519
+* fix(runs): never prune a live run or its dispatch ancestors (telemetry 73c6e796) by @patzick in https://github.com/open-mercato/cezar/pull/1520
+* fix(web): stop the host widget's per-frame effect setState from tripping React #185 (telemetry 21762d83) by @patzick in https://github.com/open-mercato/cezar/pull/1521
+* fix(runs): honor a cancel that lands while a continuation awaits its lifecycle gate by @patzick in https://github.com/open-mercato/cezar/pull/1522
+* fix(runs): honor Finish while a closed session is still settling (telemetry 6a3cecee) by @patzick in https://github.com/open-mercato/cezar/pull/1527
+* fix(self-update): show a worktree-linked version as -dev by @patzick in https://github.com/open-mercato/cezar/pull/1530
+* fix(self-update): count running tasks across every project; when idle for every picker by @patzick in https://github.com/open-mercato/cezar/pull/1524
+* fix(provider-auth): fall back on any --format rejection, read more plain Cursor status shapes (telemetry 1cd541cc) by @patzick in https://github.com/open-mercato/cezar/pull/1536
+* fix(boot): don't exit when a project's .ai/cezar cannot be created (telemetry 5af5aec6) by @patzick in https://github.com/open-mercato/cezar/pull/1541
+### Other changes
+* fix(skills): follow a dropped skills-update apply to its result by @patzick in https://github.com/open-mercato/cezar/pull/1447
+* chore(desktop): bump the shell to 0.1.7 (#1461 npm-cache fix) by @patzick in https://github.com/open-mercato/cezar/pull/1463
+* feat(web): sort Tasks by last activity, with a Recent/Created toggle by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1433
+* feat: Design Mode and Preview as the task workspace's Browser view (supersedes #1422, #1423) by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1492
+* test(worktrees): wait for the record to release a settled lifecycle operation by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1501
+* fix(windows): retry transient EPERM when atomically replacing state files by @patzick in https://github.com/open-mercato/cezar/pull/1514
+* perf(web): make the Changes tab instant to revisit and responsive on large diffs by @martaradziszewska in https://github.com/open-mercato/cezar/pull/1523
+* feat(git): Source-Control sync for the main checkout + in-place tasks on a new branch by @kinelm in https://github.com/open-mercato/cezar/pull/1528
+* feat(preview): run the task's app from an empty Preview, with per-project start recipes by @pat-lewczuk in https://github.com/open-mercato/cezar/pull/1494
+* fix(opencode): don't fail a run whose server starts slowly or prints its URL elsewhere (telemetry 2d01c3c9) by @patzick in https://github.com/open-mercato/cezar/pull/1538
+
+
+**Full Changelog**: https://github.com/open-mercato/cezar/compare/v0.15.2...v0.16.0
+
 # 0.15.2 (2026-10-14)
 
 ## Highlights

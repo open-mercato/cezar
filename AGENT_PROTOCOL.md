@@ -66,7 +66,8 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout; gemini = `gemini --acp`, the
+  `pi --mode rpc` over JSONL stdin/stdout; antigravity = `agy --input-format stream-json --output-format stream-json`
+  over NDJSON stdin/stdout; gemini = `gemini --acp`, the
   Agent Client Protocol (JSON-RPC 2.0 over NDJSON stdio) through the shared
   ACP layer (`acp-client.ts` + `acp-ui-mapper.ts`, spec
   `2026-09-19-runner-seam-native-backends`).
@@ -331,6 +332,15 @@ transport into `UiEvent`s. The authoritative table is
 | subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` | none on the wire; substitute: one `task` item per delegation (Gemini `invoke_agent`) |
 | `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped | `session/prompt` result: standard `usage`, or dialect `usageFromPromptResult` (Gemini `_meta.quota.token_count`), summed per session |
 
+`antigravity` speaks agy's own stream-json (`core/antigravity-ui-mapper.ts`): `init` →
+`session.started`, each stdin message's `user_input` step → `turn.started`, `agent_response` steps →
+message items (`text_delta`), `tool` / `subagent` steps → tool / task items, `result` →
+`turn.completed`. Turn usage is the sum of the steps' own `usage` — `result.usage` is
+cumulative for the whole conversation. The wire carries no plan, no reasoning text, no edit
+content and no parent attribution; `__fixtures__/antigravity/README.md` records the live
+captures behind each of those parity exceptions. Private MCP is a launch-side exception: agy has
+no launch-time MCP channel, so `antigravity` is not in `PRIVATE_MCP_RUNNERS`.
+
 `copilot` and `gemini` share one vendor-neutral transport and mapper with any future ACP backend
 (`core/acp-client.ts`, `core/acp-ui-mapper.ts`); what differs per agent is a small `AcpDialect`
 (`core/copilot-ui-mapper.ts`, `core/gemini-ui-mapper.ts`). The wire record behind the copilot column above is
@@ -556,3 +566,64 @@ breaking change requiring the documented deprecation path.
 - `BACKWARD_COMPATIBILITY.md` — §7 (this protocol) and §2/§3 (SSE names, NDJSON).
 - `.ai/analysis/cockpit-ui-redesign/agent-event-protocols.md` — the deep design record (§7, §7.1).
 - `.ai/specs/2026-07-14-cockpit-ui-redesign.md` — the spec (protocol v2, parity requirement).
+
+## Optional account usage metadata (#1340 component)
+
+`AgentRunSpec.onUsageWindows?: (observation: UsageWindowsObservation) => void`
+receives backend-neutral metadata during **both** `run` and `startSession`.
+Claude maps `rate_limit_event`, including `allowed` and `unifiedWindows`, and
+canonical `Claude AI usage limit reached|<epoch>` markers in errored terminal
+`result` frames, either in the string `result` or string entries of `errors[]`.
+Multiple canonical markers in one frame produce one observation with the latest
+trusted future reset. Terminal markers reuse the auto-resume parser and its seven-day
+bound, require a strictly future reset, and emit one account-wide blocked
+`terminal-limit` window (`kind: other`, unknown duration) through the same
+account-bound callback. No window cadence is inferred; expired markers are ignored.
+This metadata is retained independently of whether auto-resume is enabled;
+Codex maps `account/rateLimits/updated`. No model turn is created to refresh this
+channel. Missing events are normal. Callback failures cannot fail an agent run.
+The integration caller captures the **resolved account of that specific step**
+in its callback closure; a runner must not guess a workspace account.
+
+The Zod contract is `packages/contract/src/usage-windows.ts`. All times are epoch
+milliseconds. An observation carries provider, source, observation time and
+windows. Each window carries an id, kind, optional limit id, applicability,
+model list, nullable reset/duration/percentage, status and observation time.
+Percentages may exceed 100. Unknown applicability must make selection unavailable,
+not fall back to a different model's window. For `rate_limit_event`, Claude only marks the explicitly
+named rejected window blocked; a rejected overage does not override allowed main
+usage. Unknown Claude/model-specific limit names and non-general Codex buckets
+are deliberately `applicability: unknown`; names are not model selectors.
+Codex keyed buckets take precedence over the legacy alias. Missing windows are
+partial observations; explicit null windows clear previous knowledge. A primary
+window can be weekly and secondary can be null: labels must use duration.
+
+`saveUsageWindows(binding, observation)` and `loadUsageWindows(binding)` in
+`workspace/usage-windows.ts` bind snapshots to provider, account id, resolved
+profile location and optional hashed identity. Writes use the workspace sandbox
+guard, a bounded cross-process lease and atomic 0600 replacement under CEZ_HOME.
+Corrupt/unwritable state degrades to no data with one redacted warning per file.
+Newer observations replace older windows; other windows and accounts survive.
+A verified identity change discards the old login's windows. Unidentified observations cannot overwrite identified snapshots or remove established holds, including when the profile location changes. Bind the exact same
+identity when reading; absent identity is not a wildcard.
+
+`futureUsageWindows(snapshot, now)` retains each known reset until it expires,
+with **no snapshot TTL**. `isUsageWindowBlocking(window, now)` treats an observed
+block as active until that window resets; it does not assert live allowance.
+The parent selector must enforce applicability and the seven-day upper bound; these helpers never select or schedule a task.
+
+`probeCodexUsageWindows(resolvedProfile, { force?, identityOnly? })` takes
+a trusted server-resolved Codex profile, never an HTTP-supplied path, environment
+or executable. It returns `{ binding, observation } | null` and does not persist. Usage reads run during preview and when a scheduled start checks for a newer blocking reset at its due time. Account-binding revalidation uses `identityOnly`, which skips `account/rateLimits/read`. Ordinary Codex steps start no probe and record no usage windows. Only a scheduled run bound to a Codex identity attributes streamed observations, re-verifying through the short identity cache (at most one app-server per cache window); an unanswered check skips that observation and a changed identity disables collection for the stream. `probeCodexIdentity(profile, { force? })` tells an unanswered read (`{ unavailable: true }`) from a definitive answer (`{ identity }`, `null` for an API-key login). These checks never create model turns.
+It uses the existing executable resolver and curated runner environment with the
+resolved CODEX_HOME pinned, and the profile directory as cwd. It sends only
+`initialize`, `initialized`, `account/read` (`refreshToken: false`) and
+`account/rateLimits/read`: no thread, turn or model call. Runtime (including
+profile checks) is bounded to 5 seconds, combined stdout/stderr to 256 KiB,
+concurrency to four, cache to 64 entries/15 seconds and single-flight per
+account/location. `force` bypasses the cache for a fresh identity comparison.
+API-key/no-identity accounts cannot be bound by identity; scheduled starts bind them by profile location. Identity hashes stable account metadata;
+credentials and raw protocol/error messages are never returned or persisted.
+The short-lived process is killed when the read finishes or exceeds a bound.
+Fixtures and tests live alongside `core/usage-windows*`, `core/codex-usage-probe*`
+and `workspace/usage-windows.test.ts`.

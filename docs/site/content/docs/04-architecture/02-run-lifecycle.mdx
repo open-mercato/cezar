@@ -1,0 +1,90 @@
+---
+title: "Task lifecycle, concurrency, and recovery"
+description: "What task statuses mean, why tasks wait in the queue, and what remains after work stops or a worktree is removed."
+sources:
+  - label: "Complete status list"
+    path: packages/cezar/src/runs/store.ts
+    line: 38
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Shared slots and the resume exception"
+    path: packages/cezar/src/workspace/semaphore.ts
+    line: 7
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Default limits"
+    path: packages/cezar/src/workspace/semaphore.ts
+    line: 116
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Directories and branches"
+    path: packages/cezar/src/git-worktree.ts
+    line: 18
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "History paths"
+    path: packages/cezar/src/runs/store.ts
+    line: 1830
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Worktree lifecycle"
+    path: docs/reference.md
+    line: 848
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Auto-land conditions and autonomous execution"
+    path: packages/cezar/src/workflows/run.ts
+    line: 7163
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## Task status and process activity
+
+`RunRecord` has seven main statuses. Monitoring is an activity of a task that can still be running, not a separate monitoring status. Integrations should also read activity and waiting information. These fields distinguish token-consuming work from waiting for CI or subtasks.
+
+| Status | Meaning |
+| --- | --- |
+| queued | The task is saved and waiting for its turn or an available resource. |
+| running | The workflow is in progress. Activity information shows whether the agent is currently working. |
+| waiting | The session is waiting for further interaction and has released its slot in the normal concurrency limit. |
+| review | The work is waiting for review. A subtask with this status reports completion to its parent. |
+| done | Execution has finished. The workflow determines which checks the work included. |
+| failed | Execution ended with an error. Check the step and task history for the cause. |
+| cancelled | Execution was interrupted. Cezar does not automatically undo the changes. |
+
+## Why a task waits in the queue
+
+`WorkspaceSemaphore` shares `maxParallel` across projects. The default is 2 for the entire workspace. A second repository uses the same pool, although the project registry can assign it an additional limit. The workspace enforces the host-wide limit; the old resource fields in repository configuration no longer control it.
+
+A task needs both an execution slot and access to its working directory. Tasks without a worktree share the repository directory and need exclusive access to it, regardless of `maxParallel`. Separate worktrees give agents separate working directories where they can make independent changes in parallel.
+
+A session waiting for a reply releases its slot. Resuming it with a message can temporarily exceed the normal limit, so your reply does not have to wait behind new tasks. Graphs also release slots while waiting for a gate, a reply, CI, or a subtask. A separate limit controls how many subtasks dispatch can create.
+
+## What a worktree isolates
+
+The default task working directory is `.ai/cezar/worktrees/<runId>`. The engine records its starting point and works on a separate branch. The fallback branch name is cez/&lt;first-8-ID-characters>, although the record may specify a descriptive name. Git worktree separates tracked files and the checkout, but does not create a container or a separate operating system user.
+
+Databases, development server ports, and Docker resources can still collide. Optional lifecycle scripts prepare and clean up the environment. They run bash -c without a login profile. Workflow checks use `bash -lc` instead. Both execute on the Cezar host.
+
+Setup also runs when a previously reclaimed checkout is restored. Finishing or archiving a task does not run cleanup. If a crash occurs between executing a command and recording its result, you must decide whether to retry. The external effect may already have happened, so exactly-once execution is not guaranteed.
+
+## Auto-land in local trunk mode
+
+Trunk mode can work without a separate worktree and use landing: auto. It requires worktree: false, `readOnly` disabled, and no `inPlaceBranch`. Configuration tracked in Git cannot grant this permission.
+
+Auto-land creates a commit and runs the required checks. If the branch has an upstream, it synchronizes through rebase and attempts a push. Without an upstream, it can finish with a local commit and pushed: false. An autonomous task can run auto-land before finishing; an interactive task waits for Commit or Finish. Merging a pull request on GitHub is a separate operation.
+
+## Where to find task history
+
+`RunStore` writes the index through a temporary file and rename, and appends history in NDJSON format. The seq number keeps increasing after a restart, so clients can distinguish new events from ones they already replayed. A partial interface update does not always have its own persistent record.
+
+After a restart, Cezar rebuilds the queue from saved records. Resuming the agent also depends on its backend session and retained context. Restarting does not undo commands: disk changes or external effects may have occurred before the last saved event.
+
+```txt
+.ai/cezar/
+  runs.json                  task index and records
+  runs/<runId>.ndjson         persistent events
+  runs/<runId>.handoff.md     context handoff notes
+  worktrees/<runId>/         task checkout
+  lifecycle/                setup and cleanup operations
+~/.cezar/config.json         workspace and project registry
+```
+
+## Worktree retention and troubleshooting
+
+By default, Cezar keeps 10 completed worktrees. A value of 0 removes the limit. Reclaim frees space by deleting the directory while keeping the branch for recovery. Deleting a task and reclaiming space are separate operations; instructions should distinguish them.
+
+If a task will not start, check its status and activity, workspace and project limits, any pending lifecycle scripts, and the last check result. For high RAM usage, inspect the whole task process tree. The optional `memoryLimitMb` can stop work that exceeds the limit. `maxParallel` limits concurrent tasks, not the memory of an individual process.

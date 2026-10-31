@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -239,5 +239,24 @@ describe('createDraftPr recovery', () => {
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.error).toContain('nothing to propose');
     expect(calls().filter((c) => c === 'pr create')).toHaveLength(1);
+  });
+
+  // Telemetry 16aef26d: a task with no commits used to be pushed, then refused by gh.
+  it('refuses a branch with nothing over its base before pushing or calling gh', async () => {
+    fakeGh('echo https://github.com/acme/demo/pull/8', '[]');
+    await git(['push', '-q', 'origin', 'main']);
+    const outcome = await createDraftPr({ ...input(), run: { ...input().run, baseBranch: 'main' } });
+    expect(outcome).toEqual({ ok: false, error: expect.stringContaining('nothing to propose') });
+    expect(existsSync(join(bin, 'calls'))).toBe(false);
+    const { stdout } = await run('git', ['ls-remote', '--heads', remote, 'cez/abc123']);
+    expect(stdout.trim()).toBe('');
+  });
+
+  it('still publishes a branch whose commits are ahead of its base', async () => {
+    fakeGh('echo https://github.com/acme/demo/pull/8', '[]');
+    await git(['push', '-q', 'origin', 'main']);
+    writeFileSync(join(repo, 'a.txt'), 'work\n');
+    const outcome = await createDraftPr({ ...input(), run: { ...input().run, baseBranch: 'main' } });
+    expect(outcome).toEqual({ ok: true, url: 'https://github.com/acme/demo/pull/8', dryRun: false });
   });
 });

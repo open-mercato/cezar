@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeTempDir } from '../test-fixtures/remove-temp-dir.testkit.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { parseAskMarker } from '../core/ask.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -559,7 +560,7 @@ describe('RunManager.continueRun override', () => {
     expect(after?.model).toBeUndefined();
   });
 
-  it('a runner-only switch keeps a free-form model id — only known foreign presets are cleared', () => {
+  it("a runner-only switch drops a pin that is not provably the target's (telemetry 8e1173b1)", () => {
     const record = store.createRun({
       title: 't',
       workflow: 'quick-task',
@@ -570,8 +571,46 @@ describe('RunManager.continueRun override', () => {
     });
     store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
     store.updateStep(record.id, 's1', { sessionId: 'sess-1' });
+    // Nobody picked this gateway id for codex; the composer already shows `auto` after a switch.
     expect(manager.continueRun(record.id, { runner: 'codex' })).toEqual({ ok: true });
-    expect(store.getRun(record.id)?.model).toBe('my-org/custom-tune');
+    expect(store.getRun(record.id)?.model).toBeUndefined();
+  });
+
+  it("a runner-only switch keeps a pin native to the target, and an explicit pick always wins", () => {
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'opencode',
+      model: 'anthropic/claude-sonnet-5',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1' });
+    expect(manager.continueRun(record.id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.model).toBe('anthropic/claude-sonnet-5');
+  });
+
+  it('a runner-only switch never carries an Antigravity model name to another backend, or back', () => {
+    // The live failure: agy signed out, the cockpit fell back to claude, and the run's
+    // `Gemini 3.8 Flash (High)` pin reached `claude --model`.
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'antigravity',
+      model: 'Gemini 3.8 Flash (High)',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1', backend: 'antigravity' });
+    expect(manager.continueRun(record.id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.runner).toBe('claude');
+    expect(store.getRun(record.id)?.model).toBeUndefined();
+
+    const id = resumableRun(); // claude/sonnet
+    expect(manager.continueRun(id, { runner: 'antigravity' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.model).toBeUndefined();
   });
 
   it('a runner-only continue on the SAME backend keeps the pin (no spurious clear)', () => {
@@ -739,7 +778,8 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function changedRun(autonomous?: boolean): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', autonomous, steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     writeFileSync(join(wt.path, 'a.txt'), 'one\nTWO\nthree\n');
     writeFileSync(join(wt.path, 'new.txt'), 'x\n');
     return store.getRun(record.id) as RunRecord;
@@ -749,16 +789,18 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   async function cleanRun(): Promise<RunRecord> {
     const record = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
     const wt = await createWorktree(repoRoot, record.id, 'main');
-    store.updateRun(record.id, { worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
+    // No active generation: model recover() settling an open interactive session.
+    store.updateRun(record.id, { status: 'waiting', worktreePath: wt.path, branch: wt.branch, baseBranch: wt.baseBranch });
     return store.getRun(record.id) as RunRecord;
   }
 
-  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<void> }).settleSuccess(id);
+  const settle = (id: string) => (manager as unknown as { settleSuccess(id: string): Promise<boolean> }).settleSuccess(id);
 
   it('gate off (default) + changes → done, diff left in the worktree', async () => {
     const record = await changedRun();
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('completed');
   });
 
   it('gate on (env) + non-autonomous + changes → review', async () => {
@@ -778,8 +820,10 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   it('gate on + no changes → done (the diff check stays first)', async () => {
     process.env.CEZ_REVIEW_GATE = '1';
     const record = await cleanRun();
+    store.setLifecycleObserver(() => undefined);
     await settle(record.id);
     expect(store.getRun(record.id)?.status).toBe('done');
+    expect(store.getRun(record.id)?.completionReason).toBe('no_changes');
   });
 });
 
@@ -953,6 +997,78 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
     expect(notes[0]).not.toContain('chain of');
     expect(notes[0]).not.toContain('earlier step');
     expect(notes[0]).not.toContain('project-conventions');
+  }, 30_000);
+});
+
+/** spec 2026-10-19-repo-git-sync: an in-place run with `newBranch` forks the checkout itself. */
+describe('worktree off + newBranch switches the repo checkout to a branch off base', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const workflow: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
+  };
+  const settle = async (id: string) => {
+    const deadline = Date.now() + 20_000;
+    while (!['done', 'review', 'failed', 'cancelled'].includes(store.getRun(id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return store.getRun(id);
+  };
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-inplace-branch-'));
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, '.gitignore'), '.ai/\nnotes.md\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    // The checkout stands on another branch: the new one still forks from `main`.
+    await run('git', ['checkout', '-q', '-b', 'elsewhere'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'x.txt'), 'x\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'elsewhere only'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ baseBranch: 'main' }));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(async () => {
+    manager.dispose();
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    await removeTempDir(repoRoot);
+  });
+
+  it('creates the named branch from base, records it, and keeps it out of the worktree path', async () => {
+    const record = manager.startRun(workflow, {
+      task: 'mock:done tweak',
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/tweak',
+    });
+    const done = await settle(record.id);
+    expect(done).toMatchObject({ worktree: false, inPlaceBranch: true, branch: 'feat/tweak' });
+    expect(done?.worktreePath).toBeUndefined();
+    const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    expect(head).toBe('feat/tweak');
+    const mainSha = (await run('git', ['rev-parse', 'main'], { cwd: repoRoot })).stdout.trim();
+    expect(done?.baseBranch).toBe(mainSha);
+  }, 30_000);
+
+  it('without newBranch an in-place run leaves the checkout where it is', async () => {
+    await run('git', ['checkout', '-q', 'elsewhere'], { cwd: repoRoot });
+    const record = manager.startRun(workflow, { task: 'mock:done look', worktree: false });
+    const done = await settle(record.id);
+    expect(done?.inPlaceBranch).toBeUndefined();
+    expect(done?.branch).toBeUndefined();
+    const head = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoRoot })).stdout.trim();
+    expect(head).toBe('elsewhere');
   }, 30_000);
 });
 
@@ -1442,6 +1558,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Library');
     expect(questions[0]!.options).toHaveLength(2);
+    expect(parked?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
+    expect(parked?.attentionRequest?.questions[0]?.options).toHaveLength(2);
   }, 30_000);
 
   it('preserves the default 15-minute plain-wait expiry safeguard (#992)', () => {
@@ -1544,6 +1662,103 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       active.delete(record.id);
       vi.useRealTimers();
     }
+  });
+
+  describe('Finish while the session is settling (telemetry 6a3cecee)', () => {
+    const createWaiting = (title: string) => {
+      const record = store.createRun({ title, workflow: 'quick-task', task: title, steps: [{ id: 'task', name: 'Task', kind: 'agent' }] });
+      store.updateRun(record.id, { status: 'waiting' });
+      return record;
+    };
+    const activeMap = () => (manager as unknown as { active: Map<string, object> }).active;
+    const lifecycleMessages = (id: string) =>
+      readEvents(id).filter((event) => event.type === 'lifecycle').map((event) => event.message);
+
+    it('a closed-but-unsettled session takes Finish as the settlement intent instead of a 409', () => {
+      const record = createWaiting('closing');
+      const state = { cancelled: false, sessionEverOpened: true, idleClosed: true, askPark: 'waiting', session: { open: false } };
+      activeMap().set(record.id, state);
+      try {
+        expect(manager.finish(record.id)).toBe(true);
+        expect(state.idleClosed).toBeUndefined();
+        expect(state.askPark).toBe('abandoned');
+        // A repeat click is the same request, not a second event.
+        expect(manager.finish(record.id)).toBe(true);
+        expect(lifecycleMessages(record.id).filter((m) => m === 'finished by user while the session was closing')).toHaveLength(1);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
+
+    it('also covers the gap after teardown cleared the session object', () => {
+      const record = createWaiting('torn down');
+      activeMap().set(record.id, { cancelled: false, sessionEverOpened: true });
+      try {
+        expect(manager.finish(record.id)).toBe(true);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
+
+    it('accepts a review that is still unwinding once the engine lets go', () => {
+      const record = createWaiting('review unwinding');
+      store.updateRun(record.id, { status: 'review' });
+      const state = { cancelled: false, sessionEverOpened: true };
+      activeMap().set(record.id, state);
+      expect(manager.finish(record.id)).toBe(true);
+      expect(store.getRun(record.id)?.status).toBe('review');
+      (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
+      expect(store.getRun(record.id)?.status).toBe('done');
+      expect(store.getRun(record.id)?.completionReason).toBe('accepted');
+    });
+
+    it('a repeated End session that lands after the review settle does not accept the review', () => {
+      const record = createWaiting('double click');
+      const end = vi.fn();
+      const session = { open: true, end };
+      const state = { cancelled: false, sessionEverOpened: true, session };
+      activeMap().set(record.id, state);
+      expect(manager.finish(record.id)).toBe(true);
+      expect(end).toHaveBeenCalledOnce();
+      session.open = false;
+      store.updateRun(record.id, { status: 'review' });
+      expect(manager.finish(record.id)).toBe(true);
+      (manager as unknown as { dropActive: (id: string, s: object) => void }).dropActive(record.id, state);
+      expect(store.getRun(record.id)?.status).toBe('review');
+    });
+
+    it('still refuses a cancelled run and a run that never opened a session', () => {
+      const cancelled = createWaiting('cancelled');
+      const fresh = createWaiting('never opened');
+      activeMap().set(cancelled.id, { cancelled: true, sessionEverOpened: true });
+      activeMap().set(fresh.id, { cancelled: false });
+      try {
+        expect(manager.finish(cancelled.id)).toBe(false);
+        expect(manager.finish(fresh.id)).toBe(false);
+      } finally {
+        activeMap().delete(cancelled.id);
+        activeMap().delete(fresh.id);
+      }
+    });
+
+    it('a Finish that lands while the idle settle checks the review gate still wins', async () => {
+      const record = createWaiting('finish mid gate');
+      const state = { cancelled: false, sessionEverOpened: true, idleClosed: true as boolean | undefined };
+      activeMap().set(record.id, state);
+      const internals = manager as unknown as {
+        reviewGateApplies: (id: string) => Promise<boolean>;
+        idleClosedFails: (id: string, s: object) => Promise<boolean>;
+      };
+      internals.reviewGateApplies = async () => {
+        expect(manager.finish(record.id)).toBe(true);
+        return false;
+      };
+      try {
+        expect(await internals.idleClosedFails(record.id, state)).toBe(false);
+      } finally {
+        activeMap().delete(record.id);
+      }
+    });
   });
 
   it('keeps the configured timeout armed at both new-run and reply continuation parks (#992)', async () => {
@@ -2196,6 +2411,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -2226,6 +2442,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
+    expect(store.getRun(record.id)?.attentionRequest?.requestId).toBe(asks[0]!.requestId);
     const recoveries = events.filter(
       (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
     );
@@ -2732,12 +2949,15 @@ describe('RunManager queued-stack mutators (#472)', () => {
     expect(buffer.has(r.id)).toBe(false);
   });
 
-  it('stops deferring once a session has opened (a closed session is a real 409)', () => {
+  /** A live owner between sessions defers (1408d7cb); an open session or a cancelled owner does not. */
+  it('defers across a session gap, never past an open session or a cancel', () => {
     const r = seedQueued();
-    (manager as unknown as { active: Map<string, unknown> }).active.set(r.id, {
-      cancelled: false,
-      sessionEverOpened: true,
-    });
+    const active = (manager as unknown as { active: Map<string, unknown> }).active;
+    active.set(r.id, { cancelled: false, sessionEverOpened: true });
+    expect(manager.deferMessage(r.id, text('between steps'))).toBe(true);
+    active.set(r.id, { cancelled: false, sessionEverOpened: true, session: { open: true } });
+    expect(manager.deferMessage(r.id, text('live'))).toBe(false);
+    active.set(r.id, { cancelled: true, sessionEverOpened: true });
     expect(manager.deferMessage(r.id, text('too late'))).toBe(false);
   });
 });
@@ -3082,9 +3302,11 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
     await waitFor(() => store.getRun(record.id)?.status === 'waiting');
     const eventsPath = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
     expect(readFileSync(eventsPath, 'utf8')).toContain('"type":"ask.requested"');
+    expect(store.getRun(record.id)?.attentionRequest?.questions.length).toBeGreaterThan(0);
     expect(manager.sendMessage(record.id, [{ type: 'text', text: 'Library: Vitest' }])).toBe(true);
     await waitFor(() => readFileSync(eventsPath, 'utf8').includes('"type":"turn-end"'));
     expect(store.getRun(record.id)?.status).toBe('waiting');
+    expect(store.getRun(record.id)?.attentionRequest).toBeUndefined();
   }, 30_000);
 });
 
@@ -3554,6 +3776,7 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
       '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the `demo-engine` skill verbatim.\n',
     );
     writeFileSync(join(repoRoot, '.ai/cezar/skills/demo-engine.md'), '---\nname: demo-engine\n---\n\nEngine.\n');
+    vi.mocked(track).mockClear();
     const record = manager.startRun(SINGLE_STEP, { task: '/demo-review 12', worktree: true });
     runId = record.id;
     await waitFor(() => eventsOf(record.id).some((e) => e.stepId === 'task' && e.type === 'text'));
@@ -3563,7 +3786,21 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
       expect(readFileSync(join(wt, dir, 'demo-engine/SKILL.md'), 'utf8')).toContain('Engine.');
     }
     expect(vi.mocked(track)).toHaveBeenCalledWith('skills_provisioned', { label: 'installed', value: 2 });
+    // The selected skill counts once, under its source: a repo skill's own name stays local.
+    const used = vi.mocked(track).mock.calls.filter(([event]) => event === 'skill_used');
+    expect(used).toEqual([['skill_used', { label: 'repo' }]]);
   }, 40_000);
+
+  it('reports where a task came from and which workflow it ran, never a custom name', () => {
+    vi.mocked(track).mockClear();
+    const sid = '0192f0e0-0000-7000-8000-000000000000';
+    manager.cancel(manager.startRun(SINGLE_STEP, { task: 'from the cockpit', worktree: false, deviceSid: sid }).id);
+    expect(vi.mocked(track)).toHaveBeenCalledWith('task_origin', { label: 'cockpit' }, { sid });
+    expect(vi.mocked(track)).toHaveBeenCalledWith('workflow_used', { label: 'quick-task' }, { sid });
+    runId = manager.startRun({ ...SINGLE_STEP, name: 'acme-secret-flow', source: 'file' }, { task: 'mine', worktree: false }).id;
+    expect(vi.mocked(track)).toHaveBeenCalledWith('task_origin', { label: 'api' }, { sid: undefined });
+    expect(vi.mocked(track)).toHaveBeenCalledWith('workflow_used', { label: 'custom' }, { sid: undefined });
+  });
 
   it("writes no skill copies into the user's own checkout on an in-place run", async () => {
     // In place the cwd IS the checkout, whose skill dirs `discoverSkills` reads ahead of the
@@ -3577,6 +3814,8 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
       for (const dir of ['.claude/skills', '.agents/skills']) {
         expect(existsSync(join(repoRoot, dir, 'create-cezar-automation'))).toBe(false);
       }
+      // cezar's own skill is public, so it is counted by name.
+      expect(vi.mocked(track)).toHaveBeenCalledWith('skill_used', { label: 'create-cezar-automation' });
     } finally {
       if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
       else process.env.CEZ_API_URL = savedApiUrl;
@@ -3598,5 +3837,6 @@ describe("registry /skill expansion on a fresh run's opening prompt (#278)", () 
     expect(echoed?.text).toContain('/compact please');
     // A backend's own command is not a missing skill.
     expect(vi.mocked(track)).not.toHaveBeenCalledWith('skills_provisioned', expect.anything());
+    expect(vi.mocked(track)).not.toHaveBeenCalledWith('skill_used', expect.anything());
   }, 40_000);
 });

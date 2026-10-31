@@ -1,0 +1,25 @@
+---
+title: "Set shared project instructions"
+description: "Save rules that Cezar will include in future agent runs for the project."
+related:
+  links:
+    - guides/common-questions
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/instructions-section.tsx
+    line: 82
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The additional project instructions apply regardless of which agent you choose.
+
+## Where to find it
+
+Settings → project → Instructions → System prompt
+
+## How to use it
+
+1. Enter your project rules and save them.
+2. Start a new task to use the saved instructions.
+
+> **Good to know**: The instructions apply to future runs. Saved session history stays unchanged.
