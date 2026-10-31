@@ -54,7 +54,8 @@ const RULES: Rule[] = [
     // (`&#8203;`) and longer hashes, and comment stripping removes issue refs like `#402`.
     pattern: /(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})(?![\w-])/g,
     applies: styleSources,
-    allowed: (rel) => rel === 'src/styles/index.css',
+    // A `theme-color` meta takes a literal, not a var(); brand-asset.test.ts pins theme.ts to the sheet.
+    allowed: (rel) => rel === 'src/styles/index.css' || rel === 'src/lib/theme.ts',
   },
   {
     name: 'no-amber-text',

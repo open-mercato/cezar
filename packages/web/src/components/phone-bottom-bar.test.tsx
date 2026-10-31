@@ -59,6 +59,13 @@ describe('PhoneBottomBar', () => {
     expect(links.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/other/')
   })
 
+  it('points Tasks at the project on screen, ahead of the stored one', () => {
+    device()
+    localStorage.setItem(LAST_LOCATION_STORAGE_KEY, JSON.stringify({ projectId: 'other', pathname: '/p/other/git' }))
+    renderShell('/p/boot/git')
+    expect(within(bar()!).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/p/boot/')
+  })
+
   it('stays out of a phone browser tab', () => {
     device({ standalone: false })
     renderShell('/manager')

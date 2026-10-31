@@ -76,6 +76,11 @@ describe('lastProjectIndex', () => {
     expect(lastProjectIndex(remembered, REGISTRY, 'boot')).toBe('/p/other/')
   })
 
+  it('reads the project off the path alone, whatever query the page had', () => {
+    const queried = { projectId: 'other', pathname: '/p/other', search: '?a=100%' }
+    expect(lastProjectIndex(queried, REGISTRY, 'boot')).toBe('/p/other/')
+  })
+
   it('falls back to the bare-root landing for nothing remembered or a project that left', () => {
     expect(lastProjectIndex(null, REGISTRY, 'boot')).toBe('/p/boot/')
     expect(lastProjectIndex({ projectId: 'gone', pathname: '/p/gone/' }, REGISTRY, 'boot')).toBe('/p/boot/')
