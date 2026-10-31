@@ -139,6 +139,15 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
     label: 'Pi',
     groups: [group('pi', 'settings', 'Settings'), group('pi', 'memory', 'Memory & instructions')],
   },
+  {
+    id: 'kimi',
+    label: 'Kimi',
+    note: EDITOR_PLUS_COMMIT,
+    groups: [
+      group('kimi', 'settings', 'Settings'),
+      group('kimi', 'memory', 'Memory & instructions'),
+    ],
+  },
 ]
 
 export function descriptorFor(agent: Runner): AgentDescriptor {

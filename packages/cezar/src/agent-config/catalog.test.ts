@@ -9,6 +9,7 @@ const HOME: AgentHomePaths = {
   copilot: '/home/u/.copilot',
   junie: '/home/u/.junie',
   pi: '/home/u/.pi/agent',
+  kimi: '/home/u/.kimi-code',
 };
 
 describe('agent-config catalog', () => {
@@ -28,7 +29,7 @@ describe('agent-config catalog', () => {
   it('<repo>/AGENTS.md is ONE entry read by every runner that reads it', () => {
     const agents = CONFIG_FILES.filter((f) => f.label === 'AGENTS.md' && f.scope === 'project');
     expect(agents).toHaveLength(1);
-    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot', 'pi']);
+    expect(agents[0]!.runners).toEqual(['codex', 'opencode', 'copilot', 'pi', 'kimi']);
   });
 
   it('resolves repo-relative paths under the repo root', () => {
