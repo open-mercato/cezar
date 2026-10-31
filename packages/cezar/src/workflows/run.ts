@@ -1456,6 +1456,7 @@ export class RunManager {
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
+      dispatchBusy: () => this.dispatchBusy(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
@@ -1930,6 +1931,30 @@ export class RunManager {
   }
 
   /**
+   * Dispatch children THIS manager holds that actually occupy a compute slot — the local
+   * contribution to `WorkspaceSemaphore.dispatchBusy()` (spec
+   * 2026-09-20-dispatch-admission-scheduler). The per-run rule is the `busySlots()` rule applied
+   * to one run: a `starting` run holds a slot, and so does an `active` run that is not `waiting`
+   * (#347 — a parked child consumes no agent turn). The monitoring/watcher exemptions above are
+   * deliberately NOT mirrored here: they widen the HOST's parallel budget for parents parked on
+   * their own children, while this counter answers a different question — how many children are
+   * running right now.
+   */
+  private dispatchBusy(): number {
+    // `starting` and `active` overlap only inside the synchronous hand-off in `execute`
+    // (`active.set` immediately followed by `starting.delete`), so collapse both into one set
+    // rather than risking a double count of a child that is mid-hand-off.
+    const slotHolders = new Set<string>([...this.starting, ...this.active.keys()]);
+    let count = 0;
+    for (const runId of slotHolders) {
+      if (this.waiting.has(runId)) continue;
+      if (this.store.getRun(runId)?.dispatch?.parentRunId === undefined) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
@@ -2013,6 +2038,9 @@ export class RunManager {
         this.pumpAgain = false;
         const repo = await getRepoInfo(this.repoRoot);
         const maxParallel = this.semaphore.maxParallel();
+        // Cached dispatch-admission ceiling (null/0 = no cap) — read once per sweep, like the
+        // workspace cap above; `startable()` is the only consumer.
+        const dispatchCap = this.semaphore.dispatchMaxConcurrent();
         // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
         // project never runs more than its own configured `maxParallel`; absent
         // an override it equals the workspace cap, so behavior is unchanged.
@@ -2052,6 +2080,23 @@ export class RunManager {
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
+          // Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): a dispatch
+          // child waits in the queue while the workspace already RUNS `dispatchMaxConcurrent`
+          // children. Deliberately per-candidate rather than inside `capacity()` — ordinary runs
+          // must keep starting while a fan-out is capped, which is the whole point of a
+          // dispatch-specific ceiling. `dispatchBusy()` reads the live slot sets, so a child this
+          // sweep already moved into `starting` is counted on the next candidate, and the sweep
+          // can therefore never overshoot the cap. `findIndex(startable)` leaves the blocked child
+          // in place and considers the next queued run, exactly like the usage-limit hold above.
+          if (
+            queued &&
+            dispatchCap !== null &&
+            dispatchCap > 0 &&
+            queued.dispatch?.parentRunId !== undefined &&
+            this.semaphore.dispatchBusy() >= dispatchCap
+          ) {
+            return false;
+          }
           return capacity();
         };
         // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can

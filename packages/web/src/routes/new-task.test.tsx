@@ -182,6 +182,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
     monitoringWakeIntervalMinutes: null,
     autoResumeOnUsageLimit: true,
     memoryLimitMb: null,
+    dispatchMaxConcurrent: null,
     worktreeRetentionDefault: 10,
   },
 }
