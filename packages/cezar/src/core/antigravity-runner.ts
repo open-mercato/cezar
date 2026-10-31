@@ -16,6 +16,7 @@ import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
 import { createAntigravityUiState, mapAntigravityMessage } from './antigravity-ui-mapper.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
@@ -29,7 +30,7 @@ export const mockAntigravityPath = (): string =>
 export interface AntigravityRunnerOptions {
   /** Override the binary name/path; defaults to `agy` on PATH (`CEZ_AGY_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
   killGraceMs?: number;
 }
@@ -200,18 +201,15 @@ export class AntigravityRunner implements AgentRunner {
     sendMessage([...(spec.images ?? []), { type: 'text', text: prependSystemPrompt(spec.systemPrompt, spec.userPrompt) }]);
 
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
-    const deadline =
-      limitMs > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            hardStop();
-          }, limitMs)
-        : undefined;
-    deadline?.unref?.();
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      hardStop();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
+          deadline.touch();
           let frame: unknown;
           try {
             frame = JSON.parse(line);
@@ -234,7 +232,7 @@ export class AntigravityRunner implements AgentRunner {
       } catch (error) {
         if (!stopRequested && !spawnError) throw error;
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (autoEndTimer) clearTimeout(autoEndTimer);
         open = false;
       }
@@ -249,7 +247,7 @@ export class AntigravityRunner implements AgentRunner {
       };
       if (spawnError) fail((spawnError as Error).message);
       if (authRequired) fail('Antigravity authentication failed — run `agy` in a terminal and sign in with your Google account.');
-      if (timedOut) fail(`Antigravity CLI timed out after ${Math.round((limitMs / 60_000) * 10) / 10}m and was killed`, 'timeout');
+      if (timedOut) fail(inactivityTimeoutMessage('Antigravity CLI', limitMs, deadline.expiredBy), 'timeout');
       // A stop cezar asked for is never an agent failure (#703) — on Windows a killed agy exits 1,
       // not 128+signal, so the flag decides rather than `isSignalTerminationExit` alone.
       if (exitCode !== 0 && exitCode !== null && !stopRequested) {

@@ -205,6 +205,26 @@ for await (const _line of createInterface({ input: process.stdin })) {
     await expect(runner.run({ cwd: tmpdir(), userPrompt: 'test', timeoutMs: 200 })).rejects.toThrow('timed out');
   });
 
+  it('keeps a CLI that is still streaming past the inactivity window (cf2191f1)', async () => {
+    const bin = await script(`
+const out = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+out({ event: 'init', conversation_id: 'conv-1', init: {} });
+let n = 0;
+const t = setInterval(() => {
+  out({ event: 'step_update', step_update: { conversation_id: 'conv-1', step_index: 1, state: 'ACTIVE', step_type: 'agent_response', text_delta: '.' } });
+  if (++n === 8) {
+    clearInterval(t);
+    out({ event: 'result', result: { conversation_id: 'conv-1', status: 'SUCCESS', response: 'done' } });
+    process.exit(0);
+  }
+}, 50);
+`);
+    const runner = new AntigravityRunner({ bin, killGraceMs: 50 });
+    await expect(
+      runner.run({ cwd: tmpdir(), userPrompt: 'test', timeoutMs: 200 }),
+    ).resolves.toMatchObject({ sessionId: 'conv-1' });
+  });
+
   it('treats a deliberate interrupt as cancellation, not a failure', async () => {
     const bin = await script(
       `console.log(JSON.stringify({event:'step_update',step_update:{step_index:1,step_type:'agent_response',state:'ACTIVE',text_delta:'ready'}}));setInterval(()=>{},1000);`,
