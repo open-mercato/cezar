@@ -86,7 +86,7 @@ function DropZoneTarget({ zone, onDrop }: { zone: Zone; onDrop: (view: ViewId, a
       )}
     >
       {zone.label}
-      {zone.hint ? <span className="text-[11px] font-normal opacity-80">{zone.hint}</span> : null}
+      {zone.hint ? <span className="text-meta font-normal opacity-80">{zone.hint}</span> : null}
     </div>
   )
 }

@@ -42,7 +42,7 @@ export function RepoCommitsSection({ log }: { log: LogEntry[] }) {
   const incomingList =
     incoming.length > 0 ? (
       <section data-slot="repo-incoming" className="border-b border-border">
-        <h2 className="px-4 pt-3 text-[11px] font-medium text-muted-foreground md:px-6">
+        <h2 className="px-4 pt-3 text-meta font-medium text-muted-foreground md:px-6">
           Incoming from {sync?.upstream} · {incoming.length}
         </h2>
         <CommitList slot="repo-incoming-commits" commits={incoming.map((c) => toItem(c, 'incoming'))} />
@@ -114,7 +114,7 @@ function CommitDiffView({ sha }: { sha: string }) {
         <>
           <div data-slot="commit-meta" className="border-b border-border px-4 py-3 md:px-6">
             <h2 className="text-sm font-semibold">{commit.data.subject}</h2>
-            <p className="mt-0.5 text-[11px] text-soft-foreground">
+            <p className="mt-0.5 text-meta text-soft-foreground">
               {commit.data.author} · {commit.data.when} ·{' '}
               <span className="font-mono select-all">{commit.data.sha}</span>
             </p>

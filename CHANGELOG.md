@@ -1,6 +1,66 @@
 # Unreleased
 
 ## Highlights
+New users get a guided start: first-run onboarding signs you in to an agent, helps you pick or create a project, and connects GitHub without a terminal. Agents stall less: OpenCode's native questions now reach an ask card, and a parked parent no longer takes the parallel slot its queued reviewer needs. Windows skill runs no longer fail on long system prompts, and large or slow filesystems list faster.
+
+## ✨ Features
+- ✨ First-run and returning-user onboarding: sign in to an agent, pick or create a project, connect GitHub without a terminal, and start from a welcome page. (#1725) *(@zielivia)*
+
+## ⚡ Performance
+- ⚡ Folder-picker and Files-tab listings read entry metadata through a bounded pool, so large or slow filesystems answer faster (fixes #1217). (#1369) *(@pat-lewczuk)*
+- ⚡ Skill catalogs over 6,000 characters no longer inflate every planner request: mentioned skills come first, other descriptions are ranked and capped (fixes #1213). (#1345) *(@pat-lewczuk)*
+- ⚡ Repeated authentication failures no longer re-read the whole transcript (fixes #1223). (#1344) *(@pat-lewczuk)*
+- ⚡ Reference tracking stops rebuilding its search text once both candidate sets are full (fixes #540). (#1388) *(@pat-lewczuk)*
+
+## 🔒 Security
+- 🔒 The vault keeps its keys across initialization, reset and restore, and never overwrites the shared legacy keychain entry. New keychain keys use one account per home, which older binaries cannot read. (#1719) *(@matwiatrzyk)*
+
+## 🐛 Fixes
+- 🐛 OpenCode's native question tool shows an ask card and sends your answer back to it, so the session no longer stays blocked (fixes #1652). (#1777) *(@pat-lewczuk)*
+- 🐛 Skill runs no longer fail on Windows with `spawn ENAMETOOLONG`: long system prompts go through a temporary file (fixes #1584). (#1768) *(@pat-lewczuk)*
+- 🐛 A usage-limit hold lands on the account the run really used, including a run that picked no account (fixes #1722). (#1775) *(@pat-lewczuk)*
+- 🐛 Runs that lose Claude's OAuth refresh race retry at spread-out times, up to three times, instead of colliding again in lockstep (fixes #1480). (#1799) *(@pat-lewczuk)*
+- 🐛 A parked parent stays out of the parallel slots while its children run, so it no longer starves its queued reviewer (fixes #1697). (#1767) *(@pat-lewczuk)*
+- 🐛 An autonomous run overrides at most two consecutive questions, then waits for your answer (fixes #1221). (#1227) *(@pat-lewczuk)*
+- 🐛 Graph workflow `git.commit` nodes leave unchanged check-owned files out of the commit, and check state is released when a run ends (fixes #1359). (#1367) *(@pat-lewczuk)*
+- 🐛 An over-limit upload gets a 413 that names the limit, a proxy's 413 gets an actionable message, and the cockpit no longer retries it inline (#1735). (#1781) *(@pat-lewczuk)*
+- 🐛 A hidden tab releases its event streams after 30 seconds, including one opened or restored in the background, unless run notifications need them (fixes #1753, #1782). (#1769, #1792) *(@pat-lewczuk)*
+- 🐛 Paging the GitHub tab no longer lists PRs or issues again once that side has run out (fixes #1750). (#1778) *(@pat-lewczuk)*
+- 🐛 Numeric GitHub issue and PR search keeps discussion comment counts (fixes #889). (#1354) *(@pat-lewczuk)*
+- 🐛 An automation edited during a check stops polling with its old definition, and a shorter interval applies right away (fixes #1736). (#1755) *(@pat-lewczuk)*
+- 🐛 An automation's Review child stays off whenever Dispatch is off (fixes #1742). (#1743) *(@pat-lewczuk)*
+- 🐛 The automation editor warns about review-request logins named only in the prompt and offers to add them to Reviewers (fixes #1737). (#1795) *(@pat-lewczuk)*
+- 🐛 Design Mode shows apps that forbid embedding instead of a blank frame. (#1751) *(@pat-lewczuk)*
+- 🐛 The remove-project dialog stays inside its box on long paths and shows the full path. (#1746) *(@pat-lewczuk)*
+- 🐛 Pi's non-secret settings and instructions appear in Settings → Agent config (#894). (#1296) *(@pat-lewczuk)*
+- 🐛 The skills check no longer reports updates when every skill is current, ending needless `npx skills update` runs (fixes #1740). (#1790) *(@pat-lewczuk)*
+- 🐛 The skills-update coordinator checks a root shared by several project ids once and keeps its cache until the last id is removed (fixes #875). (#1259) *(@pat-lewczuk)*
+- 🐛 A `copilot` binary that isn't GitHub's CLI reads as not installed instead of sending a crash report on every boot (fixes #1580). (#1791) *(@pat-lewczuk)*
+- 🐛 A tab still running a pre-0.17 bundle no longer blanks the task view: slim workspace run frames go only to clients that ask for them (fixes #1848). (#1851) *(@pat-lewczuk)*
+- 🐛 The `github.wait-ci` workflow node judges the commit the worktree is on and stops at once on a merge conflict (fixes #1533). (#1808) *(@pat-lewczuk)*
+- 🐛 macOS privacy grants survive an agent update in the desktop app, because the agent clone keeps a stable path (fixes #1696). (#1822) *(@pat-lewczuk)*
+- 🐛 A turn OpenCode rejects for a usage limit no longer adds its estimated cost to Reported USD (fixes #1756). (#1828) *(@pat-lewczuk)*
+- 🐛 Provider 402 credit errors and Claude's `N-hour limit` count as account state instead of agent errors, and that limit's reset time now schedules auto-resume (fixes #1581). (#1827) *(@pat-lewczuk)*
+- 🐛 Panel drag highlights no longer flicker as the pointer crosses child elements (fixes #1556). (#1830) *(@pat-lewczuk)*
+
+## 🧪 Testing
+- 🧪 Queued screenshots are covered at the HTTP boundary (#926). (#1386) *(@pat-lewczuk)*
+- 🧪 Issue-701 fixtures drain their stores and managers before teardown (fixes #701). (#1295) *(@pat-lewczuk)*
+- 🧪 The workspace config parity check now catches a missing optional key; the two mismatches it surfaced are fixed at the source, with no wire change (fixes #1234). (#1860) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 Spec for up to 16 schedules on one automation (#1818). (#1863) *(@haxiorz)*
+
+## 👥 Contributors
+
+- @zielivia
+- @pat-lewczuk
+- @matwiatrzyk
+- @haxiorz
+
+# 0.17.0 (2026-10-29)
+
+## Highlights
 Tasks can start later: schedule one for a date or for when a usage limit resets, straight from the split Send button, or start a queued task now over the parallel cap. Projects can go trunk-based, so tasks work in the checkout and you commit to the base branch after review. You can answer an agent's question in your own words, set global instructions that every task receives, and add your organisation's skills repositories. Projects can send webhook notifications to Slack, Discord or your own receiver, and a self-hosted cockpit can manage agent accounts. Agent failures that are not bugs, such as an overloaded API, billing, a usage limit or a full disk, are retried or explained instead of reported as crashes. The cockpit gets faster on big workspaces, and conversations render Mermaid diagrams. The rest is fixes: `cezar serve` opens the project it was started in, workflows resume after a usage limit, a task's leftover processes are stopped when it settles, and monitoring runs no longer wait on a human to leave that state.
 
 ## ⚠️ Breaking

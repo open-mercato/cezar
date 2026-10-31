@@ -17,7 +17,7 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
   const { id } = useParams<{ id: string }>()
   return (
     <div data-slot="review-comments" className="mt-1 flex flex-col gap-2 text-left">
-      <p className="text-[12px] font-medium text-muted-foreground">
+      <p className="text-label font-medium text-muted-foreground">
         {items.length} {items.length === 1 ? 'comment' : 'comments'} on the diff
       </p>
       {items.map((item, index) => (
@@ -26,7 +26,7 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
           data-slot="review-comment"
           className="overflow-hidden rounded-lg border border-border bg-background/60"
         >
-          <div className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5 text-[12px]">
+          <div className="flex min-w-0 items-center gap-1.5 border-b border-border/60 px-2.5 py-1.5 text-label">
             <FileIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
             {id ? (
               <Link
@@ -44,7 +44,7 @@ export function ReviewCommentsBlock({ items }: { items: readonly ReviewItem[] })
           {item.excerpt !== '' ? (
             <pre
               data-slot="review-comment-code"
-              className="max-h-48 overflow-auto border-b border-border/60 bg-muted/40 px-2.5 py-1.5 font-mono text-[12px] leading-[1.6] whitespace-pre text-muted-foreground"
+              className="max-h-48 overflow-auto border-b border-border/60 bg-muted/40 px-2.5 py-1.5 font-mono text-label leading-[1.6] whitespace-pre text-muted-foreground"
             >
               {item.excerpt}
             </pre>

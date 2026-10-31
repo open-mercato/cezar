@@ -112,6 +112,8 @@ function useSidebarCollapse(activeProjectId: string | null) {
   return { collapsed, toggle, expand }
 }
 
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function ProjectGroups({
   projects,
   bootProjectId,
@@ -119,6 +121,7 @@ export function ProjectGroups({
   automationsAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
 }: {
   projects: ProjectListEntry[]
   /** The project a flat, unprefixed URL resolves to — so the boot project is the one that
@@ -130,6 +133,8 @@ export function ProjectGroups({
   automationsAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started — the active group's dot. */
+  newNavItems?: ReadonlySet<string>
 }) {
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
@@ -247,6 +252,7 @@ export function ProjectGroups({
       automationsAvailable={automationsAvailable}
       inboxCount={inboxCount}
       skillsUpdateAvailable={skillsUpdateAvailable}
+      newNavItems={newNavItems}
       showTokens={metricVisibility.tokens}
       showCost={metricVisibility.cost}
       sortable={sortable}
@@ -353,6 +359,7 @@ function ProjectGroup({
   automationsAvailable,
   inboxCount,
   skillsUpdateAvailable,
+  newNavItems,
   showTokens,
   showCost,
   sortable,
@@ -378,6 +385,7 @@ function ProjectGroup({
   automationsAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   showTokens: boolean
   showCost: boolean
   /** The registry holds more than one project AND the ui-state cache is populated, so a drag has
@@ -499,13 +507,13 @@ function ProjectGroup({
           <div
             data-slot="project-group-header"
             title={`${project.root} is gone — remove it in Global settings → Projects`}
-            className="flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-[13px] font-semibold opacity-55 md:h-[34px]"
+            className="flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-ui font-semibold opacity-55 md:h-[34px]"
           >
             <span className="w-3 shrink-0" aria-hidden="true" />
             <span className="truncate">{project.name}</span>
             <span
               data-slot="project-missing"
-              className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger"
+              className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-micro font-medium text-danger"
             >
               folder not found
             </span>
@@ -603,7 +611,7 @@ function ProjectGroup({
             className={cn(
               // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
               // relaxation the flat nav makes.
-              'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-[13px] font-semibold md:h-[34px]',
+              'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-ui font-semibold md:h-[34px]',
               active && 'text-foreground',
             )}
           >
@@ -615,7 +623,7 @@ function ProjectGroup({
               <span
                 data-slot="project-unregistered"
                 title="cezar is serving this folder — it is not in your saved projects. Add it from this project's Settings."
-                className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
+                className="shrink-0 rounded-full bg-muted px-[7px] py-px text-micro font-medium text-soft-foreground"
               >
                 not saved
               </span>
@@ -624,7 +632,7 @@ function ProjectGroup({
               <span
                 data-slot="project-attention"
                 title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
-                className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                className="shrink-0 rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
               >
                 {waiting}
               </span>
@@ -632,7 +640,7 @@ function ProjectGroup({
             {project.branch ? (
               <span
                 data-slot="project-branch"
-                className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
+                className="ml-auto max-w-[92px] truncate font-mono text-micro font-medium text-soft-foreground"
               >
                 {project.branch}
               </span>
@@ -676,7 +684,7 @@ function ProjectGroup({
                   onClick={onNavigate}
                   aria-current={isActive ? 'page' : undefined}
                   className={cn(
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
                     isActive && 'bg-muted font-semibold text-foreground',
                   )}
                 >
@@ -688,7 +696,7 @@ function ProjectGroup({
                   {item.badge === 'inbox-count' && active && inboxCount ? (
                     <span
                       data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {inboxCount}
                     </span>
@@ -697,6 +705,12 @@ function ProjectGroup({
                     <span data-slot="nav-update-marker" className="ml-auto flex items-center">
                       <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
                       <span className="sr-only">Skills update available</span>
+                    </span>
+                  ) : null}
+                  {active && newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
                     </span>
                   ) : null}
                 </Link>
@@ -733,7 +747,7 @@ function ProjectGroup({
             to={scopeTo(project.id, '/')}
             onClick={onNavigate}
             data-slot="project-group-more"
-            className="flex h-9 items-center rounded-md px-3 text-[12px] text-muted-foreground transition-colors hover:text-foreground md:h-7"
+            className="flex h-9 items-center rounded-md px-3 text-label text-muted-foreground transition-colors hover:text-foreground md:h-7"
           >
             More…
           </Link>

@@ -57,7 +57,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
 
   if (projects.isPending) {
     return (
-      <p data-slot="project-general-loading" className="text-[13px] text-soft-foreground">
+      <p data-slot="project-general-loading" className="text-ui text-soft-foreground">
         Loading project…
       </p>
     )
@@ -69,7 +69,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
   // so a silent `null` would leave the whole pane blank with no hint that anything went wrong.
   if (projects.isError) {
     return (
-      <p data-slot="project-general-error" className="text-[13px] text-danger">
+      <p data-slot="project-general-error" className="text-ui text-danger">
         Could not read the project registry — {projects.error.message}
       </p>
     )
@@ -113,7 +113,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
             ) : (
               // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
               // the one thing this control must not do.
-              <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
+              <p className="text-ui text-soft-foreground">Loading the workspace limit…</p>
             )}
           </SettingsField>
           <RemoveProject project={project} bootProject={registry.bootProject} />
@@ -134,7 +134,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
     >
       <dl
         data-slot="project-facts"
-        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-[13px]"
+        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-ui"
       >
         <dt className="text-muted-foreground">Name</dt>
         <dd className="min-w-0 truncate text-foreground">{project.name}</dd>
@@ -233,7 +233,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           Remove {project.name}
         </Button>
         {isBoot ? (
-          <span data-slot="project-general-remove-boot" className="text-[11px] text-soft-foreground">
+          <span data-slot="project-general-remove-boot" className="text-meta text-soft-foreground">
             cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
           </span>
         ) : null}

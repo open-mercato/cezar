@@ -20,8 +20,8 @@ const buttonVariants = cva(
         "danger-ghost": "text-danger hover:bg-danger/10",
       },
       size: {
-        default: "h-9 px-3.5 text-[13.5px]",
-        sm: "h-[30px] rounded-sm px-2.5 text-[12.5px]",
+        default: "h-9 px-3.5 text-ui",
+        sm: "h-[30px] rounded-sm px-2.5 text-label",
         icon: "size-9",
         "icon-sm": "size-[30px] rounded-sm",
         xs: "h-6 gap-1 rounded-sm px-2 text-xs [&_svg:not([class*='size-'])]:size-3",

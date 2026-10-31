@@ -80,7 +80,7 @@ export function SkillsRoute() {
       {/* Desktop header — below `md` the shell's top bar already says "Skills". */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Skills</h1>
-        <p className="text-[13px] text-muted-foreground">Markdown playbooks agents can follow.</p>
+        <p className="text-ui text-muted-foreground">Markdown playbooks agents can follow.</p>
       </header>
       <SkillsCatalog />
     </div>
@@ -202,7 +202,7 @@ function SkillsCatalog() {
             aria-label="Filter skills"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="h-8 text-[13px]"
+            className="h-8 text-ui"
           />
           <button
             type="button"
@@ -226,7 +226,7 @@ function SkillsCatalog() {
               aria-label="Filter by repository"
               value={activeRepo ?? '__all__'}
               onChange={(event) => setRepoFilter(event.target.value === '__all__' ? null : event.target.value)}
-              className="h-8 w-full rounded-md border border-border bg-card px-2 text-[13px] text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="h-8 w-full rounded-md border border-border bg-card px-2 text-ui text-foreground outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               <option value="__all__">All repositories</option>
               {repoGroups.map((group) => (
@@ -267,12 +267,12 @@ function SkillsCatalog() {
 
         <ul data-slot="skill-rows" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-2">
           {skillsQuery.isPending ? (
-            <li className="px-2.5 py-2 text-[13px] text-soft-foreground">Loading…</li>
+            <li className="px-2.5 py-2 text-ui text-soft-foreground">Loading…</li>
           ) : shown.length > 0 ? (
             shownGroups.map((group) => (
               <li key={group.key} data-slot="skill-group" data-group={group.key || 'local'} className="list-none">
                 {repoGroups.length > 1 ? (
-                  <h3 className="px-2.5 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-soft-foreground">
+                  <h3 className="px-2.5 pt-2 pb-1 eyebrow text-soft-foreground">
                     {group.label}
                   </h3>
                 ) : null}
@@ -359,7 +359,7 @@ function SkillRow({
         {/* Enabled skills read bold; inactive importable skills are muted. */}
         <span
           className={cn(
-            'min-w-0 truncate font-mono text-[13px]',
+            'min-w-0 truncate font-mono text-ui',
             skill.enabled ? 'font-semibold text-foreground' : 'font-medium text-muted-foreground',
           )}
         >
