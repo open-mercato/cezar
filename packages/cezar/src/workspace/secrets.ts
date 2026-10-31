@@ -15,7 +15,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
 import { PROJECT_ID_RE } from './config.ts';
-import { osKeychain, type DataKeyring } from './secret-keyring.ts';
+import { osKeychain, KEYCHAIN_ACCOUNT, type DataKeyring } from './secret-keyring.ts';
 
 /**
  * Project and workspace secrets (spec `2026-10-10-project-secrets-vault-options`).
@@ -23,7 +23,7 @@ import { osKeychain, type DataKeyring } from './secret-keyring.ts';
  * One JSON file per scope holder under `~/.cezar/secrets/`: `<projectId>.json` for a project,
  * `workspace.json` for the user's whole workspace. The file carries every secret's METADATA in
  * the clear (name, audiences, timestamps) and its VALUE as AES-256-GCM ciphertext under one
- * per-machine data key. The data key lives in the OS keychain when one is usable
+ * per-home data key (legacy homes retain their shared key). The data key lives in the OS keychain when one is usable
  * (`secret-keyring.ts`) and in `~/.cezar/secrets/.key` (`0600`) otherwise — in which case the
  * store is exactly as strong as a private plaintext file, and `keyBackend()` says so.
  *
@@ -92,17 +92,30 @@ export interface ResolvedSecrets {
 
 export interface SecretStoreOptions {
   /** The OS keychain to keep the data key in. Default: `osKeychain()`; tests inject a fake. */
-  keychain?: () => Promise<DataKeyring | null>;
+  keychain?: (account: string) => Promise<DataKeyring | null>;
 }
 
 export class SecretStore {
   private readonly directory: string;
-  private readonly keychain: () => Promise<DataKeyring | null>;
-  private dataKey: { key: Buffer; backend: SecretKeyBackend } | undefined;
+  private readonly keychainFactory: (account: string) => Promise<DataKeyring | null>;
 
   constructor(env: NodeJS.ProcessEnv = process.env, options: SecretStoreOptions = {}) {
     this.directory = join(cezarHomeDir(env), 'secrets');
-    this.keychain = options.keychain ?? (() => osKeychain(env));
+    this.keychainFactory = options.keychain ?? (account => osKeychain(env, account));
+  }
+
+  /** Absent marker means the legacy shared item, which is read-only from now on.
+   * Persist the random account so moving a home does not change its key identity. */
+  private async keychain(): Promise<DataKeyring | null> {
+    let account = KEYCHAIN_ACCOUNT;
+    try {
+      const id = (await this.readFile(join(this.directory, '.keychain-account'))).trim();
+      if (!z.uuid().safeParse(id).success) throw new SecretsError('Invalid keychain account marker');
+      account = `${KEYCHAIN_ACCOUNT}:${id}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return this.keychainFactory(account);
   }
 
   /**
@@ -111,25 +124,57 @@ export class SecretStore {
    * pick. The cockpit shows this next to the list so a file fallback is never silent.
    */
   async keyBackend(): Promise<SecretKeyBackend> {
-    const found = await this.loadDataKey();
-    if (found) return found.backend;
-    const keychain = await this.keychain();
-    if (!keychain) return 'file';
     try {
+      const found = await this.loadDataKey();
+      if (found) return found.backend;
+      const keychain = await this.keychain();
+      if (!keychain) return 'file';
       await keychain.get();
       return 'keychain';
     } catch {
-      return 'file';
+      // Reporting the configured backend must not prevent opening Settings when
+      // key metadata is unreadable. This is not a decryption/availability claim.
+      const backend = await this.readFile(join(this.directory, '.backend')).catch(() => '');
+      return backend.trim() === 'keychain' ? 'keychain' : 'file';
     }
+  }
+
+  /** Internal encryption for managed records. Never exposed by the generic secret editor. */
+  async sealManaged(namespace: string, id: string, value: string): Promise<string> {
+    const dataKey = await this.loadOrCreateDataKey();
+    await this.prepare();
+    await this.save(join(this.directory, '.backend'), `${dataKey.backend}\n`);
+    return JSON.stringify({ version: 1, ...encrypt(dataKey.key, aad(`managed:${namespace}`, id), value) });
+  }
+
+  async openManaged(namespace: string, id: string, text: string): Promise<string> {
+    const stored = z.object({ version: z.literal(1), iv: z.string(), data: z.string(), tag: z.string() }).strict().parse(JSON.parse(text));
+    const dataKey = await this.loadDataKey();
+    if (!dataKey) throw new SecretsError('Managed credentials cannot be decrypted: data key unavailable.');
+    const value = decrypt(dataKey.key, aad(`managed:${namespace}`, id), stored);
+    if (value === null) throw new SecretsError('Managed credentials cannot be decrypted.');
+    return value;
   }
 
   /** Stored entries, sorted by name. Absent or unreadable storage is an empty list, never a throw. */
   async list(scope: SecretScopeRef): Promise<{ secrets: SecretEntry[]; skipped?: string }> {
     const read = await this.read(scope);
-    const secrets = Object.entries(read.values)
+    // Undecryptable entries still list by name, so they can be unset after a lost key.
+    const entries = read.skipped ? await this.storedMetadata(scope) : read.values;
+    const secrets = Object.entries(entries)
       .map(([name, entry]) => ({ name, audiences: entry.audiences, updatedAt: entry.updatedAt }))
       .sort((a, b) => a.name.localeCompare(b.name));
     return read.skipped ? { secrets, skipped: read.skipped } : { secrets };
+  }
+
+  private async storedMetadata(scope: SecretScopeRef): Promise<Record<string, { audiences: SecretAudience[]; updatedAt: string }>> {
+    const id = fileId(scope);
+    if (!id) return {};
+    try {
+      const file = parseSecretFile(await this.readFile(this.file(id)));
+      if (scope.kind === 'project' && file.root !== await canonicalRoot(scope.root)) return {};
+      return Object.fromEntries(Object.entries(file.secrets).filter(([name]) => !secretNameIssue(name)));
+    } catch { return {}; }
   }
 
   /**
@@ -163,10 +208,14 @@ export class SecretStore {
       }
     }
     if (Object.keys(file.secrets).length === 0) return { values: {} };
-    const dataKey = await this.loadDataKey();
-    if (!dataKey) {
-      return { values: {}, skipped: 'the data key is gone — the OS keychain item or ~/.cezar/secrets/.key was removed; store the secrets again' };
+    let dataKey: Awaited<ReturnType<SecretStore['loadDataKey']>>;
+    try { dataKey = await this.loadDataKey(); }
+    catch {
+      // Reads degrade, but loadDataKey itself stays strict for write/key creation
+      // callers: damaged account metadata must never cause a replacement key.
+      return { values: {}, skipped: 'the data key metadata is unreadable or invalid — restore the keychain account marker and its private permissions' };
     }
+    if (!dataKey) return { values: {}, skipped: await this.missingKeyReason() };
     const values: Record<string, { value: string; audiences: SecretAudience[]; updatedAt: string }> = {};
     for (const [name, stored] of Object.entries(file.secrets)) {
       if (secretNameIssue(name)) continue;
@@ -285,13 +334,12 @@ export class SecretStore {
   /**
    * The data key, from wherever it already is: the key file first (a machine that fell back once
    * keeps its secrets readable even after a keychain appears), then the keychain. `null` when
-   * neither has one. Cached for the process: the key is immutable once created.
+   * neither has one. Re-read durable storage: a live home may have been reset or restored.
    */
   private async loadDataKey(): Promise<{ key: Buffer; backend: SecretKeyBackend } | null> {
-    if (this.dataKey) return this.dataKey;
     try {
       const key = Buffer.from((await this.readFile(join(this.directory, KEY_FILE))).trim(), 'base64');
-      if (key.length === 32) return (this.dataKey = { key, backend: 'file' });
+      if (key.length === 32) return { key, backend: 'file' };
     } catch {
       // No key file, or not one we wrote: look in the keychain.
     }
@@ -299,11 +347,24 @@ export class SecretStore {
     if (!keychain) return null;
     try {
       const key = await keychain.get();
-      if (key) return (this.dataKey = { key, backend: 'keychain' });
+      if (key) return { key, backend: 'keychain' };
     } catch {
       // A locked or unreachable store reads as "no key here"; a first write will try the file.
     }
     return null;
+  }
+
+  /** A locked keychain is not a lost key: only a read that returned nothing advises re-storing. */
+  private async missingKeyReason(): Promise<string> {
+    const keychain = await this.keychain().catch(() => null);
+    const backend = await this.readFile(join(this.directory, '.backend')).then(text => text.trim(), () => '');
+    if (keychain && await keychain.get().then(() => false, () => true)) {
+      return 'the OS keychain holding the data key is locked or unreachable — unlock it and retry';
+    }
+    if (!keychain && backend === 'keychain') {
+      return 'the data key is kept in the OS keychain, which is unavailable here (CEZ_SECRETS_KEYCHAIN=0 or no keychain service) — run where the keychain is available';
+    }
+    return 'the data key is gone — the OS keychain item or ~/.cezar/secrets/.key was removed; restore it, or unset these secrets and store them again';
   }
 
   /** The data key, created under the cross-process lock when this is the machine's first write. */
@@ -314,18 +375,66 @@ export class SecretStore {
     return this.locked('key', async () => {
       const raced = await this.loadDataKey();
       if (raced) return raced;
-      const key = randomBytes(32);
+      // An unavailable key must never be replaced while ciphertext under it remains: it may only
+      // be locked. With nothing left to decrypt, a new key is harmless and is the recovery path.
+      const entries = await fs.readdir(this.directory);
+      const blockers: string[] = [];
+      for (const entry of entries.filter(name => name.endsWith('.json'))) {
+        const existing = parseSecretFile(await this.readFile(join(this.directory, entry)));
+        if (Object.keys(existing.secrets).length) blockers.push(`secrets/${entry}`);
+      }
+      // Managed records (TrackerConnections) are sealed under the same key. Missing key metadata
+      // does not prove the key is gone: a legacy home's key may sit in a locked shared keychain item.
+      const managed = await fs.readdir(join(this.directory, '..', 'tracker-connections')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+      });
+      blockers.push(...managed.filter(name => name.endsWith('.vault')).map(name => `tracker-connections/${name}`));
+      if (blockers.length) {
+        throw new SecretsError(`The existing data key is unavailable; unlock or restore it, or remove what is still encrypted under it (${blockers.join(', ')}: cezar secrets list/unset, cez tracker-connections list/remove; a secrets file of a project no longer registered can be deleted) before saving.`);
+      }
       const keychain = await this.keychain();
+      // A keychain key that cannot be read right now may belong to a process still sealing its
+      // first record; only a proven absence (a read that returned nothing) allows a new key.
+      if (entries.includes('.backend') && (await this.readFile(join(this.directory, '.backend'))).trim() === 'keychain'
+        && !(keychain && await keychain.get().then(() => true, () => false))) {
+        throw new SecretsError(keychain
+          ? 'The keychain-held data key is unreachable; unlock the OS keychain, then retry.'
+          : 'The data key is kept in the OS keychain, which is unavailable here (CEZ_SECRETS_KEYCHAIN=0 or no keychain service). Run where the keychain is available; if that key is lost, delete ~/.cezar/secrets/.backend, then save again.');
+      }
+      const key = randomBytes(32);
+      let initialized: { key: Buffer; backend: SecretKeyBackend } | undefined;
       if (keychain) {
         try {
-          await keychain.set(key);
-          return (this.dataKey = { key, backend: 'keychain' });
+          // A failed read is not proof the shared keychain item is absent. Never
+          // overwrite another CEZ_HOME's key after a transient read failure.
+          const existing = await keychain.get();
+          if (existing) initialized = { key: existing, backend: 'keychain' };
+          else {
+            // The shared legacy account is never written. A durable random identity
+            // gives each home its own item, protected by this home's key lock.
+            // Reuse a marker left by an interrupted first initialization.
+            if (!entries.includes('.keychain-account')) {
+              await this.save(join(this.directory, '.keychain-account'), `${randomUUID()}\n`);
+            }
+            const scoped = await this.keychain();
+            if (scoped) {
+              const saved = await scoped.get();
+              if (!saved) await scoped.set(key);
+              initialized = { key: saved ?? key, backend: 'keychain' };
+            }
+          }
         } catch {
           // The keychain refused the write (locked, denied): the file is the working fallback.
         }
       }
+      if (initialized) {
+        await this.save(join(this.directory, '.backend'), 'keychain\n');
+        return initialized;
+      }
       await this.save(join(this.directory, KEY_FILE), `${key.toString('base64')}\n`);
-      return (this.dataKey = { key, backend: 'file' });
+      await this.save(join(this.directory, '.backend'), 'file\n');
+      return { key, backend: 'file' };
     });
   }
 
@@ -373,8 +482,13 @@ export class SecretStore {
     assertCezarHomeWriteIsSandboxed(path);
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {
-      await fs.writeFile(temporary, text, { mode: 0o600, flag: 'wx' });
+      const file = await fs.open(temporary, 'wx', 0o600);
+      try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
       await renameWithRetry(temporary, path);
+      if (process.platform !== 'win32') {
+        const directory = await fs.open(this.directory, 'r');
+        try { await directory.sync(); } finally { await directory.close(); }
+      }
     } finally {
       await fs.unlink(temporary).catch(() => {});
     }

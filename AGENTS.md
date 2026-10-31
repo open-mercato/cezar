@@ -4,9 +4,10 @@ cezar is a **parallel coding-agents orchestrator**: a local cockpit (CLI + brows
 
 ## Zero config
 
-cezar ships no config file the user must create and no setting they must set before it works. Every capability is discovered from what is already there — the repo, the environment, `gh`, the running processes — or it degrades quietly to a smaller cezar. `.ai/cezar/config.json` is optional and every key has a working default; A repository `.env` is never auto-loaded. Tracker credentials use managed per-project dotenv
-files in `cezarHomeDir()/tracker-connections/`, written by Settings and parsed only into the
-project connection object, never into `process.env`.
+cezar ships no config file the user must create and no setting they must set before it works. Every capability is discovered from what is already there — the repo, the environment, `gh`, the running processes — or it degrades quietly to a smaller cezar. `.ai/cezar/config.json` is optional and every key has a working default; A repository `.env` is never auto-loaded. Tracker credentials use managed encrypted per-project records in
+cezarHomeDir()/tracker-connections/, written by Settings. Legacy dotenv records migrate
+on read with identity preserved. This storage layer retains the existing explicit agent
+credential binding behavior; encryption at rest alone does not isolate agents.
 
 New state may be **written**, never **required**: `.ai/cezar/`, `~/.cache/cez/`, `~/.cezar/`. Delete any of them and cezar rebuilds what it needs on the next run. State that a user must author, migrate, or repair is not state — it is configuration, and it needs a reason. One deliberate exception inside that rule: the project registry keeps a `~/.cezar/config.json.bak` snapshot, so deleting `config.json` alone restores instead of resetting — delete the `~/.cezar` directory for a true reset.
 

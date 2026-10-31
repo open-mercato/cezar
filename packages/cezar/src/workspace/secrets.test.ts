@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, cp, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -77,10 +77,10 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
     expect((await again.read(workspace)).values.LLM_KEY?.value).toBe('sk-workspace-key-0123456789');
     expect(await again.keyBackend()).toBe('keychain');
 
-    // No keychain: the same store falls back to a 0600 key file and says so.
-    expect(await store.keyBackend()).toBe('file');
-    await store.set(workspace, 'OTHER', 'other-value');
-    expect((await stat(join(home, 'secrets', '.key'))).mode & 0o777).toBe(0o600);
+    // An established keychain becoming unavailable must not replace its data key.
+    await expect(store.set(workspace, 'OTHER', 'other-value')).rejects.toThrow('existing data key');
+    await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await again.read(workspace)).values.LLM_KEY?.value).toBe('sk-workspace-key-0123456789');
   });
 
   it('falls back to the key file when the keychain refuses the write', async () => {
@@ -261,4 +261,77 @@ describe('SecretStore (spec 2026-10-10-project-secrets-vault-options)', () => {
       expect(resolved.notes).toEqual(['workspace secrets skipped — the store file is corrupt — not JSON']);
     });
   });
+});
+
+it('never overwrites an unreadable shared keychain item when initializing a fresh home', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'unreadable-keychain-'));
+  try {
+    let writes = 0;
+    const store = new SecretStore({ CEZ_HOME: home }, { keychain: async () => ({ get: async () => { throw new Error('locked'); }, set: async () => { writes++; } }) });
+    await store.set({ kind: 'workspace' }, 'TEST_KEY', 'synthetic');
+    expect(writes).toBe(0);
+    expect(await store.keyBackend()).toBe('file');
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+it('keeps the legacy shared key readable without replacing it', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'legacy-shared-key-'));
+  const legacy = fakeKeychain(Buffer.alloc(32, 9));
+  const accounts: string[] = [];
+  const keychain = async (account: string) => { accounts.push(account); return legacy; };
+  try {
+    const store = new SecretStore({ CEZ_HOME: home }, { keychain });
+    await store.set({ kind: 'workspace' }, 'LEGACY', 'synthetic-legacy-secret');
+    expect((await new SecretStore({ CEZ_HOME: home }, { keychain }).read({ kind: 'workspace' })).values.LEGACY?.value).toBe('synthetic-legacy-secret');
+    expect(new Set(accounts)).toEqual(new Set(['secrets-data-key']));
+    expect(legacy.sets).toBe(0);
+    await expect(stat(join(home, 'secrets', '.keychain-account'))).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally { await rm(home, { recursive: true, force: true }); }
+});
+
+it('keeps the persisted keychain identity when a home is moved', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'moving-keychain-'));
+  const destination = await mkdtemp(join(tmpdir(), 'moved-keychain-'));
+  const rings = new Map<string, ReturnType<typeof fakeKeychain>>();
+  const keychain = async (account: string) => {
+    if (!rings.has(account)) rings.set(account, fakeKeychain());
+    return rings.get(account)!;
+  };
+  try {
+    await new SecretStore({ CEZ_HOME: home }, { keychain }).set({ kind: 'workspace' }, 'KEY', 'synthetic-moved-secret');
+    const account = (await readFile(join(home, 'secrets', '.keychain-account'), 'utf8')).trim();
+    expect(rings.get(`secrets-data-key:${account}`)?.sets).toBe(1);
+    expect(rings.get('secrets-data-key')?.sets).toBe(0);
+    await cp(join(home, 'secrets'), join(destination, 'secrets'), { recursive: true });
+    expect((await new SecretStore({ CEZ_HOME: destination }, { keychain }).read({ kind: 'workspace' })).values.KEY?.value).toBe('synthetic-moved-secret');
+  } finally { await rm(home, { recursive: true, force: true }); await rm(destination, { recursive: true, force: true }); }
+});
+
+it.each(['malformed', 'unsafe-mode'])('degrades %s keychain markers on reads but refuses writes', async damage => {
+  const home = await mkdtemp(join(tmpdir(), 'damaged-marker-'));
+  const keys = new Map<string, Buffer>();
+  let writes = 0;
+  const keychain = async (account: string) => ({ get: async () => keys.get(account) ?? null, set: async (value: Buffer) => { writes++; keys.set(account, value); } });
+  const scope = { kind: 'workspace' as const };
+  try {
+    await new SecretStore({ CEZ_HOME: home }, { keychain }).set(scope, 'KEY', 'synthetic-secret');
+    const file = join(home, 'secrets', 'workspace.json');
+    const marker = join(home, 'secrets', '.keychain-account');
+    const ciphertext = await readFile(file, 'utf8');
+    const identity = await readFile(marker, 'utf8');
+    if (damage === 'malformed') await writeFile(marker, 'broken');
+    else await chmod(marker, 0o644);
+    const restarted = new SecretStore({ CEZ_HOME: home }, { keychain });
+    await expect(restarted.read(scope)).resolves.toMatchObject({ values: {}, skipped: expect.stringContaining('key') });
+    await expect(restarted.resolve(undefined, 'checks')).resolves.toMatchObject({ values: {}, notes: [expect.any(String)] });
+    // Names stay listed (never values), so an unreadable secret can still be unset.
+    await expect(restarted.list(scope)).resolves.toMatchObject({ secrets: [{ name: 'KEY' }], skipped: expect.any(String) });
+    await expect(restarted.keyBackend()).resolves.toBe('keychain');
+    await expect(restarted.set(scope, 'OTHER', 'must-not-write')).rejects.toThrow();
+    expect(writes).toBe(1);
+    expect(await readFile(file, 'utf8')).toBe(ciphertext);
+    await expect(stat(join(home, 'secrets', '.key'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await writeFile(marker, identity); await chmod(marker, 0o600);
+    expect((await new SecretStore({ CEZ_HOME: home }, { keychain }).read(scope)).values.KEY?.value).toBe('synthetic-secret');
+  } finally { await rm(home, { recursive: true, force: true }); }
 });

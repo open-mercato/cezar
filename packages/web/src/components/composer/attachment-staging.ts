@@ -14,6 +14,12 @@ import { toAttachmentInput, type PendingAttachment } from './composer-attachment
  */
 
 const staged = new Map<string, Promise<string | null>>()
+/** Uploads a size limit refused (#1735): sending the same bytes inline would meet the same wall. */
+const tooLarge = new Map<string, Error>()
+
+function isPayloadTooLarge(error: unknown): error is Error {
+  return error instanceof Error && (error as { status?: unknown }).status === 413
+}
 
 /** Start uploading now; idempotent per content. */
 export function stageAttachment(attachment: PendingAttachment): Promise<string | null> {
@@ -22,6 +28,7 @@ export function stageAttachment(attachment: PendingAttachment): Promise<string |
     pending = stageUpload(toAttachmentInput(attachment)).then(
       (upload) => (typeof upload?.uploadId === 'string' ? upload.uploadId : null),
       (error: unknown) => {
+        if (isPayloadTooLarge(error)) tooLarge.set(attachment.data, error)
         reportAttachmentStagingFailed(error)
         return null
       },
@@ -38,6 +45,9 @@ export function stageAttachment(attachment: PendingAttachment): Promise<string |
 /** What goes on the wire: a reference once staged, the bytes inline when staging failed. */
 export async function toWireAttachment(attachment: PendingAttachment): Promise<AttachmentEntry> {
   const uploadId = await stageAttachment(attachment)
+  // #1735: a 413 on the upload (a proxy's body limit) cannot be dodged by sending the bytes inline.
+  const refused = tooLarge.get(attachment.data)
+  if (uploadId === null && refused) throw refused
   if (uploadId === null) return toAttachmentInput(attachment)
   return { uploadId, ...(attachment.originalName ? { name: attachment.originalName } : {}) }
 }
@@ -48,13 +58,17 @@ export function releaseStaged(attachments: readonly PendingAttachment[]): void {
     const pending = staged.get(attachment.data)
     if (!pending) continue
     staged.delete(attachment.data)
+    tooLarge.delete(attachment.data)
     void pending.then((id) => (id === null ? undefined : deleteStagedUpload(id))).catch(() => {})
   }
 }
 
 /** Forget the staged copies WITHOUT deleting them — the server no longer has them. */
 export function forgetStaged(attachments: readonly PendingAttachment[]): void {
-  for (const attachment of attachments) staged.delete(attachment.data)
+  for (const attachment of attachments) {
+    staged.delete(attachment.data)
+    tooLarge.delete(attachment.data)
+  }
 }
 
 export function isUploadMissing(error: unknown): boolean {
@@ -90,4 +104,5 @@ export async function sendWithStaged<T>(
 /** Test seam. */
 export function resetStaging(): void {
   staged.clear()
+  tooLarge.clear()
 }

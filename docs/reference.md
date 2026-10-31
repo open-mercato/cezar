@@ -496,6 +496,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/cursor-agent` | Override which Cursor Agent CLI binary is used. Unset: `cursor-agent` on PATH, then `~/.local/bin/cursor-agent`, then `agent` on PATH. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_AGY_BIN=/path/to/agy` | Override which Google Antigravity CLI (`agy`) binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -512,6 +513,7 @@ Useful environment variables:
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
+| `CEZ_REMOTE=1` | Hosted/server-install mode. The configured port is authoritative so an occupied port fails the real bind with `EADDRINUSE` instead of drifting away from the reverse-proxy upstream; interactive local launches keep bounded auto-increment. Read at startup. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
@@ -551,6 +553,27 @@ per-task directory and pre-spawn check alike — and hands agents the host
 platform.
 
 ---
+
+## Secret storage and recovery
+
+The vault encrypts values with AES-256-GCM. It reads the data key on each use from
+an existing private `secrets/.key` file or the OS keychain. A readable legacy shared key
+is reused, including by a new home. When initialization creates a new keychain key,
+`secrets/.keychain-account` records its separate account.
+Keep the marker with backups and when moving a home. Older versions cannot read new
+keychain identities: use a separate home for downgrade and never mix old/new writers.
+
+If the keychain is locked, unlock it and retry; do not delete secrets. Damaged account
+metadata blocks writes. Settings and `cezar secrets list` show unreadable values by name,
+without revealing their contents.
+
+For a lost key, restore the key and account marker from backup. If restoration is
+impossible, remove all unreadable values with `cezar secrets list/unset` (including
+`--workspace`) and any encrypted connections with `cez tracker-connections list/remove`.
+Remove orphaned `secrets/<project>.json` files for unregistered projects manually.
+A replacement key is created only when no ciphertext remains. If the lost key belonged
+to a keychain this environment cannot use, also remove the stale `secrets/.backend`
+hint after removing the ciphertext. Paths are relative to `CEZ_HOME` (default `~/.cezar`).
 
 ## Talking to a running cockpit
 

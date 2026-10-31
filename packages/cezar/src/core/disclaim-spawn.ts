@@ -30,11 +30,13 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, delimiter, isAbsolute, join } from 'node:path';
@@ -51,7 +53,11 @@ export interface DisclaimOptions {
   cloneDir?: string;
   /** The name a privacy prompt should show; defaults to `program`'s file name. */
   name?: string;
+  /** Clones `from` to `to`; defaults to `cp -c`. A test seam: `cp -c` exists only on macOS. */
+  clone?: CloneFn;
 }
+
+type CloneFn = (from: string, to: string) => void;
 
 /** Whether `disclaimedCommand` reroutes at all: the desktop shell on macOS. */
 export function disclaimActive(opts: DisclaimOptions = {}): boolean {
@@ -73,12 +79,13 @@ export function disclaimedCommand(
   if (!resolved) return [program, [...args]];
   const name = opts.name ?? basename(program);
   const cloneDir = opts.cloneDir ?? join(homedir(), '.cache', 'cez', 'agent-exec');
+  const copy = opts.clone ?? cloneFile;
   const shebang = nodeShebang(resolved);
   const node = shebang && resolveProgram(shebang[0]!, path);
   if (shebang && node && isRealNode(node)) {
-    return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(node, name, cloneDir), ...shebang.slice(1), resolved, ...args]];
+    return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(node, name, cloneDir, copy), ...shebang.slice(1), resolved, ...args]];
   }
-  return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(resolved, name, cloneDir), ...args]];
+  return [trampoline, [DISCLAIM_EXEC_FLAG, namedAfterAgent(resolved, name, cloneDir, copy), ...args]];
 }
 
 /** `[node, …flags]` from a `#!/usr/bin/env node` (or `-S node …`, or `/path/node`) script, else null. */
@@ -106,33 +113,61 @@ function isRealNode(path: string): boolean {
   }
 }
 
-/** `resolved`, or a clone of its real file named `name`; any failure keeps `resolved`. */
-function namedAfterAgent(resolved: string, name: string, cloneDir: string): string {
+/**
+ * `resolved`, or a clone of its real file named `name`; any failure keeps `resolved`.
+ * The clone's path is stable per agent (`<cloneDir>/<name>/<name>`): macOS keys a privacy grant
+ * on that path, and a path derived from the version lost every grant on each agent update (#1696).
+ */
+function namedAfterAgent(resolved: string, name: string, cloneDir: string, copy: CloneFn): string {
   try {
     const real = realpathSync(resolved);
     // Scripts find their siblings relative to their own path; only a Mach-O is safe to move.
     if (basename(real) === name || !isMachO(real)) return resolved;
     const { size, mtimeMs } = statSync(real);
     const key = createHash('sha256').update(`${real}\0${size}\0${mtimeMs}`).digest('hex').slice(0, 16);
-    const slot = `${name}-${key}`;
-    const target = join(cloneDir, slot, name);
-    if (isExecutable(target)) return target;
-    mkdirSync(join(cloneDir, slot), { recursive: true });
+    const slotDir = join(cloneDir, name);
+    const target = join(slotDir, name);
+    const marker = join(slotDir, '.source');
+    if (isExecutable(target) && readMarker(marker) === key) return target;
+    mkdirSync(slotDir, { recursive: true });
     const tmp = `${target}.${process.pid}.tmp`;
-    // `cp -c` is clonefile(2): a clone or an error, never a silent full copy of a 200 MB binary
-    // (Node's COPYFILE_FICLONE_FORCE is ENOSYS on macOS).
-    execFileSync('/bin/cp', ['-c', real, tmp], { stdio: 'ignore', timeout: 10_000 });
-    renameSync(tmp, target);
-    // Drop the clones of versions this agent has moved past (a running one keeps its inode).
+    try {
+      copy(real, tmp);
+      // rename(2) swaps the path, not the inode: a running agent keeps executing the old clone.
+      renameSync(tmp, target);
+    } catch (err) {
+      rmSync(tmp, { force: true });
+      throw err;
+    }
+    // After the rename: a marker that outlives a failed refresh would pin a stale clone.
+    const markerTmp = `${marker}.${process.pid}.tmp`;
+    writeFileSync(markerTmp, key);
+    renameSync(markerTmp, marker);
+    // Drop the legacy per-version slots (`claude-<16 hex>`) once; a running one keeps its inode.
     for (const entry of readdirSync(cloneDir)) {
-      if (entry !== slot && entry.startsWith(`${name}-`) && entry.length === slot.length) {
-        rmSync(join(cloneDir, entry), { recursive: true, force: true });
-      }
+      if (LEGACY_SLOT.test(entry)) rmSync(join(cloneDir, entry), { recursive: true, force: true });
     }
     return target;
   } catch {
     return resolved;
   }
+}
+
+/** Per-version slots written by #1407, keyed on a 16-hex hash of the agent's file. */
+const LEGACY_SLOT = /^.+-[0-9a-f]{16}$/;
+
+function readMarker(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/** `cp -c` is clonefile(2): a clone or an error, never a silent full copy of a 200 MB binary
+ * (Node's COPYFILE_FICLONE_FORCE is ENOSYS on macOS). */
+function cloneFile(from: string, to: string): void {
+  execFileSync('/bin/cp', ['-c', from, to], { stdio: 'ignore', timeout: 10_000 });
 }
 
 const MACHO_MAGIC = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca]);

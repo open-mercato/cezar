@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { QUICK_TASK } from '@/lib/task-source'
 
-import type { AutomationDefinition } from '@open-mercato/cezar-api-client'
+import type { AutomationDefinition, AutomationEvent } from '@open-mercato/cezar-api-client'
 
 import {
   DEFAULT_FILTERS,
@@ -22,10 +22,11 @@ import {
 describe('unenforcedPromptLogins', () => {
   const github = (prompt: string, authors = '') =>
     ({ kind: 'github' as const, prompt, filters: { ...newDraft().filters, authors } })
+  const review = (prompt: string, events: AutomationEvent[] = ['pull_request.review_requested']) => ({ ...github(prompt), events })
 
   it('names a login the prompt conditions on while no people filter enforces it', () => {
-    expect(unenforcedPromptLogins(github('When user `patzick` opens PR run auto review'))).toEqual(['patzick'])
-    expect(unenforcedPromptLogins(github('Only PRs by @Octo-Cat, ping @octo-cat'))).toEqual(['Octo-Cat'])
+    expect(unenforcedPromptLogins(github('When user `patzick` opens PR run auto review'))).toEqual([{ login: 'patzick', field: 'authors' }])
+    expect(unenforcedPromptLogins(github('Only PRs by @Octo-Cat, ping @octo-cat'))).toEqual([{ login: 'Octo-Cat', field: 'authors' }])
   })
   it('is quiet once a filter names the login, and for schedules', () => {
     expect(unenforcedPromptLogins(github('When user `patzick` opens PR', 'Patzick'))).toEqual([])
@@ -40,8 +41,23 @@ describe('unenforcedPromptLogins', () => {
   })
   it('ignores a bare @word that is no launch condition, and trailing-hyphen non-logins', () => {
     expect(unenforcedPromptLogins(github('cc @patzick, mention @claude, keep @ts-ignore and @deprecated'))).toEqual([])
-    expect(unenforcedPromptLogins(github('opened by @patzick or author `octo-cat`'))).toEqual(['patzick', 'octo-cat'])
+    expect(unenforcedPromptLogins(github('opened by @patzick or author `octo-cat`'))).toEqual([{ login: 'patzick', field: 'authors' }, { login: 'octo-cat', field: 'authors' }])
     expect(unenforcedPromptLogins(github('by @foo- only'))).toEqual([])
+  })
+  it('routes review-request phrasing to Reviewers when a review event is selected', () => {
+    const reviewers = (prompt: string) => unenforcedPromptLogins(review(prompt))
+    expect(reviewers('Review PRs when a review is requested for `pkarw`.')).toEqual([{ login: 'pkarw', field: 'reviewers' }])
+    expect(reviewers('Handle review requests for @pkarw')).toEqual([{ login: 'pkarw', field: 'reviewers' }])
+    expect(reviewers('Review requested from pkarw')).toEqual([{ login: 'pkarw', field: 'reviewers' }])
+    expect(reviewers('When user `pkarw` is requested as reviewer, review the PR')).toEqual([{ login: 'pkarw', field: 'reviewers' }])
+    expect(reviewers('Only for requested reviewer @pkarw')).toEqual([{ login: 'pkarw', field: 'reviewers' }])
+    expect(unenforcedPromptLogins({ ...review('Review requested from pkarw'), filters: { ...newDraft().filters, reviewers: '@PKarw' } })).toEqual([])
+  })
+  it('keeps review phrasing quiet without a review event and on ordinary prose', () => {
+    expect(unenforcedPromptLogins(review('Review requested from pkarw', ['pull_request.opened']))).toEqual([])
+    for (const prose of ['When a review is requested for the PR, read it', 'Review requested from someone on the team', 'Check review requests for this repo', 'Reviews of the code are welcome', 'Ask for a review from me', 'mail reviewer@example.com']) {
+      expect(unenforcedPromptLogins(review(prose))).toEqual([])
+    }
   })
 })
 

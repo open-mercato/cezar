@@ -334,6 +334,27 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     expect(continueBody()).toEqual({ runner: 'codex' })
   })
 
+  it('keeps an Antigravity run on agy when a network blip leaves its auth unknown — no silent claude fallback', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'not-installed', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+          { provider: 'antigravity', status: 'unknown', enabled: true },
+        ],
+      },
+    )
+    renderAction(makeRun({ runner: 'antigravity', model: 'Gemini 3.8 Flash (High)' }))
+
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({})
+  })
+
   it('excludes a connected disabled current runner and sends the enabled fallback', async () => {
     serve(
       HEALTH_MULTI,

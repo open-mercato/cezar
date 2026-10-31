@@ -22,6 +22,7 @@ const HEALTH: HealthResponse = {
     followups: false,
     singleProject: false,
     automations: false,
+    webhooks: false,
     dispatch: false,
   },
 }

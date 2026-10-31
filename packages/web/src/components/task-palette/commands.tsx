@@ -27,7 +27,7 @@ import type { GitAction, GitActionId } from '@/lib/git-actions'
 import type { TaskWorkspaceBridge } from '@/lib/task-workspace-bridge'
 import { isRunActive, resumeHint, runActionFlags } from '@/routes/task-thread/run-actions'
 import { GIT_ACTION_ICONS, GIT_ACTION_PENDING_LABELS } from '@/routes/task-git/git-toolbar'
-import { FIXED_VIEW_ORDER, VIEW_PATHS, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
+import { FIXED_VIEW_ORDER, VIEW_PATHS, viewAliases, viewLabel, type ViewId } from '@/routes/task-workspace/layout-state'
 import { stripEntries, stripTabs, type StripEntry } from '@/routes/task-workspace/strip'
 import { VIEW_ICONS } from '@/routes/task-workspace/view-picker'
 
@@ -274,7 +274,7 @@ function viewCommands({ run, workspace, terminalAvailable }: TaskCommandInput, o
       group: 'views',
       label: viewLabel(view),
       icon: <Icon aria-hidden="true" />,
-      keywords: ['view', 'go', 'tab', view],
+      keywords: ['view', 'go', 'tab', view, ...viewAliases(view).map((alias) => alias.toLowerCase())],
       ...shortcutOf(view),
       pressed: workspace?.activeView === view,
       perform: workspace ? () => workspace.openView(view) : () => on.navigate(`${base}/${VIEW_PATHS[view]}`),

@@ -314,7 +314,7 @@ function RepoFileBrowser({
           aria-label="Repository files"
           aria-activedescendant={activeRow ? rowId(activeRow.path) : undefined}
           onKeyDown={onKeyDown}
-          className="min-w-0 text-[13px]"
+          className="min-w-0 text-ui"
         >
           {rows.map((row) =>
             row.kind === 'dir' ? (

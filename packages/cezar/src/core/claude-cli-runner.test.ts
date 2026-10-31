@@ -13,6 +13,8 @@ import {
   CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
   appendClaudeSystemPrompt,
+  shouldSpoolSystemPrompt,
+  writeClaudeSystemPromptFile,
   claudeExitMessage,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
@@ -434,5 +436,31 @@ describe('claude result error with a JSON envelope', () => {
         .catch(() => undefined);
       expect(errors).toContain('API Error: 400 [400]: invalid_request_error: model gpt-5 is not available');
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('system prompt past the Windows command-line limit (#1584)', () => {
+  const big = 'x'.repeat(40_000);
+
+  it('spools only on win32 and only when the prompt is large', () => {
+    expect(shouldSpoolSystemPrompt(big, 'win32')).toBe(true);
+    expect(shouldSpoolSystemPrompt('short', 'win32')).toBe(false);
+    expect(shouldSpoolSystemPrompt(big, 'linux')).toBe(false);
+    expect(shouldSpoolSystemPrompt(big, 'darwin')).toBe(false);
+    expect(writeClaudeSystemPromptFile(big, 'linux')).toBeUndefined();
+  });
+
+  it('passes a file flag and keeps the prompt out of argv', () => {
+    const file = writeClaudeSystemPromptFile(big, 'win32');
+    expect(file).toBeDefined();
+    try {
+      const args = buildClaudeArgs({ userPrompt: 'do it', cwd: '/tmp', systemPrompt: big }, process.env, undefined, file!.path);
+      expect(args).not.toContain('--append-system-prompt');
+      expect(args[args.indexOf('--append-system-prompt-file') + 1]).toBe(file!.path);
+      expect(args.join(' ').length).toBeLessThan(2_000);
+      expect(readFileSync(file!.path, 'utf8')).toBe(big);
+    } finally {
+      file!.cleanup();
+    }
   });
 });

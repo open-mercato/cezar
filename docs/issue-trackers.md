@@ -31,42 +31,21 @@ copied when a repository is copied or moved to a new path.
 
 ### Storage and isolation
 
-Secrets are write-only through the API: read responses expose only connection ID/provider.
-They are stored as managed dotenv files in
-`~/.cezar/tracker-connections/<sha256(canonical-project-path)>.env` (or the selected
-`CEZ_HOME`), outside repositories by default, with directory mode `0700` and file mode `0600` on POSIX. A managed `.gitignore` excludes all files in the credential directory from ordinary Git staging,
-including when `CEZ_HOME` is inside a repository; it does not untrack files already committed or
-prevent forced staging. Storage uses atomic
-replacement, no backups, and a hash of the canonical repository path. Repository state keeps
-only a non-secret connection ID and scope identity. Form secrets are cleared after save,
-failure, cancellation or project change; no browser storage is used. The API never forwards
-these credentials into ordinary manual handoff agent environments. Enabled tracker automation
-workflows have a deliberate exception: they receive only the captured connection’s credentials,
-after its project, source and revision have been revalidated.
+Settings writes encrypted managed records under
+`CEZ_HOME/tracker-connections/<sha256(canonical-project-path)>.vault`.
+Private permissions (0700 directory, 0600 files), atomic replacement and the managed
+gitignore remain enforced. API reads expose only connection metadata, never tokens.
+Corrupt records fail locally rather than preventing boot. Replace credentials through Settings;
+do not hand-edit records or source a repository .env.
 
-The form writes these files automatically; do not create or source a repository `.env`.
-The dotenv values are parsed into a project-local object, never loaded into `process.env`.
-The file contains provider credentials plus a format version, canonical `PROJECT_ROOT`, opaque connection UUID and
-private consistency digest. The digest detects accidental edits; it is not encryption or a
-security boundary against someone who can edit the file. Use Settings to replace credentials:
-manual token edits without matching metadata fail closed, preventing use of an old cached key.
+Tracker automation agents receive credentials from the captured connection after
+project/source/revision validation. Ordinary manual handoffs do
+not receive them. Values never enter the server's process.env.
 
-One managed dotenv format is supported. Unreleased prototype JSON/root-less dotenv records are
-not automatically migrated or used as fallback. Stop prototype processes and reconnect through
-Settings; remove obsolete records explicitly. Invalid records produce a controlled local-storage
-error instead of silently appearing as an absent connection. Missing storage never prevents boot.
-
-Removing credentials unlinks the selected record; no disabled marker or credential backup remains.
-Mutations for the same record are serialized across processes. Unsupported future formats are not
-automatically overwritten. Explicitly replacing credentials in Settings or removing a listed
-record is a user-requested mutation; inspect the local inventory before doing so.
-Local deletion does not revoke the vendor token.
-
-Files are **not encrypted at rest**. OS permissions protect against other OS users, not agents
-or processes with the same user's filesystem privileges. Project scoping is an application
-boundary, not a tenant sandbox or a compliance certification. Hosted access must use the
-existing authenticated HTTPS deployment. Ticket descriptions enter local run history and
-the selected AI backend when you launch; follow your organization's data/retention policies.
+Encryption uses the shared vault key, with a private file fallback when the OS keychain is
+unavailable. Same-user processes remain trusted; this is not an OS sandbox. Ticket content
+is not encrypted by this store and may enter run history and the selected AI backend.
+Hosted access still requires the existing authenticated HTTPS deployment.
 
 Candidate discovery, adapter/cache instances and signed cursors are project/connection-bound.
 Replacing/removing credentials rejects late results from the old connection. A token's vendor
@@ -78,8 +57,8 @@ project where it was explicitly configured. Separate narrowly scoped tokens are 
 `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` and `LINEAR_API_KEY` in the server
 environment or a repository `.env` are not read by this integration. These names are used only
 inside the managed per-project credential file. Existing saved scopes stay visible, but reads fail closed until you configure
-credentials and reconnect in that project's Settings. There is no silent migration or fallback
-to a global key. `CEZ_DRY_RUN=1` remains an explicitly selected credential-free demo; it cannot
+credentials and reconnect in that project's Settings. There is no fallback to a global key. Managed per-project dotenv records, unlike
+server environment variables, migrate as described above. `CEZ_DRY_RUN=1` remains an explicitly selected credential-free demo; it cannot
 save real credentials and never contacts vendors.
 
 ## Credentials and read permissions
@@ -144,6 +123,26 @@ the description reaches its cap, the composer discloses the limitation and requi
 acknowledgment; you can add supplemental context. Final prompts over 100,000 characters
 must be edited before launch. Tracker credentials are not forwarded to agents by default:
 a source link does not grant the agent access to omitted context.
+
+### Credential migration
+
+On first connection read, managed `.env` records migrate to encrypted `.vault` records,
+preserving connection IDs and project associations. Plaintext is deleted only after
+successful encrypted readback. If the home is read-only or the key is unavailable,
+a valid legacy record can remain readable without migration. Authoritative ciphertext
+never falls back to stale plaintext.
+
+A non-secret `.migrated` marker survives removal, including an interrupted migration,
+so this version will not accept stale plaintext written by an older process. Settings
+can replace malformed legacy data but refuses unreadable authoritative ciphertext.
+Stop old cezar processes before upgrading. Older versions cannot read migrated records;
+use a separate home and reconfigure credentials when downgrading. See
+[secret recovery](reference.md#secret-storage-and-recovery) for key compatibility.
+
+Both record formats have a 32 KiB limit. Encryption overhead can push an unusually
+large legacy credential past that limit; migration then reports unavailable and keeps
+the plaintext unchanged. Disconnect retains credentials; explicit removal deletes them
+locally without revoking the vendor token.
 
 ## Recovery
 

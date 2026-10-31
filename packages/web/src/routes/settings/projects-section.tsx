@@ -84,7 +84,7 @@ export function ProjectsSection() {
 
   if (config.isPending || projects.isPending) {
     return (
-      <p data-slot="projects-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="projects-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading projects…
       </p>
     )
@@ -235,11 +235,11 @@ function WorkspaceRootField({
       {serverError !== null ? (
         // The mockup's error line: the reason, then what did NOT happen — a failed probe
         // persists nothing, and saying so stops the reader wondering which value is live.
-        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-[11px] text-danger">
+        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-meta text-danger">
           {serverError} — setting unchanged
         </p>
       ) : (
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           {footer}
         </p>
       )}
@@ -277,7 +277,7 @@ function RegistryTable({
           otherwise — so today this branch cannot render. Kept because an empty table with
           headers and no rows would be a worse answer than a sentence if that ever changes. */}
       {registry.projects.length === 0 ? (
-        <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
+        <p data-slot="projects-empty" className="text-ui text-soft-foreground">
           No projects registered yet.
         </p>
       ) : (
@@ -299,7 +299,7 @@ function RegistryTable({
               <col style={{ width: '92px' }} />
             </colgroup>
             <thead>
-              <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
+              <tr className="border-b border-border text-left text-label text-soft-foreground">
                 <th scope="col" className="px-3 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Tags</th>
@@ -353,25 +353,25 @@ function ProjectRow({
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
       <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
         <span className="block truncate text-foreground">{project.name}</span>
-        <span className="block truncate font-mono text-[11px] text-soft-foreground" title={project.root}>
+        <span className="block truncate font-mono text-meta text-soft-foreground" title={project.root}>
           {project.root}
         </span>
       </th>
       <td className="px-3 py-2">
         <span
           data-slot="project-status"
-          className={project.status === 'missing' ? 'text-[12px] text-danger' : 'text-[12px] text-soft-foreground'}
+          className={project.status === 'missing' ? 'text-label text-danger' : 'text-label text-soft-foreground'}
         >
           {STATUS_LABEL[project.status]}
         </span>
         {project.unregistered ? (
           // Where `source` (how it got into the registry) would go — it is not in the registry,
           // and this is the row's whole story, so it says that instead.
-          <span data-slot="project-unregistered" className="ml-1 text-[11px] text-soft-foreground">
+          <span data-slot="project-unregistered" className="ml-1 text-meta text-soft-foreground">
             · not registered
           </span>
         ) : project.status !== 'missing' ? (
-          <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
+          <span className="ml-1 text-meta text-soft-foreground">· {project.source}</span>
         ) : null}
       </td>
       <td className="px-3 py-2">
@@ -379,14 +379,14 @@ function ProjectRow({
             the per-project cap are stored ON the entry, and Remove would 404. The Add button in
             the Actions cell is the only thing this row can honestly offer. */}
         {project.unregistered ? (
-          <span className="text-[12px] text-soft-foreground">—</span>
+          <span className="text-label text-soft-foreground">—</span>
         ) : (
           <ProjectTagsEditor project={project} vocabulary={vocabulary} />
         )}
       </td>
       <td className="px-3 py-2">
         {project.unregistered ? (
-          <span className="text-[12px] text-soft-foreground">—</span>
+          <span className="text-label text-soft-foreground">—</span>
         ) : (
           <MaxParallelStepper project={project} workspaceMax={workspaceMax} />
         )}
@@ -579,7 +579,7 @@ export function ProjectTagsEditor({
           data-slot="project-tag"
           // `whitespace-nowrap`: a hyphenated tag (`open-mercato`) was wrapping mid-word into a
           // two-line chip, which read as two tags.
-          className="inline-flex max-w-full items-center gap-1 rounded-full bg-violet/15 py-px pr-1 pl-2 text-[11px] font-medium whitespace-nowrap text-violet"
+          className="inline-flex max-w-full items-center gap-1 rounded-full bg-violet/15 py-px pr-1 pl-2 text-meta font-medium whitespace-nowrap text-violet"
         >
           {tag}
           <button
@@ -674,7 +674,7 @@ export function ProjectTagsEditor({
                 if (last !== undefined) remove(last)
               }
             }}
-            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-input bg-card px-1.5 text-[12px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-input bg-card px-1.5 text-label outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           />
         </PopoverAnchor>
         <PopoverContent
@@ -702,7 +702,7 @@ export function ProjectTagsEditor({
           // and picking a suggestion for the happy path.
           onInteractOutside={(event) => event.preventDefault()}
         >
-          <p className="px-2 pt-1 pb-1.5 text-[10.5px] text-soft-foreground">
+          <p className="px-2 pt-1 pb-1.5 text-micro text-soft-foreground">
             Tags used in this workspace
           </p>
           {suggestions.map((tag, index) => (
@@ -722,7 +722,7 @@ export function ProjectTagsEditor({
               }}
               onMouseEnter={() => setHighlight(index)}
               className={cn(
-                'flex w-full items-center rounded-sm px-2 py-1 text-left text-[12px] font-medium text-violet',
+                'flex w-full items-center rounded-sm px-2 py-1 text-left text-label font-medium text-violet',
                 index === highlight && 'bg-muted',
               )}
             >
