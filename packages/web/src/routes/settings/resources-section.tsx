@@ -18,10 +18,13 @@ import { SettingsField } from './settings-field'
  * Global settings → Resources: how hard the MACHINE works. `maxParallel` caps concurrent tasks
  * across every project (the workspace semaphore holds the rest); `memoryLimitMb` is the
  * per-task ceiling the engine enforces by pausing a task that crosses it and letting the queue
- * advance (#memory-guard).
+ * advance (#memory-guard); `dispatchMaxConcurrent` is an ADMISSION ceiling — how many dispatch
+ * children are started from the queue at a time — without touching ordinary tasks' share of
+ * `maxParallel`; a parked child woken back into its session is never re-gated (spec
+ * 2026-09-20-dispatch-admission-scheduler).
  *
- * Both are workspace-level since the multi-project split (spec §"Resource governance"): they
- * protect the host, not a repo, so they live in `~/.cezar/config.json` and persist through
+ * All three are workspace-level since the multi-project split (spec §"Resource governance"):
+ * they protect the host, not a repo, so they live in `~/.cezar/config.json` and persist through
  * `PUT /api/workspace/config` — the merged answer lands straight in the workspace config query,
  * and the server refreshes the shared semaphore so a change takes effect without a restart.
  * Leftover per-repo `maxParallel`/`memoryLimitMb` keys were imported once by Migration 001 and
@@ -34,6 +37,9 @@ import { SettingsField } from './settings-field'
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
 const MAX_MONITORING_MAX = 16
+/** Dispatch admission cap bounds (spec 2026-09-20-dispatch-admission-scheduler). */
+const DISPATCH_MIN = 1
+const DISPATCH_MAX = 16
 const IDLE_TIMEOUT_MAX = 1440
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
@@ -45,7 +51,7 @@ export function ResourcesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="resources-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="resources-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading resource settings…
       </p>
     )
@@ -105,6 +111,28 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const memoryNum = memory.trim() === '' ? 0 : Number(memory)
   const memoryInvalid =
     memory.trim() !== '' && (!Number.isInteger(memoryNum) || memoryNum < MEMORY_MIN_MB)
+  // Dispatch edits locally and saves explicitly too — an empty field means "no cap".
+  const [dispatchCap, setDispatchCap] = useState(
+    config.resources.dispatchMaxConcurrent ? String(config.resources.dispatchMaxConcurrent) : '',
+  )
+  const dispatchNum = dispatchCap.trim() === '' ? 0 : Number(dispatchCap)
+  const dispatchInvalid =
+    dispatchCap.trim() !== '' &&
+    (!Number.isInteger(dispatchNum) || dispatchNum < DISPATCH_MIN || dispatchNum > DISPATCH_MAX)
+  const dispatchSaved =
+    (config.resources.dispatchMaxConcurrent ?? 0) === (dispatchInvalid ? -1 : dispatchNum)
+  const saveDispatchCap = () =>
+    save.mutate(
+      { resources: { dispatchMaxConcurrent: dispatchNum === 0 ? null : dispatchNum } },
+      {
+        onSuccess: () =>
+          toast(
+            dispatchNum === 0
+              ? 'Dispatched-task limit cleared'
+              : `At most ${dispatchNum} dispatched task${dispatchNum === 1 ? '' : 's'} will be started at a time`,
+          ),
+      },
+    )
   const memorySaved = (config.resources.memoryLimitMb ?? 0) === (memoryInvalid ? -1 : memoryNum)
   const saveMemory = () =>
     save.mutate(
@@ -152,7 +180,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           max={MAX_PARALLEL_MAX}
           onCommit={(maxParallel) => save.mutateAsync({ resources: { maxParallel: maxParallel ?? MAX_PARALLEL_MIN } })}
         />
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Need a different limit for one project?{' '}
           <Link
             to="/settings/global/projects"
@@ -163,6 +191,46 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Link>
           .
         </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Max dispatched tasks started at once"
+        hint="At most this many dispatched tasks will be started at a time; others wait in the queue. Ordinary tasks are not affected. Leave empty for no limit."
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            inputMode="numeric"
+            min={DISPATCH_MIN}
+            max={DISPATCH_MAX}
+            aria-label="Max dispatched tasks started at once"
+            data-slot="resources-dispatch-max-concurrent"
+            value={dispatchCap}
+            disabled={save.isPending}
+            placeholder="no limit"
+            onChange={(event) => setDispatchCap(event.target.value)}
+            className="block w-32 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-action="resources-save-dispatch"
+            disabled={dispatchSaved || dispatchInvalid || save.isPending}
+            onClick={saveDispatchCap}
+          >
+            Save
+          </Button>
+        </div>
+        {dispatchInvalid ? (
+          <p data-slot="resources-dispatch-invalid" className="text-meta text-danger">
+            Enter a whole number from {DISPATCH_MIN} to {DISPATCH_MAX}, or leave empty for no limit.
+          </p>
+        ) : (
+          <p className="text-meta text-soft-foreground">
+            Counts every project in this workspace. Lowering it never stops a child that is already running.
+          </p>
+        )}
       </SettingsField>
 
       <SettingsField
@@ -177,7 +245,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           max={IDLE_TIMEOUT_MAX}
           onCommit={(minutes) => save.mutateAsync({ resources: { idleTimeoutMinutes: minutes ?? 0 } })}
         />
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Minutes; 0 keeps plain waiting sessions alive. Monitoring sessions are already exempt.
         </p>
       </SettingsField>
@@ -194,7 +262,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           max={MAX_MONITORING_MAX}
           onCommit={(sessions) => save.mutateAsync({ resources: { maxMonitoringSessions: sessions ?? 0 } })}
         />
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Capacity: {config.resources.maxParallel} active + {config.resources.maxMonitoringSessions ?? 2} monitoring. Set 0 to make monitoring share active slots.
         </p>
       </SettingsField>
@@ -234,9 +302,9 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <Button type="button" variant="outline" size="sm" data-action="resources-save-monitoring-wake" disabled={wakeSaved || (wakeMode === 'interval' && wakeInvalid) || save.isPending} onClick={saveWake}>Save</Button>
         </div>
         {wakeMode === 'interval' && wakeInvalid ? (
-          <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
+          <p data-slot="resources-monitoring-wake-invalid" className="text-meta text-danger">Enter a whole number from 1 to 60 minutes.</p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+          <p className="text-meta text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
         )}
       </SettingsField>
 
@@ -255,7 +323,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <option value="on">On</option>
           <option value="off">Off</option>
         </select>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Applies to Claude, Codex and OpenCode — whenever the provider says when the limit lifts.
         </p>
       </SettingsField>
@@ -291,11 +359,11 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Button>
         </div>
         {memoryInvalid ? (
-          <p data-slot="resources-memory-invalid" className="text-[11px] text-danger">
+          <p data-slot="resources-memory-invalid" className="text-meta text-danger">
             Enter a whole number of at least {MEMORY_MIN_MB} MiB, or leave empty for no limit.
           </p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">Applies to newly started tasks.</p>
+          <p className="text-meta text-soft-foreground">Applies to newly started tasks.</p>
         )}
       </SettingsField>
 
@@ -319,7 +387,7 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-meta text-soft-foreground">
               Inherited: {composerDefaults.inheritedAutonomous === 'source-dependent'
                 ? 'Source-dependent — skills on, workflows off'
                 : composerDefaults.inheritedAutonomous ? 'On' : 'Off'}
@@ -338,12 +406,12 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
-            <span className="text-[11px] text-soft-foreground">
+            <span className="text-meta text-soft-foreground">
               Inherited: {composerDefaults.inheritedWorktree ? 'On' : 'Off'}
             </span>
           </label>
         </div>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Interactive skills may recommend both off. Multi-step and parallel runs remain isolated.
         </p>
       </SettingsField>

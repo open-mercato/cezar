@@ -46,7 +46,7 @@ const CLAUDE_MARKER_RE = /claude(?:\s+ai)?\s+usage\s+limit\s+reached\s*\|\s*(\d{
  * false positive there would schedule a resume on a timestamp that means something else entirely.
  */
 const LIMIT_PHRASE_RE =
-  /\b(?:usage|rate|session|weekly|hourly)[\s-]?limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
+  /\b(?:usage|rate|session|weekly|hourly)[\s-]?limit\b|\b\d+[\s-]hours?\s+limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
 
 /** `…try again at 2026-08-03T18:00:00Z`, `…resets at 2026-08-03 18:00`. */
 const RESET_AT_RE =
@@ -188,10 +188,17 @@ function parseDatedReset(match: RegExpExecArray, now: number): number | null {
   return now - candidate > 24 * 60 * 60_000 ? at(year + 1) : candidate;
 }
 
+/**
+ * How far in the past a clock-only reset may read and still name the window that just lifted.
+ * The prose is minute-truncated and the provider's clock is not ours, so a limit hit around the
+ * reset reads seconds-to-minutes "ago" — rolling that to tomorrow parked the task a whole day.
+ */
+const CLOCK_JUST_LIFTED_MS = 60 * 60_000;
+
 function nextLocalClock(hour: number, minute: number, now: number): number {
   const candidate = new Date(now);
   candidate.setHours(hour, minute, 0, 0);
-  if (candidate.getTime() < now) candidate.setDate(candidate.getDate() + 1);
+  if (now - candidate.getTime() > CLOCK_JUST_LIFTED_MS) candidate.setDate(candidate.getDate() + 1);
   return candidate.getTime();
 }
 
@@ -200,7 +207,7 @@ function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now
   if (!today) return null;
   let candidate = zonedWallTimeToUtc(today.year, today.month, today.day, hour, minute, timeZone);
   if (candidate === null) return null;
-  if (candidate < now) {
+  if (now - candidate > CLOCK_JUST_LIFTED_MS) {
     const tomorrow = new Date(Date.UTC(today.year, today.month - 1, today.day + 1));
     candidate = zonedWallTimeToUtc(
       tomorrow.getUTCFullYear(),

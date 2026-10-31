@@ -2,7 +2,9 @@ import { memo, useState, type ComponentProps } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
+  defaultRehypePlugins,
   type CodeHighlighterPlugin,
+  type DiagramPlugin,
   type LinkSafetyConfig,
   type UrlTransform,
 } from 'streamdown'
@@ -39,6 +41,20 @@ const shikiPlugin: CodeHighlighterPlugin = {
     void highlight(code, String(language)).then((result) => callback?.(result))
     return null
   },
+}
+
+// Keep Streamdown's controls and error fallback; load Pele only for visible diagrams.
+const mermaidPlugin: DiagramPlugin = {
+  name: 'mermaid',
+  type: 'diagram',
+  language: 'mermaid',
+  getMermaid: () => ({
+    initialize: () => {},
+    render: async (id, source) => {
+      const { renderAsync } = await import('pele/lazy')
+      return renderAsync(source, { idPrefix: id, links: false, images: false })
+    },
+  }),
 }
 
 interface MdastNode {
@@ -122,6 +138,42 @@ export function isLocalFilesystemDestination(destination: string): boolean {
     normalized,
   )
 }
+
+interface LinkTreeNode {
+  type: string
+  tagName?: string
+  properties?: Record<string, unknown>
+  children?: LinkTreeNode[]
+}
+
+/** Run after sanitization but before harden: bare paths otherwise become `[blocked]`
+ * before TranscriptLink or urlTransform can inspect them. Paths are text, never URLs
+ * relative to the cockpit page. Leave schemes, network URLs and cockpit routes to
+ * the existing sanitizer and link policy. Document previews keep their own resolver.
+ */
+function rehypeLocalFileLinks() {
+  const walk = (node: LinkTreeNode): void => {
+    const href = node.properties?.href
+    if (
+      node.tagName === 'a' &&
+      typeof href === 'string' &&
+      href.length > 0 &&
+      !/^(?:[a-z][a-z\d+.-]*:|[/#?])/i.test(href)
+    ) {
+      node.tagName = 'span'
+      node.properties = {
+        'data-local-only-link': '',
+        title: `Local file: ${href}. Open it from the task's Files tab.`,
+      }
+    }
+    node.children?.forEach(walk)
+  }
+  return walk
+}
+
+const TRANSCRIPT_REHYPE_PLUGINS = Object.entries(defaultRehypePlugins).flatMap(
+  ([name, plugin]) => name === 'harden' ? [rehypeLocalFileLinks, plugin] : [plugin],
+)
 
 type TranscriptLinkProps = ComponentProps<'a'>
 
@@ -222,9 +274,10 @@ export const Markdown = memo(function Markdown({
             ? 'thread-markdown markdown-document'
             : 'thread-markdown'
       }
-      plugins={{ code: shikiPlugin }}
+      plugins={{ code: shikiPlugin, ...(inline ? {} : { mermaid: mermaidPlugin }) }}
       shikiTheme={[SYN_THEME, SYN_THEME]}
       remarkPlugins={breaks ? HARD_BREAKS : undefined}
+      rehypePlugins={urlTransform ? undefined : TRANSCRIPT_REHYPE_PLUGINS}
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
       components={inline ? INLINE_COMPONENTS : MARKDOWN_COMPONENTS}
@@ -238,7 +291,8 @@ export const Markdown = memo(function Markdown({
       controls={{
         code: { copy: true, download: false },
         table: false,
-        mermaid: false,
+        // Thread rows contain paint, which would clip Streamdown's inline fullscreen overlay.
+        mermaid: { copy: true, download: false, fullscreen: false, panZoom: true },
       }}
       lineNumbers={false}
     >

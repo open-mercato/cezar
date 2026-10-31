@@ -26,7 +26,21 @@ export function watchProviderRuntimeAuthFailures(
   store: RunStore,
   providerAuth: ProviderAuthService,
   onProviderStatus: (status: ProviderStatus) => void,
+  dedupe = new Set<string>(),
 ): () => void {
+  const pending = new Set<string>();
+  const transcriptKey = (runId: string, provider: ProviderId, authFailureId: string): string =>
+    JSON.stringify([store.getDataDir(), runId, provider, authFailureId]);
+  const clearTranscript = (runId: string): void => {
+    for (const key of dedupe) {
+      try {
+        const [dataDir, keyRunId] = JSON.parse(key) as [string, string];
+        if (dataDir === store.getDataDir() && keyRunId === runId) dedupe.delete(key);
+      } catch {
+        // The set is private to this module; malformed keys are not expected.
+      }
+    }
+  };
   const onEvent = ({ runId, event }: { runId: string; event: RunEvent }): void => {
     if (!AUTH_ERROR_EVENT_TYPES.has(event.type)) return;
     const message = event.message;
@@ -52,18 +66,25 @@ export function watchProviderRuntimeAuthFailures(
     // `provider-status` rows fold into the default login's card, so an account incident stays off it.
     if (report.transitioned && !profileId) onProviderStatus(report.status);
 
-    const duplicate = store.readEvents(runId).some((candidate) =>
-      candidate.type === 'provider-auth-required'
-      && candidate.provider === provider
-      && candidate.authFailureId === report.status.authFailureId);
-    if (!duplicate) {
-      store.appendEvent(runId, {
-        type: 'provider-auth-required',
-        provider,
-        authFailureId: report.status.authFailureId,
-        ...(profileId ? { profileId } : {}),
-        ...(event.stepId ? { stepId: event.stepId } : {}),
-      });
+    // Production incident ids are fresh UUIDs after a restart. The cache intentionally starts
+    // cold and does not seed itself from disk; a restarted service cannot normally collide with an
+    // older persisted marker. The observer cache is retained across RunStore reopening in-process.
+    const key = transcriptKey(runId, provider, report.status.authFailureId);
+    if (!dedupe.has(key) && !pending.has(key)) {
+      pending.add(key);
+      try {
+        store.appendEvent(runId, {
+          type: 'provider-auth-required',
+          provider,
+          authFailureId: report.status.authFailureId,
+          ...(profileId ? { profileId } : {}),
+          ...(event.stepId ? { stepId: event.stepId } : {}),
+        });
+        dedupe.add(key);
+      } finally {
+        // A failed append must not permanently suppress a later retry.
+        pending.delete(key);
+      }
     }
     // An account's incident lifts on its next connected probe (`reportProfileAuthFailure`).
     if (profileId) return;
@@ -82,7 +103,12 @@ export function watchProviderRuntimeAuthFailures(
   };
 
   store.on('event', onEvent);
-  return () => store.off('event', onEvent);
+  const onDeleted = (runId: string): void => clearTranscript(runId);
+  store.on('deleted', onDeleted);
+  return () => {
+    store.off('event', onEvent);
+    store.off('deleted', onDeleted);
+  };
 }
 
 /**
@@ -93,6 +119,7 @@ export function watchProviderRuntimeAuthFailures(
  */
 export class ProviderRuntimeAuthObserver {
   private readonly watched = new WeakSet<RunStore>();
+  private readonly dedupe = new Set<string>();
 
   constructor(
     private readonly providerAuth: ProviderAuthService,
@@ -102,7 +129,7 @@ export class ProviderRuntimeAuthObserver {
   watch(store: RunStore): void {
     if (this.watched.has(store)) return;
     this.watched.add(store);
-    watchProviderRuntimeAuthFailures(store, this.providerAuth, this.onProviderStatus);
+    watchProviderRuntimeAuthFailures(store, this.providerAuth, this.onProviderStatus, this.dedupe);
   }
 }
 

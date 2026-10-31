@@ -15,7 +15,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { ChevronDownIcon, GripVerticalIcon } from 'lucide-react'
+import { ChevronDownIcon, FolderPlusIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
@@ -27,9 +27,22 @@ import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { QuickListBuckets, RepoBaseContext } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
+import { ProjectFolderDialog } from '@/components/project-folder-dialog'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
 import { moveProjectId, orderProjects } from '@/lib/project-order'
-import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
+import {
+  moveProjectBetweenFolders,
+  readProjectFolders,
+  saveProjectFolder,
+  writeProjectFolders,
+  type ProjectFolder,
+} from '@/lib/project-folders'
+import {
+  isFolderCollapsed,
+  isProjectCollapsed,
+  readStoredCollapsed,
+  writeStoredCollapsed,
+} from '@/lib/sidebar-collapse'
 import { filterRunsByOrigin } from '@/lib/task-filters'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
 import { useTaskOrigin } from '@/lib/task-origin'
@@ -112,6 +125,8 @@ function useSidebarCollapse(activeProjectId: string | null) {
   return { collapsed, toggle, expand }
 }
 
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function ProjectGroups({
   projects,
   bootProjectId,
@@ -119,6 +134,7 @@ export function ProjectGroups({
   automationsAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
 }: {
   projects: ProjectListEntry[]
   /** The project a flat, unprefixed URL resolves to — so the boot project is the one that
@@ -130,6 +146,8 @@ export function ProjectGroups({
   automationsAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started — the active group's dot. */
+  newNavItems?: ReadonlySet<string>
 }) {
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
@@ -145,6 +163,26 @@ export function ProjectGroups({
   // must not fold the whole sidebar shut.
   const collapseAnchorId = scopedProjectId ?? bootProjectId
   const { collapsed, toggle, expand } = useSidebarCollapse(collapseAnchorId)
+  const [folders, setFolders] = React.useState(readProjectFolders)
+  const selectProject = React.useCallback(
+    (projectId: string) => {
+      expand(projectId)
+      for (const folder of folders) {
+        if (folder.projectIds.includes(projectId)) expand(`folder:${folder.id}`)
+      }
+    },
+    [expand, folders],
+  )
+  const [editingFolder, setEditingFolder] = React.useState<ProjectFolder | null | undefined>(undefined)
+  const saveFolder = React.useCallback(
+    (folder: ProjectFolder | null, previousId?: string) => {
+      const next = saveProjectFolder(folders, folder, previousId)
+      setFolders(next)
+      writeProjectFolders(next)
+      setEditingFolder(undefined)
+    },
+    [folders],
+  )
 
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
@@ -191,14 +229,25 @@ export function ProjectGroups({
     (event: DragEndEvent) => {
       const { active, over } = event
       if (over === null || over.id === active.id) return
-      const from = orderedIds.indexOf(String(active.id))
-      const to = orderedIds.indexOf(String(over.id))
+      const activeId = String(active.id)
+      const overId = String(over.id)
+      const from = orderedIds.indexOf(activeId)
+      const to = orderedIds.indexOf(overId)
       if (from === -1 || to === -1) return
+
+      const activeFolder = folders.find((f) => f.projectIds.includes(activeId))
+      const overFolder = folders.find((f) => f.projectIds.includes(overId))
+      if (activeFolder?.id !== overFolder?.id) {
+        const nextFolders = moveProjectBetweenFolders(folders, activeId, overFolder?.id ?? null)
+        setFolders(nextFolders)
+        writeProjectFolders(nextFolders)
+      }
+
       // The WHOLE visible order is persisted, not just the moved id: after the first drag every
       // registered project is placed, so nothing re-sorts itself back to the top on the next read.
       setOrder(moveProjectId(orderedIds, from, to))
     },
-    [orderedIds, setOrder],
+    [folders, orderedIds, setOrder],
   )
 
   // dnd-kit's defaults would read out the project SLUG and a droppable's coordinates. The name
@@ -238,7 +287,7 @@ export function ProjectGroups({
       active={project.id === scopedProjectId}
       collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
       onToggle={toggle}
-      onSelect={expand}
+      onSelect={selectProject}
       view={view}
       activeTo={activeTo}
       currentRunId={currentRunId}
@@ -247,6 +296,7 @@ export function ProjectGroups({
       automationsAvailable={automationsAvailable}
       inboxCount={inboxCount}
       skillsUpdateAvailable={skillsUpdateAvailable}
+      newNavItems={newNavItems}
       showTokens={metricVisibility.tokens}
       showCost={metricVisibility.cost}
       sortable={sortable}
@@ -254,9 +304,48 @@ export function ProjectGroups({
       total={orderedIds.length}
     />
   ))
+  const groupsById = new Map(ordered.map((project, index) => [project.id, groups[index]]))
+
+  const folderSections = React.useMemo(
+    () =>
+      [
+        ...folders.map((folder) => ({
+          folder,
+          projects: ordered.filter((project) => folder.projectIds.includes(project.id)),
+        })),
+        {
+          folder: null,
+          projects: ordered.filter(
+            (project) => !folders.some((folder) => folder.projectIds.includes(project.id)),
+          ),
+        },
+      ].filter(({ folder, projects }) =>
+        folder !== null ? true : projects.length > 0 || folders.length === 0,
+      ),
+    [folders, ordered],
+  )
+
+  const renderedIds = React.useMemo(() => {
+    return folderSections.flatMap(({ folder, projects: sectionProjects }) => {
+      const memberIds = sectionProjects.map((project) => project.id)
+      if (!folder) return memberIds
+      const folderShut = isFolderCollapsed(collapsed, folder.id, memberIds, scopedProjectId)
+      return folderShut ? [] : memberIds
+    })
+  }, [folderSections, collapsed, scopedProjectId])
 
   return (
     <div data-slot="project-group-list">
+      <div className="mb-1 flex justify-end">
+        <button
+          type="button"
+          data-slot="project-folder-create"
+          onClick={() => setEditingFolder(null)}
+          className="flex h-7 items-center gap-1 rounded px-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <FolderPlusIcon className="size-3.5" aria-hidden="true" /> New folder
+        </button>
+      </div>
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -270,10 +359,72 @@ export function ProjectGroups({
             expanded — so the vertical strategy threw collapsed neighbours hundreds of pixels out
             of place mid-drag. The rect strategy measures each item and moves it to where it will
             actually land. */}
-        <SortableContext items={orderedIds} strategy={rectSortingStrategy}>
-          {groups}
+        <SortableContext items={renderedIds} strategy={rectSortingStrategy}>
+          {folderSections.map(({ folder, projects: sectionProjects }) => {
+            const memberIds = sectionProjects.map((project) => project.id)
+            const folderShut =
+              folder &&
+              isFolderCollapsed(collapsed, folder.id, memberIds, scopedProjectId)
+            return (
+              <React.Fragment key={folder?.id ?? 'ungrouped'}>
+                {folder ? (
+                  <div data-slot="project-folder" data-folder={folder.id} className="mb-1">
+                    <div className="flex items-center">
+                      <button
+                        type="button"
+                        aria-expanded={!folderShut}
+                        onClick={() => toggle(`folder:${folder.id}`)}
+                        className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded px-2 text-xs font-semibold text-muted-foreground hover:bg-muted"
+                      >
+                        <ChevronDownIcon
+                          className={cn('size-3 transition-transform', folderShut && '-rotate-90')}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{folder.name}</span>
+                        <span
+                          className="ml-auto"
+                          aria-label={`${sectionProjects.length} project${sectionProjects.length === 1 ? '' : 's'}`}
+                        >
+                          {sectionProjects.length}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Edit ${folder.name}`}
+                        onClick={() => setEditingFolder(folder)}
+                        className="size-8 rounded text-xs text-muted-foreground hover:bg-muted"
+                      >
+                        …
+                      </button>
+                    </div>
+                    {folderShut ? null : (
+                      <div className="ml-2 border-l border-border pl-1">
+                        {sectionProjects.length === 0 ? (
+                          <div className="px-2 py-1 text-xs text-muted-foreground">
+                            No projects
+                          </div>
+                        ) : (
+                          sectionProjects.map((project) => groupsById.get(project.id))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  sectionProjects.map((project) => groupsById.get(project.id))
+                )}
+              </React.Fragment>
+            )
+          })}
         </SortableContext>
       </DndContext>
+      {editingFolder !== undefined && (
+        <ProjectFolderDialog
+          projects={projects}
+          folder={editingFolder}
+          onClose={() => setEditingFolder(undefined)}
+          onSave={saveFolder}
+        />
+      )}
     </div>
   )
 }
@@ -353,6 +504,7 @@ function ProjectGroup({
   automationsAvailable,
   inboxCount,
   skillsUpdateAvailable,
+  newNavItems,
   showTokens,
   showCost,
   sortable,
@@ -378,6 +530,7 @@ function ProjectGroup({
   automationsAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   showTokens: boolean
   showCost: boolean
   /** The registry holds more than one project AND the ui-state cache is populated, so a drag has
@@ -499,13 +652,13 @@ function ProjectGroup({
           <div
             data-slot="project-group-header"
             title={`${project.root} is gone — remove it in Global settings → Projects`}
-            className="flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-[13px] font-semibold opacity-55 md:h-[34px]"
+            className="flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-ui font-semibold opacity-55 md:h-[34px]"
           >
             <span className="w-3 shrink-0" aria-hidden="true" />
             <span className="truncate">{project.name}</span>
             <span
               data-slot="project-missing"
-              className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger"
+              className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-micro font-medium text-danger"
             >
               folder not found
             </span>
@@ -603,19 +756,19 @@ function ProjectGroup({
             className={cn(
               // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
               // relaxation the flat nav makes.
-              'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-[13px] font-semibold md:h-[34px]',
+              'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-ui font-semibold md:h-[34px]',
               active && 'text-foreground',
             )}
           >
             <span className="truncate">{project.name}</span>
             {project.unregistered ? (
               // Says what the row is without pretending it is a problem: cezar is serving this
-              // folder, it just is not in the saved list. Global settings → Projects has the
-              // one-click Add; repeating the button here would put a registry write in the nav.
+              // folder, it just is not in the saved list. The project's Settings has the one-click
+              // Add (#1432); repeating the button here would put a registry write in the nav.
               <span
                 data-slot="project-unregistered"
-                title="cezar is serving this folder — it is not in your saved projects. Add it in Global settings → Projects."
-                className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
+                title="cezar is serving this folder — it is not in your saved projects. Add it from this project's Settings."
+                className="shrink-0 rounded-full bg-muted px-[7px] py-px text-micro font-medium text-soft-foreground"
               >
                 not saved
               </span>
@@ -624,7 +777,7 @@ function ProjectGroup({
               <span
                 data-slot="project-attention"
                 title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
-                className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                className="shrink-0 rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
               >
                 {waiting}
               </span>
@@ -632,7 +785,7 @@ function ProjectGroup({
             {project.branch ? (
               <span
                 data-slot="project-branch"
-                className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
+                className="ml-auto max-w-[92px] truncate font-mono text-micro font-medium text-soft-foreground"
               >
                 {project.branch}
               </span>
@@ -676,7 +829,7 @@ function ProjectGroup({
                   onClick={onNavigate}
                   aria-current={isActive ? 'page' : undefined}
                   className={cn(
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[30px]',
                     isActive && 'bg-muted font-semibold text-foreground',
                   )}
                 >
@@ -688,7 +841,7 @@ function ProjectGroup({
                   {item.badge === 'inbox-count' && active && inboxCount ? (
                     <span
                       data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {inboxCount}
                     </span>
@@ -697,6 +850,12 @@ function ProjectGroup({
                     <span data-slot="nav-update-marker" className="ml-auto flex items-center">
                       <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
                       <span className="sr-only">Skills update available</span>
+                    </span>
+                  ) : null}
+                  {active && newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
                     </span>
                   ) : null}
                 </Link>
@@ -733,7 +892,7 @@ function ProjectGroup({
             to={scopeTo(project.id, '/')}
             onClick={onNavigate}
             data-slot="project-group-more"
-            className="flex h-9 items-center rounded-md px-3 text-[12px] text-muted-foreground transition-colors hover:text-foreground md:h-7"
+            className="flex h-9 items-center rounded-md px-3 text-label text-muted-foreground transition-colors hover:text-foreground md:h-7"
           >
             More…
           </Link>

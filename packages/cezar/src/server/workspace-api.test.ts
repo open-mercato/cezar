@@ -95,6 +95,8 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
+      systemPrompt: null,
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -111,6 +113,7 @@ describe('the workspace settings API (step 2.7)', () => {
         agentCpuPriority: 'normal',
         hostReserve: { memoryMb: null, cpuPct: null },
         totalAgentMemoryMb: null,
+        dispatchMaxConcurrent: null,
         worktreeRetentionDefault: 10,
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
@@ -297,6 +300,8 @@ describe('the workspace settings API (step 2.7)', () => {
       projectsDir: '~/cezar/projects',
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: true,
+      orgSkillsRepos: [],
+      systemPrompt: null,
       composerDefaults: {
         autonomous: null,
         worktree: null,
@@ -313,6 +318,7 @@ describe('the workspace settings API (step 2.7)', () => {
         agentCpuPriority: 'low',
         hostReserve: { memoryMb: 3000, cpuPct: 85 },
         totalAgentMemoryMb: 8000,
+        dispatchMaxConcurrent: null,
         worktreeRetentionDefault: 10,
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
@@ -350,6 +356,22 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.idleTimeoutMinutes()).toBeNull();
   });
 
+  /** Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): a write must reach
+   *  the shared semaphore cache the engine's `pump()` asks — no restart — and `null` must clear
+   *  it back to "no cap" rather than persisting a stale ceiling. */
+  it('PUT dispatchMaxConcurrent round-trips through the semaphore and clears with null', async () => {
+    const res = await putConfig({ resources: { dispatchMaxConcurrent: 2 } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBe(2);
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBe(2);
+    expect((rawConfig().resources as Record<string, unknown>).dispatchMaxConcurrent).toBe(2);
+    expect(semaphore.dispatchMaxConcurrent()).toBe(2);
+
+    await putConfig({ resources: { dispatchMaxConcurrent: null } });
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBeNull();
+    expect(semaphore.dispatchMaxConcurrent()).toBeNull();
+  });
+
   /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
    *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
    *  it to 5 would silently overrule an operator who chose "Park until resumed". */
@@ -378,6 +400,7 @@ describe('the workspace settings API (step 2.7)', () => {
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },
       totalAgentMemoryMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 3,
     });
   });
@@ -387,6 +410,7 @@ describe('the workspace settings API (step 2.7)', () => {
     expect((await (await getConfig()).json()) as WorkspaceConfigResponse).toMatchObject({
       skillsAutoUpdate: null,
       effectiveSkillsAutoUpdate: false,
+      orgSkillsRepos: [],
     });
 
     const explicit = (await (await putConfig({ skillsAutoUpdate: true })).json()) as WorkspaceConfigResponse;
@@ -396,6 +420,21 @@ describe('the workspace settings API (step 2.7)', () => {
     const inherited = (await (await putConfig({ skillsAutoUpdate: null })).json()) as WorkspaceConfigResponse;
     expect(inherited).toMatchObject({ skillsAutoUpdate: null, effectiveSkillsAutoUpdate: false });
     expect(rawConfig().skillsAutoUpdate).toBeUndefined();
+  });
+
+  it('PUT stores the global system prompt trimmed; null and empty both clear it', async () => {
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).systemPrompt).toBeNull();
+
+    const saved = (await (await putConfig({ systemPrompt: '  Always add tests.  ' })).json()) as WorkspaceConfigResponse;
+    expect(saved.systemPrompt).toBe('Always add tests.');
+    expect(rawConfig().systemPrompt).toBe('Always add tests.');
+
+    await putConfig({ systemPrompt: '' });
+    expect(rawConfig().systemPrompt).toBeUndefined();
+    await putConfig({ systemPrompt: 'Again' });
+    const cleared = (await (await putConfig({ systemPrompt: null })).json()) as WorkspaceConfigResponse;
+    expect(cleared.systemPrompt).toBeNull();
+    expect(rawConfig().systemPrompt).toBeUndefined();
   });
 
   it('PUT stores and independently clears composer defaults while exposing env inheritance', async () => {
@@ -425,7 +464,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
-    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }, { hostReserve: { cpuPct: 0 } }, { agentCpuPriority: 'turbo' }]) {
+    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }, { hostReserve: { cpuPct: 0 } }, { agentCpuPriority: 'turbo' }, { dispatchMaxConcurrent: 17 }]) {
       const res = await putConfig({ resources });
       expect(res.status, JSON.stringify(resources)).toBe(400);
       expect((await res.json()) as { error: string }).toHaveProperty('error');

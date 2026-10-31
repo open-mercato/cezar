@@ -1,0 +1,25 @@
+---
+title: "Custom Cezar name and logo"
+description: "Distinguish instances by their name and logo in the cockpit."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/appearance.tsx
+    line: 189
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Appearance lets you set an instance name for the sidebar and browser tab. You can also upload a logo stored on the server machine.
+
+## Where to find it
+
+Settings → Global → Appearance → Instance name / Logo
+
+## How to use it
+
+1. Enter the instance name and save.
+2. Choose Choose logo and select an image file.
+3. Check the preview, then choose Save logo. Remove logo clears the custom logo.
+
+> **Good to know**: Logos have a 2 MB limit. Supported formats are PNG, JPEG, WebP, GIF, AVIF, and safe SVG.

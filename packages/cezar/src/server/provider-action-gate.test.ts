@@ -62,6 +62,15 @@ describe('provider action gate', () => {
     },
   );
 
+  it('lets an unverifiable Antigravity run — `agy models` needs the network — but not a signed-out one', () => {
+    expect(unavailableProviderMessage(['antigravity'], {
+      providers: [{ provider: 'antigravity', status: 'unknown', enabled: true }],
+    })).toBeNull();
+    expect(unavailableProviderMessage(['antigravity'], {
+      providers: [{ provider: 'antigravity', status: 'disconnected', enabled: true }],
+    })).toBe('Antigravity credentials are unavailable. Authorize it in Settings → Agents → Providers.');
+  });
+
   it('reports unavailable credentials when the provider status row is missing', () => {
     expect(unavailableProviderMessage(['opencode'], { providers: [] }))
       .toBe('OpenCode credentials are unavailable. Authorize it in Settings → Agents → Providers.');

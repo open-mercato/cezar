@@ -94,7 +94,7 @@ export function HostLimitsFields({ config, save }: { config: WorkspaceConfigResp
           <option value="off">Off</option>
           <option value="on">On</option>
         </select>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           On = low priority, keep {RESPONSIVE_PRESET.hostReserve.memoryMb} MiB free, pause starts above{' '}
           {RESPONSIVE_PRESET.hostReserve.cpuPct}% CPU. Fine-tune below.
         </p>
@@ -116,7 +116,7 @@ export function HostLimitsFields({ config, save }: { config: WorkspaceConfigResp
           <option value="low">Low (below normal)</option>
           <option value="idle">Idle (only spare CPU)</option>
         </select>
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           Best effort, for newly started agent steps: a process the OS refuses to renice keeps normal priority.
         </p>
       </SettingsField>
@@ -199,11 +199,11 @@ export function HostLimitsFields({ config, save }: { config: WorkspaceConfigResp
           </Button>
         </div>
         {invalid ? (
-          <p data-slot="resources-host-invalid" className="text-[11px] text-danger">
+          <p data-slot="resources-host-invalid" className="text-meta text-danger">
             Memory needs a whole number of at least {MIN_RESERVE_MB} MiB, CPU 1 to 100 — or leave empty.
           </p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">
+          <p className="text-meta text-soft-foreground">
             Uses the container limit when cezar runs in one. Missing telemetry never blocks a start.
           </p>
         )}

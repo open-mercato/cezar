@@ -10,6 +10,7 @@ import {
   createRun,
   createRunPr,
   deleteRun,
+  deleteAutomation,
   finishRun,
   getGithub,
   getGithubChecks,
@@ -46,6 +47,9 @@ import {
   retryProviderAuth,
 } from './client'
 import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
+
+/** A message's idempotency key (telemetry 1a212342) — fixed here so the request shape is exact. */
+const KEY = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e0f'
 
 /** The one seam under test: every call must go through `fetch` and nothing else. */
 const fetchMock = vi.fn<typeof fetch>()
@@ -304,19 +308,19 @@ describe('request shapes', () => {
     },
     {
       name: 'sendMessage',
-      call: () => sendMessage('run-1', { text: 'hi' }),
+      call: () => sendMessage('run-1', { text: 'hi', idempotencyKey: KEY }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
       // The server's schema defaults both, but an absent `images` and `[]` are the same
       // request — send the shape the endpoint documents rather than half of it.
-      body: { text: 'hi', images: [] },
+      body: { text: 'hi', images: [], idempotencyKey: KEY },
     },
     {
       name: 'sendMessage (images only)',
-      call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }] }),
+      call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }], idempotencyKey: KEY }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
-      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }] },
+      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }], idempotencyKey: KEY },
     },
   ]
 
@@ -342,6 +346,7 @@ describe('request shapes', () => {
     // The one URL this module builds without fetching it (an <img> loads it) — same invariant
     // as every case above: unscoped means exactly the pre-multi-project path.
     expect(runFileRawUrl('run-1', 'shots/final.png')).toBe('/api/v1/runs/run-1/files?path=shots%2Ffinal.png&raw=1')
+    expect(runFileRawUrl('run-1', 'a.png', 'abc123')).toBe('/api/v1/runs/run-1/files?path=a.png&raw=1&rev=abc123')
   })
 
   it('forwards an abort signal to fetch', async () => {
@@ -616,6 +621,36 @@ describe('createRunPr survives a lost response', () => {
   })
 })
 
+/** telemetry 2e454012: the connection dropped after the headers, while the body was read. */
+describe('a body lost mid-read', () => {
+  const headersThenDrop = () => {
+    const res = new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    vi.spyOn(res, 'text').mockRejectedValue(new TypeError('Failed to fetch'))
+    return res
+  }
+
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it('is the same ApiError(0) as a request that never answered, not a bare TypeError', async () => {
+    fetchMock.mockResolvedValue(headersThenDrop())
+    const error = await getHealth().catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(0)
+  })
+
+  it('a message whose answer was lost is re-posted under its key, and the server dedupes it', async () => {
+    fetchMock
+      .mockResolvedValueOnce(headersThenDrop())
+      .mockResolvedValueOnce(new Response(JSON.stringify({ delivered: true }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const result = sendMessage('run-1', { text: 'hi', idempotencyKey: KEY })
+    await vi.runAllTimersAsync()
+    await expect(result).resolves.toEqual({ delivered: true })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(lastCall().body).toEqual({ text: 'hi', images: [], idempotencyKey: KEY })
+  })
+})
+
 describe('errors', () => {
   function fail(status: number, body: string, contentType = 'application/json'): void {
     fetchMock.mockResolvedValue(
@@ -633,6 +668,15 @@ describe('errors', () => {
     expect(error).toBeInstanceOf(ApiError)
     expect((error as ApiError).status).toBe(409)
     expect((error as ApiError).message).toBe('run is active — cancel it first')
+  })
+
+  it('preserves completed launch links on a cancellation conflict', async () => {
+    fail(409, JSON.stringify({ error: 'This scheduled task already started.', runIds: ['run-a', 'run-b'] }))
+    const error = await deleteAutomation('scheduled-id', 2).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).runIds).toEqual(['run-a', 'run-b'])
+    fail(409, JSON.stringify({ error: 'Invalid response', runIds: [7] }))
+    expect(((await deleteAutomation('scheduled-id', 2).catch((e: unknown) => e)) as ApiError).runIds).toBeUndefined()
   })
 
   it('carries the 409 extras the server pairs with the reason', async () => {
@@ -665,6 +709,14 @@ describe('errors', () => {
     // Says what we know; does not paste a page of HTML into a toast.
     expect((error as ApiError).message).toBe('500 Internal Server Error')
     expect((error as Error).name).toBe('ApiError')
+  })
+
+  it('explains a proxy 413 instead of printing the status line (#1735)', async () => {
+    fail(413, '<html>413 Request Entity Too Large</html>', 'text/html')
+    const error = (await getRuns().catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(413)
+    expect(error.message).toContain('too large')
+    expect(error.message).toContain('client_max_body_size')
   })
 
   it('survives an empty error body', async () => {

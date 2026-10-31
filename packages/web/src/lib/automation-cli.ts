@@ -1,4 +1,4 @@
-import { cronOf, type AutomationDefinition, type AutomationDispatch, type AutomationEvent, type AutomationFilters, type AutomationSchedule } from '@open-mercato/cezar-api-client'
+import { cronOf, hm, normalizeSchedule, type AutomationDefinition, type AutomationDispatch, type AutomationEvent, type AutomationFilters, type AutomationSchedule } from '@open-mercato/cezar-api-client'
 
 /**
  * The editor's "Copy as CLI" card (spec 2026-09-14-automations-redesign Q1): the flag form of
@@ -15,6 +15,7 @@ export interface CliDefinition {
   kind: 'github' | 'schedule' | 'tracker'
   trackerTrigger?: AutomationDefinition['trackerTrigger']
   schedule?: AutomationSchedule
+  schedules?: AutomationSchedule[]
   events?: AutomationEvent[]
   intervalSeconds?: number
   filters?: Partial<AutomationFilters>
@@ -39,8 +40,9 @@ export function everyFlag(seconds: number): string {
 }
 
 export function flagExpressible(definition: CliDefinition): boolean {
+  if (definition.schedules && definition.schedules.length > 1) return false
   if (definition.kind === 'tracker') return false
-  if (definition.kind === 'schedule') return !!definition.schedule
+  if (definition.kind === 'schedule') return !!definition.schedule && (definition.schedule.type !== 'once' || !!definition.schedule.date)
   if (!definition.events?.length) return false
   const filters = definition.filters ?? {}
   const extra = (['assignees', 'allLabels', 'excludeLabels', 'changedLabels'] as const).some((key) => (filters[key]?.length ?? 0) > 0)
@@ -53,7 +55,10 @@ export function flagExpressible(definition: CliDefinition): boolean {
 /** The flag form. Callers check `flagExpressible` first; an inexpressible poll gets JSON. */
 export function cliFlagsOf(definition: CliDefinition): string {
   const parts = ['cez automation add', `--name ${shellQuote(definition.name || 'untitled')}`]
-  if (definition.kind === 'schedule' && definition.schedule) {
+  if (definition.kind === 'schedule' && definition.schedule?.type === 'once') {
+    const s = normalizeSchedule(definition.schedule)
+    parts.push(`--at ${shellQuote(`${s.date} ${hm(s.hour, s.minute)}`)}`)
+  } else if (definition.kind === 'schedule' && definition.schedule) {
     parts.push(`--cron ${shellQuote(cronOf(definition.schedule))}`)
   } else {
     parts.push(`--on ${(definition.events ?? []).join(',')}`)
@@ -83,7 +88,7 @@ export function cliJsonOf(definition: CliDefinition): string {
     name: definition.name || 'untitled',
     kind: definition.kind,
     ...(definition.kind === 'schedule'
-      ? { schedule: definition.schedule }
+      ? { schedule: definition.schedule, ...(definition.schedules ? { schedules: definition.schedules } : {}) }
       : definition.kind === 'tracker'
         ? { trackerTrigger: definition.trackerTrigger, intervalSeconds: definition.intervalSeconds ?? 1800, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }
         : { events: definition.events, intervalSeconds: definition.intervalSeconds ?? 300, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }),

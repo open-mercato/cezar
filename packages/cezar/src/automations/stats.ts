@@ -40,7 +40,7 @@ export interface AutomationStatsResult {
 }
 
 function automationIdOf(run: RunRecord): string | undefined {
-  return run.automation?.automationId ?? run.automationTrigger?.automationId;
+  return run.deferredBinding ? undefined : run.automation?.automationId ?? run.automationTrigger?.automationId;
 }
 
 /** Monday 00:00 of the current week in the zone; falls back to a rolling 7 days for an unknown zone. */

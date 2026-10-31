@@ -705,8 +705,9 @@ Documented custom properties use the `--cezar-*` namespace:
 ```
 
 The public token list covers color roles, typography families, radii, shadows, density, and the
-reading measure. The built-in `--cezar-measure` value is `820px` for `narrow` and `1180px` for
-`wide`. Private intermediate tokens, including `--cezar-tw-*`, may change without semver impact.
+reading measure. The built-in `--cezar-measure` value is `820px` for `narrow`; the default
+`wide` mode is uncapped (`none`). Private intermediate tokens, including `--cezar-tw-*`, may
+change without semver impact.
 
 ### Pre-paint root adoption
 

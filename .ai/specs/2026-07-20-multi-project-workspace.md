@@ -216,6 +216,14 @@ and are load-bearing:
   lists it), so legacy flat URLs and pasted deep links still resolve. A bare `/`
   with nothing remembered lands on the registry's lead project instead, because
   opening on a project with no sidebar row is the same takeover by another name.
+
+  `cezar serve` itself opens `/p/default/`, not `/` (#1432): starting cezar in a
+  folder means "show me this folder", and a bare `/` handed that choice to the
+  browser's remembered page or the registry's lead project, which put another
+  repo's tasks on screen. While the cockpit is ON the unlisted launch folder, the
+  cockpit adds its "not saved" row back from health (`withServedBootProject`), so
+  the sidebar names it and its Settings offers **Add project**. The server's list
+  is unchanged; the row leaves the sidebar when the user moves to another project.
 - **The boot slug is sticky for the process**, and reserved against other
   registrations. It is a live URL derived from a file the user edits while the
   server runs; recomputing it per call let an unrelated `Add project` with the

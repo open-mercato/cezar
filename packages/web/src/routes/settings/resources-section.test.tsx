@@ -32,6 +32,8 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -48,6 +50,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },
       totalAgentMemoryMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 10,
       ...resources,
     },
@@ -106,6 +109,10 @@ const saveMemory = () =>
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const monitoringSelect = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-monitoring"]')
 const idleTimeout = () => document.querySelector<HTMLInputElement>('[data-slot="resources-idle-timeout"]')
+const dispatchInput = () =>
+  document.querySelector<HTMLInputElement>('[data-slot="resources-dispatch-max-concurrent"]')
+const saveDispatch = () =>
+  document.querySelector<HTMLButtonElement>('[data-action="resources-save-dispatch"]')
 const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
 const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
@@ -203,6 +210,40 @@ describe('Global settings → Resources', () => {
     fireEvent.blur(monitoringSelect()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxMonitoringSessions: 3 } })
+  })
+
+  /**
+   * Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): one field, no dead
+   * knob. Empty means "no limit" (the shipped default is `null`), 1..16 is a real ceiling, and a
+   * value outside the window is refused locally instead of being sent to a route that would 400.
+   */
+  it('saves the dispatch admission cap, and an empty field clears it back to "no limit"', async () => {
+    serve({ dispatchMaxConcurrent: null })
+    renderResources()
+    await waitFor(() => expect(dispatchInput()).not.toBeNull())
+    expect(dispatchInput()!.value).toBe('') // null renders as empty, i.e. no cap
+
+    fireEvent.change(dispatchInput()!, { target: { value: '3' } })
+    fireEvent.click(saveDispatch()!)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { dispatchMaxConcurrent: 3 } })
+
+    fireEvent.change(dispatchInput()!, { target: { value: '' } })
+    fireEvent.click(saveDispatch()!)
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { dispatchMaxConcurrent: null } })
+  })
+
+  it('refuses a dispatch cap outside 1..16 without calling the route', async () => {
+    serve({ dispatchMaxConcurrent: 2 })
+    renderResources()
+    await waitFor(() => expect(dispatchInput()).not.toBeNull())
+    expect(dispatchInput()!.value).toBe('2')
+
+    fireEvent.change(dispatchInput()!, { target: { value: '99' } })
+    expect(saveDispatch()!.disabled).toBe(true)
+    expect(document.querySelector('[data-slot="resources-dispatch-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
   })
 
   it('saves the waiting-session idle timeout and allows disabling it', async () => {

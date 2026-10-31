@@ -46,6 +46,7 @@ export interface GitActionState {
 }
 
 export type GitActionId =
+  | 'land'
   | 'commit'
   | 'push'
   | 'commit-push'
@@ -219,7 +220,48 @@ export function gitActionPolicy(state: GitActionState): GitAction | null {
   return null
 }
 
-function agentStep(state: GitActionState, id: GitActionId, label: string): GitAction {
+/** An in-place task in an auto-land project (spec 2026-10-20-trunk-based-projects). */
+export interface TrunkGitActionState {
+  status: RunStatus
+  /** The checkout's base branch, as the button names it. */
+  base: string
+  /** Files outside `.ai/cezar/` the land would commit; undefined while loading. */
+  uncommitted?: number
+  /** Local commits the upstream lacks; null = no upstream. */
+  unpushed?: number | null
+  /** Upstream commits the checkout lacks, as last fetched; null = no upstream. */
+  behind?: number | null
+  forge: ForgeInfo | null
+  agentBlocked?: string
+}
+
+/**
+ * The trunk-based git step: **Commit to <base>** — commit, rebase, run the required checks, push
+ * (the same land as Finish). Under its chevron: Create PR / Create draft PR for a change that
+ * should be reviewed after all, and Update branch while the remote is ahead — both the agent's.
+ */
+export function trunkGitActionPolicy(state: TrunkGitActionState): GitAction | null {
+  if (state.uncommitted === undefined) return null
+  const behind = state.behind !== undefined && state.behind !== null && state.behind > 0
+  const update = behind ? agentStep(state, 'update-branch', 'Update branch') : null
+  const pending = state.uncommitted > 0 || (state.unpushed ?? 0) > 0
+  if (!pending) return update
+  const prReason = state.forge === null
+    ? 'no supported forge remote (GitHub) detected'
+    : state.forge.available === false
+      ? (state.forge.reason ?? 'the forge is unreachable')
+      : state.agentBlocked
+  const prStep = (id: GitActionId, label: string): GitAction =>
+    prReason ? { id, label, enabled: false, reason: `${label} unavailable — ${prReason}` } : { id, label, enabled: true }
+  const alternatives = [prStep('create-pr', 'Create PR'), prStep('create-draft-pr', 'Create draft PR'), ...(update ? [update] : [])]
+  const label = `Commit to ${state.base}`
+  if (state.status === 'running' || state.status === 'queued') {
+    return { id: 'land', label, enabled: false, reason: `${label} unavailable — the agent is still working`, alternatives }
+  }
+  return { id: 'land', label, enabled: true, alternatives }
+}
+
+function agentStep(state: { agentBlocked?: string }, id: GitActionId, label: string): GitAction {
   return state.agentBlocked
     ? { id, label, enabled: false, reason: `${label} unavailable — ${state.agentBlocked}` }
     : { id, label, enabled: true }

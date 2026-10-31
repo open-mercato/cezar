@@ -44,7 +44,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** One registered project — the degenerate workspace every existing install upgrades into. */
@@ -287,6 +287,27 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
   })
 
+  // #1412 — a recognized remote keeps its GitHub tab while the probe is cold or failing: remote
+  // mode has no health push, so a tab hidden on that answer stayed hidden until a reload.
+  it.each([
+    ['a cold probe', { kind: 'github' as const }],
+    ['a failed probe', { kind: 'github' as const, available: false, reason: 'gh timed out' }],
+  ])('keeps the GitHub nav item for a recognized remote with %s', async (_label, forge) => {
+    serve({ '/api/v1/health': { ...HEALTH, forge }, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+  })
+
+  it('drops the GitHub nav item when no forge remote is recognized', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
+    renderShell()
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
+  })
+
   it('renders no badge for an empty inbox', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()
@@ -384,6 +405,50 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
     // …and so does the repo chip, which the boot project's own group header now carries.
     expect(repoChip()).toBeNull()
+  })
+
+  it('lists the unregistered launch folder while it is the project on screen (#1432)', async () => {
+    // The registry leaves the launch folder out once it holds other projects (#1057); `serve`
+    // still opens the cockpit there, so the shell names it as a "not saved" group.
+    const others = [
+      { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
+      { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
+    ]
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': { projects: others, bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+    })
+    renderShell('/p/cezar/')
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(3),
+    )
+    const header = document.querySelector('[data-slot="project-group-header"][aria-current="true"]')
+    expect(header?.textContent).toContain('cezar')
+    expect(header?.querySelector('[data-slot="project-unregistered"]')?.textContent).toBe('not saved')
+    expect(header?.querySelector('[data-slot="project-branch"]')?.textContent).toBe('feat/cockpit')
+  })
+
+  it('leaves the unregistered launch folder out while another project is on screen', async () => {
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [
+          { ...PROJECT, id: 'shop', name: 'shop', root: '/home/me/Projects/shop' },
+          { ...PROJECT, id: 'docs', name: 'docs', root: '/home/me/Projects/docs' },
+        ],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+    })
+    renderShell('/p/shop/')
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+    )
+    expect(document.querySelector('[data-slot="project-unregistered"]')).toBeNull()
   })
 
   it('does not write a non-boot project run list into the boot cache key', async () => {
@@ -598,5 +663,61 @@ describe('document title wiring', () => {
     await waitFor(() =>
       expect(document.title).toBe('Renamed storefront — Rename browser titles · cezar'),
     )
+  })
+})
+
+// #1410 — health describes the boot folder only. Booted in `$HOME` (never registered) with ONE
+// cloned GitHub project, the registry has a single entry, so the shell renders the FLAT nav —
+// which must gate GitHub on that project's own remote, not on the boot folder's `forge: null`.
+describe('forge follows the active project, not the boot folder (#1410)', () => {
+  const GH_OK = { name: 'gh' as const, available: true, version: 'authenticated' }
+  const GH_MISSING = { name: 'gh' as const, available: false, hint: 'install the GitHub CLI' }
+  const HOME_BOOT: HealthResponse = { ...HEALTH, bootProject: 'home', repo: null, forge: null, checks: [GH_OK] }
+
+  async function toolsNote(): Promise<string | null> {
+    fireEvent.pointerDown(screen.getAllByRole('button', { name: /Tools/ })[0]!)
+    const menu = await screen.findByRole('menu')
+    return menu.querySelector('[data-slot="forge-note"]')?.textContent ?? null
+  }
+
+  it('shows the GitHub tab and no "no remote" note for a cloned GitHub project served from a non-repo boot', async () => {
+    serve({
+      '/api/v1/health': HOME_BOOT,
+      '/api/v1/projects': { projects: [{ ...PROJECT, forge: 'github' }], bootProject: 'home', projectsDir: '/repos' },
+      '/api/v1/todos': [],
+    })
+    renderScopedShell('/p/cezar/', 'cezar')
+
+    expect(await screen.findByRole('link', { name: /GitHub/ })).toBeTruthy()
+    expect(await toolsNote()).toBeNull()
+  })
+
+  it('hides the tab for a project without a GitHub remote even when the boot folder has one', async () => {
+    serve({
+      '/api/v1/health': { ...HOME_BOOT, forge: { kind: 'github', available: true } },
+      '/api/v1/projects': { projects: [{ ...PROJECT, id: 'plain', name: 'plain' }], bootProject: 'home', projectsDir: '/repos' },
+      '/api/v1/todos': [],
+    })
+    renderScopedShell('/p/plain/', 'plain')
+
+    await waitFor(() => expect(versionChip()).not.toBeNull())
+    await waitFor(() => expect(screen.getAllByRole('link', { name: /Tasks/ }).length).toBeGreaterThan(0))
+    expect(screen.queryByRole('link', { name: /GitHub/ })).toBeNull()
+    expect(await toolsNote()).toContain('No GitHub remote detected')
+  })
+
+  it('keeps the tab and names the missing gh CLI, not a missing remote, when the host cannot reach GitHub', async () => {
+    serve({
+      '/api/v1/health': { ...HOME_BOOT, checks: [GH_MISSING] },
+      '/api/v1/projects': { projects: [{ ...PROJECT, forge: 'github' }], bootProject: 'home', projectsDir: '/repos' },
+      '/api/v1/todos': [],
+    })
+    renderScopedShell('/p/cezar/', 'cezar')
+
+    // A recognized remote keeps its tab; the GitHub page explains the failure and retries.
+    expect(await screen.findByRole('link', { name: /GitHub/ })).toBeTruthy()
+    const note = await toolsNote()
+    expect(note).toContain('gh auth login')
+    expect(note).not.toContain('No GitHub remote detected')
   })
 })

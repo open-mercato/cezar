@@ -3,10 +3,12 @@ import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
+import { CEZAR_DATA_EXCLUDE } from '../data-gitignore.ts';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef } from '../git-remotes.ts';
 import { branchesCheckedOutElsewhere, gitHasIdentity, unresolvedConflicts } from '../git-worktree.ts';
+import { FILESYSTEM_LISTING_CONCURRENCY, mapWithConcurrency } from './concurrency.ts';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -52,11 +54,26 @@ function gitReason(res: GitResult, fallback: string): string {
   return text || fallback;
 }
 
+/** A failed fetch/pull/push in words for the person reading the toast, with the way out
+ *  (telemetry 9202a06a: a raw `error: …` line). Known outcomes get a sentence; anything else is
+ *  git's own `fatal:`/`error:` line — not its first line, which for a push is `To <remote>`. */
+export function syncFailureReason(res: GitResult, fallback: string): string {
+  const text = res.stderr.trim() || res.stdout.trim();
+  if (/\[rejected\]|failed to push some refs/.test(text)) return 'the remote has commits this branch does not — pull first';
+  if (/would be overwritten by (merge|checkout)/.test(text)) return 'uncommitted changes would be overwritten — commit or stash them first';
+  if (/Authentication failed|could not read Username|Permission denied \(publickey\)/i.test(text)) {
+    return 'git could not sign in to the remote — check your credentials';
+  }
+  if (/Could not resolve host/i.test(text)) return 'the remote could not be reached — check your connection';
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const line = lines.find((l) => /^(fatal|error):/.test(l)) ?? lines[0];
+  return line ? line.replace(/^(fatal|error):\s*/, '') : fallback;
+}
+
 // ---- structured changes -----------------------------------------------------
 
 /** Per-file patch cap — the GUI shows a "truncated" note past this. */
 const PATCH_CAP = 200_000;
-
 export interface ChangedFile {
   path: string;
   /** Rename/copy source — present only when `status` is renamed/copied. */
@@ -79,6 +96,9 @@ export interface ChangesPayload {
    *  payload is intentionally limited to uncommitted changes instead of attributing the
    *  checked-out branch's history to this task. */
   repointedHead?: RepointedHead;
+  /** The commit the diff is measured against, resolved to a sha so the old side of an image can
+   *  be fetched by it (`/files?raw=1&rev=`). Absent when the anchor does not resolve. */
+  baseSha?: string;
 }
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
@@ -261,6 +281,8 @@ export async function collectChanges(
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
+    /** Leave cezar's own `.ai/cezar/` out — an in-place task's Changes show what would land. */
+    excludeCezarData?: boolean;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
@@ -302,20 +324,24 @@ export async function collectChanges(
     // so that refresh is written once here instead — else every poll re-reads each stat-dirty file.
     await git(dir, ['update-index', '-q', '--refresh'], env);
     const readEnv = { ...env, GIT_OPTIONAL_LOCKS: '0' };
-    const [nameStatus, numstat, patchOut] = await Promise.all([
-      git(dir, ['diff', '--name-status', '-z', '-M', base], readEnv),
-      git(dir, ['diff', '--numstat', '-z', '-M', base], readEnv),
-      git(dir, ['diff', '--patch', '-M', '--no-color', base], readEnv),
+    const scope = opts.excludeCezarData ? ['--', '.', CEZAR_DATA_EXCLUDE] : [];
+    const [nameStatus, numstat, patchOut, baseRev] = await Promise.all([
+      git(dir, ['diff', '--name-status', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--numstat', '-z', '-M', base, ...scope], readEnv),
+      git(dir, ['diff', '--patch', '-M', '--no-color', base, ...scope], readEnv),
+      git(dir, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`], readEnv),
     ]);
     for (const listing of [nameStatus, numstat, patchOut]) {
       if (!listing.ok) return { ok: false, error: gitReason(listing, 'git diff failed') };
     }
+    const baseSha = baseRev.ok ? baseRev.stdout.trim() : '';
 
     return {
       ok: true,
       changes: {
         ...assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap),
         ...(repointedHead ? { repointedHead } : {}),
+        ...(isCommitSha(baseSha) ? { baseSha } : {}),
       },
     };
   } finally {
@@ -581,6 +607,42 @@ export function imageMimeType(path: string): string | null {
   return IMAGE_MIME[name.slice(dot + 1).toLowerCase()] ?? null;
 }
 
+/** A full sha-1 or sha-256 object name — never a ref, a range or an option. */
+export function isCommitSha(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+}
+
+export type ImageAtRevResult =
+  | { kind: 'ok'; bytes: Buffer; mime: string }
+  | { kind: 'refused'; error: string };
+
+/**
+ * An image's bytes as committed at `rev` — the old side of a deleted or modified image in the
+ * Changes tab. Same allowlist and cap as the worktree raw route (`imageMimeType`,
+ * `FILE_CONTENT_CAP`); the size is asked first so an oversized blob is never read.
+ */
+export async function readImageAtRev(dir: string, rev: string, path: string): Promise<ImageAtRevResult> {
+  if (!isCommitSha(rev)) return { kind: 'refused', error: `invalid rev: ${rev}` };
+  const segments = path.split('/');
+  if (!path || path.startsWith('/') || path.includes('\0') || segments.some((s) => s === '.' || s === '..' || s === '.git' || s === '')) {
+    return { kind: 'refused', error: `invalid path: ${path}` };
+  }
+  const mime = imageMimeType(path);
+  if (mime === null) return { kind: 'refused', error: `raw serving is limited to images: ${path}` };
+  const object = `${rev}:${path}`;
+  const size = await git(dir, ['cat-file', '-s', object]);
+  if (!size.ok) return { kind: 'refused', error: `not found at ${rev.slice(0, 8)}: ${path}` };
+  const bytes = Number(size.stdout.trim());
+  if (!(bytes <= FILE_CONTENT_CAP)) {
+    return { kind: 'refused', error: `file too large to serve raw (${bytes} bytes): ${path}` };
+  }
+  return new Promise((resolvePromise) => {
+    execFile('git', ['cat-file', 'blob', object], { cwd: dir, encoding: 'buffer', maxBuffer: FILE_CONTENT_CAP + 1 }, (err, stdout) => {
+      resolvePromise(err ? { kind: 'refused', error: `not found at ${rev.slice(0, 8)}: ${path}` } : { kind: 'ok', bytes: stdout, mime });
+    });
+  });
+}
+
 /**
  * Extensions the "open in the OS default app" route (#365) will hand to the OS launcher —
  * deliberately NOT `imageMimeType`'s list, even though it is otherwise the same set minus one.
@@ -669,19 +731,19 @@ export async function readWorktreePath(
 
   if (info.isDirectory()) {
     const dirents = await readdir(target, { withFileTypes: true });
-    const entries: DirEntry[] = [];
-    for (const d of dirents) {
-      if (d.name === '.git') continue;
+    const entries = (await mapWithConcurrency(dirents, FILESYSTEM_LISTING_CONCURRENCY, async (d): Promise<DirEntry | null> => {
+      if (d.name === '.git') return null;
       if (d.isDirectory()) {
-        entries.push({ name: d.name, type: 'dir' });
+        return { name: d.name, type: 'dir' };
       } else if (d.isFile()) {
         const size = await stat(join(target, d.name))
           .then((s) => s.size)
           .catch(() => undefined);
-        entries.push({ name: d.name, type: 'file', ...(size !== undefined ? { size } : {}) });
+        return { name: d.name, type: 'file', ...(size !== undefined ? { size } : {}) };
       }
       // Symlinks, sockets, … deliberately omitted from the listing.
-    }
+      return null;
+    })).filter((entry): entry is DirEntry => entry !== null);
     entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'dir' ? -1 : 1));
     return { kind: 'dir', path: display, entries };
   }
@@ -863,6 +925,6 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
   const push = await git(dir, args);
-  if (!push.ok) return { ok: false, error: gitReason(push, 'git push failed') };
+  if (!push.ok) return { ok: false, error: syncFailureReason(push, 'git push failed') };
   return { ok: true, branch, remote, upstreamSet: !upstream.ok };
 }

@@ -59,7 +59,7 @@ function projectSettingsPath(projectId: string, sectionId?: SettingsSection['id'
   return sectionId === undefined ? base : `${base}/${sectionId}`
 }
 
-type CapabilityProps = Partial<Pick<Capabilities, 'singleProject'>>
+type CapabilityProps = Partial<Pick<Capabilities, 'singleProject' | 'webhooks' | 'webhooksUnavailableReason'>>
 
 /** One row of the project tree. `missing` rows render inert (their panes all 409). */
 type TreeProject = Pick<ProjectListEntry, 'id' | 'name' | 'status'>
@@ -153,7 +153,7 @@ function useEscapeToLeave(leave: () => void): void {
  *  on project pages and the whole nav had to scroll anyway. */
 const navRowClass = (active: boolean, touch = false) =>
   cn(
-    'flex h-[34px] shrink-0 items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+    'flex h-[34px] shrink-0 items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
     // In the phone drawer every row is a touch target: 44px, the shell's mobile rule.
     touch && 'h-11',
     active && 'bg-muted font-semibold text-foreground',
@@ -165,7 +165,7 @@ const TouchTargetsContext = React.createContext(false)
 
 function GroupLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="shrink-0 px-2.5 pt-1 pb-1 text-[10.5px] font-semibold tracking-wide text-soft-foreground uppercase">
+    <p className="shrink-0 px-2.5 pt-1 pb-1 eyebrow text-soft-foreground">
       {children}
     </p>
   )
@@ -196,7 +196,7 @@ function ProjectSectionLinks({
         end
         data-slot="settings-project-general"
         data-project={project.id}
-        className={cn(navRowClass(active && activeId === null, touch), !touch && 'h-[30px]', 'text-[13px]')}
+        className={cn(navRowClass(active && activeId === null, touch), !touch && 'h-[30px]', 'text-ui')}
       >
         <SlidersHorizontalIcon aria-hidden="true" className="size-3.5 shrink-0" />
         General
@@ -209,7 +209,7 @@ function ProjectSectionLinks({
             to={scopeTo(project.id, settingsSectionPath('project', section.id))}
             data-project-section={section.id}
             data-project={project.id}
-            className={cn(navRowClass(current, touch), !touch && 'h-[30px]', 'text-[13px]')}
+            className={cn(navRowClass(current, touch), !touch && 'h-[30px]', 'text-ui')}
           >
             <section.icon aria-hidden="true" className="size-3.5 shrink-0" />
             {section.title}
@@ -236,12 +236,12 @@ function MissingProjectRow({ project, indent }: { project: TreeProject; indent: 
       data-project={project.id}
       data-status="missing"
       title={hint}
-      className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium opacity-55"
+      className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-ui font-medium opacity-55"
     >
       {indent ? <span className="w-3 shrink-0" aria-hidden="true" /> : null}
       <span className="truncate">{project.name}</span>
       <span className="sr-only">{hint}</span>
-      <span className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger">
+      <span className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-micro font-medium text-danger">
         folder not found
       </span>
     </div>
@@ -323,7 +323,7 @@ function ProjectTreeRow({
             data-slot="settings-project-link"
             title={`Open ${project.name}'s ${sections.find((s) => s.id === openSectionId)?.title ?? 'General'}`}
             className={cn(
-              'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground',
+              'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-ui font-semibold text-muted-foreground transition-colors hover:text-foreground',
               touch && 'min-h-11',
             )}
           >
@@ -339,7 +339,7 @@ function ProjectTreeRow({
           aria-controls={expanded ? bodyId : undefined}
             data-slot="settings-project-toggle"
             className={cn(
-              'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-[13px] font-semibold transition-colors',
+              'flex min-w-0 flex-1 items-center gap-1.5 rounded-md py-1.5 pr-2 text-left text-ui font-semibold transition-colors',
               touch && 'min-h-11',
               active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
@@ -519,7 +519,7 @@ function SettingsSidebarContent({
         })}
         {/* Global settings are per USER, not per repo — worth saying once, where the choice to
             write there is being made. */}
-        <p className="shrink-0 px-2.5 pt-1 pb-2 text-[11px] text-soft-foreground">Stored in ~/.cezar</p>
+        <p className="shrink-0 px-2.5 pt-1 pb-2 text-meta text-soft-foreground">Stored in ~/.cezar</p>
 
         {tree.projects.length > 0 ? (
           <div data-slot="settings-project-tree" className="mt-1 flex shrink-0 flex-col gap-0.5 border-t border-border pt-3">
@@ -600,7 +600,7 @@ function SectionPills({
   const NavLink = scope === 'global' ? RouterNavLink : ScopedNavLink
   const pillClass = (active: boolean) =>
     cn(
-      'rounded-full border px-3 py-1.5 text-[13px] font-medium whitespace-nowrap transition-colors',
+      'rounded-full border px-3 py-1.5 text-ui font-medium whitespace-nowrap transition-colors',
       active ? 'border-transparent bg-contrast text-contrast-foreground' : 'border-border bg-card text-muted-foreground',
     )
   return (
@@ -676,7 +676,7 @@ function PageTitle({ title, projectName, as: Heading }: {
   projectName: string | null
   as: 'h1' | 'span'
 }) {
-  const size = Heading === 'h1' ? 'text-base' : 'text-[14.5px]'
+  const size = Heading === 'h1' ? 'text-base' : 'text-body'
   return (
     <span className="flex min-w-0 items-baseline gap-2">
       {/* Breadcrumb shape, owner's call: `project / view`. The project leads because it is the
@@ -717,9 +717,9 @@ function PageHeader({
     >
       <PageTitle title={title} projectName={beside} as="h1" />
       {section ? (
-        <p className="min-w-0 truncate text-[13px] text-soft-foreground">{section.description}</p>
+        <p className="min-w-0 truncate text-ui text-soft-foreground">{section.description}</p>
       ) : scope === 'project' ? (
-        <p className="text-[13px] text-soft-foreground">Project settings</p>
+        <p className="text-ui text-soft-foreground">Project settings</p>
       ) : null}
     </header>
   )

@@ -48,6 +48,22 @@ describe('cez automation', () => {
     return { calls, out, err, io };
   };
 
+  it('partial updates preserve the union unless a timing replacement is explicit (#1818)', async () => {
+    const schedule = { type: 'daily', hour: 4 };
+    const schedules = [schedule, { type: 'weekly', day: 5, hour: 16 }];
+    for (const patch of [{ name: 'Renamed' }, { schedule: { type: 'daily', hour: 7 } }, { schedules: [{ type: 'daily', hour: 8 }] }]) {
+      const h = harness([
+        { status: 200, body: { automation: { ...definition, id: 'a1', revision: 1, kind: 'schedule', enabled: false, schedule, schedules } } },
+        { status: 200, body: { automation: { id: 'a1', name: 'Renamed', revision: 2, enabled: false } } },
+      ]);
+      expect(await runAutomationCommand(['update', 'a1', '--json', JSON.stringify(patch)], env, h.io)).toBe(0);
+      const sent = JSON.parse(String(h.calls[1]?.init?.body));
+      if ('schedule' in patch) expect(sent.schedules).toBeUndefined();
+      else if ('schedules' in patch) { expect(sent.schedule).toBeUndefined(); expect(sent.schedules).toEqual(patch.schedules); }
+      else expect(sent.schedules).toEqual(schedules);
+    }
+  });
+
   it('create posts the definition from --file to the project-scoped route, paused, and prints the cockpit link', async () => {
     const h = harness([{ status: 201, body: { automation: { id: 'auto-1', name: 'Review new PRs', enabled: false } } }], { '/tmp/def.json': JSON.stringify(definition) });
     const code = await runAutomationCommand(['create', '--file', '/tmp/def.json'], env, h.io);
@@ -301,6 +317,16 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(parseEvery('45')).toBe(45);
     expect(() => parseEvery('soon')).toThrow('--every');
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
+  });
+
+  it('maps --at to a one-time schedule and refuses what is not a date and time (#771)', () => {
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'once', date: '2026-10-05', hour: 23, minute: 0 } });
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05T07:30', kind: 'schedule' }, 'p')).toMatchObject({ schedule: { type: 'once', date: '2026-10-05', hour: 7, minute: 30 } });
+    for (const bad of ['2026-02-30 10:00', '2026-10-05 24:00', 'tonight']) {
+      expect(() => bodyFromAddFlags({ name: 'later', at: bad }, 'p'), bad).toThrow('--at');
+    }
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', cron: '0 4 * * *' }, 'p')).toThrow('not both');
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', on: 'issue.opened' }, 'p')).toThrow('not both');
   });
 });
 

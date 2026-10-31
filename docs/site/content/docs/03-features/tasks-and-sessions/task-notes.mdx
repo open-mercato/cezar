@@ -1,0 +1,25 @@
+---
+title: "Task handoff notes"
+description: "Read what the agent completed and what remains."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/task-notes.tsx
+    line: 76
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Notes tab displays the agent's task handoff file as a Markdown document. Notes have their own page, so longer records can be read outside the conversation.
+
+## Where to find it
+
+Task → Notes
+
+## How to use it
+
+1. Open Notes for the task.
+2. Read the work summary and remaining actions.
+3. Return to Chat to continue.
+
+> **Good to know**: Content depends on the notes saved by the agent. Task Notes work independently of the optional global Inbox.

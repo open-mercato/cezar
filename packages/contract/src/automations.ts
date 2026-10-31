@@ -1,11 +1,12 @@
+import { deferredStartStateSchema, deferredCreationRecordSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
 // An automation launches an ORDINARY cezar task, so the task it carries is the composer's own
 // run-creation input minus the keys an automation supplies itself. Consumed rather than
 // redeclared — the same one-way direction `./runs.ts` takes towards `./workflows.ts`.
 import { createRunInputBaseSchema, runStatusSchema } from './runs.ts';
-import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema } from './dispatch.ts';
-import { automationScheduleSchema } from './automation-schedule.ts';
+import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema, dispatchIntentSchema } from './dispatch.ts';
+import { automationScheduleSchema, automationSchedulesSchema } from './automation-schedule.ts';
 
 /**
  * The AUTOMATIONS family of `/api/v1` (#694) — the per-project GitHub triggers, their runtime
@@ -159,7 +160,13 @@ export const automationDefinitionSchema = z.object({
   /** `schedule` kind: always present. `github` kind: absent. */
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
-  task: automationTaskSchema,
+  schedules: automationSchedulesSchema.optional(),
+  // Composer-deferred tasks retain the full run dispatch intent. Keep this response-only:
+  // ordinary automation inputs and templates still expose only their own dispatch settings.
+  task: automationTaskSchema.extend({
+    dispatch: z.object({ ...dispatchIntentSchema.shape, ...automationDispatchSchema.shape }).optional(),
+  }),
+  deferredStart: deferredStartStateSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -402,6 +409,7 @@ export const automationTemplateSchema = z.object({
   kind: z.enum(['github', 'schedule']),
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   events: z.array(automationEventSchema).optional(),
   intervalSeconds: z.number().optional(),
   /** `github` kind only. A copy without them would launch for every item. */
@@ -437,8 +445,9 @@ export type AutomationTemplatesResponse = z.infer<typeof automationTemplatesResp
  * `enable: true` asks the route to enable it AND establish a current-time baseline in one step.
  */
 export const createAutomationInputSchema = automationDefinitionSchema
-  .omit({ id: true, revision: true, createdAt: true, updatedAt: true, enabled: true, kind: true })
+  .omit({ id: true, revision: true, createdAt: true, updatedAt: true, enabled: true, kind: true, deferredStart: true })
   .extend({
+    task: automationTaskSchema,
     /** Omitted = `github`, the shape every pre-schedule client sends. */
     kind: automationKindSchema.optional(),
     enable: z.boolean().optional(),

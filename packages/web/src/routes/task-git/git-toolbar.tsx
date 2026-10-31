@@ -148,6 +148,7 @@ export function GitActions({
 
 /** One icon per git step — shared with the phone action menu, so both spell a step the same. */
 export const GIT_ACTION_ICONS: Record<GitActionId, ReactNode> = {
+  land: <GitCommitHorizontalIcon aria-hidden="true" />,
   commit: <GitCommitHorizontalIcon aria-hidden="true" />,
   'commit-push': <UploadIcon aria-hidden="true" />,
   push: <UploadIcon aria-hidden="true" />,
@@ -161,6 +162,7 @@ export const GIT_ACTION_ICONS: Record<GitActionId, ReactNode> = {
 /** What a step's button says while it is in flight — the agent running it, or (with no agent to
  *  ask) the server's push or PR request. */
 export const GIT_ACTION_PENDING_LABELS: Record<GitActionId, string> = {
+  land: 'Committing and pushing…',
   commit: 'Committing…',
   'commit-push': 'Committing and pushing…',
   push: 'Pushing…',

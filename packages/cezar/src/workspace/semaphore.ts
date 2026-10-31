@@ -4,6 +4,9 @@ import type { HostUsage } from '@open-mercato/cezar-contract';
 import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
 import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
 import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
+import { createAdmissionGovernor, type AdmissionGovernor } from '../core/admission-governor.ts';
+import { setAdmissionStatusProvider, type AdmissionStatus } from '../core/admission-status.ts';
+import { createCgroupPressureSource } from '../core/cgroup-pressure.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
@@ -59,6 +62,14 @@ export interface WorkspaceResourceLimits {
   /** Ceiling on the summed RSS of all agent trees before a NEW run starts. Absent/null = off. */
   totalAgentMemoryMb?: number | null;
   /**
+   * ADMISSION ceiling on dispatch children (spec 2026-09-20-dispatch-admission-scheduler): at
+   * most this many are STARTED from the queue at a time, workspace-wide; a parked child returning
+   * to work is never re-gated (#347), so the running count may exceed it. `null`/`0` = no cap.
+   * Optional so an older `load` stub keeps working — an absent key reads as "no cap", i.e. today's
+   * behavior.
+   */
+  dispatchMaxConcurrent?: number | null;
+  /**
    * Per-project concurrency ceilings, keyed by realpath-normalized project
    * root (the registry stores normalized `root`). A root absent from the map
    * inherits the workspace `maxParallel`. Optional so older `load` stubs that
@@ -93,15 +104,26 @@ function normalizeRootSync(root: string): string {
  *    that stopped a live workspace dead.
  */
 export interface AccountHolds {
+  deadlines?: ReadonlyMap<string, number>;
   deadline: ReadonlySet<string>;
   inFlight: ReadonlySet<string>;
 }
 
 /** One manager's seam into the shared counter. */
 export interface SemaphoreParticipant {
+  refreshQueueReasons?(): void;
   /** Slots this manager currently holds. The #347 exemption lives in the
    *  participant's own accounting: `waiting` runs are already subtracted. */
   busySlots(): number;
+  /**
+   * Dispatch children THIS manager holds that are actually consuming a compute slot
+   * (`starting`, or `active` and not `waiting`) — the per-run predicate in `pump()`
+   * consults the workspace-wide sum so a fan-out in one project cannot take the
+   * dispatch budget of another (spec 2026-09-20-dispatch-admission-scheduler).
+   * Optional so a stub participant — and any caller that predates the key — keeps
+   * working; absent simply holds no dispatch slot.
+   */
+  dispatchBusy?(): number;
   /** Kick the manager's queue — capacity may have appeared. Awaited by
    *  `release()` so the manager taking a freed slot has registered it before
    *  the next participant evaluates capacity. */
@@ -132,6 +154,7 @@ const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
   autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
+  dispatchMaxConcurrent: null,
 };
 
 /** Production loader: the `resources` slice of `~/.cezar/config.json`
@@ -156,6 +179,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     agentCpuPriority: resources.agentCpuPriority,
     hostReserve: resources.hostReserve,
     totalAgentMemoryMb: resources.totalAgentMemoryMb,
+    dispatchMaxConcurrent: resources.dispatchMaxConcurrent,
     projectLimits,
   };
 }
@@ -177,6 +201,20 @@ export interface WorkspaceSemaphoreOptions {
     subscribeAgents(listener: () => void): () => void;
     now(): number;
   };
+  /**
+   * The adaptive admission governor (spec 2026-09-20-adaptive-admission-governor): the REDUCTION
+   * layer under the configured dispatch ceiling. Injected so tests drive the levels without a
+   * cgroup; production reads the process's own cgroup through the default below.
+   */
+  governor?: AdmissionGovernor;
+  /**
+   * Whether this instance registers as the telemetry readout's admission provider. Defaults to
+   * true for the shared workspace semaphore; a per-manager FALLBACK (`RunManager` constructed
+   * without an injected semaphore) passes false. The registration slot is last-writer-wins, so a
+   * fallback with no ceiling configured would otherwise blank the readout of the real semaphore
+   * that is actively reducing the ceiling (review minor M4).
+   */
+  registersAdmissionStatus?: boolean;
 }
 
 const defaultHost: NonNullable<WorkspaceSemaphoreOptions['host']> = {
@@ -190,6 +228,7 @@ const defaultHost: NonNullable<WorkspaceSemaphoreOptions['host']> = {
 export class WorkspaceSemaphore {
   private readonly participants = new Set<SemaphoreParticipant>();
   private readonly load: () => Promise<WorkspaceResourceLimits>;
+  private readonly governor: AdmissionGovernor;
   private limits: WorkspaceResourceLimits;
   /** A `release()` sweep is in flight — see `pendingRelease`. */
   private broadcasting = false;
@@ -212,6 +251,13 @@ export class WorkspaceSemaphore {
     this.load = options.load ?? loadResourceLimits;
     this.host = options.host ?? defaultHost;
     this.limits = { ...DEFAULT_LIMITS, ...options.initial };
+    this.governor = options.governor ?? createAdmissionGovernor({ sample: createCgroupPressureSource() });
+    if (options.registersAdmissionStatus !== false) {
+      // The telemetry side reads the governor's snapshot from HERE (spec A7): the semaphore owns
+      // the governor and registers the one provider, the sampler only reports. The arrow never
+      // points back - a display-side value must not be able to decide admission.
+      setAdmissionStatusProvider(() => this.admissionStatus());
+    }
     this.syncHostGate();
   }
 
@@ -314,7 +360,17 @@ export class WorkspaceSemaphore {
    *  `dispose()` must call it so a torn-down project stops counting. */
   register(participant: SemaphoreParticipant): () => void {
     this.participants.add(participant);
-    return () => this.participants.delete(participant);
+    return () => {
+      if (this.participants.delete(participant)) this.notifyAccountHoldsChanged();
+    };
+  }
+
+  private notifyingHolds = false;
+  notifyAccountHoldsChanged(): void {
+    if (this.notifyingHolds) return;
+    this.notifyingHolds = true;
+    try { for (const participant of this.participants) participant.refreshQueueReasons?.(); }
+    finally { this.notifyingHolds = false; }
   }
 
   /** Slots held across EVERY registered manager (waiting runs excluded by
@@ -322,6 +378,19 @@ export class WorkspaceSemaphore {
   busy(): number {
     let total = 0;
     for (const participant of this.participants) total += participant.busySlots();
+    return total;
+  }
+
+  /**
+   * Dispatch children holding a compute slot across EVERY registered manager — the number the
+   * per-run admission predicate compares against `dispatchMaxConcurrent()`. Summed here for the
+   * same reason `busy()` is: the cap protects the host, so a fan-out in one project must not be
+   * able to spend another project's dispatch budget. Participants that predate the key (or test
+   * stubs) simply contribute nothing.
+   */
+  dispatchBusy(): number {
+    let total = 0;
+    for (const participant of this.participants) total += participant.dispatchBusy?.() ?? 0;
     return total;
   }
 
@@ -344,6 +413,60 @@ export class WorkspaceSemaphore {
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;
+  }
+
+  /**
+   * Cached ADMISSION ceiling on dispatch children, or null for "no cap" — what the queue gate
+   * compares `dispatchBusy()` against; a resume never consults it (#347). Answered from the
+   * in-memory snapshot like `maxParallel()`, refreshed by `refresh()` (boot and every
+   * `PUT /workspace/config`), never re-read per pump. Like `maxMonitoringSessions()` and
+   * `autoResumeOnUsageLimit()`, this accessor reads an OPTIONAL field and collapses absent to a
+   * usable default — `null` here, where absent and `null` mean the same thing ("no cap"), unlike
+   * #810's `monitoringWakeIntervalMinutes` where collapsing them was the bug.
+   */
+  dispatchMaxConcurrent(): number | null {
+    return this.limits.dispatchMaxConcurrent ?? null;
+  }
+
+  /**
+   * The ceiling the dispatch admission gate enforces RIGHT NOW: the configured ceiling reduced by
+   * the governor's current level (`ceil(configured * 1)`, `* 1/2`, `* 1/4`, floor 1), or `null`
+   * when there is nothing to reduce.
+   *
+   * `null` covers both spellings of "no ceiling" the rest of the workspace already honors: an
+   * absent/null key AND the explicit `0` the operator can write (see `dispatchMaxConcurrent()`,
+   * whose tests pin `0` as a real value). Handing `0` to the governor would answer `1` - a ceiling
+   * the operator never set - so the "no cap" case never reaches it.
+   *
+   * `dispatchMaxConcurrent()` itself keeps answering the CONFIGURED value: the settings API and its
+   * tests read the user's number back, while the admission gate reads this one. Splitting the two
+   * is what lets the readout say "2 of 4" honestly (spec 2026-09-20-adaptive-admission-governor).
+   */
+  dispatchAdmissionCeiling(): number | null {
+    const configured = this.dispatchMaxConcurrent();
+    if (configured === null || configured <= 0) return null;
+    return this.governor.effectiveCeiling(configured);
+  }
+
+  /**
+   * The governor's state for the telemetry readout (spec A7/A8), or `undefined` when no ceiling is
+   * configured - there is nothing to reduce, so the payload carries no `admission` key at all.
+   * `since` is the ISO-8601 instant the current non-normal level began, and is absent while the
+   * machine is `normal`.
+   */
+  admissionStatus(): AdmissionStatus | undefined {
+    const configured = this.dispatchMaxConcurrent();
+    if (configured === null || configured <= 0) return undefined;
+    // `level()` first: it advances the lazily-evaluated governor, so `since()` and
+    // `effectiveCeiling()` describe the same level the status reports.
+    const state = this.governor.level();
+    const since = this.governor.since();
+    return {
+      state,
+      configured,
+      effective: this.governor.effectiveCeiling(configured),
+      ...(since === undefined ? {} : { since: new Date(since).toISOString() }),
+    };
   }
 
   maxMonitoringSessions(): number {
@@ -387,15 +510,17 @@ export class WorkspaceSemaphore {
    * whose window has reopened or leak a stampede through one that has not.
    */
   accountHolds(): AccountHolds {
+    const deadlines = new Map<string, number>();
     const deadline = new Set<string>();
     const inFlight = new Set<string>();
     for (const participant of this.participants) {
       const holds = participant.accountHolds?.();
       if (!holds) continue;
+      for (const [key, at] of holds.deadlines ?? []) deadlines.set(key, Math.min(at, deadlines.get(key) ?? Infinity));
       for (const key of holds.deadline) deadline.add(key);
       for (const key of holds.inFlight) inFlight.add(key);
     }
-    return { deadline, inFlight };
+    return { deadline, inFlight, deadlines };
   }
 
   /**
@@ -469,6 +594,7 @@ export class WorkspaceSemaphore {
     } catch {
       // keep the last good snapshot
     }
+    this.notifyAccountHoldsChanged();
     // A raised cap is capacity appearing everywhere at once — same sweep.
     await this.release();
   }

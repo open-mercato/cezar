@@ -99,7 +99,7 @@ function project(overrides: Partial<ProjectListEntry> & { id: string }): Project
 }
 
 /** Health with/without a working forge — what gates the Views group's GitHub row (R6 1.1). */
-function health(forgeAvailable: boolean, automations = false): HealthResponse {
+function health(forgeAvailable: boolean | 'cold', automations = false): HealthResponse {
   return {
     version: '0.0.0-test',
     projects: [],
@@ -108,8 +108,8 @@ function health(forgeAvailable: boolean, automations = false): HealthResponse {
     repo: { root: '/repo', branch: 'main' },
     checks: [],
     defaultRunner: 'claude',
-    forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
+    forge: forgeAvailable === 'cold' ? { kind: 'github' } : forgeAvailable ? { kind: 'github', available: true } : null,
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, webhooks: false, dispatch: false },
   }
 }
 
@@ -142,6 +142,8 @@ function renderPalette({
   automations = false,
   uiState = {} as Record<string, unknown>,
   entry = '/',
+  bootProject,
+  healthOverrides = {},
 }: {
   runs?: RunRecord[]
   skills?: Skill[]
@@ -152,20 +154,24 @@ function renderPalette({
   /** What the runs index already knows about the rows' PRs and issues, by project. */
   referenceStatuses?: Record<string, unknown>
   theme?: Theme
-  forge?: boolean
+  /** `'cold'` — a recognized remote whose probe has not answered yet (#1412). */
+  forge?: boolean | 'cold'
   /** `capabilities.automations` (#801) — off by default, exactly as a default server reports. */
   automations?: boolean
   uiState?: Record<string, unknown>
   /** The URL to mount at. `/p/<id>/…` is what gives the palette an ACTIVE project. */
   entry?: string
+  /** The registry's boot project; defaults to the first listed project. */
+  bootProject?: string
+  healthOverrides?: Partial<HealthResponse>
 } = {}) {
   if (theme) localStorage.setItem(THEME_STORAGE_KEY, theme)
   serve({
     '/api/v1/runs': runs,
     '/api/v1/skills': skills,
-    '/api/v1/health': health(forge, automations),
+    '/api/v1/health': { ...health(forge, automations), ...healthOverrides },
     '/api/v1/ui-state': uiState,
-    '/api/v1/projects': { projects, bootProject: projects[0]?.id ?? 'default', projectsDir: '/repos' },
+    '/api/v1/projects': { projects, bootProject: bootProject ?? projects[0]?.id ?? 'default', projectsDir: '/repos' },
     '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated, referenceStatuses },
   })
   render(
@@ -313,6 +319,15 @@ describe('Views group', () => {
     ).toBe('/new')
   })
 
+  // #1412: a recognized remote whose probe is still cold keeps the view, as the sidebar does.
+  it('keeps the GitHub view while a recognized forge probe is still cold', async () => {
+    renderPalette({ forge: 'cold' })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="palette-view"][data-nav-to="/github"]')).not.toBeNull())
+  })
+
   // R6 Step 1.1: the palette must not offer a GitHub view the sidebar honestly hides.
   it('drops the GitHub view when health reports no forge', async () => {
     renderPalette({ forge: false })
@@ -338,6 +353,29 @@ describe('Views group', () => {
 
     expect(location()).toBe('/settings/global')
     await waitFor(() => expect(dialog()).toBeNull())
+  })
+
+  // #1410: health's forge is the BOOT folder's. A cloned GitHub project served from a non-repo
+  // boot still offers its GitHub view — and a remote-less project never inherits the boot's.
+  it.each([
+    { name: 'offers GitHub for a GitHub project when the boot folder has no forge', bootForge: false, projectForge: true },
+    { name: 'drops GitHub for a remote-less project when the boot folder has one', bootForge: true, projectForge: false },
+  ])('$name', async ({ bootForge, projectForge }) => {
+    renderPalette({
+      forge: bootForge,
+      bootProject: 'home',
+      projects: [project({ id: 'shop', name: 'shop', root: '/repos/shop', ...(projectForge ? { forge: 'github' as const } : {}) })],
+      entry: '/p/shop/',
+      healthOverrides: { bootProject: 'home', checks: [{ name: 'gh', available: true }] },
+    })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="palette-view"]').length).toBeGreaterThan(0))
+    await waitFor(() => {
+      const targets = [...document.querySelectorAll('[data-slot="palette-view"]')].map((view) => view.getAttribute('data-nav-to'))
+      expect(targets.includes('/github')).toBe(projectForge)
+    })
   })
 
   it('navigates to the selected view and closes', async () => {

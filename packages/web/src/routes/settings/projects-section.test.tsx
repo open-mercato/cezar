@@ -110,6 +110,8 @@ function serve(answers: Answers = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -126,6 +128,7 @@ function serve(answers: Answers = {}) {
       agentCpuPriority: 'normal',
       hostReserve: { memoryMb: null, cpuPct: null },
       totalAgentMemoryMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 10,
     },
   }

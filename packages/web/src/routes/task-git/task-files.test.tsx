@@ -42,7 +42,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** The worktree the stub serves: a root with one lazy directory and every preview kind. */
@@ -142,6 +142,13 @@ describe('the Files tab route', () => {
     expect(pane.className).toContain('md:overflow-y-auto')
     expect(pane.className).toContain('md:overscroll-contain')
     expect(pane.className.split(' ')).not.toContain('overflow-y-auto')
+    // A splitter beside the tree widens it from md up (hidden on phones, where it is full-width).
+    const splitter = pane.nextElementSibling as HTMLElement
+    expect(splitter.dataset.slot).toBe('tree-pane-resize')
+    expect(splitter.className).toContain('hidden md:block')
+    fireEvent.keyDown(splitter.querySelector('[role="separator"]')!, { key: 'End' })
+    expect(pane.style.getPropertyValue('--tree-pane-width')).not.toBe('')
+    expect(pane.className).toContain('md:w-(--tree-pane-width)!')
     // The preview scrolls on its own too, and a text preview holds nothing focusable: without a
     // tab stop WebKit (the desktop app) leaves a keyboard user no way to scroll a long file.
     const preview = document.querySelector('[data-slot="file-preview-pane"]') as HTMLElement

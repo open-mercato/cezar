@@ -70,6 +70,8 @@ describe('chords', () => {
     expect(chordProblem('Shift+P')).toBeDefined()
     expect(chordProblem('Mod+K')).toBeDefined()
     expect(chordProblem('Mod+W')).toBeDefined()
+    // The Preview's Design Mode key (spec 2026-10-09-design-mode §7a).
+    expect(chordProblem('Alt+D')).toBeDefined()
     expect(chordProblem('Mod+Shift+P')).toBeUndefined()
     expect(chordProblem('Alt+P')).toBeUndefined()
   })
