@@ -63,6 +63,9 @@ public class ServerOriginTest {
         assertFalse(origin.sameOrigin("https://cezar.example.com:8443/x?q=a|b"));
         assertFalse(origin.sameOrigin("https://evil.com#@cezar.example.com/"));
         assertFalse(origin.sameOrigin("https://cezar.example.com:notaport/"));
+        assertFalse(ServerOrigin.parse("https://mail.example.com").sameOrigin("https://ma\u0131l.example.com/"));
+        assertFalse(ServerOrigin.parse("https://mail.example.com").sameOrigin("https://MA\u0130L.example.com/"));
+        assertFalse(origin.sameOrigin("https://cezar.example.com:\u0664\u0664\u0663/"));
         assertTrue(ServerOrigin.parse("https://[::1]:8443").sameOrigin("https://[::1]:8443/x"));
     }
 }
