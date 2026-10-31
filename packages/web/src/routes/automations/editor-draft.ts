@@ -217,6 +217,7 @@ export type TemplatePick = Pick<AutomationTemplateDraft, 'name' | 'kind' | 'sche
   steps?: TaskSteps
   runner?: string
   model?: string
+  reasoningEffort?: string
   autonomous?: boolean
   checkout?: 'base' | 'pr-head'
   allowForkHeads?: boolean
