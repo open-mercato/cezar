@@ -1,7 +1,7 @@
 import { parse as parseYaml } from 'yaml';
 import { describe, expect, it } from 'vitest';
 import { E2E_CREDENTIAL_NAMES } from '@open-mercato/cezar-contract';
-import { E2E_SETUP_PR_TITLE, E2E_WORKFLOW_TEMPLATE, e2eCredentialsAmong, e2eSetupWorkflow } from './e2e-setup.ts';
+import { E2E_PACKAGE, E2E_SETUP_PR_TITLE, E2E_WORKFLOW_TEMPLATE, e2eCredentialsAmong, e2eInitCommand, e2eSetupWorkflow } from './e2e-setup.ts';
 import { graphIssues } from './workflows/graph.ts';
 import { stepsIssue, workflowDefSchema, workflowFileSchema } from './workflows/types.ts';
 
@@ -25,7 +25,11 @@ describe('e2e setup workflow (spec 2026-10-10-e2e-one-click-setup)', () => {
       expect(graph.nodes.find((n) => n.id === 'pr')).toMatchObject({ type: 'github.draft-pr', title: E2E_SETUP_PR_TITLE });
       expect(graph.edges.filter((e) => e.from.startsWith('pr.')).map((e) => [e.from, e.to])).toEqual([['pr.created', end.id], ['pr.failed', end.id]]);
       // The repo-pinned binary, never the registry's latest; vendor telemetry off.
-      for (const check of workflow.steps.filter((s) => s.command)) expect(check.command).toMatch(/E2E_TELEMETRY_DISABLED=1 npx --no-install e2e /);
+      // Replay cache in the project's shared check cache (blank, i.e. unset, outside cezar).
+      for (const check of workflow.steps.filter((s) => s.command)) {
+        expect(check.command).toMatch(/E2E_TELEMETRY_DISABLED=1 E2E_CACHE_DIR="\$\{CEZ_SHARED_CACHE_DIR:\+\$CEZ_SHARED_CACHE_DIR\/e2e\}" npx --no-install e2e /);
+      }
+      expect(workflow.steps.find((s) => s.id === 'e2e-smoke')!.command).toContain('--max-duration 300000');
     }
   });
 
@@ -34,6 +38,8 @@ describe('e2e setup workflow (spec 2026-10-10-e2e-one-click-setup)', () => {
     expect(doc.name).toBe('implement-and-e2e');
     expect(stepsIssue(doc.steps ?? [])).toBeNull();
     expect(doc.steps?.find((s) => s.id === 'browser')?.onFail).toEqual({ retry: 'implement', max: 2, retryOn: [1] });
+    // A run that outlives its budget exits 1 (RUN_TIMEOUT), so it loops back like a failed verdict.
+    expect(doc.steps?.find((s) => s.id === 'browser')?.command).toContain('--max-duration 900000');
   });
 
   it('keeps the live {{task}} token out of the agent prompt, and checks the written file has it', () => {
@@ -51,5 +57,19 @@ describe('e2e setup workflow (spec 2026-10-10-e2e-one-click-setup)', () => {
     for (const name of E2E_CREDENTIAL_NAMES) {
       expect(e2eSetupWorkflow([name]).steps[0]!.prompt).toContain(`\`${name}\``);
     }
+  });
+
+  it('scaffolds non-interactively with the gateway of the first stored key, from a pinned e2e', () => {
+    const gatewayOf = (names: Parameters<typeof e2eInitCommand>[0]) => e2eInitCommand(names).match(/--gateway (\S+)/)?.[1];
+    expect(gatewayOf([])).toBe('vercel');
+    expect(gatewayOf(['AI_GATEWAY_API_KEY'])).toBe('vercel');
+    expect(gatewayOf(['OPENROUTER_API_KEY', 'AI_GATEWAY_API_KEY'])).toBe('openrouter');
+    // Direct providers have no init gateway: the default is generated and the agent rewires it.
+    expect(gatewayOf(['ANTHROPIC_API_KEY'])).toBe('vercel');
+    const command = e2eInitCommand([]);
+    expect(command).toContain(`npx --yes ${E2E_PACKAGE} init --yes --engine web`);
+    expect(command).toContain('--skills .agents/skills,.claude/skills --mcp .mcp.json --install');
+    expect(E2E_PACKAGE).not.toMatch(/@latest$/);
+    expect(e2eSetupWorkflow(['OPENROUTER_API_KEY']).steps[0]!.prompt).toContain(e2eInitCommand(['OPENROUTER_API_KEY']));
   });
 });
