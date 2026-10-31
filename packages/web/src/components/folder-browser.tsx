@@ -70,7 +70,7 @@ export function FolderBrowser({
       </p>
 
       {!listing.isError && listing.data?.parent === null ? (
-        <p data-slot="fs-root-hint" className="text-[12.5px] text-soft-foreground">
+        <p data-slot="fs-root-hint" className="text-label text-soft-foreground">
           This is the browse root. To browse elsewhere, change{' '}
           {/* A document navigation also dismisses pickers owned above the route (#1688). */}
           <a href="/settings/global/projects" className="text-foreground underline underline-offset-4 hover:text-muted-foreground">
