@@ -65,8 +65,7 @@ shell telemetry for now, and direct APK or F-Droid builds in v1.
 
 Manager lands through its own PR, **draft #1880** from `cez/7c7ed729`, at `a1ebb4f72`: 19 commits on
 top of `f25b6b9ad`, the current `origin/main`. This PR is stacked on that branch and carries only
-this spec. Tasks M4 to M6 and M10 cannot start until #1880 merges. Whether Manager is on by default
-is still open, in the pending ratification entry that #1880 adds to AGENTS.md.
+this spec. Tasks M4 to M6 and M10 cannot start until #1880 merges. Manager is on by default.
 
 This spec depends on exactly these items from that branch, re-checked at `a1ebb4f72`:
 
@@ -214,9 +213,10 @@ Switching is reachable from three places, so that an old server cannot trap the 
 link in the cockpit's More menu (`cezar://servers`, shown only with the User-Agent token), a home
 screen quick action, and the shell's connection-error screen.
 
-**Proposed: HTTP is refused in v1.** iOS blocks cleartext by default and credentials must not cross
-it. Tailscale users can use `tailscale serve` for HTTPS [M]. Still open: see
-[Q5](#q5-allow-plain-http-for-lan-or-tailscale-addresses).
+**HTTP is refused in v1.** iOS blocks cleartext by default, and credentials must not cross it. Users
+without a public server reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`.
+Tailscale cannot be made invisible to the user: it needs its own app and sign-in on the phone, and
+the shell cannot do that for them. The connect screen's error for an `http://` URL names these three.
 
 ## Decision 3: Manager as default
 
@@ -454,7 +454,8 @@ A self-hosted server cannot hold them without shipping a secret in an npm packag
 Relay cost: one small Cloudflare Worker, likely within free or $5/month tiers [M]; an APNs `.p8` key
 and FCM service account in its secrets; rate limiting and token handling; on-call ownership of a
 service, which this project does not have today; and a privacy policy that names it. The relay is a
-stateless Cloudflare Worker. Its owner is still to be named, and M11 cannot start until one is.
+stateless Cloudflare Worker owned by Open Mercato, which must hold the APNs and FCM keys, so neither
+the keys nor the relay can live in the app.
 
 **Order:**
 
@@ -521,7 +522,8 @@ minimum server version. An old server still works, without Manager.
 
 **Demo server.** Host it on a small Ubuntu VPS under Open Mercato, with the existing `ubuntu-vps`
 install. Cloudflare does not fit, because cezar needs a long-running Node process. The Worker relay
-is separate. The provider is still to be confirmed.
+is separate. The provider, and whether the demo is reviewers-only, are still open: see
+[Q10](#q10-where-does-the-demo-server-run-and-who-may-use-it).
 
 The demo must run with `CEZ_DRY_RUN=1`, because a real cockpit gives shell access to anyone holding
 the password. The installer has no flag for this, so a systemd drop-in adds `CEZ_DRY_RUN=1` and
@@ -539,8 +541,8 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | # | Task | Ships | Depends on | Size |
 | --- | --- | --- | --- | --- |
 | M1 | **Installable cockpit (#1762).** Manifest with `start_url: "/"` and `crossorigin="use-credentials"` so it loads behind Basic auth, icons, no `/api` caching. Check iOS install behind Basic auth and service worker registration | **First thing a user can install** | None | S |
-| M2 | **Shell spike.** Throwaway build proving every item below | Go or no-go report | None | M |
-| M3 | **Land Manager.** PR #1880, including the decision on default-on | Manager on `main` | Maintainer | Outside this work |
+| M2 | **Shell spike.** Runs first. Throwaway build on the team's own devices with local signing and no store accounts, proving every item below | Go or no-go report, which decides Q2 | None | M |
+| M3 | **Land Manager.** PR #1880, on by default | Manager on `main` | Maintainer | Outside this work |
 | M4 | **Phone chat.** One-row header, composer leftovers, keyboard inset, chips, measure streaming | Better chat in every phone browser | M3 | M |
 | M5 | **Approvals.** Confirmation sheet and dialog, the Settings section with one switch per type (default all on), 44pt buttons, per-card state, refusal on card, pill, `pending=1` | Safer approvals at every width, on phones first | M3 | M |
 | M6 | **Manager first.** `isPhone`, the bare-`/` redirect with its five conditions, one-manager chat, pending-first order, bottom bar for shell and phone PWA | Every phone browser and phone PWA opens to Manager. Desktop unchanged | M3, M1 for the bar | S to M |
@@ -548,10 +550,10 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | M8 | **Mobile CI.** `mobile-check.yml`, `mobile-release.yml`, signing | Automated test builds | M7, Open Mercato accounts | M |
 | M9 | **Test tracks.** TestFlight internal and Play internal, privacy policy draft, store metadata | **First native install for testers** | M8, M4 to M6 | S |
 | M10 | **Server push detection and Web Push.** `push/` sink, device registry in `~/.cezar/`, routes, in-app toggle | PWA notifications | M3, M1 | M |
-| M11 | **Relay and native push.** Worker, keys, native registration | Native notifications | M10, M9, relay owner named | L |
-| M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | M11, VPS provider confirmed | M, plus review time |
+| M11 | **Relay and native push.** Worker, keys, native registration | Native notifications | M10, M9 | L |
+| M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | M11, Q10 | M, plus review time |
 
-Native push is required before M12 on both stores. M1 and M2 can start now. M4, M5 and M7 can run in parallel with disjoint files. M4 and M5 both touch
+Native push is required before M12 on both stores. M2 runs first, and M1 can start alongside it. M4, M5 and M7 can run in parallel with disjoint files. M4 and M5 both touch
 the Manager routes but different components.
 
 **M2 must answer, on real iOS and Android devices:**
@@ -574,7 +576,7 @@ the Manager routes but different components.
 | [M] Capacitor claims turn out wrong | Medium | Shell plan changes | M2 runs first; fallback is plain native |
 | Page script reaches the keychain | Low | Credential theft by agent output | No bridge on server pages, plus a test |
 | Apple rejects under 4.2 | Medium | No public iOS listing | Push first; TestFlight and PWA unaffected |
-| Relay becomes an unowned service | Medium | Push outage | Stateless design; name an owner before M11 |
+| Relay fails or is neglected | Medium | Push outage | Stateless design, owned by Open Mercato |
 | Mis-tapped merge | Low | Unwanted merge | Confirmation on by default, plus server pins |
 | Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain. A biometric lock is deferred |
 
@@ -609,13 +611,13 @@ the Manager routes but different components.
 
 ## Open questions for the maintainer
 
-These three stay open, and the maintainer asked for more detail on them. The decisions already taken
-follow in the [Decisions](#decisions) table.
+These three stay open. The decisions already taken follow in the [Decisions](#decisions) table.
 
 ### Q2: Accept Capacitor?
 
-**Recommended: yes, conditional on M2.** This means M2 is built with Capacitor, and the shell work in
-M7 starts only if it passes.
+**Pending the M2 spike. Recommended: yes, if M2 passes.** M2 runs first, built with Capacitor on the
+team's own devices with local signing and no store accounts. The shell work in M7 starts only if it
+passes.
 
 The question comes down to one fact: which framework lets native code answer a Basic auth challenge
 inside the webview. Tauri cannot in wry 0.55.1 [V]. That Capacitor can is [M], from memory only.
@@ -633,25 +635,12 @@ still lead on push.
 Accepting now costs nothing if M2 fails, since M2 is throwaway. The bundle ID and accounts do not
 depend on this choice.
 
-### Q5: Allow plain HTTP for LAN or Tailscale addresses?
+### Q10: Where does the demo server run, and who may use it?
 
-**Recommended: no in v1.** Refusing now can be relaxed later, but allowing it and withdrawing it later
-would break people.
-
-This affects anyone reaching cezar at `http://` on a home network or a raw Tailscale address. Basic
-auth sends the password with every request, so on plain HTTP anyone on that network can read it, and
-that password gives shell access to the server.
-
-| Option | For | Against | What it changes |
-| --- | --- | --- | --- |
-| Refuse | Simple and safe. Nothing to justify to Apple | LAN users need a certificate or a tunnel | Nothing. `tailscale serve` gives Tailscale users HTTPS [M] |
-| Allow Tailscale addresses only | WireGuard already encrypts that path, so the password is protected | The shell can only check the address range, and a wrong range check exposes the password. Global cleartext settings still apply | Range check, warning screen, platform exceptions |
-| Allow any private address | Covers every home setup | The password crosses the local network in the clear | As above, and a warning the user can dismiss |
-
-Both allow options need cleartext exceptions. On iOS an arbitrary user-entered address likely needs
-a broad App Transport Security exception that App Review asks to justify. On Android it likely means
-allowing cleartext globally, because the address is not known at build time [M]. So both also add to
-review risk.
+**Recommended: reviewers only, on a small Ubuntu VPS under Open Mercato.** The `ubuntu-vps` install is
+decided. The provider is unconfirmed, and so is whether the demo is reviewers-only. A public demo
+would need its login published, and a shared dry-run cockpit would need more than a nightly reset to
+stay presentable. M12 cannot finish until this is answered.
 
 ### Q11: What becomes of PR #1821's do-not-merge?
 
@@ -681,14 +670,14 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 
 | # | Decision | Answer |
 | --- | --- | --- |
-| Q1 | How does Manager land? | Through its own PR, #1880, and the mobile work stacks on it. Default-on is still open |
+| Q1 | How does Manager land, and is it on by default? | Through its own PR, #1880, with the mobile work stacked on it. On by default |
 | Q3 | Who owns the store accounts? | Open Mercato |
 | Q4 | Bundle ID | `com.openmercato.cezar.mobile` accepted |
-| Q6 | Does the project run a push relay? | Yes, as a Cloudflare Worker. Owner still to be named |
+| Q5 | Allow plain HTTP for LAN or Tailscale addresses? | No in v1. Users without a public server use HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. Tailscale cannot be made invisible to the user |
+| Q6 | Does the project run a push relay, and who owns it? | Yes, as a Cloudflare Worker owned by Open Mercato, which must hold the APNs and FCM keys, so it cannot live in the app |
 | Q7 | Is push required before a public listing? | Yes |
 | Q8 | Should a phone browser tab also start at `/manager`? | Yes, changed from the original recommendation. See [In a phone browser](#in-a-phone-browser) |
 | Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0` |
-| Q10 | Is there a demo server for reviewers? | Yes, on a small Ubuntu VPS under Open Mercato with the `ubuntu-vps` install, not Cloudflare. Provider still to be confirmed |
 | Q12 | Optional biometric lock | Deferred, out of the current plan |
 | Q13 | Which approvals need confirmation? | Changed: a user setting per type, default on for merges, automations and jobs. See [Confirmation setting](#confirmation-setting) |
 | Q14 | Shell telemetry | None now, planned for later |
@@ -696,10 +685,8 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | Q16 | Public store name | Cezar if available, otherwise Cezar Cockpit. It can change later, unlike the bundle ID |
 | Q17 | May public listings wait on M12? | Yes |
 
-Three of these leave a follow-up open: Manager's default-on decision (Q1), the relay owner (Q6) and
-the VPS provider (Q10).
-
 ## Changelog
 
 - 2026-10-31: Initial design.
 - 2026-11-01: Stacked on #1880 and re-checked against it. Recorded maintainer decisions. A phone browser now starts at `/manager`, and confirmation became a per-type setting. Expanded Q2, Q5 and Q11.
+- 2026-11-01: Closed Q1, Q5 and Q6. Q2 now waits on M2, which runs first on the team's own devices. Reopened Q10 for the provider and audience.
