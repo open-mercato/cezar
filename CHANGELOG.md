@@ -1,7 +1,7 @@
 # Unreleased
 
 ## Highlights
-<!-- TODO: Highlights — left blank for the maintainer to fill in before the cut. -->
+New users get a guided start: first-run onboarding signs you in to an agent, helps you pick or create a project, and connects GitHub without a terminal. Agents stall less: OpenCode's native questions now reach an ask card, and a parked parent no longer takes the parallel slot its queued reviewer needs. Windows skill runs no longer fail on long system prompts, and large or slow filesystems list faster.
 
 ## ✨ Features
 - ✨ First-run and returning-user onboarding: sign in to an agent, pick or create a project, connect GitHub without a terminal, and start from a welcome page. (#1725) *(@zielivia)*
