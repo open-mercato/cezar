@@ -58,12 +58,12 @@ public final class ServerOrigin {
     /** False for anything without a readable authority, so an odd URL can never pass as this server. */
     public boolean sameOrigin(String url) {
         UrlParts parts = UrlParts.parse(url);
-        if (parts == null || !"https".equals(parts.scheme) || !host.equalsIgnoreCase(parts.host)) return false;
+        if (parts == null || !"https".equals(parts.scheme) || !host.equals(parts.host)) return false;
         return port == (parts.port == -1 ? 443 : parts.port);
     }
 
     public boolean sameHost(String url) {
         UrlParts parts = UrlParts.parse(url);
-        return parts != null && host.equalsIgnoreCase(parts.host);
+        return parts != null && host.equals(parts.host);
     }
 }

@@ -48,6 +48,9 @@ final class ShellConnector {
 
     func open(_ id: String, cookies: String?) async -> Outcome {
         guard let server = servers.get(id), let origin = server.origin else { return Outcome(screen: Self.list) }
+        if await realmChanged(server, origin, cookies: cookies) {
+            return Outcome(screen: Self.askCredentials, serverId: id, status: 401)
+        }
         let password = credentials.get(id)
         let health = await probe.probe(origin, username: server.username, password: password, cookies: cookies)
         let route = StartDecision.decide(health, passwordSaved: password != nil)
@@ -58,9 +61,6 @@ final class ShellConnector {
         case .connectionError:
             return Outcome(screen: health.kind == .tlsFailure ? Self.tlsFailure : Self.connectionError, serverId: id, status: health.status)
         default:
-            if await realmChanged(server, origin, cookies: cookies) {
-                return Outcome(screen: Self.askCredentials, serverId: id, status: health.status)
-            }
             servers.markUsed(id)
             return Outcome(screen: Self.open, serverId: id, url: origin.url(StartDecision.path(route)), origin: origin,
                            note: oneTimeNote(server, route, health), status: health.status)
@@ -100,7 +100,7 @@ final class ShellConnector {
         servers.remove(id)
     }
 
-    /// The responder would refuse a new realm and strand a 401 page (BACKWARD_COMPATIBILITY.md §6b).
+    /// Before the password goes out: a new realm gets no answer, and would strand a 401 page (BACKWARD_COMPATIBILITY.md §6b).
     private func realmChanged(_ server: ServerRecord, _ origin: ServerOrigin, cookies: String?) async -> Bool {
         guard let realm = server.realm else { return false }
         let bare = await probe.probe(origin, username: nil, password: nil, cookies: cookies)
