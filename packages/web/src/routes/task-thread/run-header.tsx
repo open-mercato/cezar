@@ -914,6 +914,7 @@ function prChipNodes(run: ApiRun, references: ReturnType<typeof taskReferences>)
           references={prReferences}
           taskTitle={runTitle(run)}
           hidden={prReferences.length - 1}
+          conflictActionFor={(reference) => <ResolveConflictsButton run={run} prNumber={reference.number} />}
         />
       ) : null}
     </span>,
