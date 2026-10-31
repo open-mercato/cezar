@@ -48,6 +48,22 @@ describe('cez automation', () => {
     return { calls, out, err, io };
   };
 
+  it('partial updates preserve the union unless a timing replacement is explicit (#1818)', async () => {
+    const schedule = { type: 'daily', hour: 4 };
+    const schedules = [schedule, { type: 'weekly', day: 5, hour: 16 }];
+    for (const patch of [{ name: 'Renamed' }, { schedule: { type: 'daily', hour: 7 } }, { schedules: [{ type: 'daily', hour: 8 }] }]) {
+      const h = harness([
+        { status: 200, body: { automation: { ...definition, id: 'a1', revision: 1, kind: 'schedule', enabled: false, schedule, schedules } } },
+        { status: 200, body: { automation: { id: 'a1', name: 'Renamed', revision: 2, enabled: false } } },
+      ]);
+      expect(await runAutomationCommand(['update', 'a1', '--json', JSON.stringify(patch)], env, h.io)).toBe(0);
+      const sent = JSON.parse(String(h.calls[1]?.init?.body));
+      if ('schedule' in patch) expect(sent.schedules).toBeUndefined();
+      else if ('schedules' in patch) { expect(sent.schedule).toBeUndefined(); expect(sent.schedules).toEqual(patch.schedules); }
+      else expect(sent.schedules).toEqual(schedules);
+    }
+  });
+
   it('create posts the definition from --file to the project-scoped route, paused, and prints the cockpit link', async () => {
     const h = harness([{ status: 201, body: { automation: { id: 'auto-1', name: 'Review new PRs', enabled: false } } }], { '/tmp/def.json': JSON.stringify(definition) });
     const code = await runAutomationCommand(['create', '--file', '/tmp/def.json'], env, h.io);

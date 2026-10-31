@@ -46,6 +46,16 @@ servers may omit the metadata. Existing keys, defaults, routes, settings and
 persisted state remain unchanged.
 
 
+Scheduled automations (#1818) optionally accept `schedules` (1–16 timed triggers), with
+the first entry mirrored in legacy `schedule`. A list alone or a matching pair is accepted;
+conflicting mirrors, event/timed mixtures, and a one-time trigger combined with others are
+refused. Existing single schedules remain readable without migration. An old client's explicit
+single-schedule update replaces the whole union, so hidden triggers cannot survive an edit.
+Coincident instants launch once; catch-up chooses one newest union instant. Downgraded readers
+see only the first trigger. If an old writer changes that mirror while retaining the unknown
+list, a newer reader refuses the conflicting definition rather than firing hidden schedules.
+No configuration, network, enabled-state default, or existing task setting changes.
+
 - Webhook receiver `format` accepts `cezar.json.v1` (default), `slack.v1`, and `discord.v1`.
   An omitted format means cezar JSON. Create/edit requests validate chat URLs for the selected
   format. Delivery records snapshot the format; provider rendering uses the public event schema.
@@ -202,6 +212,16 @@ Breaking: removing/renaming a route; making a previously optional body field req
   existing windows keep the established last-write-wins preference semantics. This changes
   list presentation only: automation definitions, scheduler priority, calendars and the Next
   runs rail are unchanged. No migration or required configuration is introduced.
+
+- Task-detail Remove worktree (#1600, additive) uses existing lifecycle `reclaim`,
+  including for hook-free legacy worktrees. It retains the branch, task and
+  transcript and writes only existing reclamation metadata. Dirty tracked or
+  untracked files block removal; ignored artifacts are explicitly discarded.
+  Requests, confirmation state and cache updates remain bound to the originating
+  project and run across navigation. Optional explicit scope arguments to the
+  private web helpers preserve their previous defaults. No public API, state
+  format, configuration or default changes. The git-status preflight is not atomic
+  against external filesystem writes.
 
 - `webhooks/` is private opt-in state, covered by `ensureDataGitignore` in boot and lazy project
   contexts and verified ignored/untracked before secrets are written. Files include root-bound

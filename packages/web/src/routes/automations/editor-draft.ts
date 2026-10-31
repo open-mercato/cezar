@@ -49,6 +49,8 @@ export interface EditorDraft {
   kind: EditableAutomationKind
   trackerTrigger?: AutomationDefinition['trackerTrigger']
   schedule: AutomationSchedule
+  /** Additional triggers; the first retains the legacy draft field. */
+  schedules?: AutomationSchedule[]
   events: AutomationEvent[]
   intervalSeconds: number
   filters: DraftFilters
@@ -190,6 +192,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     kind: definition.kind,
     trackerTrigger: definition.trackerTrigger,
     schedule: definition.schedule ? { ...definition.schedule } : base.schedule,
+    schedules: definition.schedules?.map(schedule => ({ ...schedule })),
     events: definition.events?.length ? [...definition.events] : base.events,
     intervalSeconds: definition.intervalSeconds ?? base.intervalSeconds,
     filters: filters ? draftFiltersOf(filters) : base.filters,
@@ -213,6 +216,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
 
 /** What the palette hands over: a built-in template or another project's automation. */
 export type TemplatePick = Pick<AutomationTemplateDraft, 'name' | 'kind' | 'schedule' | 'events' | 'intervalSeconds' | 'prompt' | 'workflow' | 'dispatch'> & {
+  schedules?: AutomationSchedule[]
   filters?: AutomationFilters
   steps?: TaskSteps
   runner?: string
@@ -228,6 +232,7 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
     name: template.name,
     kind: template.kind,
     ...(template.schedule ? { schedule: template.schedule } : {}),
+    ...(template.schedules ? { schedules: template.schedules } : {}),
     ...(template.events ? { events: template.events } : {}),
     ...(template.intervalSeconds !== undefined ? { intervalSeconds: template.intervalSeconds } : {}),
     ...(template.filters ? { filters: template.filters } : {}),
@@ -261,6 +266,7 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     name: template.name,
     kind: template.kind,
     schedule: template.schedule ? { ...template.schedule } : draft.schedule,
+    schedules: template.schedules?.map(schedule => ({ ...schedule })),
     events: template.events?.length ? [...template.events] : draft.events,
     intervalSeconds: template.intervalSeconds ?? draft.intervalSeconds,
     // The trigger and the task source are the template's, or the default: a second pick must never
@@ -314,7 +320,8 @@ export function toBody(draft: EditorDraft): AutomationBody {
     ...(draft.dispatch ? { dispatch: { maxSubtasks: draft.maxSubtasks, reviewChild: draft.reviewChild } } : {}),
   }
   if (draft.kind === 'schedule') {
-    return { name: draft.name.trim(), kind: 'schedule', schedule: scheduleBody(draft.schedule), task }
+    return { name: draft.name.trim(), kind: 'schedule', schedule: scheduleBody(draft.schedule),
+      ...(draft.schedules ? { schedules: [draft.schedule, ...draft.schedules.slice(1)].map(scheduleBody) } : {}), task }
   }
   if (draft.kind === 'tracker') {
     return { name: draft.name.trim(), kind: 'tracker', trackerTrigger: draft.trackerTrigger,
@@ -364,6 +371,7 @@ export function cliDefinitionOf(draft: EditorDraft): CliDefinition {
     kind: draft.kind,
     ...(body.trackerTrigger ? { trackerTrigger: body.trackerTrigger } : {}),
     ...(body.schedule ? { schedule: body.schedule } : {}),
+    ...(body.schedules ? { schedules: body.schedules } : {}),
     ...(body.events ? { events: body.events } : {}),
     ...(body.intervalSeconds !== undefined ? { intervalSeconds: body.intervalSeconds } : {}),
     ...(body.filters ? { filters: body.filters } : {}),

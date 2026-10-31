@@ -6,7 +6,7 @@ import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureS
 // redeclared — the same one-way direction `./runs.ts` takes towards `./workflows.ts`.
 import { createRunInputBaseSchema, runStatusSchema } from './runs.ts';
 import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema, dispatchIntentSchema } from './dispatch.ts';
-import { automationScheduleSchema } from './automation-schedule.ts';
+import { automationScheduleSchema, automationSchedulesSchema } from './automation-schedule.ts';
 
 /**
  * The AUTOMATIONS family of `/api/v1` (#694) — the per-project GitHub triggers, their runtime
@@ -160,6 +160,7 @@ export const automationDefinitionSchema = z.object({
   /** `schedule` kind: always present. `github` kind: absent. */
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   // Composer-deferred tasks retain the full run dispatch intent. Keep this response-only:
   // ordinary automation inputs and templates still expose only their own dispatch settings.
   task: automationTaskSchema.extend({
@@ -408,6 +409,7 @@ export const automationTemplateSchema = z.object({
   kind: z.enum(['github', 'schedule']),
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   events: z.array(automationEventSchema).optional(),
   intervalSeconds: z.number().optional(),
   /** `github` kind only. A copy without them would launch for every item. */
