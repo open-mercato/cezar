@@ -235,5 +235,5 @@ export function useDeleteManager(id: string) {
 
 /** Does any manager want the user? Drives the switch's dot and the phone menu's. */
 export function managersNeedAttention(managers: readonly ManagerSummary[] | undefined): boolean {
-  return (managers ?? []).some((manager) => manager.unread > 0 || manager.pendingActions > 0)
+  return (managers ?? []).some((manager) => manager.unread > 0 || manager.pendingActions > 0 || manager.pendingQuestions > 0)
 }

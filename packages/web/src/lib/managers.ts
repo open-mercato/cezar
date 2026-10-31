@@ -194,6 +194,9 @@ export function clearManagerOrigins(): void {
 }
 
 export function managerRowPreview(manager: ManagerSummary): string {
+  if (manager.pendingQuestions > 0) {
+    return `${manager.pendingQuestions} ${manager.pendingQuestions === 1 ? 'question' : 'questions'} for you`
+  }
   if (manager.pendingActions > 0) {
     return `${manager.pendingActions} ${manager.pendingActions === 1 ? 'approval' : 'approvals'} waiting`
   }

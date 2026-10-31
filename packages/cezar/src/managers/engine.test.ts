@@ -484,6 +484,45 @@ describe('ManagerEngine', () => {
     expect(avatars).toEqual([0, 1, 2, 3]);
   });
 
+  describe('questions', () => {
+    const line = `CEZ:ASK ${JSON.stringify({ questions: [{ header: 'Shell', question: 'Which shell?', options: [{ label: 'A' }, { label: 'B' }] }] })}`;
+
+    it('lifts the marker into a card and counts it as waiting', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say(`I need a decision.\n\n${line}`));
+      engine.send(id, 'hi');
+      await settled(engine);
+      const [message] = assistants(id);
+      expect(message?.text).toBe('I need a decision.');
+      expect(message?.ask?.questions[0]?.header).toBe('Shell');
+      expect((await engine.summary(id))?.pendingQuestions).toBe(1);
+    });
+
+    it('the next message closes it, from the card or the composer', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say(line));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say('Thanks'));
+      engine.send(id, 'Shell: A');
+      await settled(engine);
+      expect(assistants(id)[0]?.askAnswer).toBe('Shell: A');
+      expect((await engine.summary(id))?.pendingQuestions).toBe(0);
+    });
+
+    it('leaves a malformed marker readable rather than losing the question', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('CEZ:ASK {"questions":[]}'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(assistants(id)[0]?.ask).toBeUndefined();
+      expect(assistants(id)[0]?.text).toContain('CEZ:ASK');
+    });
+  });
+
   describe('importance', () => {
     const raised: Array<[string, string]> = [];
     const noisy = (extra = {}) => makeEngine({ notifySystem: (title: string, body: string) => raised.push([title, body]), ...extra });
@@ -527,6 +566,16 @@ describe('ManagerEngine', () => {
       await settled(engine);
       vi.advanceTimersByTime(3_000);
       expect(raised).toEqual([]);
+    });
+
+    it('always raises a question', async () => {
+      const engine = noisy();
+      const id = await create(engine, 0);
+      backend.scripts.push(say(`CEZ:ASK ${JSON.stringify({ questions: [{ header: 'H', question: 'Q?', options: [{ label: 'A' }, { label: 'B' }] }] })}`));
+      engine.send(id, 'hi');
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(raised[0]?.[1]).toBe('Has a question for you');
     });
 
     it('always raises an approval', async () => {

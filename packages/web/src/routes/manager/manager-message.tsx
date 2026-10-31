@@ -1,7 +1,8 @@
 import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon } from 'lucide-react'
-import { memo, useContext, createContext, useState, useMemo, type ComponentProps } from 'react'
+import { memo, useContext, createContext, useEffect, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
+import { sendManagerMessage } from '@/api/managers'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { chipClass } from '@/components/picker-pill'
@@ -16,7 +17,9 @@ import {
 } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
-import type { ManagerActionStatus, ManagerCommand, ManagerMessage } from '@open-mercato/cezar-api-client'
+import { AskForm } from '@/routes/task-thread/ask-card'
+import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
+import type { ManagerActionStatus, ManagerAsk, ManagerCommand, ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
@@ -81,6 +84,58 @@ export function CommandsRow({ commands }: { commands: readonly ManagerCommand[] 
   )
 }
 
+/** A `CEZ:ASK` card. Answering is just the user's next message, so the composer answers it too. */
+function ManagerQuestions({
+  managerId,
+  messageId,
+  ask,
+  answer,
+}: {
+  managerId: string
+  messageId: string
+  ask: ManagerAsk
+  answer: string | undefined
+}) {
+  const [isPending, setPending] = useState(false)
+  const [error, setError] = useState<string>()
+  const card = useMemo(() => ({ id: messageId, questions: ask.questions }), [messageId, ask])
+  useEffect(() => {
+    if (answer !== undefined) forgetAskSelections(managerId, card)
+  }, [answer, card, managerId])
+  if (answer !== undefined) {
+    return (
+      <div data-slot="manager-ask" data-resolved="true" className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
+        <span className="text-soft-foreground">Answered</span>
+        <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{answer}</span>
+      </div>
+    )
+  }
+  const send = async (text: string) => {
+    setPending(true)
+    setError(undefined)
+    try {
+      await sendManagerMessage(managerId, text)
+      return undefined
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Your answer did not reach the manager.'
+      setError(message)
+      return message
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <div data-slot="manager-ask" data-resolved="false">
+      <AskForm
+        ask={card}
+        ownerId={managerId}
+        delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+        asker="Your decision"
+      />
+    </div>
+  )
+}
+
 function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage, { kind: 'assistant' }>; origin: ManagerOrigin }) {
   const segments = useMemo(() => parseManagerText(message.text, message.commands), [message.text, message.commands])
   return (
@@ -105,6 +160,11 @@ function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage
           ),
         )}
       </OriginContext.Provider>
+      {message.ask ? (
+        <div className="mt-3 max-w-2xl">
+          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} />
+        </div>
+      ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.error ? (
         <p role="alert" className="mt-1 flex items-start gap-1.5 text-sm text-danger">

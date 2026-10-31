@@ -25,7 +25,7 @@ export function ManagerRow({
   now: Date
   onNavigate?: () => void
 }) {
-  const unread = manager.unread > 0 || manager.pendingActions > 0
+  const unread = manager.unread > 0 || manager.pendingActions > 0 || manager.pendingQuestions > 0
   return (
     <Link
       to={`/manager/${encodeURIComponent(manager.id)}`}

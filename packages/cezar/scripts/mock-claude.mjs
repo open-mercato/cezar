@@ -199,6 +199,12 @@ async function managerTurn(userText) {
     const proposed = pr && tool(['merge', '--project', pr.projectId, String(pr.number), '--reason', 'Checks pass and nothing blocks it (dry run).']);
     lines.push(proposed ? `I proposed merging [[pr:${pr.projectId}/${pr.number}]]. Approve the card when you are ready.` : 'There is no pull request I can propose merging.');
   }
+  if (/\bquestions?\b/i.test(said)) {
+    lines.push('I need two decisions.', `CEZ:ASK ${JSON.stringify({ questions: [
+      { header: 'Shell', question: 'Which mobile shell should we use?', options: [{ label: 'Capacitor (recommended)', description: 'Wraps the existing cockpit.' }, { label: 'Tauri 2', description: 'Shares the desktop stack.' }] },
+      { header: 'Default', question: 'Does a phone browser open on Manager?', options: [{ label: 'No (recommended)' }, { label: 'Yes' }] },
+    ] })}`);
+  }
   return say(lines.join('\n\n'));
 }
 

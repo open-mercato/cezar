@@ -70,6 +70,31 @@ describe('ManagerMessageRow', () => {
     expect(document.querySelectorAll('[data-slot="session-card"]')).toHaveLength(1)
   })
 
+  describe('question card', () => {
+    const ask = { questions: [
+      { header: 'Shell', question: 'Which shell?', options: [{ label: 'Capacitor (recommended)' }, { label: 'Tauri' }] },
+      { header: 'Default', question: 'Open on Manager?', options: [{ label: 'No' }, { label: 'Yes' }] },
+    ] }
+
+    it('sends every answer as one message', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const fetchMock = vi.mocked(fetch)
+      fetchMock.mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
+      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No' })
+    })
+
+    it('collapses to the answer', () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
+      expect(document.querySelector('[data-slot="manager-ask"]')?.getAttribute('data-resolved')).toBe('true')
+      expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
+    })
+  })
+
   it('marks what the manager judged important, with its headline', () => {
     renderMessage(assistantMessage(2, { text: 'It asks which shell.', important: true, headline: 'Blocked on you' }))
     expect(document.querySelector('[data-slot="manager-important"]')?.textContent).toBe('Blocked on you')
