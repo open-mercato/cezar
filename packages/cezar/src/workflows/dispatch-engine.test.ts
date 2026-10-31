@@ -314,6 +314,18 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(overIntent.id)?.model).toBeUndefined();
     }, 40_000);
 
+    it('a child inherits the parent’s account on the same runner, and --account overrides it (#1744)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, { runner: 'codex', agentProfile: 'work' });
+      const same = dispatchOk(parent.id, order('same runner', { max_cost: 1 }));
+      expect(store.getRun(same.id)?.agentProfile).toBe('work');
+      const picked = dispatchOk(parent.id, order('picked', { account: 'other', max_cost: 1 }));
+      expect(store.getRun(picked.id)?.agentProfile).toBe('other');
+      const switched = dispatchOk(parent.id, order('other runner', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(switched.id)?.agentProfile).toBeUndefined();
+    }, 40_000);
+
     it('a root started with an intent runs in a worktree even when the composer opted out, and its prompt carries the intent block', async () => {
       const record = start('mock:monitoring the user asked for a fan-out', undefined, { worktree: false, dispatchIntent: { maxSubtasks: 5 } });
       await waitFor(record.id, (r) => r?.activity === 'monitoring');

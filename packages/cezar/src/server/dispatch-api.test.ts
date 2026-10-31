@@ -66,6 +66,13 @@ describe('the dispatch routes', () => {
     expect(await res.json()).toEqual({ error: 'no budget left' });
   });
 
+  it('refuses an unknown --account before the manager is called (#1744)', async () => {
+    const res = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'x', account: 'ghost', runner: 'codex' }));
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('unknown codex account: ghost');
+    expect(calls).toEqual([]);
+  });
+
   it('400s an order with an unknown key — a misspelled cap is a brake that did not fire', async () => {
     const res = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'x', max_costs: 2 }));
     expect(res.status).toBe(400);
