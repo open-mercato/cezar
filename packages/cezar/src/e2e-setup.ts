@@ -30,22 +30,43 @@ export const E2E_SETUP_TASK = 'Set up browser e2e tests (TesterArmy e2e) in this
  * Every `e2e` invocation the setup makes: the repo-pinned binary only (`--no-install` — a bare
  * `npx e2e` with nothing installed would fetch the registry's latest instead of the version the
  * setup pinned) and the vendor's telemetry off, because cezar does not widen network exposure
- * on the user's behalf.
+ * on the user's behalf. The replay cache goes to the project's shared check cache, so a
+ * recording made in one task's worktree replays in the next (e2e treats a blank value as unset).
  */
-const E2E = 'E2E_TELEMETRY_DISABLED=1 npx --no-install e2e';
+const E2E = 'E2E_TELEMETRY_DISABLED=1 E2E_CACHE_DIR="${CEZ_SHARED_CACHE_DIR:+$CEZ_SHARED_CACHE_DIR/e2e}" npx --no-install e2e';
+
+/** The first `e2e` with the non-interactive `init` flags, `E2E_CACHE_DIR` and `--max-duration`. */
+export const E2E_PACKAGE = 'e2e@^0.21.0';
+
+/** Run budgets: one smoke test during setup; a whole suite in the user's tasks (exits 1 on expiry). */
+const SMOKE_MAX_DURATION_MS = 300_000;
+const SUITE_MAX_DURATION_MS = 900_000;
+
+/** The `init --gateway` that generates the model for a stored key; direct providers have none. */
+const INIT_GATEWAYS: Partial<Record<E2eCredentialName, string>> = {
+  AI_GATEWAY_API_KEY: 'vercel',
+  OPENROUTER_API_KEY: 'openrouter',
+};
 
 /** What the configured provider package and model factory are, per stored key name. */
 const PROVIDER_HINTS: Record<E2eCredentialName, string> = {
   AI_GATEWAY_API_KEY: "the Vercel AI Gateway — keep the `gateway(...)` model `e2e init` generated (package `ai`)",
   OPENAI_API_KEY: 'OpenAI directly — add `@ai-sdk/openai` as a devDependency and use its `openai(...)` model',
   ANTHROPIC_API_KEY: 'Anthropic directly — add `@ai-sdk/anthropic` as a devDependency and use its `anthropic(...)` model',
-  OPENROUTER_API_KEY: 'OpenRouter — add `@openrouter/ai-sdk-provider` as a devDependency and use its `openrouter(...)` model',
+  OPENROUTER_API_KEY: "OpenRouter — keep the `openrouter(...)` model `e2e init` generated (package `@openrouter/ai-sdk-provider`)",
 };
+
+/** The scaffold command: every wizard answer is a flag (e2e #1114), so nothing is left for the agent to undo. */
+export function e2eInitCommand(credentials: readonly E2eCredentialName[]): string {
+  const gateway = (credentials[0] && INIT_GATEWAYS[credentials[0]]) ?? 'vercel';
+  return `E2E_TELEMETRY_DISABLED=1 npx --yes ${E2E_PACKAGE} init --yes --engine web --gateway ${gateway} --skills .agents/skills,.claude/skills --mcp .mcp.json --install </dev/null`;
+}
 
 /**
  * The workflow the setup leaves behind for the user's own tasks: implement, unit-test, then
  * prove it in a browser. `retryOn: [1]` loops on e2e's verdict only (exit 2/3/4 are config,
- * credential and engine failures the coding agent cannot fix — `docs/e2e-verification.md`).
+ * credential and engine failures the coding agent cannot fix — `docs/e2e-verification.md`);
+ * an exhausted `--max-duration` also exits 1, so a change that hangs the app loops back too.
  * The setup agent adapts the install and unit-test commands to the project; the rest is fixed.
  */
 export const E2E_WORKFLOW_TEMPLATE = `name: implement-and-e2e
@@ -74,7 +95,7 @@ steps:
   - id: browser
     name: Browser e2e
     command: |
-      ${E2E} run --reporter list,markdown --max-failures 3; code=$?
+      ${E2E} run --reporter list,markdown --max-failures 3 --max-duration ${SUITE_MAX_DURATION_MS}; code=$?
       [ -f .e2e/summary.md ] && cat .e2e/summary.md
       exit $code
     onFail:
@@ -102,33 +123,31 @@ export function e2eSetupPrompt(credentials: readonly E2eCredentialName[]): strin
 
 1. Check the toolchain. \`e2e\` needs Node.js ^22.22.3 or >=24.8.0 (\`node --version\`). If this repository has no web application that a browser could open (no dev server or start script), or Node is too old, stop: explain why in one short paragraph and change nothing.
 
-2. Scaffold: \`E2E_TELEMETRY_DISABLED=1 npx --yes e2e@latest init --yes </dev/null\`. It never overwrites existing files. It writes \`e2e.config.ts\`, \`tests/example.e2e.ts\`, the \`e2e\` skill (\`.agents/skills/e2e\` and a \`.claude/skills/e2e\` symlink), \`.mcp.json\`, a \`test:e2e\` script, devDependencies and \`.gitignore\` entries. If it also created \`.cursor/\` and the repository had no \`.cursor/\` directory before, delete that directory.
+2. Scaffold: \`${e2eInitCommand(credentials)}\` — if the repository already has a \`.cursor/\` directory, append \`,.cursor/mcp.json\` to \`--mcp\`. It never overwrites existing files. It writes \`e2e.config.ts\`, \`tests/example.e2e.ts\`, the \`e2e\` skill (\`.agents/skills/e2e\` and a \`.claude/skills/e2e\` symlink), \`.mcp.json\`, a \`test:e2e\` script, devDependencies and \`.gitignore\` entries, and installs the dependencies with the package manager this repository uses, updating its lockfile.
 
-3. Install the dependencies \`init\` added with the package manager this repository uses (the \`packageManager\` field or the lockfile; npm otherwise), so the lockfile is updated.
-
-4. Configure \`e2e.config.ts\` so every task gets its own port (cezar runs tasks in parallel):
+3. Configure \`e2e.config.ts\` so every task gets its own port (cezar runs tasks in parallel):
    - \`app.url: 'http://127.0.0.1:0'\` — literally \`127.0.0.1\`, never \`localhost\`, which e2e rejects with port 0.
-   - \`app.command\`: start THIS project's dev server as \`{ executable, args, env }\` (never a shell string) with the \`{port}\` placeholder, bound to 127.0.0.1 — e.g. Vite \`['run','dev','--','--host','127.0.0.1','--port','{port}','--strictPort']\`, Next.js \`['run','dev','--','-H','127.0.0.1','-p','{port}']\` (and add \`allowedDevOrigins: ['127.0.0.1']\` to the Next config, or the page never hydrates). Pass \`PORT: '{port}'\` in \`env\` too. Raise \`startupTimeout\` if the dev server is slow to start. The app process inherits only PATH, HOME and temp variables, so put anything else it needs in \`env\`.
+   - \`app.command\`: start THIS project's dev server as \`{ executable, args, env }\` (never a shell string) with the \`{port}\` placeholder, bound to 127.0.0.1 — e.g. Vite \`['run','dev','--','--host','127.0.0.1','--port','{port}','--strictPort']\`, Next.js \`['run','dev','--','-H','127.0.0.1','-p','{port}']\` (and add \`allowedDevOrigins: ['127.0.0.1']\` to the Next config, or the page never hydrates). Pass \`PORT: '{port}'\` in \`env\` too. Raise \`startupTimeout\` if the dev server is slow to start. The app process inherits only PATH, HOME and temp variables: put fixed values in \`env\`, and list variables whose values come from the environment (a database URL, a service secret) in \`inheritEnv\` by name or \`PREFIX_*\` — never \`'*'\`, which e2e rejects because it would hand the app the model keys.
    - Model: ${providerLine}
    - Read \`node_modules/e2e/docs/reference/config.mdx\` for anything not covered here.
 
-5. Replace \`tests/example.e2e.ts\` with \`tests/smoke.e2e.ts\`: open \`/\` and assert something visible that this app actually renders (a heading, the main landmark) using locators only — no \`agent.*\` step, so the smoke test passes without a model key. Leave one commented-out \`agent.act\`/\`agent.assert\` example below it.
+4. Replace \`tests/example.e2e.ts\` with \`tests/smoke.e2e.ts\`: open \`/\` and assert something visible that this app actually renders (a heading, the main landmark) using locators only — no \`agent.*\` step, so the smoke test passes without a model key. Leave one commented-out \`agent.act\`/\`agent.assert\` example below it.
 
-6. Prove it locally: \`${E2E} list\` must list the smoke test, and \`${E2E} run --reporter list,markdown\` must pass (a missing browser downloads once on its own). Fix the configuration until both pass.
+5. Prove it locally: \`${E2E} list\` must list the smoke test, and \`${E2E} run --reporter list,markdown\` must pass (a missing browser downloads once on its own). Fix the configuration until both pass.
 
-7. Write \`${E2E_WORKFLOW_FILE}\` with exactly this content, changing only the \`deps\` install command and the \`unit\` test command to what this repository uses (drop the \`unit\` step if it has no unit tests). Replace \`${TASK_PLACEHOLDER}\` with cezar's task token: two opening curly braces, the word \`task\`, two closing curly braces, with no spaces. A check step verifies that token is in the file.
+6. Write \`${E2E_WORKFLOW_FILE}\` with exactly this content, changing only the \`deps\` install command and the \`unit\` test command to what this repository uses (drop the \`unit\` step if it has no unit tests). Replace \`${TASK_PLACEHOLDER}\` with cezar's task token: two opening curly braces, the word \`task\`, two closing curly braces, with no spaces. A check step verifies that token is in the file.
 
 \`\`\`yaml
 ${E2E_WORKFLOW_TEMPLATE.replaceAll(TASK_TOKEN, TASK_PLACEHOLDER)}\`\`\`
 
-8. Commit everything with the message \`chore: set up e2e browser tests\`. Reply with three short lines: the dev-server command you configured, the model provider, and anything the user still has to do.`;
+7. Commit everything with the message \`chore: set up e2e browser tests\`. Reply with three short lines: the dev-server command you configured, the model provider, and anything the user still has to do.`;
 }
 
 /** The draft PR's title — what the user sees in their PR list. */
 export const E2E_SETUP_PR_TITLE = 'chore: set up e2e browser tests (TesterArmy e2e)';
 
 /**
- * The setup chain. The checks re-run what step 6 asked the agent to prove, from the outside,
+ * The setup chain. The checks re-run what step 5 asked the agent to prove, from the outside,
  * and loop back with the failing output on ANY exit code: unlike a coding task, a config,
  * dependency or app-process error (2/3) is exactly the setup's own work.
  *
@@ -151,7 +170,7 @@ export function e2eSetupWorkflow(credentials: readonly E2eCredentialName[]): Wor
     {
       id: 'e2e-smoke',
       name: 'e2e smoke test',
-      command: `${E2E} run --reporter list,markdown --max-failures 3; code=$?\n[ -f .e2e/summary.md ] && cat .e2e/summary.md\nexit $code`,
+      command: `${E2E} run --reporter list,markdown --max-failures 3 --max-duration ${SMOKE_MAX_DURATION_MS}; code=$?\n[ -f .e2e/summary.md ] && cat .e2e/summary.md\nexit $code`,
       onFail: { retry: 'setup', max: 2 },
     },
   ];
