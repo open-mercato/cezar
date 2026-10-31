@@ -40,6 +40,6 @@ describe('signInUrl', () => {
   it('answers null with no address, and for anything that is not a web address', () => {
     expect(signInUrl('')).toBeNull()
     expect(signInUrl('Press Enter to continue')).toBeNull()
-    expect(signInUrl('javascript:alert(1) file:///etc/passwd')).toBeNull()
+    expect(signInUrl('javascript:void(0) file:///etc/passwd')).toBeNull()
   })
 })

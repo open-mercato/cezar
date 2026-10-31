@@ -65,5 +65,5 @@ an agent from a list, cezar installs it and signs them in, in a terminal on the 
 
 ### Phase 3: Docs and verification
 
-- [ ] 3.1 Spec, BACKWARD_COMPATIBILITY and user docs
-- [ ] 3.2 Real install and sign-in walk with screenshots
+- [x] 3.1 Spec, BACKWARD_COMPATIBILITY and user docs — 36f17a798
+- [x] 3.2 Real install and sign-in walk with screenshots — 8966c313d
