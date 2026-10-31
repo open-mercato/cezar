@@ -10,6 +10,7 @@ const managerIdSchema = z.string().regex(/^[a-z0-9-]{1,64}$/);
 
 export const managerIdParamSchema = z.object({ id: managerIdSchema });
 export const managerActionParamSchema = z.object({ id: managerIdSchema, actionId: z.string().min(1).max(64) });
+export const managerJobParamSchema = z.object({ id: managerIdSchema, jobId: z.string().min(1).max(64) });
 
 /** `all` follows the registry: a project added later is connected without touching the manager. */
 export const managerProjectsSchema = z.union([z.literal('all'), z.array(z.string().min(1).max(200)).min(1).max(200)]);
@@ -139,6 +140,8 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
     number: z.number().int().positive(),
     title: z.string().optional(),
     method: z.enum(['merge', 'squash', 'rebase']).optional(),
+    /** Stamped by the server at proposal: a push after it makes the approval refuse, not merge. */
+    headSha: z.string().optional(),
   }),
   z.object({
     type: z.literal('enable-automation'),
