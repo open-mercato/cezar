@@ -18,6 +18,8 @@ import type {
   fsBrowseResponseSchema,
   initProjectGitResponseSchema,
   publishProjectGithubResponseSchema,
+  agentSetupSessionSchema,
+  agentSetupStateSchema,
   githubLoginStateSchema,
   launchKeyResponseSchema,
   repoSuggestionsResponseSchema,
@@ -122,6 +124,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type FsRepos200 = InferResponseType<typeof client.api.v1.fs.repos.$get, 200>;
   type InitProjectGit200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['git-init']['$post'], 200>;
   type PublishGithub200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['publish-github']['$post'], 200>;
+  type AgentSetupRead200 = InferResponseType<typeof client.api.v1.providers.setup.$get, 200>;
+  type AgentSetupStart201 = InferResponseType<typeof client.api.v1.providers.setup.sessions.$post, 201>;
   type GithubLoginStart200 = InferResponseType<typeof client.api.v1.github.login.$post, 200>;
   type GithubLoginRead200 = InferResponseType<typeof client.api.v1.github.login.$get, 200>;
   type GithubLoginCancel200 = InferResponseType<typeof client.api.v1.github.login.$delete, 200>;
@@ -244,6 +248,8 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof repoSuggestionsResponseSchema>, FsRepos200>>,
     Assert<Exact<z.infer<typeof initProjectGitResponseSchema>, InitProjectGit200>>,
     Assert<Exact<z.infer<typeof publishProjectGithubResponseSchema>, PublishGithub200>>,
+    Assert<Exact<z.infer<typeof agentSetupStateSchema>, AgentSetupRead200>>,
+    Assert<Exact<z.infer<typeof agentSetupSessionSchema>, AgentSetupStart201>>,
     Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginStart200>>,
     Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginRead200>>,
     Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginCancel200>>,
