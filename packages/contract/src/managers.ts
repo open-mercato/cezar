@@ -117,7 +117,7 @@ export type ManagerListResponse = z.infer<typeof managerListResponseSchema>;
 
 // ---- chat ------------------------------------------------------------------
 
-/** Why a turn ran. Only `chat` and `job` may change anything; `watch` is read-and-propose. */
+/** Why a turn ran. Only `chat` and `job` may act or propose; `watch` only reads. */
 export const managerTurnKindSchema = z.enum(['chat', 'watch', 'job']);
 export type ManagerTurnKind = z.infer<typeof managerTurnKindSchema>;
 

@@ -146,10 +146,8 @@ describe('client', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/workspace/managers/global/messages?limit=50&before=7')
   })
 
-  it('says the server\'s own refusal and rejects a body off the contract', async () => {
+  it('says the server\'s own refusal', async () => {
     fetchMock.mockResolvedValueOnce(answer({ error: 'nope' }, 409))
     await expect(decideManagerAction('g', 'a1', 'approve')).rejects.toThrow('nope')
-    fetchMock.mockResolvedValueOnce(answer({ wrong: true }))
-    await expect(decideManagerAction('g', 'a1', 'approve')).rejects.toThrow('unexpected body')
   })
 })

@@ -19,9 +19,8 @@ function Probe() {
 function renderMessage(message: ManagerMessage, onDecide = vi.fn()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   client.setQueryData(workspaceQueryKeys.projects, { projects: [], bootProject: 'alpha', projectsDir: '' })
-  client.setQueryData(['default', 'runs', 'list'], [{ id: 'run-1', diffStat: { adds: 87, dels: 12, files: 3 } }])
   client.setQueryData(workspaceQueryKeys.runsIndex, {
-    runs: [{ projectId: 'alpha', id: 'run-1', title: 'Session 123123', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z' }],
+    runs: [{ projectId: 'alpha', id: 'run-1', title: 'Session 123123', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', diffStat: { adds: 87, dels: 12, files: 3 } }],
   })
   render(
     <QueryClientProvider client={client}>

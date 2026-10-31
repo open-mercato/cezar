@@ -1,10 +1,6 @@
 import {
   managerChangeEventSchema,
-  managerListResponseSchema,
   managerMessageEventSchema,
-  managerMessagesResponseSchema,
-  managerOkResponseSchema,
-  managerSummarySchema,
   type CreateManagerInput,
   type ManagerActionDecisionInput,
   type ManagerListResponse,
@@ -23,57 +19,72 @@ import {
 } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
-import { requestContract } from './client'
+import { cez, unwrap } from './client'
 
 /**
  * Managers (spec `2026-10-31-managers`): the workspace-level routes, their queries and the reducers
- * the one workspace stream folds `manager-*` events through. Built on `requestContract` until the
- * server's chain carries these routes; then each function is a one-line move to `cez.api.v1`.
+ * the one workspace stream folds `manager-*` events through.
  */
 
+const managerParam = (id: string) => ({ id: encodeURIComponent(id) })
+const managers = () => cez.api.v1.workspace.managers
 const managerPath = (id: string, rest = '') => `/workspace/managers/${encodeURIComponent(id)}${rest}`
 
-const jsonInit = (method: string, body?: unknown): RequestInit => ({
-  method,
-  ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
-})
+export async function getManagers(opts?: { signal?: AbortSignal }): Promise<ManagerListResponse> {
+  return unwrap(await managers().$get({}, { init: { signal: opts?.signal } }), '/workspace/managers')
+}
 
-export const getManagers = (opts?: { signal?: AbortSignal }): Promise<ManagerListResponse> =>
-  requestContract('/workspace/managers', managerListResponseSchema, { signal: opts?.signal })
+export async function createManager(input: CreateManagerInput): Promise<ManagerSummary> {
+  return unwrap(await managers().$post({ json: input }), '/workspace/managers')
+}
 
-export const createManager = (input: CreateManagerInput): Promise<ManagerSummary> =>
-  requestContract('/workspace/managers', managerSummarySchema, jsonInit('POST', input))
+export async function updateManager(id: string, patch: UpdateManagerInput): Promise<ManagerSummary> {
+  return unwrap(await managers()[':id'].$patch({ param: managerParam(id), json: patch }), managerPath(id))
+}
 
-export const updateManager = (id: string, patch: UpdateManagerInput): Promise<ManagerSummary> =>
-  requestContract(managerPath(id), managerSummarySchema, jsonInit('PATCH', patch))
-
-export const deleteManager = (id: string) => requestContract(managerPath(id), managerOkResponseSchema, jsonInit('DELETE'))
+export async function deleteManager(id: string) {
+  return unwrap(await managers()[':id'].$delete({ param: managerParam(id) }), managerPath(id))
+}
 
 export const MANAGER_PAGE_SIZE = 50
 
-export function getManagerMessages(
+export async function getManagerMessages(
   id: string,
   before: number | undefined,
   opts?: { signal?: AbortSignal },
 ): Promise<ManagerMessagesResponse> {
-  const query = new URLSearchParams({ limit: String(MANAGER_PAGE_SIZE) })
-  if (before !== undefined) query.set('before', String(before))
-  return requestContract(managerPath(id, `/messages?${query}`), managerMessagesResponseSchema, { signal: opts?.signal })
+  const query = { limit: String(MANAGER_PAGE_SIZE), ...(before === undefined ? {} : { before: String(before) }) }
+  return unwrap(
+    await managers()[':id'].messages.$get({ param: managerParam(id), query }, { init: { signal: opts?.signal } }),
+    managerPath(id, '/messages'),
+  )
 }
 
-export const sendManagerMessage = (id: string, text: string) =>
-  requestContract(managerPath(id, '/messages'), managerOkResponseSchema, jsonInit('POST', { text }))
+export async function sendManagerMessage(id: string, text: string) {
+  return unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json: { text } }), managerPath(id, '/messages'))
+}
 
-export const stopManager = (id: string) => requestContract(managerPath(id, '/stop'), managerOkResponseSchema, jsonInit('POST'))
-export const checkManager = (id: string) => requestContract(managerPath(id, '/check'), managerOkResponseSchema, jsonInit('POST'))
-export const markManagerRead = (id: string) => requestContract(managerPath(id, '/read'), managerOkResponseSchema, jsonInit('POST'))
+export async function stopManager(id: string) {
+  return unwrap(await managers()[':id'].stop.$post({ param: managerParam(id) }), managerPath(id, '/stop'))
+}
 
-export const decideManagerAction = (id: string, actionId: string, decision: ManagerActionDecisionInput['decision']) =>
-  requestContract(
+export async function checkManager(id: string) {
+  return unwrap(await managers()[':id'].check.$post({ param: managerParam(id) }), managerPath(id, '/check'))
+}
+
+export async function markManagerRead(id: string) {
+  return unwrap(await managers()[':id'].read.$post({ param: managerParam(id) }), managerPath(id, '/read'))
+}
+
+export async function decideManagerAction(id: string, actionId: string, decision: ManagerActionDecisionInput['decision']) {
+  return unwrap(
+    await managers()[':id'].actions[':actionId'].decision.$post({
+      param: { ...managerParam(id), actionId: encodeURIComponent(actionId) },
+      json: { decision },
+    }),
     managerPath(id, `/actions/${encodeURIComponent(actionId)}/decision`),
-    managerOkResponseSchema,
-    jsonInit('POST', { decision }),
   )
+}
 
 // ---- cache ---------------------------------------------------------------------------------
 

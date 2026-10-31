@@ -1,22 +1,13 @@
 import { ChevronRightIcon } from 'lucide-react'
-import { useMemo } from 'react'
 import { Link } from 'react-router'
 
-import { useProjectRuns, useProjects, useRunsIndex } from '@/api/queries'
+import { useRunsIndex } from '@/api/queries'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import type { ManagerOrigin } from '@/lib/managers'
 import { runTitle } from '@/lib/task-groups'
-import type { ApiRun, DiffStat, RunRecord } from '@open-mercato/cezar-api-client'
-
-/** The index has no `diffStat`, so the numbers come from that project's run list. */
-function useRunDiffStat(projectId: string, runId: string): DiffStat | undefined {
-  const registry = useProjects().data
-  const boot = registry?.bootProject === projectId
-  const select = useMemo(() => (runs: ApiRun[]) => runs.find((run) => run.id === runId)?.diffStat, [runId])
-  return useProjectRuns(boot ? 'default' : projectId, registry !== undefined, boot, select).data
-}
+import type { RunRecord } from '@open-mercato/cezar-api-client'
 
 export function taskPath(projectId: string, runId: string): string {
   return `/p/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(runId)}`
@@ -34,7 +25,7 @@ export function SessionCard({
 }) {
   const index = useRunsIndex()
   const run = index.data?.runs.find((entry) => entry.projectId === projectId && entry.id === runId)
-  const stat = useRunDiffStat(projectId, runId)
+  const stat = run?.diffStat
   const attention = run ? deriveAttention(run as unknown as RunRecord) : undefined
   return (
     <div className="my-3">

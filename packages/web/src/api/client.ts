@@ -477,23 +477,6 @@ async function send(path: string, init: RequestInit): Promise<Response> {
 }
 
 /**
- * A JSON route `AppType` does not carry yet, validated against its contract schema. Managers only:
- * `api/managers.ts` moves to the typed client once their routes are in the chain.
- */
-export async function requestContract<T>(
-  path: string,
-  schema: ResponseValidator<T>,
-  init: RequestInit = {},
-): Promise<T> {
-  const res = await send(path, init)
-  const body = await readBody(res)
-  if (!res.ok) throw errorFor(res.status, res.statusText, body)
-  const result = schema.safeParse(parseJson(body))
-  if (!result.success) throw new ApiError(res.status, `the cezar server answered ${path} with an unexpected body`)
-  return result.data
-}
-
-/**
  * For the endpoints that answer `text/plain` (diffs, the handoff journal).
  *
  * These say so in `Accept`. Two of the server's routes now negotiate the representation from that
