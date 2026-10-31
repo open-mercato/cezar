@@ -7,7 +7,7 @@ New users get a guided start: first-run onboarding signs you in to an agent, hel
 - ✨ First-run and returning-user onboarding: sign in to an agent, pick or create a project, connect GitHub without a terminal, and start from a welcome page. (#1725) *(@zielivia)*
 - ✨ Managers: create global agents in the new Manager mode, connect repositories, and chat with them. A manager refreshes on a cadence (a check with nothing new makes no model call), runs saved jobs, starts and steers tasks, and proposes merges and automation enables that wait for your approval. `CEZ_MANAGERS=0` turns them off. (#1880) *(@patzick)*
 - ✨ The Manager chat fits a phone: one header row, a composer that stays above the keyboard, thumb-sized controls, and `status`, `attention` and `prs` chips on an empty draft. (#1881) *(@patzick)*
-- ✨ Manager approvals are safer on a phone: Approve opens a summary of what will happen, a sheet on phones and a dialog on desktop, each card decides on its own and shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type; all three stay on by default. (#PR_NUMBER) *(@patzick)*
+- ✨ Manager approvals are safer on a phone: Approve opens a summary of what will happen, a sheet on phones and a dialog on desktop, each card decides on its own and shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type; all three stay on by default. (#1884) *(@patzick)*
 
 ## ⚡ Performance
 - ⚡ Folder-picker and Files-tab listings read entry metadata through a bounded pool, so large or slow filesystems answer faster (fixes #1217). (#1369) *(@pat-lewczuk)*
