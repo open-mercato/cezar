@@ -28,7 +28,8 @@
  * you cannot actually escape through, and this repo's graceful-degradation rule
  * says a new check must never become the only way to run.
  */
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** Run ids are uuids; anything else must never reach a recursive `rmSync`.
@@ -143,25 +144,59 @@ export function agentTmpEnv(
   return { TMPDIR: dir, TEMP: dir, TMP: dir };
 }
 
+/** Prefix of a directory that has been detached from its run and is waiting for the
+ *  background delete. A run id is a uuid, so it can never start with a dot. */
+const TRASH_PREFIX = '.trash-';
+
+/** Distinguishes trash names from one process, so two reaps of the same run id
+ *  (a Continue that ended twice) never rename onto each other. */
+let trashSeq = 0;
+
+/**
+ * Delete a tree without blocking the event loop. The synchronous recursive
+ * `rmSync` is a JS rimraf on the main thread — one `lstat` + `unlink` per file —
+ * and an agent's temp directory routinely holds thousands of them (a Puppeteer
+ * profile, a webpack bundle). On a slow volume (exFAT through fskit) that froze
+ * the whole cockpit for minutes: the port accepted connections and answered none.
+ *
+ * The rename is a single syscall, so the run's path is free the moment this
+ * returns — a Continue that re-creates it through `agentTmpEnv` can never have its
+ * fresh files removed by the delete still running behind it. The delete itself is
+ * fire-and-forget; whatever it leaves behind (a crash mid-delete) carries the
+ * trash prefix and the next startup sweep finishes it.
+ */
+function detachAndDelete(root: string, name: string): boolean {
+  const trash = join(root, `${TRASH_PREFIX}${name}-${process.pid}-${(trashSeq += 1)}`);
+  try {
+    renameSync(join(root, name), trash);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return true; // already gone
+    return false;
+  }
+  void rm(trash, { recursive: true, force: true }).catch(() => {
+    // best-effort; the startup sweep picks up whatever survives.
+  });
+  return true;
+}
+
 /**
  * Reap one run's directory. Scratch, not an artifact: nothing reads it once the
  * agent is gone, and a Continue re-creates it through `agentTmpEnv`. Never
- * throws — reaping must not break a terminal transition.
+ * throws — reaping must not break a terminal transition — and never blocks:
+ * the tree is deleted in the background (see `detachAndDelete`).
  */
 export function removeAgentTmpDir(dataDir: string, runId: string): void {
   if (!safeRunId(runId)) return;
-  try {
-    rmSync(agentTmpDir(dataDir, runId), { recursive: true, force: true });
-  } catch {
-    // best-effort; the startup sweep picks up whatever survives.
-  }
+  detachAndDelete(agentTmpRoot(dataDir), runId);
 }
 
 /**
  * Remove every per-run directory that is not in `keepRunIds` — the startup
  * sweep, so a crash (which never reaches the terminal-transition reap) cannot
- * accumulate them forever. Confined to `<dataDir>/tmp`; sibling run state is
- * never enumerated, let alone touched. Returns the ids actually reaped.
+ * accumulate them forever. Also finishes any trash an interrupted background
+ * delete left behind. Confined to `<dataDir>/tmp`; sibling run state is never
+ * enumerated, let alone touched. Returns the run ids actually reaped; the
+ * deletes themselves run in the background, so boot is never held up by them.
  */
 export function sweepAgentTmpDirs(dataDir: string, keepRunIds: Iterable<string>): string[] {
   const root = agentTmpRoot(dataDir);
@@ -177,13 +212,12 @@ export function sweepAgentTmpDirs(dataDir: string, keepRunIds: Iterable<string>)
     return [];
   }
   for (const name of entries) {
-    if (keep.has(name) || !safeRunId(name)) continue;
-    try {
-      rmSync(join(root, name), { recursive: true, force: true });
-      reaped.push(name);
-    } catch {
-      // best-effort: a locked directory is retried on the next boot.
+    if (name.startsWith(TRASH_PREFIX)) {
+      void rm(join(root, name), { recursive: true, force: true }).catch(() => {});
+      continue;
     }
+    if (keep.has(name) || !safeRunId(name)) continue;
+    if (detachAndDelete(root, name)) reaped.push(name);
   }
   return reaped;
 }
