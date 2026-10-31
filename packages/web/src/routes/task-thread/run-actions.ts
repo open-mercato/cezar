@@ -16,6 +16,12 @@ export { cliTargetRunner }
 // Lives in `lib/` so shared components can use it without importing a route module.
 export { isRunActive }
 
+/** Reclaim keeps the task and branch; an in-place checkout never belongs to this action. */
+export function canRemoveTaskWorktree(run: RunRecord): boolean {
+  return !isRunActive(run.status) && run.worktree !== false && !!run.worktreePath
+    && !run.worktreeReclaimedAt && !run.worktreeLifecycle?.activeOperationId
+}
+
 /** The latest agent session across steps — what Continue/Terminal resume. */
 export function lastSessionId(run: RunRecord): string | undefined {
   return [...run.steps].reverse().find((step) => step.sessionId)?.sessionId
