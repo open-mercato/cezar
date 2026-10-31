@@ -22,6 +22,12 @@ import { z } from 'zod';
  * exists - a usage-only cgroup (every plain host process) keeps the v1 payload byte-identical.
  * Nothing renders a limit without its value: a limit the probe could not read stays absent and the
  * card shows `—`, never the host figure in its place.
+ *
+ * The additive `admission` key reports the dispatch governor (spec
+ * `.ai/specs/2026-09-20-adaptive-admission-governor.md`): it is present only while a
+ * `dispatchMaxConcurrent` ceiling is configured, it reports the ceiling the dispatch gate enforces
+ * right now (`effective`, the user's `configured` or lower), and a workspace without a ceiling sees
+ * no new key at all.
  */
 export const hostUsageContainerSchema = z.object({
   /** Which hierarchy the numbers came from; a systemd-limited host service is v2 too. */
@@ -38,6 +44,24 @@ export const hostUsageContainerSchema = z.object({
   cpuPct: z.number().min(0).max(100).optional(),
 });
 export type HostUsageContainer = z.infer<typeof hostUsageContainerSchema>;
+
+/**
+ * The governor's readout, carried beside the host numbers: the sampler REPORTS what the shared
+ * workspace semaphore owns and never decides anything itself, which is what keeps the display path
+ * out of the admission decision.
+ */
+export const hostUsageAdmissionSchema = z.object({
+  state: z.enum(['normal', 'elevated', 'critical']),
+  /** The user's ceiling. Always present with `effective`: the whole object is omitted while no
+   *  ceiling is configured, so a half-reported readout is not a state this wire shape has. */
+  configured: z.number().int().positive(),
+  /** What the admission gate was enforcing when this sample was taken (`configured` or lower).
+   *  A cached route read can lag the live gate by up to the sampler's freshness window. */
+  effective: z.number().int().positive(),
+  /** ISO-8601 instant the current state began; absent while `normal`. */
+  since: z.string().optional(),
+});
+export type HostUsageAdmission = z.infer<typeof hostUsageAdmissionSchema>;
 
 export const hostUsageSchema = z.object({
   /** ISO-8601 instant this sample was read (server clock). */
@@ -68,5 +92,7 @@ export const hostUsageSchema = z.object({
    * (`'unconstrained'` is reserved for a future producer that wants to say it explicitly.)
    */
   cgroupProbe: z.enum(['unavailable', 'unconstrained']).optional(),
+  /** The dispatch governor's snapshot; absent while no `dispatchMaxConcurrent` ceiling is set. */
+  admission: hostUsageAdmissionSchema.optional(),
 });
 export type HostUsage = z.infer<typeof hostUsageSchema>;

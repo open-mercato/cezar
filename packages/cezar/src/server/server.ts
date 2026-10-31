@@ -3668,6 +3668,7 @@ export function createApp(deps: ServerDeps) {
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
+      dispatchMaxConcurrent: config.resources.dispatchMaxConcurrent,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
@@ -3776,6 +3777,9 @@ export function createApp(deps: ServerDeps) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
+          if (resources?.dispatchMaxConcurrent !== undefined) {
+            config.resources.dispatchMaxConcurrent = resources.dispatchMaxConcurrent;
+          }
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
           }
