@@ -1,0 +1,16 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Systems — empty state</title><link rel="stylesheet" href="tokens.css"><script>if(location.hash==="#light")document.documentElement.classList.add("light")</script></head><body>
+<div class="app"><aside class="side"><div class="brand">cezar</div><div class="navsec">Global settings</div><div class="nav">General</div><div class="nav">Projects</div><div class="nav on">Systems</div><div class="nav">Agent accounts</div><div class="nav">Resources</div><div class="nav">Appearance</div></aside>
+<main class="main">
+ <div class="crumb">Settings / Global / Systems</div>
+ <div class="row" style="justify-content:space-between"><div><h1>Systems</h1><p class="sub">Systems tell agents how your repositories depend on each other — who provides an API, who consumes it, where the contract lives.</p></div><button class="btn btn-primary">+ New system</button></div>
+ <div class="card" style="margin-top:22px;padding:28px">
+  <h3 style="font-size:15px">No systems yet</h3>
+  <p class="muted" style="font-size:13px;max-width:640px">Without a system every project works exactly as today. Create one when several registered repositories form one application (a web app and its API, or a set of services).</p>
+  <div class="label" style="margin-top:20px">Suggested from tags shared by two or more projects</div>
+  <div class="col" style="gap:8px">
+   <div class="row card" style="padding:10px 14px;justify-content:space-between"><div class="row"><span class="chip lime">storefront</span><span class="muted" style="font-size:12.5px">3 projects — <b style="color:var(--foreground)">web</b>, <b style="color:var(--foreground)">api</b>, <b style="color:var(--foreground)">payments-sdk</b></span></div><button class="btn btn-sm btn-outline">Create system from tag</button></div>
+   <div class="row card" style="padding:10px 14px;justify-content:space-between"><div class="row"><span class="chip lime">ops</span><span class="muted" style="font-size:12.5px">2 projects — <b style="color:var(--foreground)">infra</b>, <b style="color:var(--foreground)">worker</b></span></div><button class="btn btn-sm btn-outline">Create system from tag</button></div>
+  </div>
+  <p class="note" style="margin-top:14px">Tags stay filters only. Creating a system copies the tagged projects in as members; you then add roles and links.</p>
+ </div>
+</main></div><span class="tag-mock">mockup — illustrative</span></body></html>

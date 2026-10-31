@@ -34,7 +34,7 @@ import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRe
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
-import { modelConflictsWithRunner, modelNativeToRunner } from '../core/model-presets.ts';
+import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
   ModelIdentityError,
@@ -4641,13 +4641,11 @@ export class RunManager {
       // meaningless for the new one, which is exactly what the composer already displays (auto).
       // On a real switch only a pin native to the target survives: Claude accepts gateway ids, so
       // the conflict guard alone let OpenCode's `openai/gpt-5.1` reach `claude --model` (8e1173b1).
-      const runnerSwitched = targetRunner !== (run.runner ?? 'claude');
+      // Antigravity's names are private to it, so no pin crosses into or out of it.
       const inheritedPinIsForeign =
         opts.model === undefined &&
         run.model !== undefined &&
-        (runnerSwitched
-          ? !modelNativeToRunner(run.model, targetRunner)
-          : modelConflictsWithRunner(run.model, targetRunner));
+        !pinSurvivesRunnerSwitch(run.model, run.runner ?? 'claude', targetRunner);
       // An account belongs to ONE agent, so a runner switch that names no account must not leave
       // the previous backend's login on the record. It is inert immediately (resolution applies
       // the run's account only to steps on the run's own runner) and wrong later, when a further

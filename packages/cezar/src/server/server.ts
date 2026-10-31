@@ -55,7 +55,7 @@ import {
   type AutomationDefinition,
   type AutomationRuntimeState,
 } from '../automations/types.ts';
-import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerTriggerSchema, trackerAutomationOptionsSchema, trackerAutomationOptionsQuerySchema, automationScheduleSchema, automationSchedulesSchema, automationScheduleIssue, schedulesOf, nextScheduleOccurrence, localTimeZone, nextOccurrence, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -111,6 +111,7 @@ import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from 
 import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
+import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -118,6 +119,7 @@ import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-mode
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
+import { discoverAntigravityModels } from '../core/antigravity-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
@@ -590,6 +592,7 @@ const automationEditableSchema = z
     filters: automationFiltersSchema.optional(),
     trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
+    schedules: automationSchedulesSchema.optional(),
     task: automationTaskSchema,
   })
   .strict();
@@ -601,14 +604,14 @@ type AutomationEditableBody = z.infer<typeof automationEditableSchema>;
  * schedule and carries no GitHub filter.
  */
 function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'schedule' | 'tracker'): string | null {
+  const timingIssue = automationScheduleIssue(body, kind);
+  if (timingIssue) return timingIssue;
   // Tracker automations have no create/edit route yet (2026-09-19): hand-authored into
   // `automations.json` only. Refuse explicitly rather than misapplying the GitHub filter rules
   // below to one that reaches this far (e.g. a PUT that omits `kind` on an existing tracker row).
   if (kind === 'tracker') return body.trackerTrigger ? null : 'Choose an event to finish configuring this automation';
   if (kind === 'schedule') {
-    if (!body.schedule) return 'a scheduled automation needs a schedule';
-    if (body.schedule.type === 'once' && !body.schedule.date) return 'a one-time schedule needs a date';
-    if (body.events || body.filters || body.intervalSeconds !== undefined) return 'a scheduled automation has no GitHub filter';
+    if (body.events || body.filters || body.intervalSeconds !== undefined || body.trackerTrigger) return 'a scheduled automation has no GitHub filter';
     return null;
   }
   if (!body.events?.length) return 'a GitHub automation needs at least one event';
@@ -661,6 +664,7 @@ function editableAutomation(definition: AutomationDefinition) {
     filters: definition.filters,
     trackerTrigger: definition.trackerTrigger,
     schedule: definition.schedule,
+    ...(definition.schedules ? { schedules: definition.schedules } : {}),
     task: definition.task,
   };
 }
@@ -1413,6 +1417,7 @@ export function createApp(deps: ServerDeps) {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
+      antigravity: { discover: () => discoverAntigravityModels() },
     },
   });
   const providerAuth = deps.providerAuth
@@ -2132,7 +2137,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, or antigravity' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -2284,7 +2289,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, junie, copilot, or antigravity' }), async (c) => {
       const body = { data: c.req.valid('json') };
       const sid = deviceSid(c.req.header('x-cezar-sid'));
 
@@ -4243,7 +4248,7 @@ export function createApp(deps: ServerDeps) {
   const armAutomation = (store: AutomationStore, automation: AutomationDefinition): void => {
     const now = Date.now();
     if (isScheduleAutomation(automation)) {
-      const next = nextOccurrence(automation.schedule, now, localTimeZone());
+      const next = nextScheduleOccurrence(automation, now, localTimeZone());
       store.setState(automation.id, (current) => ({
         ...current,
         revision: automation.revision,
@@ -4447,7 +4452,7 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
-      const passedIssue = oncePassedIssue(parsed.data.schedule, parsed.data.enable === true);
+      const passedIssue = oncePassedIssue(schedulesOf(parsed.data)[0], parsed.data.enable === true);
       if (passedIssue) return c.json({ error: passedIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
@@ -4495,13 +4500,17 @@ export function createApp(deps: ServerDeps) {
         try {
           const fresh = automationStore.get(current.id);
           if (!fresh?.deferredStart || fresh.revision !== parsed.data.expectedRevision || fresh.deferredStart.runIds.length) return c.json({ error: 'The task changed or its launch was already claimed.' }, 409);
-          if (digest(parsed.data.task) !== digest(fresh.task) || parsed.data.name !== fresh.name || parsed.data.kind !== 'schedule' || parsed.data.schedule?.type !== 'once') return c.json({ error: 'Cancel and submit a new task to change its prompt or settings.' }, 409);
+          const timingIssue = automationKindIssue(parsed.data, 'schedule');
+          if (timingIssue) return c.json({ error: timingIssue }, 400);
+          const schedules = schedulesOf(parsed.data);
+          const schedule = schedules[0];
+          if (digest(parsed.data.task) !== digest(fresh.task) || parsed.data.name !== fresh.name || parsed.data.kind !== 'schedule' || schedules.length !== 1 || schedule?.type !== 'once') return c.json({ error: 'Cancel and submit a new task to change its prompt or settings.' }, 409);
           await validateDeferredBinding(c.get('project').root, fresh);
           const { prompt, ...fields } = fresh.task;
-          const schedule = parsed.data.schedule;
           const resolved = await previewDeferredStart(c.get('project').root, { task: { ...fields, task: prompt }, start: { kind: 'at', date: schedule.date ?? '', hour: schedule.hour ?? 0, minute: schedule.minute ?? 0 } }, true);
           if (!resolved.preview.available) return c.json({ error: resolved.preview.message }, 400);
-          const automation = automationStore.update(fresh.id, fresh.revision, { ...fresh, schedule: resolved.schedule!, enabled: true,
+          if (!resolved.schedule) return c.json({ error: 'The scheduled time could not be resolved.' }, 400);
+          const automation = automationStore.update(fresh.id, fresh.revision, { ...fresh, schedule: resolved.schedule, schedules: undefined, enabled: true,
             deferredStart: { ...fresh.deferredStart, reason: 'at', notBefore: resolved.preview.notBefore, timeZone: resolved.preview.timeZone, status: 'pending', failureKind: undefined, error: undefined, holdUntil: undefined, manualRequested: undefined } });
           emitAutomationChange(c.get('project'), automation.id, automation.revision);
           automationsChanged();
@@ -4517,7 +4526,7 @@ export function createApp(deps: ServerDeps) {
         const issue = await trackerTriggerIssue(c.get('project'), parsed.data.trackerTrigger);
         if (issue) return c.json({ error: issue }, 400);
       }
-      const passedIssue = oncePassedIssue(parsed.data.schedule, parsed.data.enabled === true);
+      const passedIssue = oncePassedIssue(schedulesOf(parsed.data)[0], parsed.data.enabled === true);
       if (passedIssue) return c.json({ error: passedIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
@@ -4549,13 +4558,6 @@ export function createApp(deps: ServerDeps) {
             }
           },
         );
-        // An edited schedule recomputes its next occurrence; `store.update` carried the old
-        // `nextRunAt` forward, so clear it and let the timer's `dueAt` persist the new one.
-        if (kind === 'schedule' && JSON.stringify(current.schedule) !== JSON.stringify(automation.schedule)) {
-          if (automationStore.state(automation.id)?.nextRunAt) {
-            automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
-          }
-        }
         // A poll's `nextCheckAt` was computed from the old interval; a shorter one takes effect
         // now, not after the old wait (#1736). An active failure backoff is left alone.
         if (kind !== 'schedule' && automation.enabled && current.enabled) {
@@ -8570,6 +8572,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     case 'cursor': {
       const bin = quoteResumeBin(resolveCursorAgentBin());
       return bin === null ? null : `${bin} --resume ${sessionId}`;
+    }
+    case 'antigravity': {
+      const bin = quoteResumeBin(resolveAntigravityBin());
+      return bin === null ? null : `${bin} --conversation ${sessionId}`;
     }
     case 'pi':
       return `pi --session ${sessionId}`;
