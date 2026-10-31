@@ -53,15 +53,15 @@ an agent from a list, cezar installs it and signs them in, in a terminal on the 
 
 ### Phase 1: Server
 
-- [ ] 1.1 Install recipes
-- [ ] 1.2 Contract schemas and routes
-- [ ] 1.3 Route and recipe tests
+- [x] 1.1 Install recipes — d0f215bb7
+- [x] 1.2 Contract schemas and routes — d0f215bb7
+- [x] 1.3 Route and recipe tests — d0f215bb7
 
 ### Phase 2: Cockpit
 
-- [ ] 2.1 API client and hooks
-- [ ] 2.2 Setup list and embedded terminal
-- [ ] 2.3 Component tests
+- [x] 2.1 API client and hooks — 8966c313d
+- [x] 2.2 Setup list and embedded terminal — 8966c313d
+- [x] 2.3 Component tests — 8966c313d
 
 ### Phase 3: Docs and verification
 
