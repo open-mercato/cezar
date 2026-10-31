@@ -21,6 +21,7 @@ import {
   type ManagerTurnKind,
   type UpdateManagerInput,
 } from '@open-mercato/cezar-contract';
+import type { AutomationDefinition } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
@@ -102,8 +103,12 @@ export const MANAGER_ALLOWED_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
 export const MANAGER_BASH_ALLOWLIST = [
   'cez-manager',
   'gh pr view', 'gh pr list', 'gh pr diff', 'gh pr checks', 'gh issue view', 'gh issue list', 'gh run view', 'gh run list', 'gh repo view',
-  'git log', 'git status', 'git diff', 'git show', 'git branch',
 ];
+
+/** A task keeps a task's full shell, so this is a request, not a fence (spec, Safety). */
+const MANAGER_TASK_SYSTEM_PROMPT = 'A cezar manager started this task. Do not merge pull requests or enable automations: leave that to the user.';
+
+const SESSION_FIELD = { chat: 'sessionId', watch: 'watchSessionId', job: 'jobSessionId' } as const;
 
 const WATCH_REFUSAL = 'A watch check is read-only: it may ask the user to act, it may not act. Say what you would do and let the user ask for it.';
 
@@ -388,7 +393,7 @@ export class ManagerEngine {
   }
 
   private publish(id: string, message: ManagerMessage, persist: boolean): ManagerMessage {
-    const written = persist ? this.deps.store.persistMessage(id, message) : (this.deps.store.setLiveMessage(id, message), message);
+    const written = persist ? this.deps.store.persistMessage(id, message) : this.deps.store.setLiveMessage(id, message);
     this.deps.emit('manager-message', { managerId: id, message: written });
     return written;
   }
@@ -628,6 +633,12 @@ export class ManagerEngine {
     }
     const job = manager.jobs.find((candidate) => candidate.id === item.jobId);
     if (!job) return;
+    // Stamped here, under the lease: a cockpit that lost the race must not eat the interval.
+    const lastRunAt = this.iso();
+    store.update(id, (current) => ({
+      ...current,
+      jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
+    }));
     await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt, notes), 'job', turn, job.name);
   }
 
@@ -645,7 +656,8 @@ export class ManagerEngine {
     let latest: { text: string; commands: ManagerCommand[] } = { text: '', commands: [] };
     const flush = () => {
       throttle = undefined;
-      this.publish(id, { ...base, ...latest, streaming: true }, false);
+      // Output stays for the final frame: every open tab parses these ten times a second.
+      this.publish(id, { ...base, text: latest.text, commands: latest.commands.map(({ output: _output, ...command }) => command), streaming: true }, false);
     };
     const result = await this.drive(id, manager, prompt, turn, (progress) => {
       latest = progress;
@@ -741,7 +753,9 @@ export class ManagerEngine {
     const runner = configured ?? (await this.deps.defaultRunner());
     const sessionKey = `${runner}|${manager.agentProfile ?? ''}`;
     const state = store.state(id);
-    const resumable = state.sessionId !== undefined && state.sessionKey === sessionKey;
+    const field = SESSION_FIELD[turn.kind];
+    const resumeId = state.sessionKey === sessionKey ? state[field] : undefined;
+    const resumable = resumeId !== undefined;
     const sources = await this.sources(manager);
     const profile = supportsProfiles(runner) ? await resolveProfileEnvForRoot(undefined, runner, manager.agentProfile) : { env: {} };
     const apiUrl = process.env.CEZ_API_URL;
@@ -770,10 +784,13 @@ export class ManagerEngine {
       ...(manager.model && !locked ? { model: manager.model } : {}),
       ...(manager.effort ? { effort: manager.effort } : {}),
     };
-    const first = await this.session(id, base, sessionKey, runner, resumable ? state.sessionId : undefined, turn, onProgress);
+    const first = await this.session(id, base, sessionKey, runner, resumeId, turn, onProgress);
     const silent = !first.text && first.commands.length === 0;
     if (!resumable || !first.error || !silent || turn.stopped) return first;
-    const recap = recapPrompt(store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming)));
+    // Only a chat gets the transcript back: it holds what watches read.
+    const recap = turn.kind === 'chat'
+      ? recapPrompt(store.messages(id).filter((message) => !(message.kind === 'assistant' && message.streaming)))
+      : '';
     const fresh = await this.session(id, { ...base, userPrompt: `${recap}${prompt}` }, sessionKey, runner, undefined, turn, onProgress);
     return { ...fresh, costUsd: fresh.costUsd + first.costUsd };
   }
@@ -802,7 +819,14 @@ export class ManagerEngine {
     const saveSession = (value: string) => {
       if (saved || !store.get(id)) return;
       saved = true;
-      store.updateState(id, (state) => ({ ...state, sessionId: value, sessionKey }));
+      const field = SESSION_FIELD[turn.kind];
+      store.updateState(id, (state) => ({
+        ...state,
+        // A transcript does not follow a runner or account change: drop its siblings with it.
+        ...(state.sessionKey === sessionKey ? {} : { sessionId: undefined, watchSessionId: undefined, jobSessionId: undefined }),
+        [field]: value,
+        sessionKey,
+      }));
     };
     const onEvent = (event: AgentEvent) => {
       // An error first means no transcript exists; resuming it would only fail again.
@@ -897,11 +921,6 @@ export class ManagerEngine {
       }
       for (const job of manager.jobs) {
         if (!job.enabled || Date.parse(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000 > now) continue;
-        const lastRunAt = new Date(now).toISOString();
-        this.deps.store.update(manager.id, (current) => ({
-          ...current,
-          jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
-        }));
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
@@ -955,6 +974,7 @@ export class ManagerEngine {
       body: {
         workflow: input.workflow ?? 'quick-task',
         task: input.task,
+        systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
         ...(input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
@@ -982,6 +1002,7 @@ export class ManagerEngine {
 
   /** Checked against the forge now, so a card never offers a merge that was already impossible. */
   private async stampAction(action: ManagerActionRequest): Promise<ManagerActionRequest | ManagerRefusal> {
+    if (action.type === 'add-job') return action;
     const prefix = `/p/${encodeURIComponent(action.projectId)}`;
     if (action.type === 'merge-pr') {
       const response = await this.forward(`${prefix}/github/prs/${action.number}/merge-state`);
@@ -989,23 +1010,24 @@ export class ManagerEngine {
       const body = (await response.json()) as { available: boolean; reason?: string; mergeState?: { title: string; state: string; headSha: string } };
       if (!body.available || !body.mergeState) return { error: body.reason ?? 'GitHub merge is unavailable', status: 409 };
       if (body.mergeState.state !== 'open') return { error: `#${action.number} is already ${body.mergeState.state}`, status: 409 };
-      return { ...action, title: action.title ?? body.mergeState.title, headSha: body.mergeState.headSha };
+      // The forge's title, never the agent's: the card is what the user decides on.
+      return { ...action, title: body.mergeState.title, headSha: body.mergeState.headSha };
     }
     const response = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}`);
     if (!response.ok) return ManagerEngine.refusalOf(response);
-    const body = (await response.json()) as { automation?: { name?: string; enabled?: boolean } };
-    if (body.automation?.enabled) return { error: 'that automation is already enabled', status: 409 };
-    return { ...action, ...(body.automation?.name ? { name: body.automation.name } : {}) };
+    const { automation } = (await response.json()) as { automation?: AutomationDefinition };
+    if (!automation) return { error: 'automation not found', status: 404 };
+    if (automation.enabled) return { error: 'that automation is already enabled', status: 409 };
+    const { id: _id, revision: _revision, enabled: _enabled, createdAt: _createdAt, updatedAt: _updatedAt, ...definition } = automation;
+    return { ...action, name: automation.name, revision: automation.revision, summary: JSON.stringify(definition).slice(0, 1500) };
   }
 
   async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus } | ManagerRefusal> {
-    const scope = await this.toolScope(id, input.action.projectId, true);
+    const scope = await this.toolScope(id, actionProject(input.action), true);
     if ('error' in scope) return scope;
     const action = await this.stampAction(input.action);
     if ('error' in action) return action;
-    const same = (other: ManagerActionRequest) =>
-      other.type === action.type && other.projectId === action.projectId &&
-      (other.type === 'merge-pr' ? other.number === (action as typeof other).number : other.automationId === (action as typeof other).automationId);
+    const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
     const pending = this.deps.store.messages(id).find((message) => message.kind === 'action' && message.status === 'pending' && same(message.action));
     if (pending) return { actionId: pending.id, status: 'pending' };
     const message: ManagerMessage = {
@@ -1039,18 +1061,28 @@ export class ManagerEngine {
       return { ok: true as const };
     }
     this.publish(id, { ...message, status: 'running' }, true);
-    const connected = (await this.sources(manager)).some((source) => source.id === message.action.projectId);
+    const projectId = actionProject(message.action);
+    const connected = projectId === undefined || (await this.sources(manager)).some((source) => source.id === projectId);
     const outcome = connected
-      ? await this.perform(message.action)
-      : { ok: false as const, result: `This manager is no longer connected to ${message.action.projectId}.` };
+      ? await this.perform(id, message.action)
+      : { ok: false as const, result: `This manager is no longer connected to ${projectId}.` };
     settle(outcome.ok ? 'done' : 'failed', outcome.result);
     if (outcome.ok) this.addNotice(id, outcome.result);
     return { ok: true as const };
   }
 
-  private async perform(action: ManagerActionRequest): Promise<{ ok: boolean; result: string }> {
+  private async perform(id: string, action: ManagerActionRequest): Promise<{ ok: boolean; result: string }> {
+    if (action.type === 'add-job') {
+      // Counted from now: an approved job must not fire seconds after the click.
+      const added = this.addJob(id, { name: action.name, prompt: action.prompt, everyMinutes: action.everyMinutes, enabled: true, lastRunAt: this.iso() });
+      return 'error' in added ? { ok: false, result: added.error } : { ok: true, result: `Added job ${action.name}` };
+    }
     const prefix = `/p/${encodeURIComponent(action.projectId)}`;
     if (action.type === 'enable-automation') {
+      const current = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}`);
+      if (!current.ok) return { ok: false, result: (await ManagerEngine.refusalOf(current)).error };
+      const { automation } = (await current.json()) as { automation?: { revision?: number } };
+      if (automation?.revision !== action.revision) return { ok: false, result: 'This automation changed after the proposal. Ask for a new one.' };
       const response = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}/enable`, { method: 'POST' });
       if (response.ok) return { ok: true, result: `Enabled ${action.name ?? action.automationId}` };
       return { ok: false, result: (await ManagerEngine.refusalOf(response)).error };
@@ -1069,11 +1101,12 @@ export class ManagerEngine {
     return { ok: false, result: (await ManagerEngine.refusalOf(merged)).error };
   }
 
-  async addJob(id: string, input: { id?: string; name: string; prompt: string; everyMinutes: number; enabled: boolean }): Promise<ManagerJob | ManagerRefusal> {
-    const scope = await this.toolScope(id, undefined, true);
-    if ('error' in scope) return scope;
-    if (scope.manager.jobs.length >= 32) return { error: 'a manager holds at most 32 jobs', status: 409 };
-    const job: ManagerJob = { ...input, id: input.id ?? randomUUID() };
+  /** Reached only from an approved `add-job`; the cockpit edits jobs through `update`. */
+  private addJob(id: string, input: Omit<ManagerJob, 'id'>): ManagerJob | ManagerRefusal {
+    const manager = this.deps.store.get(id);
+    if (!manager) return { error: 'manager not found', status: 404 };
+    if (manager.jobs.length >= 32) return { error: 'a manager holds at most 32 jobs', status: 409 };
+    const job: ManagerJob = { ...input, id: randomUUID() };
     this.deps.store.update(id, (manager) => ({ ...manager, jobs: [...manager.jobs.filter((other) => other.id !== job.id), job], updatedAt: this.iso() }));
     this.reschedule();
     this.emitChange(id);
@@ -1091,5 +1124,17 @@ export class ManagerEngine {
   }
 }
 
-const describe = (action: ManagerActionRequest): string =>
-  action.type === 'merge-pr' ? `Merge of ${action.projectId}#${action.number}` : `Enabling automation ${action.name ?? action.automationId}`;
+const actionProject = (action: ManagerActionRequest): string | undefined =>
+  action.type === 'add-job' ? undefined : action.projectId;
+
+const actionKey = (action: ManagerActionRequest): string => {
+  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}`;
+  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}`;
+  return `job:${action.name}`;
+};
+
+const describe = (action: ManagerActionRequest): string => {
+  if (action.type === 'merge-pr') return `Merge of ${action.projectId}#${action.number}`;
+  if (action.type === 'enable-automation') return `Enabling automation ${action.name ?? action.automationId}`;
+  return `Adding job ${action.name}`;
+};

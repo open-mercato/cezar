@@ -29,6 +29,9 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
 const stateSchema = z
   .object({
     sessionId: z.string().optional().catch(undefined),
+    /** Own transcripts: text a watch or job read must not be live in the next chat turn. */
+    watchSessionId: z.string().optional().catch(undefined),
+    jobSessionId: z.string().optional().catch(undefined),
     /** `runner|account` the session belongs to: a transcript does not follow either change. */
     sessionKey: z.string().optional().catch(undefined),
     lastCheckAt: z.string().optional().catch(undefined),
@@ -249,8 +252,10 @@ export class ManagerStore {
     return clean;
   }
 
-  setLiveMessage(id: string, message: ManagerMessage): void {
-    this.log(id).setLive(message);
+  setLiveMessage(id: string, message: ManagerMessage): ManagerMessage {
+    const clean = redactDeep(message, this.secrets) as ManagerMessage;
+    this.log(id).setLive(clean);
+    return clean;
   }
 
   state(id: string): ManagerState {

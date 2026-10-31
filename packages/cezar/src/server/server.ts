@@ -29,7 +29,6 @@ import {
   managerActionParamSchema,
   managerCreateTaskInputSchema,
   managerIdParamSchema,
-  managerJobInputSchema,
   managerJobParamSchema,
   managerMessagesQuerySchema,
   managerProposeActionInputSchema,
@@ -8329,10 +8328,6 @@ export function createApp(deps: ServerDeps) {
     .post('/workspace/managers/:id/actions', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerProposeActionInputSchema), async (c) => {
       const proposed = await managerEngine.propose(c.req.valid('param').id, c.req.valid('json'));
       return 'error' in proposed ? c.json({ error: proposed.error }, proposed.status) : c.json(proposed, 201);
-    })
-    .post('/workspace/managers/:id/jobs', paramZodValidator(managerIdParamSchema), jsonZodValidator(managerJobInputSchema), async (c) => {
-      const job = await managerEngine.addJob(c.req.valid('param').id, c.req.valid('json'));
-      return 'error' in job ? c.json({ error: job.error }, job.status) : c.json(job, 201);
     })
     .delete('/workspace/managers/:id/jobs/:jobId', paramZodValidator(managerJobParamSchema), async (c) => {
       const { id, jobId } = c.req.valid('param');

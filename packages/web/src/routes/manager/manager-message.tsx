@@ -137,9 +137,15 @@ export function ActionCard({
     >
       <p className="text-sm font-semibold">{actionTitle(message.action)}</p>
       <p className="mt-0.5 text-xs text-muted-foreground">
-        {message.action.projectId}
+        {message.action.type === 'add-job' ? `Every ${message.action.everyMinutes} min` : message.action.projectId}
         {message.action.type === 'merge-pr' && message.action.method ? ` · ${message.action.method}` : ''}
       </p>
+      {/* What will actually run: an unattended job's prompt or the automation's definition. */}
+      {message.action.type === 'add-job' || (message.action.type === 'enable-automation' && message.action.summary) ? (
+        <pre data-slot="manager-action-detail" className="mt-2 max-h-40 overflow-auto rounded-lg bg-muted p-2 font-mono text-xs break-words whitespace-pre-wrap">
+          {message.action.type === 'add-job' ? message.action.prompt : message.action.summary}
+        </pre>
+      ) : null}
       {message.reason ? <p className="mt-2 text-sm">{message.reason}</p> : null}
       {message.status === 'pending' ? (
         <div className="mt-3 flex gap-2">

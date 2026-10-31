@@ -7,8 +7,6 @@ import type {
   managerActionDecisionInputSchema,
   managerCreateTaskInputSchema,
   managerCreateTaskResponseSchema,
-  managerJobInputSchema,
-  managerJobSchema,
   managerListResponseSchema,
   managerMessagesResponseSchema,
   managerOkResponseSchema,
@@ -53,7 +51,6 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.infer<typeof managerCreateTaskResponseSchema>, InferResponseType<One['tasks']['$post'], 201>>>,
     Assert<Mutual<Ok, InferResponseType<One['task-message']['$post'], 200>>>,
     Assert<Mutual<z.infer<typeof managerProposeActionResponseSchema>, InferResponseType<One['actions']['$post'], 201>>>,
-    Assert<Mutual<z.infer<typeof managerJobSchema>, InferResponseType<One['jobs']['$post'], 201>>>,
     Assert<Mutual<Ok, InferResponseType<One['jobs'][':jobId']['$delete'], 200>>>,
 
     Assert<Mutual<z.input<typeof createManagerInputSchema>, Body<InferRequestType<Managers['$post']>>>>,
@@ -63,7 +60,6 @@ describe('src/contract/managers.ts matches the managers routes exactly', () => {
     Assert<Mutual<z.input<typeof managerCreateTaskInputSchema>, Body<InferRequestType<One['tasks']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerTaskMessageInputSchema>, Body<InferRequestType<One['task-message']['$post']>>>>,
     Assert<Mutual<z.input<typeof managerProposeActionInputSchema>, Body<InferRequestType<One['actions']['$post']>>>>,
-    Assert<Mutual<z.input<typeof managerJobInputSchema>, Body<InferRequestType<One['jobs']['$post']>>>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

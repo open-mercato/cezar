@@ -132,7 +132,8 @@ export function managerTimeLabel(iso: string | undefined, now: Date = new Date()
 
 export function actionTitle(action: ManagerActionRequest): string {
   if (action.type === 'merge-pr') return `Merge #${action.number}${action.title ? ` — ${action.title}` : ''}`
-  return `Enable automation ${action.name ?? action.automationId}`
+  if (action.type === 'enable-automation') return `Enable automation ${action.name ?? action.automationId}`
+  return `Add job ${action.name}`
 }
 
 // ---- back to the manager -------------------------------------------------------------------

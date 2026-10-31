@@ -148,6 +148,16 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
     projectId: z.string(),
     automationId: z.string(),
     name: z.string().optional(),
+    /** Stamped by the server at proposal, with what the card shows: an edit after it refuses. */
+    revision: z.number().int().optional(),
+    summary: z.string().optional(),
+  }),
+  /** A job runs unattended, so one the agent asks for waits for the user too. */
+  z.object({
+    type: z.literal('add-job'),
+    name: z.string().trim().min(1).max(80),
+    prompt: z.string().trim().min(1).max(20_000),
+    everyMinutes: z.number().int().min(5).max(10_080),
   }),
 ]);
 export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;

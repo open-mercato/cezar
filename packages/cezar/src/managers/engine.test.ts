@@ -72,6 +72,7 @@ describe('ManagerEngine', () => {
   let store: ManagerStore;
   let backend: ReturnType<typeof fakeBackend>;
   let requests: Array<{ path: string; method: string; body?: unknown }>;
+  let automationRevision = 1;
   let events: Array<{ event: string; data: unknown }>;
   let engines: ManagerEngine[];
   const previous = process.env.CEZ_HOME;
@@ -98,7 +99,7 @@ describe('ManagerEngine', () => {
         }
         if (path.endsWith('/merge')) return Response.json({ merged: true });
         if (path.endsWith('/runs')) return Response.json({ id: 'new-run' }, { status: 201 });
-        if (/\/automations\/[^/]+$/.test(path)) return Response.json({ automation: { name: 'Nightly', enabled: false } });
+        if (/\/automations\/[^/]+$/.test(path)) return Response.json({ automation: { id: 'a1', revision: automationRevision, name: 'Nightly', enabled: false } });
         return Response.json({ ok: true });
       },
       ...over,
@@ -126,6 +127,7 @@ describe('ManagerEngine', () => {
     store = new ManagerStore(() => undefined);
     backend = fakeBackend();
     requests = [];
+    automationRevision = 1;
     events = [];
     engines = [];
   });
@@ -473,8 +475,7 @@ describe('ManagerEngine', () => {
       let now = Date.parse('2026-10-31T12:00:00.000Z');
       const engine = makeEngine({ now: () => now });
       const id = await create(engine, 0);
-      const added = await engine.addJob(id, { name: 'Digest', prompt: 'Summarize the week', everyMinutes: 60, enabled: true });
-      if ('error' in added) throw added;
+      await engine.update(id, { jobs: [{ name: 'Digest', prompt: 'Summarize the week', everyMinutes: 60, enabled: true }] });
       backend.scripts.push(say('Digest done'));
       now += 61 * 60_000;
       engine.tick();
@@ -491,7 +492,7 @@ describe('ManagerEngine', () => {
       let now = Date.parse('2026-10-31T12:00:00.000Z');
       const engine = makeEngine({ now: () => now });
       const id = await create(engine, 0);
-      await engine.addJob(id, { name: 'Off', prompt: 'x', everyMinutes: 5, enabled: false });
+      await engine.update(id, { jobs: [{ name: 'Off', prompt: 'x', everyMinutes: 5, enabled: false }] });
       now += 60 * 60_000;
       engine.tick();
       await settled(engine);
@@ -501,6 +502,61 @@ describe('ManagerEngine', () => {
 
   describe('safety', () => {
     const merge = { type: 'merge-pr', projectId: 'alpha', number: 7 } as const;
+
+    it('a job the agent asks for waits for approval, and its interval starts at the click', async () => {
+      const now = Date.parse('2026-10-31T12:00:00.000Z');
+      const engine = makeEngine({ now: () => now });
+      const id = await create(engine, 0);
+      const proposed = await engine.propose(id, { action: { type: 'add-job', name: 'Digest', prompt: 'p', everyMinutes: 5 } });
+      if ('error' in proposed) throw proposed;
+      expect(store.get(id)?.jobs).toEqual([]);
+      await engine.decide(id, proposed.actionId, 'approve');
+      expect(store.get(id)?.jobs[0]).toMatchObject({ name: 'Digest', enabled: true, lastRunAt: new Date(now).toISOString() });
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+    });
+
+    it('stamps the merge card with the forge title, not the agent\'s', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      const proposed = await engine.propose(id, { action: { ...merge, title: 'Harmless typo fix' } });
+      if ('error' in proposed) throw proposed;
+      const message = store.message(id, proposed.actionId);
+      expect(message?.kind === 'action' && message.action.type === 'merge-pr' ? message.action.title : undefined).not.toBe('Harmless typo fix');
+    });
+
+    it('refuses an enable when the automation changed after the proposal', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      const proposed = await engine.propose(id, { action: { type: 'enable-automation', projectId: 'alpha', automationId: 'a1', summary: 'forged', revision: 99 } });
+      if ('error' in proposed) throw proposed;
+      const message = store.message(id, proposed.actionId);
+      expect(message?.kind === 'action' && message.action.type === 'enable-automation' ? message.action.summary : '').not.toBe('forged');
+      automationRevision += 1;
+      await engine.decide(id, proposed.actionId, 'approve');
+      expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'failed' });
+      expect(requests.some((request) => request.path.endsWith('/enable'))).toBe(false);
+    });
+
+    it('a watch never resumes the chat session, and the reverse', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      backend.scripts.push(say('hello'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      backend.scripts.push(say('a PR is ready'));
+      engine.check(id);
+      await settled(engine);
+      backend.scripts.push(say('sure'));
+      engine.send(id, 'again');
+      await settled(engine);
+      const [chat, watch, next] = backend.specs;
+      expect(watch?.sessionId).not.toBe(chat?.sessionId);
+      expect(watch?.resume).toBeFalsy();
+      expect(next?.sessionId).toBe(chat?.sessionId);
+      expect(next?.resume).toBe(true);
+    });
 
     it('every tool refuses a project the manager is not connected to', async () => {
       const engine = makeEngine();
@@ -525,7 +581,7 @@ describe('ManagerEngine', () => {
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'x' })).toMatchObject({ status: 409 });
       expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'r', text: 'x' })).toMatchObject({ status: 409 });
       expect(await engine.propose(id, { action: merge })).toMatchObject({ status: 409 });
-      expect(await engine.addJob(id, { name: 'n', prompt: 'p', everyMinutes: 5, enabled: true })).toMatchObject({ status: 409 });
+      expect(await engine.propose(id, { action: { type: 'add-job', name: 'n', prompt: 'p', everyMinutes: 5 } })).toMatchObject({ status: 409 });
       expect('attention' in ((await engine.snapshot(id)) ?? {})).toBe(true);
       expect(requests).toEqual([]);
 

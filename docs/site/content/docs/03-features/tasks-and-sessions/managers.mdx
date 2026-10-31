@@ -112,7 +112,7 @@ Cezar reports each item once. The same task failing again is a new item, and so 
 
 ## Jobs
 
-A job is a saved prompt the manager runs on its own interval, for example a morning summary of open pull requests. Open the gear, select **Jobs…**, then add a name, a prompt, and an interval from 5 to 10,080 minutes. You can also ask the manager in chat to add one. A manager holds up to 32 jobs.
+A job is a saved prompt the manager runs on its own interval, for example a morning summary of open pull requests. Open the gear, select **Jobs…**, then add a name, a prompt, and an interval from 5 to 10,080 minutes. You can also ask the manager in chat to add one, and it proposes the job as a card you approve. A manager holds up to 32 jobs.
 
 Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore the attention gate and keep running with **Chron** set to **Off**, so **every due job spends a model turn**. Use the switch in **Jobs…** to pause a job.
 
@@ -123,16 +123,17 @@ Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore t
 | Read tasks, pull requests, workflows, and automations | Does it | Does it |
 | Start a task, with a workflow or Dispatch | Does it | Refused |
 | Message a running task, or continue a finished one | Does it | Refused |
-| Create an automation, always paused | Does it | Refused |
-| Add or remove a job | Does it | Refused |
+| Create or edit an automation, which always leaves it paused | Does it | Refused |
+| Add a job | Proposes it | Refused |
+| Remove a job | Does it | Refused |
 | Merge a pull request | Proposes it | Refused |
 | Enable an automation | Proposes it | Refused |
 
 A watch check reads text that anyone can write in a pull request, so Cezar keeps it read-only. It can ask you to act, and you then ask for the action in chat.
 
-Merging and enabling an automation happen only when you approve. The manager puts a card in the chat with its reason. Select **Approve** or **Reject**, and the manager learns the outcome on its next turn.
+Merging, enabling an automation and adding a job happen only when you approve. The manager puts a card in the chat with its reason. Select **Approve** or **Reject**, and the manager learns the outcome on its next turn.
 
-Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw.
+Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
 
 ## Open a task from a card
 
@@ -142,7 +143,7 @@ Select a card to open that task's own thread and keep working there. The task th
 
 ## Tool limits by agent
 
-Cezar gives a manager `Read`, `Grep`, `Glob`, and a `Bash` allowlist of `cez-manager` plus read-only `gh` and `git` commands. **Only Claude enforces those limits.** Choose Claude for a manager that reads pull requests from people you do not trust.
+Cezar gives a manager `Read`, `Grep`, `Glob`, and a `Bash` allowlist of `cez-manager` plus read-only `gh` commands. **Only Claude enforces those limits.** Choose Claude for a manager that reads pull requests from people you do not trust.
 
 | Agent | What limits the manager |
 | --- | --- |

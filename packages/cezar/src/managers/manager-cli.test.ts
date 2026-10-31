@@ -20,6 +20,7 @@ function harness(env: Record<string, string> = {}) {
       if (String(url).endsWith('/snapshot')) return Response.json(snapshot);
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
       if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new' }, { status: 201 });
+      if (/\/automations\/[^/]+$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
       return Response.json({ automations: [], ok: true });
     }) as typeof fetch,
   };
@@ -48,6 +49,50 @@ describe('cez manager', () => {
     expect(await run('merge', '--project', 'alpha', '4', '--reason', 'green')).toBe(0);
     expect(calls.at(-1)).toMatchObject({ method: 'POST', body: { action: { type: 'merge-pr', projectId: 'alpha', number: 4 }, reason: 'green' } });
     expect(calls.at(-1)?.url).toMatch(/\/workspace\/managers\/m1\/actions$/);
+    expect(logs.join()).toContain('approval');
+  });
+
+  describe('automations', () => {
+    const json = '{"name":"n","enabled":true,"enable":true}';
+
+    it('never creates one enabled, however the definition spells it', async () => {
+      const { run, calls } = harness();
+      await run('automation', '--project', 'alpha', 'create', '--json', json);
+      const post = calls.find((call) => call.method === 'POST');
+      expect(post?.url).toMatch(/\/automations$/);
+      expect(post?.body).not.toHaveProperty('enable');
+      expect(post?.body).not.toHaveProperty('enabled');
+    });
+
+    it('an edit pauses, even one that asks for enabled', async () => {
+      const { run, calls } = harness();
+      await run('automation', '--project', 'alpha', 'update', 'a1', '--json', json);
+      const put = calls.find((call) => call.method === 'PUT');
+      expect(put?.body).toMatchObject({ enabled: false });
+    });
+
+    it.each([[['check', 'a1', '--execute']], [['run', 'a1']], [['delete', 'a1']], [['create', '--enable', '--json', '{}']]])('refuses %j in any turn', async (sub) => {
+      const { run, calls } = harness();
+      expect(await run('automation', '--project', 'alpha', ...sub)).toBe(1);
+      expect(calls.filter((call) => call.method !== 'GET')).toEqual([]);
+    });
+
+    it.each(['create', 'add', 'update', 'pause', 'mystery'])('a watch check refuses %s', async (sub) => {
+      const { run, calls } = harness({ CEZ_MANAGER_TURN: 'watch' });
+      expect(await run('automation', '--project', 'alpha', sub, 'a1')).toBe(1);
+      expect(calls.filter((call) => call.method !== 'GET')).toEqual([]);
+    });
+
+    it('a watch check may still read', async () => {
+      const { run } = harness({ CEZ_MANAGER_TURN: 'watch' });
+      expect(await run('automation', '--project', 'alpha', 'list')).toBe(0);
+    });
+  });
+
+  it('job add only proposes', async () => {
+    const { run, calls, logs } = harness();
+    expect(await run('job', 'add', '--name', 'Digest', '--every', '60', 'Summarize')).toBe(0);
+    expect(calls.at(-1)).toMatchObject({ method: 'POST', body: { action: { type: 'add-job', name: 'Digest', everyMinutes: 60, prompt: 'Summarize' } } });
     expect(logs.join()).toContain('approval');
   });
 

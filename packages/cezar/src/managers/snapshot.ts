@@ -131,6 +131,8 @@ async function projectPrs(
     const status = listed.prs.length > 0 ? await github.refStatus(source.root, listed.prs.map((pr) => pr.number)) : undefined;
     const known = status?.available ? status : undefined;
     return {
+      // No status is no knowledge: `gateAttention` must keep these keys, not forget and re-bill them.
+      ...(listed.prs.length > 0 && !known ? { prsUnavailable: 'Pull request status is unavailable' } : {}),
       prs: listed.prs.map((pr) => {
         const reference = known?.prs[pr.number];
         const conflicts = known?.conflicts;

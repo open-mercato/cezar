@@ -32,10 +32,15 @@ const USAGE = `cez manager — the tools of a cezar manager's agent (CEZ_MANAGER
   cez manager merge --project <id> <number> [--method merge|squash|rebase] [--title t] [--reason "…"]
                                                  proposes a merge; the user approves it in the chat
   cez manager automation --project <id> <cez automation args>
-                                                 paused by default; enable proposes
-  cez manager job add --name <name> --every <minutes> "<prompt>" | job list | job remove <id>`;
+                                                 always paused, editing one pauses it; enable proposes
+  cez manager job add --name <name> --every <minutes> "<prompt>"
+                                                 proposes a job; the user approves it in the chat
+  cez manager job list | job remove <id>`;
 
-const MUTATING_AUTOMATION = new Set(['create', 'add', 'update', 'run', 'pause', 'delete', 'enable']);
+/** All a watch check may run; an allowlist, so a new subcommand is refused until someone decides. */
+const READ_ONLY_AUTOMATION = new Set(['list', 'show', 'schema', 'check']);
+/** Each of these starts or destroys work no card ever showed the user. */
+const REFUSED_AUTOMATION = new Set(['run', 'delete']);
 
 function fail(message: string): never {
   throw new Error(message);
@@ -225,8 +230,9 @@ export async function runManagerCommand(
           return 0;
         }
         if (forwarded.includes('--enable')) fail('a manager creates automations paused: drop --enable, then propose it with `cez manager automation enable <id>`');
-        if (sub && MUTATING_AUTOMATION.has(sub) && env.CEZ_MANAGER_TURN === 'watch') fail('a watch check is read-only: ask the user instead');
-        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io);
+        if (forwarded.includes('--execute') || (sub && REFUSED_AUTOMATION.has(sub))) fail('a manager cannot launch or delete automations: ask the user to do it in the cockpit');
+        if (env.CEZ_MANAGER_TURN === 'watch' && !(sub && READ_ONLY_AUTOMATION.has(sub))) fail('a watch check is read-only: ask the user instead');
+        return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true });
       }
 
       case 'job': {
@@ -247,8 +253,11 @@ export async function runManagerCommand(
           const prompt = positionals.join(' ').trim();
           const everyMinutes = Number(values.every);
           if (!values.name || !prompt || !Number.isInteger(everyMinutes)) fail('usage: cez manager job add --name <name> --every <minutes> "<prompt>"');
-          const job = await call<{ id: string }>('/jobs', { method: 'POST', body: { name: values.name, prompt, everyMinutes, enabled: true } });
-          io.log(`added job ${job.id}`);
+          const proposed = await call<{ actionId: string }>('/actions', {
+            method: 'POST',
+            body: { action: { type: 'add-job', name: values.name, prompt, everyMinutes } },
+          });
+          io.log(`proposed ${proposed.actionId}: the job waits for the user's approval in the chat`);
           return 0;
         }
         fail('usage: cez manager job add|list|remove');

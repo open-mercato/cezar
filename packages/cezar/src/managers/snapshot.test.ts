@@ -57,6 +57,18 @@ describe('snapshotTasks', () => {
   });
 });
 
+describe('buildSnapshot', () => {
+  it('a missing PR status blinds the project, so the check keeps its keys', async () => {
+    const source = { id: 'p', name: 'p', root: '/p', available: true, runs: () => [], automationFailures: () => [] } as unknown as ManagerProjectSource;
+    const github = {
+      list: async () => ({ available: true as const, prs: [{ number: 12, title: 't', author: 'a', url: 'u' }] }),
+      refStatus: async () => ({ available: false as const, reason: 'offline' }),
+    } as never;
+    const blip = await buildSnapshot([source], github, 0);
+    expect(gateAttention(blip, { 'pr-ready:p:12': 'then' }).kept).toEqual({ 'pr-ready:p:12': 'then' });
+  });
+});
+
 describe('gateAttention', () => {
   const snapshot = (keys: string[], blind?: string): ManagerSnapshot => ({
     generatedAt: '',
