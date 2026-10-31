@@ -25,8 +25,10 @@ export function ManagerSection() {
 
   const toggle = (type: keyof ManagerConfirm, next: boolean) => {
     // Written whole: the route merges top-level keys, and a type skipped here would read as on.
+    // From the cache, not the render: a second switch tapped before it must keep the first.
+    const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)?.managerConfirm
     const managerConfirm = {
-      ...Object.fromEntries(MANAGER_CONFIRM_TYPES.map((known) => [known, actionConfirms(setting, known)])),
+      ...Object.fromEntries(MANAGER_CONFIRM_TYPES.map((known) => [known, actionConfirms(current, known)])),
       [type]: next,
     }
     queryClient.setQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState, (state) => ({ ...state, managerConfirm }))
