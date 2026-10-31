@@ -1020,7 +1020,7 @@ export class ManagerEngine {
     if (!automation) return { error: 'automation not found', status: 404 };
     if (automation.enabled) return { error: 'that automation is already enabled', status: 409 };
     const { id: _id, revision: _revision, enabled: _enabled, createdAt: _createdAt, updatedAt: _updatedAt, ...definition } = automation;
-    return { ...action, name: automation.name, revision: automation.revision, summary: JSON.stringify(definition).slice(0, 1500) };
+    return { ...action, name: automation.name, revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
   }
 
   async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus } | ManagerRefusal> {
@@ -1124,13 +1124,20 @@ export class ManagerEngine {
   }
 }
 
+const SUMMARY_LIMIT = 8_000;
+
+/** Long on purpose: the end of a definition is its prompt, and a card must not hide that. */
+const clipSummary = (text: string): string =>
+  text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}… (cut, open the automation to read it all)` : text;
+
 const actionProject = (action: ManagerActionRequest): string | undefined =>
   action.type === 'add-job' ? undefined : action.projectId;
 
 const actionKey = (action: ManagerActionRequest): string => {
-  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}`;
-  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}`;
-  return `job:${action.name}`;
+  // The stamped facts count: a stale card must not stand in for what changed since.
+  if (action.type === 'merge-pr') return `merge:${action.projectId}:${action.number}:${action.headSha}`;
+  if (action.type === 'enable-automation') return `enable:${action.projectId}:${action.automationId}:${action.revision}`;
+  return `job:${action.name}:${action.everyMinutes}:${action.prompt}`;
 };
 
 const describe = (action: ManagerActionRequest): string => {
