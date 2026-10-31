@@ -432,6 +432,10 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** The run whose archive took this one along (#1752): set on a finished subtask archived with
+   *  its dispatching parent, so restoring the parent restores exactly these. Cleared whenever
+   *  this run itself is archived or restored directly. */
+  archivedWith: z.string().optional(),
   /** Pinned to the top of this project's task list (#935): plain per-task state, the
    *  same class as `archived` and `seenAt`. Optional with NO default, unlike `archived`:
    *  absent is what every runs.json written before this carries and it already means
@@ -601,6 +605,13 @@ function clearPendingAutoResume(run: RunRecord): void {
 function isAccessDenied(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException | undefined)?.code;
   return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
+}
+
+/** A finished outcome the archive may take without asking — `review` and an unanswered
+ *  question are gates, not outcomes. Shared by the "Archive finished" sweep and the subtask
+ *  cascade (#1752). */
+function isArchivableOutcome(run: RunRecord): boolean {
+  return ['done', 'failed', 'cancelled'].includes(run.status) && run.awaitingAnswerSince === undefined;
 }
 
 /**
@@ -1530,11 +1541,14 @@ export class RunStore extends EventEmitter {
     this.touch(run);
   }
 
-  setArchived(id: string, archived: boolean): RunRecord | undefined {
+  /** `archivedWith` is the cascade's stamp (#1752); a direct archive or restore leaves it unset. */
+  setArchived(id: string, archived: boolean, archivedWith?: string): RunRecord | undefined {
     const run = this.runs.get(id);
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
+    if (archived && archivedWith !== undefined) run.archivedWith = archivedWith;
+    else delete run.archivedWith;
     if (archived) {
       clearPendingAutoResume(run);
       clearAwaitingAnswer(run);
@@ -1542,6 +1556,50 @@ export class RunStore extends EventEmitter {
     }
     this.touch(run);
     return run;
+  }
+
+  /**
+   * `setArchived` for a run AND the subtasks it dispatched (#1752). Archiving walks
+   * `dispatch.parentRunId` down from `id` and takes every descendant that is a finished outcome
+   * (the `archiveFinished` rule), stamping `archivedWith = id`; a live descendant stays active and
+   * stops the walk below it, so a live subtree stays together. Restoring brings back exactly the
+   * runs stamped with `id`. Returns the cascaded records so the caller can run per-run side effects.
+   */
+  setArchivedWithSubtasks(
+    id: string,
+    archived: boolean,
+  ): { run: RunRecord; cascaded: RunRecord[] } | undefined {
+    const run = this.setArchived(id, archived);
+    if (!run) return undefined;
+    const cascaded: RunRecord[] = [];
+    if (!archived) {
+      for (const other of this.runs.values()) {
+        if (other.archived && other.archivedWith === id) cascaded.push(this.setArchived(other.id, false)!);
+      }
+      return { run, cascaded };
+    }
+    const children = new Map<string, RunRecord[]>();
+    for (const other of this.runs.values()) {
+      const parent = other.dispatch?.parentRunId;
+      if (parent !== undefined) children.set(parent, [...(children.get(parent) ?? []), other]);
+    }
+    const seen = new Set([id]);
+    const stack = [id];
+    while (stack.length > 0) {
+      for (const child of children.get(stack.pop()!) ?? []) {
+        if (seen.has(child.id)) continue;
+        seen.add(child.id);
+        // Archived on its own earlier: left as it is, but its finished subtree still comes along.
+        if (child.archived) {
+          stack.push(child.id);
+          continue;
+        }
+        if (!isArchivableOutcome(child)) continue;
+        cascaded.push(this.setArchived(child.id, true, id)!);
+        stack.push(child.id);
+      }
+    }
+    return { run, cascaded };
   }
 
   /** Pin one run to the top of this project's task list, or unpin it (#935). Mirrors
@@ -1569,11 +1627,7 @@ export class RunStore extends EventEmitter {
     let count = 0;
     for (const run of this.runs.values()) {
       // An unanswered question is a gate, not an outcome — like `review`, the bulk sweep leaves it.
-      if (
-        !run.archived &&
-        ['done', 'failed', 'cancelled'].includes(run.status) &&
-        run.awaitingAnswerSince === undefined
-      ) {
+      if (!run.archived && isArchivableOutcome(run)) {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
         clearPendingAutoResume(run);

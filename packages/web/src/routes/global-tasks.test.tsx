@@ -123,6 +123,7 @@ function stubFetch({
   truncated = [] as string[],
   indexStatus = 200,
   archiveStatus = 200,
+  archiveHangs = false,
   costMetrics = true,
   refStatus,
   indexStatuses,
@@ -132,6 +133,8 @@ function stubFetch({
   truncated?: string[]
   indexStatus?: number
   archiveStatus?: number
+  /** The archive POST never answers — what isolates the optimistic patch from the refetch. */
+  archiveHangs?: boolean
   costMetrics?: boolean
   /** Per-project chip status, as the forge would answer it. Absent = the forge is unreachable,
    *  which is the only honest default here: no `gh`, no statuses, neutral chips. */
@@ -217,6 +220,7 @@ function stubFetch({
       }
       const archive = /^\/api\/v1\/p\/([^/]+)\/runs\/([^/]+)\/archive$/.exec(path)
       if (archive && method === 'POST') {
+        if (archiveHangs) return new Promise<Response>(() => {})
         if (archiveStatus !== 200) return jsonResponse({ error: 'still running' }, archiveStatus)
         const [, projectId, id] = archive
         const archived = (JSON.parse(String(init.body)) as { archived: boolean }).archived
@@ -1088,6 +1092,28 @@ describe('global tasks page', () => {
       }),
     )
     await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1']))
+  })
+
+  it('moves the finished subtasks out of Active with their parent before the server answers (#1752)', async () => {
+    const child = (id: string, status: RunIndexEntry['status']): RunIndexEntry => ({
+      ...RUNS[2]!,
+      id,
+      title: `Subtask ${id}`,
+      status,
+      dispatch: { rootRunId: 'i1', parentRunId: 'i1', kind: 'review' },
+    })
+    stubFetch({ runs: [...RUNS, child('i2', 'done'), child('i3', 'running')], archiveHangs: true })
+    renderPage()
+    await screen.findByText('Bump the runner')
+
+    fireEvent.click(
+      document
+        .querySelector('[data-slot="global-task-row"][data-run-id="i1"]')!
+        .querySelector<HTMLButtonElement>('[data-action="archive-run"]')!,
+    )
+
+    // The finished child leaves with its parent; the running one stays, now a top-level row.
+    await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i3']))
   })
 
   it('restores an archived task from the Archived tab', async () => {

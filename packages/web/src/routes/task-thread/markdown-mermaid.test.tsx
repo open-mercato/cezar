@@ -46,6 +46,9 @@ describe('Markdown Mermaid previews', () => {
       </ThemeProvider>,
     )
     await screen.findByRole('img', { name: 'Mermaid chart' })
+    // The chart's role can appear before the render call settles on a slow runner; a late call
+    // would also leak into the next case's `mock.calls`.
+    await waitFor(() => expect(renderDiagram).toHaveBeenCalledTimes(1))
 
     fireEvent.click(screen.getByRole('button', { name: 'Theme: light. Switch to dark.' }))
     expect(renderDiagram).toHaveBeenCalledTimes(1)

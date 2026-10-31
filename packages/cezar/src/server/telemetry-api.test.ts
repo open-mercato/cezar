@@ -68,13 +68,24 @@ describe('telemetry routes', () => {
     expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'sidebar' })).status).toBe(200);
     expect(track).toHaveBeenCalledWith('task_pinned', { label: 'sidebar' }, { sid: undefined });
     expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: true, surface: 'task_view' })).status).toBe(200);
-    expect(track).toHaveBeenCalledWith('task_archived', { label: 'task_view' }, { sid: undefined });
+    expect(track).toHaveBeenCalledWith('task_archived', { label: 'task_view', value: 1 }, { sid: undefined });
     expect((await post(`/api/v1/runs/${run.id}/archive`, { archived: false })).status).toBe(200);
-    expect(track).toHaveBeenCalledWith('task_unarchived', { label: 'api' }, { sid: undefined });
+    expect(track).toHaveBeenCalledWith('task_unarchived', { label: 'api', value: 1 }, { sid: undefined });
 
     vi.mocked(track).mockClear();
     expect((await post(`/api/v1/runs/${run.id}/pin`, { surface: 'my-secret-repo' })).status).toBe(400);
     expect(track).not.toHaveBeenCalled();
+  });
+
+  it('counts the finished subtasks an archive takes along in value (#1752)', async () => {
+    const parent = store.createRun({ title: 'p', workflow: 'w', task: 't', steps: [] });
+    store.updateRun(parent.id, { status: 'done' });
+    for (let i = 0; i < 2; i++) {
+      const child = store.createRun({ title: 'c', workflow: 'w', task: 't', steps: [] });
+      store.updateRun(child.id, { status: 'done', dispatch: { rootRunId: parent.id, parentRunId: parent.id } });
+    }
+    expect((await post(`/api/v1/runs/${parent.id}/archive`, { surface: 'all_tasks' })).status).toBe(200);
+    expect(track).toHaveBeenCalledWith('task_archived', { label: 'all_tasks', value: 3 }, { sid: undefined });
   });
 
   it('relays only the closed event labels', async () => {
