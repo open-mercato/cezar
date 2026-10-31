@@ -6,7 +6,13 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
-import { AUTONOMOUS_NUDGE, MAX_AUTO_CONTINUES, RunManager } from './run.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import {
+  AUTONOMOUS_NUDGE,
+  MAX_AUTO_CONTINUES,
+  MAX_CONSECUTIVE_OVERRIDDEN_ASKS,
+  RunManager,
+} from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -143,6 +149,11 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(store.getRun(record.id)?.autonomous).toBe(true);
 
     const statuses = trackStatuses();
+    // Captured live: an unpaced mock can settle the run (clearing currentStepId) before we look.
+    let continuationStepId: string | undefined;
+    store.on('run', (r: RunRecord) => {
+      if (r.id === record.id && r.currentStepId) continuationStepId ??= r.currentStepId;
+    });
     expect(manager.continueRun(record.id, { text: 'mock:autonomous keep going' })).toEqual({ ok: true });
 
     // `runContinuation` builds its OWN ActiveRun; it must read `autonomous` off the record.
@@ -153,12 +164,38 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     // Same helper, same event SHAPE: every other event this handler writes is attributed to the
     // continuation's own step, and the cockpit keys transcript items by `stepId`. A nudge note
     // from a continuation must not be the one anonymous event in the file.
-    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toBe(
-      store.getRun(record.id)?.currentStepId,
-    );
+    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toBe(continuationStepId);
     expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toMatch(/^continue-/);
     await waitFor(record.id, (r) => r?.status === 'done');
     expect(statuses).not.toContain('waiting');
+  }, 40_000);
+
+  it('parks an autonomous monitoring turn at the first-session turn end', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:monitoring keep watching',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 40_000);
+
+  it('parks an autonomous monitoring continuation without nudging it', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+
+    expect(manager.continueRun(record.id, { text: 'mock:monitoring keep watching' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.activity === 'monitoring');
+    expect(nudgeNotes(record.id)).toEqual([]);
+    expect(store.getRun(record.id)?.status).toBe('running');
   }, 40_000);
 
   it('a NON-autonomous continuation still parks at waiting (unchanged)', async () => {
@@ -208,6 +245,83 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(String(parked[0]?.message)).toContain('Which date library should I standardize on?');
     // The repeated question reaches the operator as a real ask card, not a silent park.
     expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
+  }, 90_000);
+
+  it('parks on a reworded blocker after two consecutive overrides', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS);
+    expect(notesMatching(record.id, 'question overridden by the auto-continue nudge')).toHaveLength(
+      MAX_CONSECUTIVE_OVERRIDDEN_ASKS,
+    );
+    const parked = notesMatching(record.id, 'consecutive questions were overridden');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain('the run now waits for your answer');
+    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
+  }, 90_000);
+
+  it('resets the consecutive bound after a clean turn but keeps the sticky repeat guard', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword-clean dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS + 2);
+    expect(notesMatching(record.id, 'consecutive questions were overridden')).toHaveLength(1);
+  }, 90_000);
+
+  it('applies the same consecutive bound in a continuation', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(manager.continueRun(record.id, { text: 'mock:ask-reword continue after done' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS);
+    expect(notesMatching(record.id, 'consecutive questions were overridden')).toHaveLength(1);
+  }, 90_000);
+
+  it('resets the consecutive bound after a monitoring turn and automatic wake', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword-monitoring dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_OVERRIDDEN_ASKS + 1);
+    expect(notesMatching(record.id, 'consecutive questions were overridden')).toHaveLength(1);
+  }, 90_000);
+
+  it('keeps a verbatim repeat sticky across a clean turn', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-repeat-clean pick a date library',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(2);
+    expect(notesMatching(record.id, 'the same question was asked again after a nudge')).toHaveLength(1);
   }, 90_000);
 
   it('records the CEZ:ASK it overrides, so an overridden question is not lost', async () => {

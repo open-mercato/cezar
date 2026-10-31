@@ -1,0 +1,26 @@
+---
+title: "Worktree setup scripts"
+description: "Prepare the environment after worktree creation and before the agent starts."
+version: opt-in
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/worktree-lifecycle-editor.tsx
+    line: 129
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Setup commands prepare the environment after a worktree is created and before the agent starts. You can set their order and an optional timeout. Preview shows variable substitutions before you save the scripts.
+
+## Where to find it
+
+Project settings → Worktrees → lifecycle scripts
+
+## How to use it
+
+1. Add a setup command.
+2. Set the command, order, and optional timeout.
+3. Check Preview and choose Save scripts.
+
+> **Good to know**: Scripts run non-interactively in Bash. Preview shows substitutions without executing commands.

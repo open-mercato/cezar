@@ -17,16 +17,18 @@ import {
   TagIcon,
   TriangleAlertIcon,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
+import { Virtualizer } from 'virtua'
 
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { queryKeys, useGithubInfinite, useGithubChecks, useGithubComments, useGithubPrChanges, useGithubSearch, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
+  GithubData,
   GithubTimelineEvent,
   GithubTimelineEventKind,
   GithubMergeMethod,
@@ -36,8 +38,9 @@ import type {
 import { IssueBrowserLayout } from '@/components/issue-browser-layout'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffFileChange } from '@/components/diff'
-import type { EnginePick } from '@/components/engine-pills'
+import { useRememberedEnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
+import { Segmented } from '@/components/segmented'
 import { TabLink } from '@/components/tab-link'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,9 +61,18 @@ import { orderSkillsByUsage } from '@/lib/skills'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from '../task-thread/markdown'
-import { allLabels, filterGithubItems, labelChipStyle, shouldSearchForge } from './github-filter'
+import {
+  allLabels,
+  filterGithubItems,
+  labelChipStyle,
+  shouldSearchForge,
+  sortGithubItems,
+  type GithubSort,
+} from './github-filter'
 import { GithubLoading } from './github-loading'
+import { IssueOwnership } from './issue-ownership'
 import { HandToAgent } from './hand-to-agent'
+import { SwipeLaunchSheet, SwipeReveal, useRowSwipe } from './swipe-launch'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
 
 /**
@@ -71,24 +83,19 @@ import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-d
  * `/github/prs`, `/github/issues/:n`, `/github/prs/:n`. PR rows also carry a compact checks
  * glyph (#400) — the same tones as the detail pane's `ChecksBadge`, just the symbol.
  *
- * Data loads in ONE fast shot (#664): the list call no longer fetches `statusCheckRollup` — the
- * CI rollup for every open PR was the dominant cost and forced the old two-shot `30 → 1000`
- * pattern — so a single `limit`-capped fetch paints the whole open set quickly and search works
- * across it immediately. Each PR row's checks glyph is then hydrated lazily, for the on-screen
- * rows only, via `useGithubChecks` (`GET /api/github/checks`), the same way comment counts fill
- * in a beat later. A cheap React-Query prefetch on row hover/focus warms the thread so an opened
- * item is usually instant. (Cursor pagination + "Load more"/infinite scroll + row virtualization
- * are the Phase 2 follow-up.)
+ * Data loads in cheap cursor pages (#664/#1261): the list call no longer fetches
+ * `statusCheckRollup` or bodies, while exact open totals and comment counts come from lightweight
+ * GraphQL fields. PR checks are hydrated lazily for the visible rows, and selected body/diffstat
+ * details arrive through the background thread request. A cheap React-Query prefetch on row
+ * hover/focus warms the thread so an opened item is usually instant.
  *
  * Gating: the nav item is hidden by the shell when health reports no forge — but the URL
  * stays reachable (pasted links), so an unavailable payload renders the honest explainer
  * with the server's own reason, never an error.
  */
 
-/** The single fast list fetch (`/api/github` limit). No longer split into a fast batch + a slow
- *  everything-open shot — dropping `statusCheckRollup` from the list made one fetch of the whole
- *  open set cheap. A count AT this cap still reads `N+`, since the open set may exceed it. */
-const LIST_LIMIT = 1000
+/** The first cursor page size. Totals are supplied independently by GitHub's GraphQL connection. */
+const LIST_LIMIT = 50
 
 /** How many on-screen PR rows one checks request covers (matches the server's `GH_CHECKS_MAX`).
  *  The visible window is hydrated first; without virtualization (Phase 2) rows past this stay
@@ -109,6 +116,39 @@ function useDebouncedValue<T>(value: T, delay: number): T {
     return () => clearTimeout(timer)
   }, [value, delay])
   return settled
+}
+
+/** How far below the visible list the next page starts loading, so it usually lands before the
+ *  user reaches the end. */
+const LOAD_AHEAD_PX = 600
+
+/**
+ * Scroll-driven paging: calls `loadMore` whenever the returned sentinel ref comes within
+ * `LOAD_AHEAD_PX` of the list pane's visible bottom. The observer is rebuilt every time `enabled`
+ * flips back on (after each page lands), and a fresh observer reports its initial state — so a
+ * sentinel still in view after a short page keeps loading until it scrolls out or pages run out.
+ */
+function useLoadMoreSentinel(enabled: boolean, loadMore: () => void) {
+  const [sentinel, setSentinel] = useState<HTMLElement | null>(null)
+  const loadMoreRef = useRef(loadMore)
+  useEffect(() => {
+    loadMoreRef.current = loadMore
+  })
+  useEffect(() => {
+    if (!enabled || !sentinel || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadMoreRef.current()
+      },
+      {
+        root: sentinel.closest<HTMLElement>('[data-slot="gh-list"]'),
+        rootMargin: `0px 0px ${LOAD_AHEAD_PX}px 0px`,
+      },
+    )
+    observer.observe(sentinel)
+    return () => observer.disconnect()
+  }, [enabled, sentinel])
+  return setSentinel
 }
 
 export type GithubView = 'issues' | 'prs'
@@ -141,17 +181,44 @@ export function GithubRoute({
   index?: boolean
 }) {
   const { n } = useParams()
-  // One fast shot now that the list dropped `statusCheckRollup` (#664) — no more fast/full swap.
-  const list = useGithub({ limit: LIST_LIMIT })
+  // One fast page now that the list is cursor-backed; later pages append without replacing this
+  // first-paint result or refetching rows already shown.
+  const list = useGithubInfinite(LIST_LIMIT)
   // #801: automations are opt-in, so the cross-link into them exists exactly while the server
   // says the feature does — otherwise this tab would advertise a page that only says "off".
   // `capabilities?.` because this tab renders against minimal health payloads too; absent is
   // fail-closed, which is the honest answer while the server has not spoken.
   const automationsAvailable = useHealth().data?.capabilities?.automations === true
-  const gh = list.data
+  const gh = useMemo<GithubData | undefined>(() => {
+    const pages = list.data?.pages
+    if (!pages || pages.length === 0) return undefined
+    const first = pages[0]
+    const last = pages[pages.length - 1]
+    if (!first || !last) return undefined
+    return {
+      ...first,
+      available: first.available ?? false,
+      issues: pages.flatMap((page) => page.issues ?? []),
+      prs: pages.flatMap((page) => page.prs ?? []),
+      labelColors: Object.assign({}, ...pages.map((page) => page.labelColors ?? {})),
+      issuesNextCursor: last.issuesNextCursor,
+      prsNextCursor: last.prsNextCursor,
+    }
+  }, [list.data])
+
+  // The remembered list order (#gh-sort). Read up here, above the checks window below, because
+  // that window is "the PRs the user can see" and flipping to oldest-first changes which ones
+  // those are. Anything but the stored `oldest` — absent key, old ui-state.json, a value from a
+  // newer cockpit — means the default, which is the order `gh` already returns.
+  const uiState = useUiState()
+  const sort: GithubSort = uiState.data?.githubSort === 'oldest' ? 'oldest' : 'newest'
+  const sortedPrs = useMemo(
+    () => (gh?.available ? sortGithubItems(gh.prs, sort) : []),
+    [gh, sort],
+  )
 
   // Lazy checks glyphs for the on-screen PR window (#664). Hooks must run before the early
-  // returns below, so derive the PR numbers straight from the list payload rather than the
+  // returns below, so derive the PR numbers from the sorted list payload rather than the
   // post-filter `items`. The URL-selected PR is pinned into the window so the detail badge
   // hydrates even when it sits past the row cap.
   const selectedNumber = n === undefined ? null : Number.parseInt(n, 10)
@@ -161,12 +228,12 @@ export function GithubRoute({
     if (view === 'prs' && selectedNumber !== null && Number.isInteger(selectedNumber)) {
       nums.add(selectedNumber)
     }
-    for (const pr of gh.prs) {
+    for (const pr of sortedPrs) {
       if (nums.size >= CHECKS_WINDOW) break
       nums.add(pr.number)
     }
     return [...nums]
-  }, [gh, view, selectedNumber])
+  }, [gh, sortedPrs, view, selectedNumber])
   const checksQuery = useGithubChecks(checkPrNumbers, view === 'prs')
   const checksMap = checksQuery.data?.available ? checksQuery.data.checks : undefined
 
@@ -189,6 +256,22 @@ export function GithubRoute({
       })
   }
 
+  // The list order (#gh-sort), remembered the same way the sub-tab is. A presentation pref, not a
+  // fetch parameter: flipping the order re-renders all loaded pages and never re-fetches them.
+  //
+  // Same read-then-write shape as `saveGithubView`, including the eager cache patch — without it
+  // the toggle would render the OLD order until the PUT resolved, which on a slow write reads as
+  // a click that did nothing.
+  const saveGithubSort = (next: GithubSort) => {
+    queryClient.setQueryData<UiState>(queryKeys.uiState, (prev) => ({ ...prev, githubSort: next }))
+    putUiState({ githubSort: next })
+      .then((merged) => queryClient.setQueryData(queryKeys.uiState, merged))
+      .catch((error: unknown) => {
+        toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.uiState })
+      })
+  }
+
   // The thread actually ON SCREEN, so a manual refresh can bust its SERVER cache.
   //
   // Deliberately a ref fed from the rendered `selected`, NOT derived from the `:n` route param.
@@ -200,10 +283,10 @@ export function GithubRoute({
 
   const refresh = useMutation({
     mutationFn: () => getGithub({ refresh: true, limit: LIST_LIMIT }),
-    onSuccess: (data) => {
-      // One list query now (#664) — patch it directly, then re-hydrate the visible checks window
-      // so glyphs track the fresh rows (they carry their own ≤60 s cache server-side).
-      queryClient.setQueryData(queryKeys.github({ limit: LIST_LIMIT }), data)
+    onSuccess: () => {
+      // Replace the paged cache from the first page; the next page cursor is intentionally
+      // discarded because a refresh may have inserted or removed rows before it.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubPages(LIST_LIMIT) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubChecks(checkPrNumbers) })
 
       // The open thread must be re-fetched with `refresh: true` (#525). Invalidating its key is
@@ -242,16 +325,17 @@ export function GithubRoute({
   // page reload too — previously this was plain route state, gone on refresh.
   const workflows = useWorkflows()
   const skills = useSkills()
-  const uiState = useUiState()
   const [workflow, setWorkflow] = useState<string | null>(() => readFollowupSelection().workflow)
   const [selectedSkills, setSelectedSkills] = useState<readonly string[]>(
     () => readFollowupSelection().skills,
   )
   // The backend choice (#401) is a way of working too, so it lives here beside the pickers —
   // and it must, because HandToAgent is keyed by item and would otherwise reset on every hop.
-  // The agent account rides along on the same footing: a per-hand-off choice, route state rather
-  // than a persisted one, exactly like the runner and the model beside it.
-  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null, account: null })
+  // It is remembered on the same footing as the workflow (#906): route state alone reset it to
+  // "never touched" on every mount, and "never touched" is what lets the coding agent's OWN
+  // settings file outvote a pick the user makes over and over. The agent ACCOUNT stays per
+  // hand-off — its `null` follows the project's selection rather than a native default.
+  const [engine, setEngine] = useRememberedEnginePick()
   useEffect(() => {
     writeFollowupSelection({ workflow, skills: [...selectedSkills] })
   }, [workflow, selectedSkills])
@@ -277,9 +361,29 @@ export function GithubRoute({
     [skillsData, skillUsage],
   )
   const [queued, setQueued] = useState<ReadonlyMap<string, string>>(new Map())
+  // The swipe launcher (touch): the item stays set while the sheet animates closed.
+  const [swipeItem, setSwipeItem] = useState<GithubItem | null>(null)
+  const [swipeOpen, setSwipeOpen] = useState(false)
+  const openSwipeLaunch = useCallback((item: GithubItem) => {
+    setSwipeItem(item)
+    setSwipeOpen(true)
+  }, [])
+  const markQueued = useCallback(
+    (url: string, runId: string) => setQueued((current) => new Map(current).set(url, runId)),
+    [],
+  )
   // List filtering (#gh-filter): free-text search (by #id or any text) + a label narrow.
   const [query, setQuery] = useState('')
   const [labelFilter, setLabelFilter] = useState<readonly string[]>([])
+  const filtering = query.trim() !== '' || labelFilter.length > 0
+  const listScrollRef = useRef<HTMLElement | null>(null)
+  // No paging under a filter: a narrowed list would keep the sentinel in view and crawl every page,
+  // and anything past the open list is the forge search's job (#730). A failed page stops the
+  // observer too — otherwise the still-visible sentinel would retry it in a tight loop.
+  const loadMoreRef = useLoadMoreSentinel(
+    list.hasNextPage && !list.isFetchingNextPage && !list.isFetchNextPageError && !filtering,
+    () => void list.fetchNextPage(),
+  )
 
   // Cross-state search fallback (#730). The list tier only ever holds OPEN items, so a closed or
   // merged issue/PR is not "past the fetched window" — it was never fetched, and no amount of
@@ -287,9 +391,12 @@ export function GithubRoute({
   // ask the forge instead. Like the checks window above, these hooks must sit ABOVE the early
   // returns, so the open set is derived from the payload rather than from the post-filter `items`.
   const debouncedQuery = useDebouncedValue(query, SEARCH_DEBOUNCE_MS)
+  // Sorted here rather than at render time so every consumer below — the filter, the row list,
+  // the checks window — agrees on one order, and so the up-to-`LIST_LIMIT` sort is paid once per
+  // (payload, view, order) instead of on every keystroke.
   const openItems = useMemo(
-    () => (gh?.available ? (view === 'issues' ? gh.issues : gh.prs) : []),
-    [gh, view],
+    () => (gh?.available ? (view === 'issues' ? sortGithubItems(gh.issues, sort) : sortedPrs) : []),
+    [gh, view, sort, sortedPrs],
   )
   // Evaluated against the DEBOUNCED query, not the live one: the fallback must be decided by the
   // same text the request will carry, or a fast typist fires a `gh` subprocess per keystroke.
@@ -355,7 +462,7 @@ export function GithubRoute({
           <p className="text-xs leading-relaxed text-soft-foreground">
             The tab needs the <span className="font-mono">gh</span> CLI, logged in (
             <span className="font-mono">gh auth login</span>), and a repo with a GitHub remote.
-            Everything else in cezar works without it.
+            Everything else in the cockpit works without it.
           </p>
         </CenteredState>
       </div>
@@ -364,7 +471,6 @@ export function GithubRoute({
 
   const allItems = openItems
   const items = filterGithubItems(allItems, { query, labels: labelFilter })
-  const filtering = query.trim() !== '' || labelFilter.length > 0
   // Gated on `searchWanted`, not just on the payload: the query key is (kind, text), so flipping
   // `enabled` off does not evict what a previous run cached under the same text. Reading `data`
   // alone therefore kept the hits on screen after the local narrow started matching again —
@@ -376,9 +482,14 @@ export function GithubRoute({
   // query text, so without this an open item could occupy both lists at once (#856). "Found on
   // GitHub" only ever means "past the open list", so an overlap is never information.
   const listedNumbers = new Set(items.map((item) => item.number))
+  // Sorted by the same control as the list above: the two lists sit one under the other, and an
+  // order the user chose that visibly stops applying halfway down the page reads as a bug.
   const searchHits = searchPayload
-    ? filterGithubItems(searchPayload.items, { labels: labelFilter }).filter(
-        (item) => !listedNumbers.has(item.number),
+    ? sortGithubItems(
+        filterGithubItems(searchPayload.items, { labels: labelFilter }).filter(
+          (item) => !listedNumbers.has(item.number),
+        ),
+        sort,
       )
     : []
   // "A search is coming or running" — the debounce window counts. Without it, the moment between
@@ -456,14 +567,14 @@ export function GithubRoute({
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="text-lg font-semibold">GitHub</h1>
             {gh.repo ? (
-              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-[11px] text-soft-foreground">
+              <span data-slot="gh-repo" className="min-w-0 truncate font-mono text-meta text-soft-foreground">
                 {gh.repo}
               </span>
             ) : null}
             {automationsAvailable ? (
               <Link
                 to="/automations/new"
-                className="ml-auto shrink-0 text-[10px] font-medium text-primary hover:underline"
+                className="ml-auto shrink-0 text-micro font-medium text-primary hover:underline"
               >
                 Set up automations
               </Link>
@@ -477,7 +588,7 @@ export function GithubRoute({
               // The automations link owns the `ml-auto` that pushes this cluster right; with the
               // link gated away this button inherits it, so the header does not re-flow.
               className={cn(
-                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
+                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-micro font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
                 !automationsAvailable && 'ml-auto',
               )}
             >
@@ -490,14 +601,18 @@ export function GithubRoute({
           </div>
           <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
             <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
-              Issues · {countLabel(gh.issues.length)}
+              Issues · {countLabel(gh.issuesTotal ?? gh.issues.length)}
             </TabLink>
             <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
-              Pull requests · {countLabel(gh.prs.length)}
+              Pull requests · {countLabel(gh.prsTotal ?? gh.prs.length)}
             </TabLink>
           </div>
-          <div className="mt-2.5 flex items-center gap-2 pb-3">
-            <div className="relative min-w-0 flex-1">
+          {/* Wraps rather than squeezes: on a phone the sort control below is ~145px, and with
+              a non-wrapping row the search field shrank to about a quarter of its placeholder.
+              The field's `min-w` is what forces the wrap — `flex-1` alone would keep shrinking
+              it to nothing instead. Nothing wraps once there is room, so desktop is unchanged. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 pb-3">
+            <div className="relative min-w-[11rem] flex-1">
               <SearchIcon
                 aria-hidden="true"
                 className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground"
@@ -509,7 +624,7 @@ export function GithubRoute({
                 placeholder="Search #id, title, author…"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-ui outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               />
             </div>
             <LabelFilter
@@ -517,6 +632,20 @@ export function GithubRoute({
               colors={labelColors}
               selected={labelFilter}
               onChange={setLabelFilter}
+            />
+            {/* One click to work the backlog from the long-waiting end instead of the newest.
+                No `allowRelease`: there is no third "unordered" state to fall back to — the
+                payload's incoming order is itself `newest`. */}
+            <Segmented<GithubSort>
+              slot="gh-sort"
+              label="Sort order"
+              value={sort}
+              options={[
+                { value: 'newest', label: 'Newest' },
+                { value: 'oldest', label: 'Oldest' },
+              ]}
+              onChange={saveGithubSort}
+              className="shrink-0"
             />
           </div>
         </header>
@@ -532,26 +661,83 @@ export function GithubRoute({
             </div>
           )
         ) : (
-          <ul data-slot="gh-rows" className="flex flex-col gap-0.5 px-2 py-2">
-            {items.map((item) => (
-              <GithubRow
-                key={item.url}
-                item={item}
-                view={view}
-                colors={labelColors}
-                active={selected?.url === item.url}
-                queued={queued.has(item.url)}
-                checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
-              />
-            ))}
-          </ul>
+          <div
+            // The list pane is the scroll owner, not the shell's `main`: pointed at `main` the
+            // virtualizer never saw a scroll and left only the first window of rows mounted. The
+            // sticky header needs no `startMargin` — it covers the rows virtua counts as on top.
+            ref={(node) => {
+              listScrollRef.current = node?.closest<HTMLElement>('[data-slot="gh-list"]') ?? null
+            }}
+            data-slot="gh-rows"
+            data-virtualized="true"
+            className="px-2 py-2"
+          >
+            {import.meta.env.MODE === 'test' ? (
+              items.map((item) => (
+                <div key={item.url} className="pb-0.5">
+                  <GithubRow
+                    item={item}
+                    view={view}
+                    colors={labelColors}
+                    active={selected?.url === item.url}
+                    queued={queued.has(item.url)}
+                    checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                    onSwipe={openSwipeLaunch}
+                  />
+                </div>
+              ))
+            ) : (
+              <Virtualizer scrollRef={listScrollRef}>
+                {items.map((item) => (
+                  <div key={item.url} className="pb-0.5">
+                    <GithubRow
+                      item={item}
+                      view={view}
+                      colors={labelColors}
+                      active={selected?.url === item.url}
+                      queued={queued.has(item.url)}
+                      checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                      onSwipe={openSwipeLaunch}
+                    />
+                  </div>
+                ))}
+              </Virtualizer>
+            )}
+          </div>
         )}
+
+        {list.hasNextPage && !filtering && items.length > 0 ? (
+          <div
+            ref={loadMoreRef}
+            data-slot="gh-load-more"
+            className="flex min-h-6 items-center justify-center gap-1.5 px-4 pb-3 text-xs text-soft-foreground"
+          >
+            {list.isFetchingNextPage ? (
+              <>
+                <LoaderCircleIcon aria-hidden="true" className="size-3.5 motion-safe:animate-spin" />
+                Loading more…
+              </>
+            ) : list.isFetchNextPageError ? (
+              <>
+                Could not load more.
+                <button
+                  type="button"
+                  data-slot="gh-load-more-retry"
+                  onClick={() => void list.fetchNextPage()}
+                  className="font-medium text-primary hover:underline"
+                >
+                  Retry
+                </button>
+              </>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* Cross-state hits (#730) — rendered under their own heading so it is never ambiguous
             whether a row came from the open list or from a search that reached past it. */}
         {searchHits.length > 0 ? (
           <div data-slot="gh-search-hits">
-            <p className="px-4 pt-2 pb-1 text-[11px] font-medium tracking-wide text-soft-foreground uppercase">
+            <p className="px-4 pt-2 pb-1 eyebrow text-soft-foreground">
               Found on GitHub{searchPayload?.truncated ? ' (first matches)' : ''}
             </p>
             <ul className="flex flex-col gap-0.5 px-2 pb-2">
@@ -564,11 +750,22 @@ export function GithubRoute({
                   active={selected?.url === item.url}
                   queued={queued.has(item.url)}
                   checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                  onSwipe={openSwipeLaunch}
                 />
               ))}
             </ul>
           </div>
         ) : null}
+
+        <SwipeLaunchSheet
+          item={swipeItem}
+          open={swipeOpen}
+          onOpenChange={setSwipeOpen}
+          workflows={workflows.data?.workflows ?? []}
+          skills={skillList}
+          engine={engine}
+          onQueued={markQueued}
+        />
     </>} detail={<>
         {selected ? (
           <GithubDetail
@@ -590,7 +787,7 @@ export function GithubRoute({
               engine={engine}
               onEngineChange={setEngine}
               queuedRunId={queued.get(selected.url) ?? null}
-              onQueued={(url, runId) => setQueued((current) => new Map(current).set(url, runId))}
+              onQueued={markQueued}
             />
           </GithubDetail>
         ) : (
@@ -613,20 +810,12 @@ export function GithubRoute({
   )
 }
 
-/** The exact open count from the single fast fetch — with a `+` only when it hit the list cap, so
- *  a repo with more than `LIST_LIMIT` open items reads honestly as "at least this many". */
+/** Counts are exact when supplied by the server; this fallback keeps older payloads readable. */
 function countLabel(count: number): string {
-  return `${count}${count >= LIST_LIMIT ? '+' : ''}`
+  return String(count)
 }
 
-function GithubRow({
-  item,
-  view,
-  colors,
-  active,
-  queued,
-  checks,
-}: {
+interface GithubRowProps {
   item: GithubItem
   view: GithubView
   colors: Record<string, string>
@@ -634,9 +823,27 @@ function GithubRow({
   queued: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
-}) {
+  /** Touch swipe-left opens the run launcher for this row. Must be referentially stable. */
+  onSwipe?: (item: GithubItem) => void
+}
+
+/**
+ * Memoized, but not virtualized: a row's height depends on whether it carries labels and how many
+ * lines they wrap to, so there is no fixed row height to window by. `colors` is rebuilt every
+ * render of the page, so only the entries for this row's own labels are compared.
+ */
+const GithubRow = memo(function GithubRow({
+  item,
+  view,
+  colors,
+  active,
+  queued,
+  checks,
+  onSwipe,
+}: GithubRowProps) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
+  const swipe = useRowSwipe(() => onSwipe?.(item))
 
   // Warm the thread on hover/focus (#664) so opening the row is usually instant — best-effort,
   // deduped by React Query, and it re-uses the mounted detail's exact query key/staleTime.
@@ -660,11 +867,15 @@ function GithubRow({
   }
 
   return (
-    <li>
+    // Clip only mid-swipe: an always-clipped <li> would cut off the link's default focus ring.
+    <li className={cn('relative rounded-md', swipe.offset !== 0 && 'overflow-hidden')}>
+      {onSwipe ? <SwipeReveal offset={swipe.offset} /> : null}
       <Link
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
         onDragStart={onDragStart}
+        {...(onSwipe ? swipe.handlers : {})}
+        style={swipe.offset ? { transform: `translateX(${swipe.offset}px)` } : undefined}
         onMouseEnter={prefetchThread}
         onFocus={prefetchThread}
         data-slot="gh-row"
@@ -672,7 +883,7 @@ function GithubRow({
         aria-current={active ? 'page' : undefined}
         title="Drag into the composer to prefill a task"
         className={cn(
-          'flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted',
+          'relative flex touch-pan-y flex-col gap-1 rounded-md bg-background px-2.5 py-2 transition-colors hover:bg-muted',
           active && 'bg-muted',
         )}
       >
@@ -681,11 +892,11 @@ function GithubRow({
             aria-hidden="true"
             className={cn('size-3.5 shrink-0', item.kind === 'issue' ? 'text-success' : 'text-violet')}
           />
-          <span className={cn('min-w-0 truncate text-[13px] font-medium', active && 'font-semibold')}>
+          <span className={cn('min-w-0 truncate text-ui font-medium', active && 'font-semibold')}>
             {item.title}
           </span>
         </span>
-        <span className="flex items-center gap-2 pl-[22px] font-mono text-[10.5px] text-muted-foreground">
+        <span className="flex items-center gap-2 pl-[22px] font-mono text-micro text-muted-foreground">
           <span>#{item.number}</span>
           <span className="min-w-0 truncate">{item.author}</span>
           <span>{shortAge(item.createdAt)}</span>
@@ -705,7 +916,20 @@ function GithubRow({
           </span>
         ) : null}
       </Link>
+      <IssueOwnership item={item} />
     </li>
+  )
+}, sameGithubRow)
+
+function sameGithubRow(previous: GithubRowProps, next: GithubRowProps): boolean {
+  return (
+    previous.item === next.item &&
+    previous.view === next.view &&
+    previous.active === next.active &&
+    previous.queued === next.queued &&
+    previous.checks === next.checks &&
+    previous.onSwipe === next.onSwipe &&
+    next.item.labels.every((label) => previous.colors[label] === next.colors[label])
   )
 }
 
@@ -733,7 +957,7 @@ function LabelFilter({
           data-slot="gh-label-filter"
           disabled={options.length === 0}
           className={cn(
-            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
+            'flex shrink-0 items-center gap-1 rounded-md border border-input bg-card px-2 py-1 text-label font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50',
             selected.length > 0 && 'border-primary/60 text-foreground',
           )}
         >
@@ -779,7 +1003,7 @@ function LabelChip({ label, color }: { label: string; color: string | undefined 
       data-slot="gh-label"
       data-label={label}
       style={labelChipStyle(color)}
-      className="rounded-full border px-1.5 py-px text-[10px] font-medium"
+      className="rounded-full border px-1.5 py-px text-micro font-medium"
     >
       {label}
     </span>
@@ -803,7 +1027,11 @@ function GithubDetail({
   checks?: GithubItem['checks']
 }) {
   const kindWord = item.kind === 'pr' ? 'pull request' : 'issue'
-  const hasDiffStat = item.kind === 'pr' && Boolean(item.additions || item.deletions)
+  const detailQuery = useGithubComments(item.kind, item.number)
+  const detailBody = detailQuery.data?.detail?.body ?? item.body
+  const detailAdditions = detailQuery.data?.detail?.additions ?? item.additions
+  const detailDeletions = detailQuery.data?.detail?.deletions ?? item.deletions
+  const hasDiffStat = item.kind === 'pr' && Boolean(detailAdditions || detailDeletions)
   return (
     <article data-slot="gh-detail-inner" className="min-w-0 px-4 py-4 md:px-7 md:py-5">
       <Link
@@ -815,7 +1043,7 @@ function GithubDetail({
         Back to the list
       </Link>
 
-      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
+      <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-micro text-soft-foreground">
         <span>#{item.number}</span>·<span>{kindWord}</span>·<span>opened by {item.author}</span>·
         <span>{shortAge(item.createdAt)} ago</span>
         {item.comments ? (
@@ -827,8 +1055,8 @@ function GithubDetail({
           <>
             ·
             <span data-slot="gh-diffstat">
-              <span className="text-success">+{item.additions ?? 0}</span>{' '}
-              <span className="text-danger">−{item.deletions ?? 0}</span>
+              <span className="text-success">+{detailAdditions ?? 0}</span>{' '}
+              <span className="text-danger">−{detailDeletions ?? 0}</span>
             </span>
           </>
         ) : null}
@@ -872,8 +1100,8 @@ function GithubDetail({
 
       {changes && item.kind === 'pr' ? <GithubPrChanges item={item} /> : <>
       <div data-slot="gh-body" className="mt-5 text-sm">
-        {item.body ? (
-          <Markdown>{item.body}</Markdown>
+        {detailBody ? (
+          <Markdown>{detailBody}</Markdown>
         ) : (
           <p className="text-soft-foreground">(no description)</p>
         )}
@@ -937,8 +1165,8 @@ function GithubMergeBox({ number }: { number: number }) {
       setConfirming(false)
       toast(`Pull request #${number} merged`)
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubMergeState(number) })
-      // The single list query (#664) — a merged PR drops out of the open set on the next fetch.
-      void queryClient.invalidateQueries({ queryKey: queryKeys.github({ limit: LIST_LIMIT }) })
+      // A merged PR drops out of the first page on the next paged fetch.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.githubPages(LIST_LIMIT) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubComments('pr', number) })
     },
     onError: (error) => {
@@ -1000,7 +1228,7 @@ function GithubMergeBox({ number }: { number: number }) {
               Refresh
             </Button>
           </div>
-          <p className="mt-1 font-mono text-[11px] text-soft-foreground">
+          <p className="mt-1 font-mono text-meta text-soft-foreground">
             {state.headRef} ({state.headSha.slice(0, 7)}) → {state.baseRef}
           </p>
           <ul className="mt-3 space-y-2 text-xs">
@@ -1012,7 +1240,7 @@ function GithubMergeBox({ number }: { number: number }) {
               <MergeRequirementIcon state={conflictState} />
               <span>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</span>
             </li>
-            {state.checks.length === 0 ? <li>No checks configured</li> : state.checks.map((check) => (
+            {state.checks.length === 0 && state.checksTier !== 'none' ? <li>No checks configured</li> : state.checks.map((check) => (
               <li key={check.name} className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2">
                   <MergeRequirementIcon state={check.state} />
@@ -1021,7 +1249,25 @@ function GithubMergeBox({ number }: { number: number }) {
                 {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
               </li>
             ))}
-            {state.blockers.map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
+            {/* What the token could NOT read (#969). A fine-grained PAT cannot expand
+                `statusCheckRollup` into CheckRun contexts — there is no permission to grant — so
+                the panel says which tier it is showing instead of passing a degraded read off as
+                the whole truth, or (tier `none`) an empty list off as "no CI". */}
+            {state.checksTier === 'aggregate' || state.checksTier === 'none' ? (
+              <li data-slot="gh-merge-checks-degraded" className="flex items-start gap-2">
+                <MergeRequirementIcon state="unknown" />
+                <span className="min-w-0">
+                  {state.checksTier === 'aggregate'
+                    ? 'Only the rolled-up check state is readable here — per-check detail is not.'
+                    : 'This token cannot read the checks on this pull request.'}
+                  {state.checksReason ? <span className="mt-0.5 block break-words text-soft-foreground">{state.checksReason}</span> : null}
+                </span>
+              </li>
+            ) : null}
+            {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
+            {state.blockers
+              .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
+              .map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
           </ul>
           {state.canOverride ? (
             <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
@@ -1043,7 +1289,7 @@ function GithubMergeBox({ number }: { number: number }) {
                 aria-label="Merge method"
                 value={selectedMethod ?? ''}
                 onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
                 {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
               </select>
@@ -1125,7 +1371,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
       <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0">
           <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
             {files.map((file) => <option key={file.path}>{file.path}</option>)}
           </select>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
@@ -1222,7 +1468,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
     <section data-slot="gh-thread" className="mt-6 border-t border-border pt-5">
       <h3
         data-slot="gh-thread-header"
-        className="mb-4 text-[11px] font-semibold tracking-wide text-soft-foreground uppercase"
+        className="mb-4 eyebrow text-soft-foreground"
       >
         {/* "Activity", not "Comments": heading a twenty-row list `Comments · 2` would be
             incoherent once events render. The comment count stays as a secondary. This is a
@@ -1328,7 +1574,7 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
             type="button"
             aria-expanded={true}
             onClick={() => setOpen(false)}
-            className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+            className="flex items-center gap-1.5 font-mono text-meta text-soft-foreground hover:text-foreground"
           >
             <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
             <span className="font-sans font-medium text-foreground">{actor}</span>
@@ -1348,7 +1594,7 @@ function CommitGroup({ commits, colors }: { commits: GithubTimelineEvent[]; colo
         type="button"
         aria-expanded={false}
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground hover:text-foreground"
+        className="flex items-center gap-1.5 font-mono text-meta text-soft-foreground hover:text-foreground"
       >
         <span aria-hidden="true">{EVENT_GLYPH.committed}</span>
         <span className="font-sans font-medium text-foreground">{actor}</span>
@@ -1387,7 +1633,7 @@ function EventRow({ event, colors }: { event: GithubTimelineEvent; colors: Recor
       data-slot="gh-event-row"
       data-kind={event.kind}
       className={cn(
-        'flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-soft-foreground',
+        'flex min-w-0 items-center gap-1.5 font-mono text-meta text-soft-foreground',
         event.kind === 'merged' && 'text-accent-foreground',
       )}
     >
@@ -1436,7 +1682,7 @@ function EventPhrase({ event, colors }: { event: GithubTimelineEvent; colors: Re
             <span
               data-slot="gh-event-label"
               style={labelChipStyle(event.label.color ?? colors[event.label.name])}
-              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-[10px]"
+              className="max-w-[12rem] truncate rounded-full border px-1.5 py-px font-sans text-micro"
             >
               {event.label.name}
             </span>
@@ -1506,7 +1752,7 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
   const chip = comment.reviewState ? REVIEW_CHIP[comment.reviewState] : null
   return (
     <li data-slot="gh-thread-entry" data-kind={comment.kind} className="min-w-0">
-      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[11px] text-soft-foreground">
+      <div className="mb-1.5 flex items-center gap-1.5 font-mono text-meta text-soft-foreground">
         <Avatar url={comment.avatarUrl} login={comment.author} />
         <span className="font-sans font-medium text-foreground">{comment.author}</span>
         <span>{shortAge(comment.createdAt)}</span>
@@ -1514,7 +1760,7 @@ function ThreadEntry({ comment }: { comment: GithubComment }) {
           <span
             data-slot="gh-review-chip"
             data-review-state={comment.reviewState}
-            className={cn('rounded-full border px-1.5 py-px font-sans text-[10px] font-medium', chip.tone)}
+            className={cn('rounded-full border px-1.5 py-px font-sans text-micro font-medium', chip.tone)}
           >
             {chip.label}
           </span>
@@ -1596,7 +1842,7 @@ function CommentCount({ count }: { count: number }) {
 /** The checks badge — the legacy tab's three phrases, tinted by outcome. Links out
  *  to the PR's checks tab on GitHub (issue #415) when a URL is available. */
 function ChecksBadge({ checks, url }: { checks: Checks; url?: string }) {
-  const className = cn('text-[11px] font-medium', CHECKS_TONE[checks], url && 'hover:underline')
+  const className = cn('text-meta font-medium', CHECKS_TONE[checks], url && 'hover:underline')
   const label = `${CHECKS_GLYPH[checks]} checks ${checks}`
 
   if (!url) {
@@ -1631,7 +1877,7 @@ function ChecksGlyph({ checks }: { checks: Checks }) {
       data-checks={checks}
       title={`checks ${checks}`}
       aria-label={`checks ${checks}`}
-      className={cn('shrink-0 font-sans text-[11px] font-semibold', CHECKS_TONE[checks])}
+      className={cn('shrink-0 font-sans text-meta font-semibold', CHECKS_TONE[checks])}
     >
       {CHECKS_GLYPH[checks]}
     </span>

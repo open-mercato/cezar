@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — Machine card (Settings → Resources)</title>
+<style>
+  :root {
+    --bg: #0d0f11; --panel: #14171a; --border: #262b30; --text: #e7e9ea;
+    --muted: #9aa1a9; --faint: #6b7278; --ok: #5b8def; --pending: #f2c14e; --track: #23282d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+  .layout { display: flex; min-height: 100vh; }
+  .sidebar { width: 232px; border-right: 1px solid var(--border); padding: 14px 12px; color: var(--muted); }
+  .brand { display: flex; align-items: center; gap: 8px; color: var(--text); font-weight: 600; margin-bottom: 18px; }
+  .brand .dot { width: 22px; height: 22px; border-radius: 6px; background: #d8f34e; }
+  .nav { display: grid; gap: 2px; font-size: 13.5px; }
+  .nav span { padding: 7px 10px; border-radius: 8px; }
+  .nav .active { background: #212529; color: var(--text); }
+  .sectionnav { width: 210px; border-right: 1px solid var(--border); padding: 22px 12px; font-size: 13.5px; color: var(--muted); }
+  .sectionnav div { padding: 7px 10px; border-radius: 8px; display: flex; gap: 8px; align-items: center; }
+  .sectionnav .active { background: #212529; color: var(--text); }
+  .main { flex: 1; padding: 22px 28px 40px; max-width: 780px; }
+  .crumb { display: flex; justify-content: space-between; align-items: baseline; }
+  h1 { font-size: 17px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .aside { color: var(--faint); font-size: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px 12px; margin-bottom: 26px; }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .card-head h2 { font-size: 15px; margin: 0; }
+  .livedot { width: 7px; height: 7px; border-radius: 50%; background: #59d18a; }
+  .fresh { color: var(--faint); font-size: 12px; margin-left: auto; }
+  .rows { margin-top: 10px; display: grid; gap: 13px; }
+  .row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: center; }
+  .label { color: var(--muted); font-size: 12.5px; }
+  .value { font-variant-numeric: tabular-nums; font-size: 13px; }
+  .cpu { display: grid; grid-template-columns: 74px 1fr; gap: 10px; align-items: center; }
+  .bar { height: 8px; border-radius: 999px; background: var(--track); overflow: hidden; display: flex; }
+  .bar i { display: block; height: 100%; }
+  .spark { margin-top: 6px; }
+  .num { color: var(--text); }
+  .caveat { color: var(--faint); font-size: 11.5px; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 9px; }
+  .existing { color: var(--muted); font-size: 13px; }
+  .existing h3 { color: var(--text); font-size: 14.5px; margin: 0 0 2px; }
+  .existing p { margin: 0 0 12px; }
+  .chip { display: inline-block; border: 1px solid var(--border); border-radius: 8px; padding: 2px 8px;
+    color: var(--muted); font-size: 12px; }
+  .mock { position: fixed; right: 18px; bottom: 14px; color: var(--faint); font-size: 11.5px;
+    border: 1px dashed var(--border); border-radius: 8px; padding: 4px 9px; }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="sidebar">
+    <div class="brand"><span class="dot"></span> cezar</div>
+    <div class="nav">
+      <span>New task</span><span>Tasks</span><span>Git</span><span>GitHub</span>
+      <span>Automations</span><span>Skills</span><span>Workflows</span><span class="active">Settings</span>
+    </div>
+  </div>
+  <div class="sectionnav">
+    <div>⚙ General</div><div>🎨 Appearance</div><div>🔔 Notifications</div>
+    <div class="active">⏱ Resources</div><div>🧩 Skills</div><div>🪪 Agent accounts</div><div>📁 Projects</div>
+  </div>
+  <div class="main">
+    <div class="crumb"><h1>Resources</h1><span class="aside">Global settings</span></div>
+    <p class="sub">Parallel tasks and per-task memory limit, across every project.</p>
+
+    <div class="card">
+      <div class="card-head">
+        <span class="livedot"></span>
+        <h2>Machine</h2>
+        <span class="fresh">updated 2 s ago</span>
+      </div>
+      <div class="rows">
+        <div class="row">
+          <span class="label">CPU</span>
+          <div>
+            <div class="cpu">
+              <span class="value num">38%</span>
+              <div class="bar"><i style="width:38%; background:var(--ok)"></i></div>
+            </div>
+            <svg class="spark" width="100%" height="34" viewBox="0 0 300 34" preserveAspectRatio="none" role="img" aria-label="CPU, last 60 seconds">
+              <polyline fill="none" stroke="#5b8def" stroke-width="1.6"
+                points="0,20 10,17 20,19 30,14 40,16 50,12 60,15 70,22 80,18 90,25 100,21 110,16 120,19 130,13 140,11 150,17 160,23 170,19 180,15 190,18 200,26 210,22 220,17 230,14 240,16 250,21 260,18 270,12 280,15 290,13 300,16" />
+            </svg>
+          </div>
+        </div>
+        <div class="row">
+          <span class="label">Memory</span>
+          <div>
+            <div class="cpu">
+              <span class="value num">12.4 GB / 32 GB</span>
+              <div class="bar"><i style="width:39%; background:var(--ok)"></i><i style="width:61%; background:var(--track)"></i></div>
+            </div>
+          </div>
+        </div>
+        <div class="row">
+          <span class="label">Swap</span>
+          <div><span class="value num">1.1 GB / 8 GB</span></div>
+        </div>
+        <div class="row">
+          <span class="label">Load average</span>
+          <div><span class="value num">1.42 · 0.98 · 0.76</span> <span class="chip">4 cores</span></div>
+        </div>
+      </div>
+      <p class="caveat">Host totals — container/cgroup limits are not subtracted.</p>
+    </div>
+
+    <div class="existing">
+      <h3>Max parallel tasks</h3>
+      <p>How many tasks run at once across every project. The rest wait in the queue.</p>
+      <h3>Extra monitoring sessions</h3>
+      <p>How many agent sessions may wait on CI, sub-agents, or monitored commands…</p>
+      <h3>Monitoring wake-up</h3>
+      <p>Park uses no model turns. Re-check sends the same agent a follow-up on this cadence…</p>
+    </div>
+  </div>
+</div>
+<div class="mock">illustrative mockup — not a running build</div>
+</body>
+</html>

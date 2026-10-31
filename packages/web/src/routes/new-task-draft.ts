@@ -4,6 +4,7 @@ import {
   type DispatchIntent,
   type Runner,
 } from '@open-mercato/cezar-api-client'
+import type { PendingAttachment } from '@/components/composer/composer-attachments'
 import { RUNNERS, type TaskSource } from './new-task-form'
 
 /**
@@ -28,12 +29,17 @@ export interface NewTaskDraft {
   agentProfile: string | null
   model: string | null
   variants: number
-  /** The `Start | Plan first` toggle (#383). Sticky like the pickers: plan-first is a way of
-   *  working, not a per-task whim — it survives navigation with the rest of the draft. */
-  planFirst: boolean
   /** Worktree opt-out (#worktree-toggle): false runs in the repo working tree. null → the
    *  remembered `lastWorktree` / default (isolated worktree). */
   worktree: boolean | null
+  /** The project's `taskWorkspace` when `worktree` was chosen (spec 2026-10-20-trunk-based-projects):
+   *  changing the project setting retires the remembered choice. Absent on older drafts. */
+  worktreeBasis?: string
+  /** With the worktree off: fork the checkout onto a new branch from base first (spec
+   *  2026-10-19-repo-git-sync). Sticky; ignored while the worktree is on. */
+  newBranch?: boolean
+  /** The branch `newBranch` creates; empty → the namer's answer, else `cez/<id8>`. */
+  branchName?: string
   /** Autonomous (#autonomous): true never pauses for the user. null → remembered
    *  `lastAutonomous` / default (off). */
   autonomous: boolean | null
@@ -43,12 +49,14 @@ export interface NewTaskDraft {
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
   dispatch: DispatchIntent | null
+  /** The Ask chip (spec 2026-10-20-trunk-based-projects): a read-only task. Absent = the
+   *  project decides (a trunk-based project asks when the message is a question). Per task, never sticky. */
+  readOnly?: boolean
 }
 
 export interface ComposerRunModeInput {
   hasGit: boolean
   variants: number
-  planFirst: boolean
   explicitAutonomous: boolean | null
   explicitWorktree: boolean | null
   interactive?: boolean
@@ -67,6 +75,31 @@ export interface ComposerRunModeInput {
  * run in place when the user or workspace policy opts out. `configuredAutonomous`/
  * `configuredWorktree` carry the workspace run defaults; `'source-dependent'` autonomy means
  * skills default on and everything else off. */
+/**
+ * The autonomy default in an auto-land project (spec 2026-10-20-trunk-based-projects): an
+ * autonomous task lands without review, so "skills default autonomous" does not apply there. An
+ * explicit workspace default and the composer's own toggle still do.
+ */
+export function autoLandsUnreviewed(
+  configured: boolean | 'source-dependent',
+  autoLand: boolean,
+): boolean | 'source-dependent' {
+  return autoLand && configured === 'source-dependent' ? false : configured
+}
+
+/**
+ * The draft's remembered Worktree choice, if it still applies: one made under a different project
+ * `taskWorkspace` (or, for an older draft, before the project set one) yields to the project.
+ */
+export function explicitWorktreeFor(
+  draft: Pick<NewTaskDraft, 'worktree' | 'worktreeBasis'>,
+  taskWorkspace: string | null | undefined,
+): boolean | null {
+  if (draft.worktree === null) return null
+  const basis = draft.worktreeBasis ?? 'default'
+  return basis === (taskWorkspace ?? 'default') ? draft.worktree : null
+}
+
 export function resolveComposerRunMode(input: ComposerRunModeInput): {
   autonomous: boolean
   worktree: boolean
@@ -79,9 +112,10 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
   // Dispatch sits between the explicit choice and the recommendation: only an explicit OFF
   // beats it, because an interactive skill's advice is about the parent pausing for the user,
   // and a dispatching parent is expected to keep going while its children work.
-  const autonomous = input.planFirst
-    ? false
-    : (input.explicitAutonomous ?? (dispatch ? true : undefined) ?? recommended ?? autonomousFallback)
+  const autonomous = input.explicitAutonomous
+    ?? (dispatch ? true : undefined)
+    ?? recommended
+    ?? autonomousFallback
   const worktree = !input.hasGit
     ? false
     : input.variants > 1 || dispatch
@@ -112,13 +146,30 @@ export function composerRunModeNote(input: {
    *  where the work happens than which tree the parent sits in. */
   dispatch?: boolean
   autonomous?: boolean
+  /** In-place on a fresh branch from base (spec 2026-10-19-repo-git-sync). */
+  newBranch?: boolean
+  /** A read-only Ask task (spec 2026-10-20-trunk-based-projects). */
+  readOnly?: boolean
+  /** The project lands finished in-place work on its base branch itself. */
+  autoLand?: boolean
 }): string {
+  if (input.readOnly === true && input.hasGit) {
+    return 'Asks a read-only question about the current checkout — no branch, nothing to clean up.'
+  }
   if (input.dispatch === true) {
     return input.autonomous === true
       ? 'Runs on its own and fans work out to subtasks — it will not pause for you.'
       : 'Fans work out to subtasks in isolated worktrees.'
   }
   if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
+  if (input.hasGit && input.newBranch) {
+    return 'Runs in the repo working tree on a new branch from base — your checkout switches to it.'
+  }
+  if (input.hasGit && input.autoLand) {
+    return input.autonomous === true
+      ? 'Runs in the repo working tree, one write task at a time — finished work is checked and lands on the base branch.'
+      : 'Runs in the repo working tree, one write task at a time — review the changes, then Commit lands them on the base branch.'
+  }
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
 }
@@ -130,7 +181,6 @@ const EMPTY: NewTaskDraft = {
   agentProfile: null,
   model: null,
   variants: 1,
-  planFirst: false,
   worktree: null,
   autonomous: null,
   generateFollowups: null,
@@ -165,12 +215,15 @@ function normalize(raw: unknown): NewTaskDraft {
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
-    planFirst: obj.planFirst === true,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,
+    ...(typeof obj.worktreeBasis === 'string' ? { worktreeBasis: obj.worktreeBasis } : {}),
+    ...(obj.newBranch === true ? { newBranch: true } : {}),
+    ...(typeof obj.branchName === 'string' && obj.branchName ? { branchName: obj.branchName } : {}),
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
+    ...(typeof obj.readOnly === 'boolean' ? { readOnly: obj.readOnly } : {}),
   }
 }
 
@@ -256,13 +309,89 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
  *  picked once ended up silently running every task after it. A fresh `/new` starts with no
  *  skill; picking one again is one click. */
 export function clearStartedDraft(projectId: string | null = null): void {
-  writeDraft({ ...readDraft(projectId), text: '', source: null }, projectId)
+  // A branch name is per-task — two tasks cannot both create it — while the toggle stays sticky.
+  const { branchName: _spent, readOnly: _asked, ...kept } = readDraft(projectId)
+  writeDraft({ ...kept, text: '', source: null }, projectId)
+}
+
+/**
+ * The composer's attachments, per project — IN MEMORY, deliberately.
+ *
+ * The draft above is localStorage-backed and says, in so many words, why the images are not:
+ * four 5 MB attachments encoded as base64 is ~27 MB against a ~5 MB quota, so persisting them
+ * would break the whole draft rather than enrich it. What they DO need is to survive the one
+ * navigation that was losing them: `/p/:projectId/new` remounts per project (`routes.tsx`
+ * `NewTaskProjectRoute` keys on the id), so swapping the project pill unmounted the composer and
+ * took its uncontrolled `images` state with it. A module-level map outlives that remount at no
+ * storage cost, and — like every other module store here — starts empty on a real page load,
+ * which is exactly the promise `/new` attachments have always made.
+ *
+ * Keyed by the same `storageKey` the draft uses, so the boot project's bare key and the suffixed
+ * key of every other project cannot drift apart.
+ */
+const attachments = new Map<string, PendingAttachment[]>()
+
+export function readAttachments(projectId: string | null = null): PendingAttachment[] {
+  return [...(attachments.get(storageKey(projectId)) ?? [])]
+}
+
+export function writeAttachments(
+  next: readonly PendingAttachment[],
+  projectId: string | null = null,
+): void {
+  const key = storageKey(projectId)
+  if (next.length === 0) attachments.delete(key)
+  else attachments.set(key, [...next])
+}
+
+/**
+ * Switching project while composing takes the composition with you (#1018).
+ *
+ * The per-project draft keys exist so a half-typed task for the shop frontend does not surface
+ * in the cezar composer — and they should. But that rule was being applied to the one case it
+ * was never about: the user did not NAVIGATE away, they changed their mind about where this
+ * task belongs, mid-sentence, with a screenshot already pasted. The prompt and its attachments
+ * are the thing being moved, so they move with it.
+ *
+ * A MOVE, never a copy: the composition ends up in exactly one project, which is what keeps the
+ * isolation invariant true. And never a clobber — when the arriving project already holds its
+ * own unsent text, that is somebody's work in progress and it wins; nothing moves, and the
+ * departing draft stays where it was (switching back restores it, attachments included, from
+ * the map above).
+ *
+ * The pickers deliberately stay behind. A skill ref is resolved against the project's own
+ * catalog, so carrying `om-fix` into a project that has no such skill would replace a lost
+ * prompt with a silently wrong one.
+ */
+export function handOffComposition(
+  from: string | null,
+  to: string | null,
+): { moved: boolean; reason?: 'same-project' | 'nothing-to-move' | 'destination-busy' } {
+  if (from === to) return { moved: false, reason: 'same-project' }
+  const departing = readDraft(from)
+  const carried = readAttachments(from)
+  if (departing.text === '' && carried.length === 0) {
+    return { moved: false, reason: 'nothing-to-move' }
+  }
+  const arriving = readDraft(to)
+  // Attachments are unsent work too. A destination with only a pasted image must win just like
+  // one with typed text; otherwise the write below replaces its attachment array and silently
+  // destroys the image when the project pill navigates away.
+  if (arriving.text !== '' || readAttachments(to).length > 0) {
+    return { moved: false, reason: 'destination-busy' }
+  }
+  writeDraft({ ...arriving, text: departing.text }, to)
+  writeDraft({ ...departing, text: '' }, from)
+  writeAttachments(carried, to)
+  writeAttachments([], from)
+  return { moved: true }
 }
 
 /** Test isolation — drop EVERY project's cache and stored draft, so the next read re-consults
  *  storage (a fresh page). */
 export function resetDraft(): void {
   cache.clear()
+  attachments.clear()
   try {
     for (const key of Object.keys(localStorage)) {
       if (key === STORAGE_KEY || key.startsWith(`${STORAGE_KEY}:`)) localStorage.removeItem(key)

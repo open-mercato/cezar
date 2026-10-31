@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 import record from './fixtures/subagents-run.record.json'
 
 /**
@@ -126,10 +126,9 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 180_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 const DOCK = '[data-slot="agents-dock"]'
@@ -139,6 +138,8 @@ describe('the Agents dock against a replayed fan-out', () => {
   it('docks both sub-agents with odometer, type badge, activity and tool count', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
     // The dock mounts only once the replay has produced the fan-out.
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="agents-count"]')?.textContent.includes('2/2')`,
@@ -167,6 +168,8 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('a row opens the drill-down sheet with that agent’s output and nobody else’s', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     // The second agent's row — a real dialog-opening button.
@@ -198,9 +201,21 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.click(`${ROW}:nth-of-type(1) button`)
     browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"]') !== null`)
+    // The panel folds all but the last few finished tool calls under "N earlier tool calls"
+    // (the tool-streak fold), so 36 tools no longer overflow it on their own. Open the fold —
+    // the long transcript a reader actually scrolls — before measuring.
+    browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"] [data-slot="tool-streak"] button') !== null`)
+    // A DOM click: the synthesized pointer click on this trigger lands outside the sheet in the
+    // harness and dismisses it, which is not what this test is about.
+    browser.evaluate(`document.querySelector('[data-slot="transcript-viewport"] [data-slot="tool-streak"] button').click()`)
+    browser.waitForFunction(
+      `(() => { const el = document.querySelector('[data-slot="transcript-viewport"]'); return el.scrollHeight > el.clientHeight })()`,
+    )
 
     const metrics = JSON.parse(
       browser.evaluate(`JSON.stringify((() => {
@@ -231,6 +246,8 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('collapses to a one-line odometer', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+    browser.click(`${DOCK} > button`)
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     browser.click(`${DOCK} > button`)

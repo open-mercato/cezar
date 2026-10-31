@@ -15,6 +15,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import type { DashboardTelemetrySample } from '@open-mercato/cezar-contract';
 
 /** One aggregated sample for a run's process tree. */
 export interface ProcessUsage {
@@ -32,6 +33,11 @@ export interface ProcStat {
   ppid: number;
   rssKb: number;
   cpuPct: number;
+}
+
+interface ProcessIndex {
+  byPid: Map<number, ProcStat>;
+  children: Map<number, number[]>;
 }
 
 /**
@@ -65,6 +71,10 @@ export function parsePsOutput(text: string): ProcStat[] {
  * sample) — callers treat that as "no data", not zero usage.
  */
 export function aggregateTreeUsage(procs: ProcStat[], rootPid: number): ProcessUsage | null {
+  return aggregateIndexedTreeUsage(indexProcesses(procs), rootPid);
+}
+
+function indexProcesses(procs: ProcStat[]): ProcessIndex {
   const byPid = new Map<number, ProcStat>();
   const children = new Map<number, number[]>();
   for (const p of procs) {
@@ -73,8 +83,12 @@ export function aggregateTreeUsage(procs: ProcStat[], rootPid: number): ProcessU
     if (siblings) siblings.push(p.pid);
     else children.set(p.ppid, [p.pid]);
   }
-  if (!byPid.has(rootPid)) return null;
+  return { byPid, children };
+}
 
+function aggregateIndexedTreeUsage(index: ProcessIndex, rootPid: number): ProcessUsage | null {
+  const { byPid, children } = index;
+  if (!byPid.has(rootPid)) return null;
   let cpuPct = 0;
   let rssKb = 0;
   let procCount = 0;
@@ -101,6 +115,7 @@ export const SAMPLE_INTERVAL_MS = 2_000;
 interface Entry {
   pid: number;
   last?: ProcessUsage;
+  sampledAt?: string;
   peakRssBytes: number;
   peakProcCount: number;
 }
@@ -144,6 +159,13 @@ export function currentUsage(runId: string): ProcessUsage | undefined {
   return entries.get(runId)?.last;
 }
 
+/** Timestamp belongs to successful sampling, never to a later HTTP/SSE read. */
+export function currentTimedUsage(runId: string): Omit<DashboardTelemetrySample, 'projectId' | 'runId'> | undefined {
+  const entry = entries.get(runId);
+  if (!entry?.last || !entry.sampledAt) return undefined;
+  return { ...entry.last, sampledAt: entry.sampledAt, cpuPct: process.platform === 'win32' ? null : entry.last.cpuPct };
+}
+
 /** Latest samples for every registered run that has data. */
 export function allUsage(): Record<string, ProcessUsage> {
   const out: Record<string, ProcessUsage> = {};
@@ -179,9 +201,12 @@ async function sample(): Promise<void> {
     const text = await runPs();
     if (text === null) return; // ps unavailable — degrade to no data
     const procs = parsePsOutput(text);
+    const index = indexProcesses(procs);
+    const sampledAt = new Date().toISOString();
     for (const entry of entries.values()) {
-      const usage = aggregateTreeUsage(procs, entry.pid);
+      const usage = aggregateIndexedTreeUsage(index, entry.pid);
       entry.last = usage ?? undefined;
+      entry.sampledAt = usage ? sampledAt : undefined;
       if (usage) {
         entry.peakRssBytes = Math.max(entry.peakRssBytes, usage.rssBytes);
         entry.peakProcCount = Math.max(entry.peakProcCount, usage.procCount);

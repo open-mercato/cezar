@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -15,8 +16,9 @@ import {
   DEFAULT_RUN_TIMEOUT_MS,
   KILL_GRACE_MS,
 } from './claude-cli-runner.ts';
-import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { ASK_MAX_QUESTIONS, parseAskRequest, type AskQuestion } from './ask.ts';
 import { readNdjson } from './ndjson.ts';
+import { skippedServersNote, toCodexConfigOverrides } from './private-mcp.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   CodexAppServerRpc,
@@ -29,18 +31,26 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnError,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
   type CodexUiMapperState,
 } from './codex-ui-mapper.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { explainCodexModelError } from './agent-errors.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** Waits between `thread/resume` retries while another process holds the thread. */
+  resumeLockRetryMs?: readonly number[];
 }
+
+/** ~16s: outlasts a previous session's own EOF→TERM→KILL teardown (12s) before forking. */
+const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 4_000, 4_000];
 
 /**
  * `AgentRunner` over `codex app-server` — the same JSONL transport the VS Code
@@ -62,11 +72,13 @@ export class CodexAppServerRunner implements AgentRunner {
 
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly resumeLockRetryMs: readonly number[];
   private lastSession: CodexSession | null = null;
 
   constructor(opts: CodexRunnerOptions = {}) {
     this.bin = resolveCodexExecutable(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
   }
 
   run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
@@ -82,7 +94,7 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new CodexSession(this.bin, this.timeoutMs, spec, onEvent, opts);
+    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
   }
@@ -100,6 +112,11 @@ class CodexSession implements AgentSession {
   private readonly child!: ChildProcessWithoutNullStreams;
   private readonly rpc!: CodexAppServerRpc;
   private stdinOpen = true;
+  /** Teardown rejects follow-up RPCs after the owning run may have gone away.
+   * Do not route that self-inflicted rejection through the discarded floating
+   * promise, while keeping the normal cancellation lifecycle (`done`) intact
+   * for existing session consumers (#1105). */
+  private followUpDeliveryOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
   private pendingUserInput: PendingUserInput | undefined;
@@ -114,10 +131,20 @@ class CodexSession implements AgentSession {
     this.emit({ type: 'text', text });
   });
   private tokensUsed = 0;
+  /**
+   * Did the CURRENT turn's last act turn out to be the app-server compacting its own
+   * context window (#955)? Set by a completed `contextCompaction` item on OUR thread and
+   * cleared by anything after it that could be a real handoff — an assistant message, a
+   * native `requestUserInput`, or the next turn starting. The turn boundary then carries it
+   * out as the additive `turn-end` reason, because `turn/completed` is byte-identical
+   * whether the model stopped to hand over or the session merely paused to tidy itself up.
+   */
+  private compactionEndedTurn = false;
   private ready!: Promise<void>;
   private autoEndTimer: NodeJS.Timeout | undefined;
   private eofTermTimer: NodeJS.Timeout | undefined;
   private eofKillTimer: NodeJS.Timeout | undefined;
+  private hardKillTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
   /** Set the moment WE signal the child (EOF watchdog, cancel, kill switch).
@@ -136,6 +163,7 @@ class CodexSession implements AgentSession {
   constructor(
     private readonly bin: string,
     timeoutMs: number,
+    private readonly resumeLockRetryMs: readonly number[],
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
@@ -155,25 +183,21 @@ class CodexSession implements AgentSession {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-        this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+      this.child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!this.hasExited()) {
+          this.terminatedByCezar = true;
+          this.child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     // Handshake → thread → first turn. Kicked off concurrently with the read
     // loop below (which resolves the request() promises this awaits).
@@ -185,11 +209,15 @@ class CodexSession implements AgentSession {
         const readLoop = async () => {
           for await (const line of readNdjson(this.child.stdout)) {
             if (this.timedOut) break;
+            deadline.touch();
             let msg: CodexAppServerMessage;
             try {
               msg = JSON.parse(line) as CodexAppServerMessage;
             } catch {
               continue; // not JSON-RPC — skip
+            }
+            if (msg.method === 'account/rateLimits/updated') {
+              emitUsageWindows(spec.onUsageWindows, normalizeCodexUsageWindows(msg.params));
             }
             // A sub-agent child thread's turn lifecycle must reach neither channel (#600):
             // v1 would emit a bogus `turn-end`, and the v2 mapper — which carries no thread
@@ -214,7 +242,7 @@ class CodexSession implements AgentSession {
           this.end();
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
@@ -222,7 +250,8 @@ class CodexSession implements AgentSession {
 
       const exitCode = await waitForCodexAppServerExit(this.child);
       if (this.eofTermTimer) clearTimeout(this.eofTermTimer);
-      if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
+        if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
+        if (this.hardKillTimer) clearTimeout(this.hardKillTimer);
       this.rpc.rejectPending();
 
       if (this.spawnFailed) throw this.spawnFailed;
@@ -239,8 +268,7 @@ class CodexSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `codex app-server timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('codex app-server', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }
@@ -295,16 +323,56 @@ class CodexSession implements AgentSession {
     void this.ready
       .then(() => this.startOrSteerTurn(text))
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.emit({ type: 'note', message: `codex: turn failed: ${message}` });
+        if (this.followUpDeliveryOpen) {
+          this.emit(this.asyncTurnFailure(err instanceof Error ? err.message : String(err)));
+        }
       });
     return true;
+  }
+
+  /**
+   * How a `turn/start` / `turn/steer` that was ACCEPTED into stdin but REJECTED by the
+   * app-server reaches the run (#955).
+   *
+   * `sendMessage` answers `true` as soon as the frame is written, so
+   * `RunManager.deliverMessage` has already cleared `waiting` and written `running` by the
+   * time the JSON-RPC response settles. When the rejection was a refused `turn/start` there
+   * is now NO turn at all, and as a mere `note` that state was invisible to the run
+   * lifecycle: the task sat at `running` forever with nothing running — the silent zombie.
+   * `error` is the SAME authority `turn/failed` already carries for the same class of event,
+   * and `RunManager` turns it into a visible failed run the user can act on.
+   *
+   * Two failures deliberately stay notes, because neither leaves a zombie behind:
+   *
+   *  - a failure cezar itself caused. Once stdin is closed or we have signalled the child,
+   *    every request still in flight is rejected by `rejectPending` as part of an ordinary
+   *    teardown, and escalating those would make every cancel a failed run — the
+   *    self-inflicted failure #703 removed.
+   *  - a refused `turn/steer` while a turn is STILL LIVE. The session is demonstrably
+   *    working and `RunManager`'s `running` is simply true; what was lost is the follow-up,
+   *    not the run. Escalating would interrupt the turn in flight and throw away real work
+   *    to report a problem the run does not have. The note says the message did not land so
+   *    the user can resend it once the turn ends.
+   */
+  private asyncTurnFailure(detail: string): AgentEvent {
+    // Read in the order of the two exceptions above, then the rule.
+    if (!this.stdinOpen || this.terminatedByCezar || this.timedOut) {
+      return { type: 'note', message: `codex: turn failed: ${detail}` };
+    }
+    if (this.activeTurnId) {
+      return {
+        type: 'note',
+        message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
+      };
+    }
+    return { type: 'error', message: `codex: turn failed: ${explainCodexModelError(detail, this.spec.model)}` };
   }
 
   end(): void {
     if (!this.stdinOpen) return;
     this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
+    this.followUpDeliveryOpen = false;
     try {
       endCodexAppServer(
         this.child,
@@ -323,6 +391,7 @@ class CodexSession implements AgentSession {
 
   interrupt(): void {
     this.stdinOpen = false;
+    this.followUpDeliveryOpen = false;
     this.rejectPendingUserInput('turn interrupted');
     // Best-effort graceful cancel of the in-flight turn, then hard stop.
     if (this.threadId && this.activeTurnId) {
@@ -334,6 +403,18 @@ class CodexSession implements AgentSession {
       this.terminatedByCezar = true;
       this.child.kill('SIGTERM');
     }
+  }
+
+  hardStop(): void {
+    this.interrupt();
+    if (this.hardKillTimer || this.hasExited()) return;
+    this.hardKillTimer = setTimeout(() => {
+      if (!this.hasExited()) {
+        this.terminatedByCezar = true;
+        this.child.kill('SIGKILL');
+      }
+    }, KILL_GRACE_MS);
+    this.hardKillTimer.unref?.();
   }
 
   // ---- protocol -----------------------------------------------------------
@@ -349,10 +430,12 @@ class CodexSession implements AgentSession {
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
       sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
       approvalPolicy: 'never',
+      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+      config: this.privateMcpConfig(),
     };
     if (this.spec.resume && this.spec.sessionId) {
-      await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
-      this.threadId = this.spec.sessionId;
+      this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {
       const res = await this.rpc.request('thread/start', clean(overrides));
       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
@@ -370,6 +453,35 @@ class CodexSession implements AgentSession {
     // of the opening message.
     const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
     await this.startOrSteerTurn(first);
+  }
+
+  /**
+   * `thread/resume`, tolerating another live app-server that still holds the thread's writer
+   * lock — the previous session draining its turn after a Continue or a cezar restart. Wait
+   * for it to let go; if it never does, fork the stored thread (forking takes no writer lock)
+   * so the run keeps its history instead of failing on a lock it cannot break.
+   */
+  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.rpc.request('thread/resume', { threadId, ...overrides });
+        return threadId;
+      } catch (err) {
+        if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
+        const delay = this.resumeLockRetryMs[attempt];
+        if (delay === undefined) break;
+        await new Promise((resolve) => setTimeout(resolve, delay).unref?.());
+        if (!this.stdinOpen) throw err;
+      }
+    }
+    const res = await this.rpc.request('thread/fork', { threadId, ...overrides });
+    const forkedId = threadIdOf(res);
+    if (!forkedId) throw new Error(`codex: thread ${threadId} is open in another Codex process and could not be forked`);
+    this.emit({
+      type: 'note',
+      message: `codex: thread ${threadId} is still open in another Codex process — continuing in a fork of it (${forkedId})`,
+    });
+    return forkedId;
   }
 
   private async startOrSteerTurn(text: string): Promise<void> {
@@ -411,6 +523,8 @@ class CodexSession implements AgentSession {
       return;
     }
     if (this.pendingUserInput) this.rejectPendingUserInput('superseded by a newer requestUserInput');
+    // A native ask IS the user owning the next action, whatever happened before it (#955).
+    this.compactionEndedTurn = false;
     this.pendingUserInput = { rpcId, questions };
     this.opts.onUiEvent?.({ type: 'ask.requested', requestId: `codex-${String(rpcId)}`, questions });
   }
@@ -446,6 +560,7 @@ class CodexSession implements AgentSession {
       case 'turn/started': {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
+        this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
         break;
       }
       case 'item/agentMessage/delta': {
@@ -468,6 +583,18 @@ class CodexSession implements AgentSession {
         const item = (params.item as Record<string, unknown>) ?? {};
         const type = stringField(item, 'type');
         const id = stringField(item, 'id') ?? '';
+        // The compaction boundary (#955). Item events are NOT thread-filtered — only turn
+        // lifecycle is (#600) — so the thread check has to happen here, or a sub-agent
+        // tidying ITS context would colour the parent's turn boundary. The item itself is
+        // mapped exactly as before, below: the "Compacted context" row is unchanged, and
+        // this only adds lifecycle meaning alongside it.
+        const ownThread = !this.isForeignThreadTurn(params);
+        if (ownThread && type === 'contextCompaction') {
+          this.compactionEndedTurn = true;
+        } else if (ownThread && type === 'agentMessage') {
+          // The model spoke AFTER compacting — that is a real handoff, not maintenance.
+          this.compactionEndedTurn = false;
+        }
         if (type === 'agentMessage') {
           // One v1 `text` per finished message — the snapshot's full text when
           // present (also covers turns that send no deltas), else the deltas.
@@ -498,12 +625,18 @@ class CodexSession implements AgentSession {
         // An interrupted/failed item never sees item/completed — surface its
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
+        // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
+        // boundary carries it: a failed turn already emits an authoritative error, and
+        // stacking a "keep going" reason on top of it would be two verdicts for one turn.
+        const turnError = codexTurnError(method, params);
+        const compacted = turnError === undefined && this.compactionEndedTurn;
+        this.compactionEndedTurn = false;
+        if (turnError !== undefined && !this.terminatedByCezar) {
+          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
         }
-        this.emit({ type: 'turn-end' });
+        // The bare event when there is nothing extra to say, so every existing consumer
+        // and every golden recording sees the exact frame it saw before (§7 additive).
+        this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
           this.autoEndTimer.unref?.();
@@ -513,6 +646,15 @@ class CodexSession implements AgentSession {
       default:
         break;
     }
+  }
+
+  private privateMcpConfig(): Record<string, unknown> | undefined {
+    if (!this.spec.mcpServers?.length) return undefined;
+    const { config, skipped } = toCodexConfigOverrides(this.spec.mcpServers);
+    if (skipped.length) {
+      this.emit({ type: 'note', message: skippedServersNote('codex', skipped, 'Codex supports stdio and streamable HTTP MCP servers, not SSE') });
+    }
+    return Object.keys(config).length ? config : undefined;
   }
 
   private emit(event: AgentEvent): void {
@@ -536,8 +678,17 @@ class CodexSession implements AgentSession {
 
 // ---- helpers --------------------------------------------------------------
 
+/**
+ * Map Codex's native `requestUserInput` questions onto the portable ask shape.
+ * `parseAskRequest` at the end is what decides validity; the length guard here
+ * only keeps the mapping work bounded, so a frame claiming a hundred thousand
+ * questions is refused before each one is walked and allocated. It reads the
+ * shared `ASK_MAX_QUESTIONS` rather than its own number — the line used to say
+ * `value.length > 4`, which is exactly the kind of copy that stays behind when
+ * the schema moves. The low end stays with the schema (`min(1)`).
+ */
 function codexAskQuestions(value: unknown): AskQuestion[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+  if (!Array.isArray(value) || value.length > ASK_MAX_QUESTIONS) return null;
   const questions: unknown[] = [];
   for (const raw of value) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -559,7 +710,10 @@ function codexAskQuestions(value: unknown): AskQuestion[] | null {
   return parseAskRequest({ questions })?.questions ?? null;
 }
 
-function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
+/** Read the ask card's `Header: answer` lines back into Codex's per-question answers. Only a
+ *  multi-select answer is a comma list — a single-select one may be the user's own text, and
+ *  "Use X, but only for Y" is one answer, not two. */
+export function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
   const lines = text.split(/\r?\n/);
   const hasStructuredAnswer = questions.some((question) => lines.some((line) => line.startsWith(`${question.header}:`)));
   const answers: Record<string, { answers: string[] }> = {};
@@ -568,7 +722,12 @@ function userInputAnswers(questions: AskQuestion[], text: string): Record<string
     const matching = lines.find((line) => line.startsWith(prefix));
     const raw = matching?.slice(prefix.length).trim() ?? (!hasStructuredAnswer && index === 0 ? text.trim() : '');
     answers[question.id ?? String(index)] = {
-      answers: raw === '' ? [] : raw.split(',').map((answer) => answer.trim()).filter(Boolean),
+      answers:
+        raw === ''
+          ? []
+          : question.multiSelect === true
+            ? raw.split(',').map((answer) => answer.trim()).filter(Boolean)
+            : [raw],
     };
   }
   return answers;
@@ -617,6 +776,11 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === 'string' ? v : undefined;
+}
+
+/** Codex's per-thread writer lock is held by another live process (codex-rs `writer_lock.rs`). */
+function isActiveWriterError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('already has an active writer');
 }
 
 function threadIdOf(res: Record<string, unknown>): string | undefined {

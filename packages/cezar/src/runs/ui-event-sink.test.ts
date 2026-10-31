@@ -18,6 +18,7 @@ import type { UiEvent, UiItem, UiToolItem } from '../core/ui-events.ts';
 import { createCodexUiState, mapCodexNotification } from '../core/codex-ui-mapper.ts';
 import { RunStore } from './store.ts';
 import { DELTA_FLUSH_MS, UiEventSink, isV2WireEventType } from './ui-event-sink.ts';
+import { collectSecretValues } from '../core/secret-redaction.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -389,6 +390,13 @@ describe('streaming credentials across real store flush boundaries', () => {
     vi.useFakeTimers();
     const dir = mkdtempSync(join(tmpdir(), 'cez-stream-secret-'));
     try {
+      // Only the run's own secret may be in play: a credential in the developer's environment
+      // is a known secret too, and the stream holds back any tail that could be its first
+      // characters — a host token starting with "d" turned "world" into "worl".
+      const hostSecrets = new Set(collectSecretValues());
+      for (const [name, value] of Object.entries(process.env)) {
+        if (value !== undefined && hostSecrets.has(value)) vi.stubEnv(name, '');
+      }
       const store = RunStore.open(dir);
       const run = store.createRun({ title: 'test', workflow: 'w', task: 'test', steps: [] });
       store.registerRunSecrets(run.id, [secret]);

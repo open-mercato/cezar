@@ -8,12 +8,14 @@ import {
   formatCost,
   formatMem,
   githubRepoBase,
+  ownedTaskPr,
   prNumber,
   scheduledResume,
   taskReference,
   taskPrUrl,
   taskIssueUrl,
   taskReferences,
+  prioritizeTaskReferences,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -189,6 +191,8 @@ describe('finishedRunCount', () => {
         run({ status: 'waiting' }),
         run({ status: 'running' }),
         run({ status: 'queued' }),
+        // A closed session's unanswered question is a gate too.
+        run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' }),
         // Already archived — nothing to archive again.
         run({ status: 'done', archived: true }),
       ]),
@@ -197,6 +201,20 @@ describe('finishedRunCount', () => {
 })
 
 describe('taskPrUrl', () => {
+  it('projects the primary PR from the ordered association list', () => {
+    const r = run({
+      prRefs: [
+        { number: 7, origin: 'marker', at: '2026-01-01T00:00:00.000Z' },
+        { number: 8, origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+      ],
+      prNumber: 7,
+    } as never)
+    expect(taskReferences(r, 'https://github.com/o/r')).toEqual([
+      { kind: 'PR', number: 7, url: 'https://github.com/o/r/pull/7' },
+      { kind: 'PR', number: 8, url: 'https://github.com/o/r/pull/8' },
+    ])
+  })
+
   it('prefers the PR the task created over the one it referenced', () => {
     const r = run({
       pullRequestUrl: 'https://github.com/o/r/pull/7',
@@ -245,6 +263,35 @@ describe('taskPrUrl', () => {
 
 describe('taskReferences', () => {
   const REPO = 'https://github.com/o/r'
+
+  it('moves only known closed PRs behind live and merged references', () => {
+    const refs = [
+      { kind: 'PR' as const, number: 10 },
+      { kind: 'PR' as const, number: 11 },
+      { kind: 'Issue' as const, number: 12 },
+    ]
+    expect(
+      prioritizeTaskReferences(refs, (reference) =>
+        reference.number === 10 ? 'closed' : reference.number === 11 ? 'merged' : 'completed',
+      ),
+    ).toEqual([refs[1], refs[2], refs[0]])
+  })
+
+  it('keeps same-number PRs from different repositories distinct', () => {
+    expect(
+      taskReferences(
+        run({
+          prRefs: [
+            { number: 7, url: `${REPO}/pull/7`, origin: 'created', at: '2026-01-01T00:00:00.000Z' },
+            { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+          ],
+        } as never),
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 7, url: `${REPO}/pull/7` },
+      { kind: 'PR', number: 7, url: 'https://github.com/other/r/pull/7' },
+    ])
+  })
 
   it('returns every reference a task has, strongest first', () => {
     // The real multi-reference case: a review task opened on an issue, ABOUT one PR, having
@@ -367,6 +414,103 @@ describe('taskReferences', () => {
     ).toEqual([{ kind: 'PR', number: 9, url: 'https://github.com/other/repo/pull/9' }])
   })
 
+  it('drops a number-only issue a candidate proves is another repo’s (#819)', () => {
+    // The list synthesizes from `issueNumber` directly, so #819's guard has to hold HERE too —
+    // otherwise the accessor declines the link and the list rebuilds it one line later, and the
+    // 404 chip survives on the page with the most rows.
+    expect(
+      taskReferences(
+        run({
+          issueNumber: 4143,
+          markerRefs: { pr: 1977 },
+          referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+          referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        }),
+        'https://github.com/open-mercato/cezar',
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 1977, url: 'https://github.com/open-mercato/open-mercato/pull/1977' },
+    ])
+  })
+
+  it('keeps a number-only issue whose foreign candidates carry other numbers (#819)', () => {
+    // Evidence about THIS number only — merely having mentioned another repo costs a task
+    // nothing.
+    expect(
+      taskReferences(
+        run({ issueNumber: 12, referencedIssueCandidates: ['https://github.com/other/repo/issues/9'] }),
+        REPO,
+      ),
+    ).toEqual([{ kind: 'Issue', number: 12, url: `${REPO}/issues/12` }])
+  })
+
+  it('keeps a foreign-numbered issue as inert text when no repo is known (#819)', () => {
+    // Nothing can be rebuilt without a `repoBase`, so there is no wrong link to prevent — and a
+    // number the task really does reference is worth more on screen than off it.
+    expect(
+      taskReferences(
+        run({
+          issueNumber: 4143,
+          referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        }),
+      ),
+    ).toEqual([{ kind: 'Issue', number: 4143 }])
+  })
+
+  it('drops a number-only PR a candidate proves is another repo’s (#854)', () => {
+    // The PR half of #819's rule. `prNumber` reaches a run the same two ways `issueNumber` does,
+    // and the auto-namer scrapes it off a transcript — so a task driving open-mercato's #1977
+    // seeds a number cezar does not own. Rebuilt here it is `…/cezar/pull/1977`, a 404.
+    expect(
+      taskReferences(
+        run({
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        }),
+        'https://github.com/open-mercato/cezar',
+      ),
+    ).toEqual([])
+  })
+
+  it('keeps a number-only PR whose foreign candidates carry other numbers (#854)', () => {
+    // Evidence about THIS number only, exactly as on the issue side.
+    expect(
+      taskReferences(
+        run({ prNumber: 42, referencedPrCandidates: ['https://github.com/other/repo/pull/9'] }),
+        REPO,
+      ),
+    ).toEqual([{ kind: 'PR', number: 42, url: `${REPO}/pull/42` }])
+  })
+
+  it('keeps a foreign-numbered PR as inert text when no repo is known (#854)', () => {
+    // Nothing is rebuilt without a `repoBase`, so there is no wrong link to prevent.
+    expect(
+      taskReferences(
+        run({
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        }),
+      ),
+    ).toEqual([{ kind: 'PR', number: 1977 }])
+  })
+
+  it('keeps a discovered URL for a number the candidates call foreign (#854)', () => {
+    // Suppression removes a SYNTHESIZED link, never a real one: the run created that PR in
+    // another repo, `pullRequestUrl` says where it lives, and the chip goes there correctly.
+    expect(
+      taskReferences(
+        run({
+          pullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+          prNumber: 1977,
+          referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/1977'],
+        }),
+        'https://github.com/open-mercato/cezar',
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 1977, url: 'https://github.com/open-mercato/open-mercato/pull/1977' },
+    ])
+  })
+
   it('is empty when the task references nothing', () => {
     expect(taskReferences(run())).toEqual([])
   })
@@ -407,6 +551,63 @@ describe('taskIssueUrl', () => {
     // …and with no project repo known (health in flight, no remote, non-GitHub forge), no link
     // at all: no chip beats a wrong chip.
     expect(taskIssueUrl(r)).toBeUndefined()
+  })
+
+  it('synthesizes nothing when a candidate names this number in another repo (#819)', () => {
+    // The reported record: `/om-auto-fix-pr …/open-mercato/pull/1977` run inside the cezar
+    // project. No CEZ:ISSUE marker, so the auto-namer seeded `issueNumber` from the transcript —
+    // open-mercato's 4143, not cezar's. Rebuilt against the project repo it produced
+    // `…/open-mercato/cezar/issues/4143`, a confident 404. The candidate carrying 4143 under
+    // another repo is the proof the number is not ours.
+    const r = run({
+      issueNumber: 4143,
+      markerRefs: { pr: 1977 },
+      referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+      referencedIssueCandidates: [
+        'https://github.com/open-mercato/open-mercato/issues/4143',
+        'https://github.com/open-mercato/open-mercato/issues/4824',
+        'https://github.com/open-mercato/open-mercato/issues/4826',
+      ],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/open-mercato/cezar')).toBeUndefined()
+  })
+
+  it('still synthesizes when the foreign candidates carry other numbers (#819)', () => {
+    // The guard is evidence about THIS number only: a task that merely mentioned other repos'
+    // issues keeps the link its own prompt-derived number earns.
+    const r = run({
+      issueNumber: 544,
+      referencedIssueCandidates: ['https://github.com/other/repo/issues/9'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/544')
+  })
+
+  it('treats a candidate in this repo as ours whatever its spelling (#819)', () => {
+    // GitHub repo names are case-insensitive; a transcript spelling the remote differently must
+    // not suppress a correct chip.
+    const r = run({
+      issueNumber: 544,
+      referencedIssueCandidates: ['https://github.com/O/R/issues/544'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBe('https://github.com/o/r/issues/544')
+  })
+
+  it('does not mistake a repo whose name merely starts the same for ours (#819)', () => {
+    const r = run({
+      issueNumber: 544,
+      referencedIssueCandidates: ['https://github.com/o/r-fork/issues/544'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/o/r')).toBeUndefined()
+  })
+
+  it('suppresses a foreign-numbered marker too, since a marker names no repo (#819)', () => {
+    // CEZ:ISSUE declares the task's subject, not the project on screen — a run driving another
+    // repo's issue declares that repo's number, and rebuilding it locally is the same 404.
+    const r = run({
+      markerRefs: { issue: 4143 },
+      referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+    })
+    expect(taskIssueUrl(r, 'https://github.com/open-mercato/cezar')).toBeUndefined()
   })
 
   it('prefers a real discovered issue URL over the synthesized one (#526)', () => {
@@ -555,5 +756,31 @@ describe('compareGroups', () => {
 
   it('ignores ungrouped runs entirely', () => {
     expect(compareGroups([run(), run()], 'active')).toEqual([])
+  })
+})
+
+describe('ownedTaskPr — the PR a task may ACT on', () => {
+  it('is the PR the task created', () => {
+    expect(ownedTaskPr({ pullRequestUrl: 'https://github.com/o/r/pull/9' })).toEqual({
+      url: 'https://github.com/o/r/pull/9',
+      number: 9,
+    })
+  })
+
+  it('is the PR it declared, even known only by number', () => {
+    expect(ownedTaskPr({ markerRefs: { pr: 12 } })).toEqual({ number: 12 })
+    expect(ownedTaskPr({ prRefs: [{ number: 12, origin: 'marker' }] })).toEqual({ number: 12 })
+  })
+
+  it('is never a PR merely scraped from the transcript', () => {
+    expect(ownedTaskPr({ referencedPullRequestUrl: 'https://github.com/o/r/pull/534' })).toBeUndefined()
+    expect(
+      ownedTaskPr({
+        prRefs: [
+          { number: 534, url: 'https://github.com/o/r/pull/534', origin: 'legacy' },
+          { number: 7, origin: 'derived' },
+        ],
+      }),
+    ).toBeUndefined()
   })
 })

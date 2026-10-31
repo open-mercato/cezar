@@ -5,6 +5,7 @@ import type {
 
 import { orderProjects } from './project-order'
 import { pathnameProjectId } from './project-router'
+import { isSettingsPathname } from './settings-path'
 
 export type LocationParts = Pick<Location, 'pathname' | 'search' | 'hash'>
 
@@ -52,7 +53,10 @@ function parsedLastLocation(value: unknown): WorkspaceLastLocation | null {
     typeof record.pathname !== 'string' ||
     record.pathname.length < 1 ||
     record.pathname.length > 2_048 ||
-    !record.pathname.startsWith('/p/')
+    !record.pathname.startsWith('/p/') ||
+    // Never a settings page (spec 2026-10-13-unified-settings): a launch restored into the
+    // full-screen settings frame left its Back nowhere to go but `/`, which restored it again.
+    isSettingsPathname(record.pathname)
   ) {
     return null
   }

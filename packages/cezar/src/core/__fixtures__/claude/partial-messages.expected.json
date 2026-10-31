@@ -1,0 +1,77 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "5b7e1c2a-9d34-4f6e-8a10-2c3d4e5f6a70",
+    "backend": "claude",
+    "model": "claude-haiku-4-5-20251001",
+    "cwd": "/repo",
+    "tools": [
+      "Task",
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "TodoWrite",
+      "Glob",
+      "Grep"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_1",
+    "field": "text",
+    "delta": "hello there"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_1",
+    "field": "text",
+    "delta": " friend"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "hello there friend"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 10,
+      "output": 87,
+      "total": 31516,
+      "cacheRead": 14757,
+      "cacheWrite": 16662
+    },
+    "costUsd": 0.0352447
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 10,
+      "output": 87,
+      "total": 31516,
+      "cacheRead": 14757,
+      "cacheWrite": 16662
+    },
+    "costUsd": 0.0352447
+  }
+]

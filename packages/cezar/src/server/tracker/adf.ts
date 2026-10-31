@@ -46,7 +46,7 @@ export function adfMarkdown(document: unknown): { body: string; unsupportedConte
         if (rows.length) rows.splice(1, 0, '| ' + (first?.content ?? []).map(() => '---').join(' | ') + ' |');
         return rows.join('\n') + '\n\n';
       }
-      case 'tableRow': return '| ' + children.map(child => render(child, depth + 1).trim().replace(/\|/g, '\\|').replace(/\n/g, '<br>')).join(' | ') + ' |\n';
+      case 'tableRow': return '| ' + children.map(child => escapeTableCell(render(child, depth + 1).trim()).replace(/\n/g, '<br>')).join(' | ') + ' |\n';
       case 'tableCell': case 'tableHeader': return content();
       default: {
         unsupportedContent = true;
@@ -56,6 +56,29 @@ export function adfMarkdown(document: unknown): { body: string; unsupportedConte
     }
   };
   return document == null ? { body: '', unsupportedContent: false } : { body: render(document), unsupportedContent };
+}
+
+/**
+ * Escape the pipes in one table cell — `|` becomes `\|`, and so does every backslash already in
+ * front of it. Escaping only the pipe turned a cell's own `a\|b` into `a\\|b`: an escaped
+ * backslash, then a live delimiter that split the cell (CodeQL js/incomplete-sanitization, #12).
+ * A backslash away from any pipe stays as written, so inline code keeps its literal text.
+ *
+ * A single forward pass rather than `/(\\*)\|/g`: that regex re-scans the whole backslash run from
+ * every position inside it, so a cell holding 64k backslashes and no pipe spent ~3.9 s on the
+ * server's event loop — the same polynomial-backtracking class as the alert #10 this change set
+ * closes, and a Jira document is no more trusted than agent output.
+ */
+function escapeTableCell(text: string): string {
+  let out = '';
+  let slashes = 0; // backslashes emitted since the last other character
+  for (const character of text) {
+    if (character === '\\') { slashes += 1; out += character; continue; }
+    if (character === '|') out += '\\'.repeat(slashes + 1);
+    out += character;
+    slashes = 0;
+  }
+  return out;
 }
 
 export function descriptionBody(body: string, maximum: number, unsupportedContent = false): { body: string; bodyTruncated: boolean; unsupportedContent: boolean } {

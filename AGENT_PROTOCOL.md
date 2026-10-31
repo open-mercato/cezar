@@ -35,9 +35,9 @@ id — that is the whole point of the seam.
 ### Identity
 
 ```ts
-const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;  // the source of truth
-type RunnerId     = (typeof RUNNER_IDS)[number];                   // user-selectable
-type AgentBackend = RunnerId | 'claude-cli';                       // + legacy id, still parses
+const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie'] as const;  // the source of truth
+type RunnerId     = (typeof RUNNER_IDS)[number];                             // user-selectable
+type AgentBackend = RunnerId | 'claude-cli';                                 // + legacy id, still parses
 ```
 
 `RUNNER_IDS` is the tuple every other enumeration derives from — the zod schemas
@@ -66,7 +66,8 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout.
+  `pi --mode rpc` over JSONL stdin/stdout; antigravity = `agy --input-format stream-json --output-format stream-json`
+  over NDJSON stdin/stdout.
 
 ### `AgentSession`
 
@@ -156,11 +157,22 @@ type AgentEvent =
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
   | { type: 'session'; sessionId: string }                    // backend's real session id, once known
-  | { type: 'turn-end' }
+  | { type: 'turn-end'; reason?: 'context-compaction' }       // optional, additive (#955)
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 ```
+
+`turn-end.reason` is optional and additive (#955), in the same shape as `note.tone`
+(#936): a runner emits the bare event unless it knows something the turn's text
+cannot say, an old recording with no `reason` replays unchanged, and an
+unrecognized value degrades to "no reason given". `context-compaction` means the
+turn's last act was the backend compacting its OWN context window with no
+assistant message or native ask after it — internal session maintenance, not the
+user being handed the next action — so the run manager keeps the run working and
+continues once on the same thread instead of parking it at `waiting`. Codex emits
+it off a completed `contextCompaction` item on its own thread; a runner that has
+no such signal simply never sets the field.
 
 Every v1 event stays **derivable** from the v2 stream, so a consumer can migrate
 one panel at a time. New work should read v2; v1 exists for the console renderer
@@ -207,11 +219,17 @@ type UiItem = UiMessageItem | UiReasoningItem | UiToolItem;
 `parent_tool_use_id`, opencode `subtask` parts, Codex collaboration receiver
 thread ids).
 
+`toolKind: 'task'` means a **subagent spawn** and nothing else — surfaces that count live
+fan-out (the cockpit's Agents dock, the history root-episode retention) key on it directly. A
+skill invocation is `toolKind: 'skill'`: instructions loaded into the current agent's turn, with
+no second agent behind it and no children to adopt. Conflating the two reports a fan-out that
+never happened (#1202).
+
 ### Enumerations
 
 ```ts
 type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined';
-type ToolKind   = 'read'|'edit'|'delete'|'move'|'search'|'execute'|'think'|'fetch'|'task'|'plan'|'other';
+type ToolKind   = 'read'|'edit'|'delete'|'move'|'search'|'execute'|'think'|'fetch'|'task'|'skill'|'plan'|'other';
 type StopReason = 'end_turn'|'max_tokens'|'refusal'|'cancelled'|'timeout'|'error';
 type PlanStatus = 'pending' | 'in_progress' | 'completed';
 ```
@@ -249,8 +267,10 @@ backend-neutral: the agent asks a structured
 multiple-choice question by ending a turn with a `CEZ:ASK <json>` control marker
 (a sibling of `CEZ:DONE` / `CEZ:MONITORING`); the RunManager detects it on the
 *assembled* turn text — uniform across claude, codex and opencode with no mapper
-work — validates the payload (`packages/cezar/src/core/ask.ts`, modeled on Claude Code's
-`AskUserQuestion`: 1–4 questions, 2–4 options each, `header` ≤12 chars), emits
+work — validates the payload (`packages/cezar/src/core/ask.ts`, shaped after Claude Code's
+`AskUserQuestion`: `header` ≤12 chars, 1–`ASK_MAX_QUESTIONS` questions,
+2–`ASK_MAX_OPTIONS` options each — 20 and 10, finite for payload size and a
+scrollable card rather than for parity with that tool's 4 and 4), emits
 `ask.requested` and parks the run `waiting`. The cockpit renders clickable option
 chips; the user's pick (or a free-form reply) rides the normal reply seam
 (`POST /api/runs/:id/messages`), and the card resolves client-side when that
@@ -296,18 +316,34 @@ Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) tur
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
-| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) |
-|---|---|---|---|
-| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response |
-| `turn.started` | each stdin user message | `turn/started` | each prompt POST |
-| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) |
-| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts |
-| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts |
-| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) |
-| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata |
-| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool |
-| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` |
-| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` |
+| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | cursor (stream-json print mode) | copilot (ACP over stdio) |
+|---|---|---|---|---|---|
+| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `system/init` (model, cwd) | `session/new` result (`sessionId`; the request's `cwd`) |
+| `turn.started` | each stdin user message | `turn/started` | each prompt POST | no stdin turn boundary in print mode — starts `turn_1` with the session | each outbound `session/prompt` |
+| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `result` (`is_error→error`, `subtype=error_max_turns→max_tokens`, else `end_turn`) | the `session/prompt` result's `stopReason` (`end_turn`, `max_tokens`, `max_turn_requests→max_tokens`, `refusal`, `cancelled`) |
+| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `assistant` `text` content blocks | `agent_message_chunk` |
+| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | *(none — docs: `thinking` events are suppressed in print mode)* | `agent_thought_chunk` |
+| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` started/completed (`readToolCall`/`writeToolCall`/`editToolCall`/`shellToolCall`, or the generic `tool_call.function` wrapper) | `tool_call`→running (Copilot announces a STARTED tool as ACP `pending` and never sends `in_progress`), `tool_call_update`→completed/failed, `content[].type: "diff"`→`diffs` |
+| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none)* | *(none — `tool.execution_progress` is dropped by Copilot's own ACP bridge)* |
+| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) |
+| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` |
+| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped |
+
+`antigravity` speaks agy's own stream-json (`core/antigravity-ui-mapper.ts`): `init` →
+`session.started`, each stdin message's `user_input` step → `turn.started`, `agent_response` steps →
+message items (`text_delta`), `tool` / `subagent` steps → tool / task items, `result` →
+`turn.completed`. Turn usage is the sum of the steps' own `usage` — `result.usage` is
+cumulative for the whole conversation. The wire carries no plan, no reasoning text, no edit
+content and no parent attribution; `__fixtures__/antigravity/README.md` records the live
+captures behind each of those parity exceptions. Private MCP is a launch-side exception: agy has
+no launch-time MCP channel, so `antigravity` is not in `PRIVATE_MCP_RUNNERS`.
+
+`copilot` shares one vendor-neutral transport and mapper with any future ACP backend
+(`core/acp-client.ts`, `core/acp-ui-mapper.ts`); what differs per agent is a small `AcpDialect`
+(`core/copilot-ui-mapper.ts`). The wire record behind the column above is
+`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`, and
+`__fixtures__/copilot/README.md` states exactly which of those frames are a live capture and
+which were read out of the CLI's own ACP bridge.
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are
@@ -336,8 +372,10 @@ heuristic subtitle. `mcp__server__tool` names collapse to `server.tool`.
 
 ## 6. Backend parity — the hard rule (`packages/cezar/src/core/ui-parity.test.ts`)
 
-> Every capability in the parity matrix MUST be emitted by **every**
-> backend, so the GUI degrades **per-capability, never per-backend**.
+> Every capability in the parity matrix MUST be emitted by **every first-class
+> backend**, so the GUI degrades **per-capability, never per-backend** — unless
+> the backend's own wire format provably cannot carry that capability, in which
+> case the exclusion is written down and cited (see below).
 
 This is made executable: `ui-parity.test.ts` asserts each capability over each
 backend's golden-fixture expected output. If a mapper change drops a capability —
@@ -354,10 +392,25 @@ or a new fixture set forgets one — a named row fails. The matrix:
   `.ai/specs/2026-07-20-grouped-subagent-display.md`, #474)
 - `usage.updated` with raw token counts
 - `turn.completed` with a `stopReason`
-- sub-agent **nesting** via `parentItemId` where the upstream wire attributes
-  child work to a parent
+- sub-agent **nesting** via `parentItemId` — only where the wire attributes work
+  to its parent (claude's `parent_tool_use_id`, opencode's child-session parts
+  under a `subtask`); codex, cursor and pi have no parent attribution in their
+  wire format, so their matrix cell is the task-kind tool items above instead.
+  junie (core ACP) has no parent attribution either, and its task-kind
+  substitute is unavailable for the same protocol reason (core ACP's
+  `tool_call.kind` has no `task` value), so that row carries a cited `except`
 
-A new backend is not "done" until it produces every row.
+A new backend is not "done" until it produces every row its wire format is
+capable of. **Documented exceptions are allowed** when a capability provably
+cannot be produced from the backend's own wire format — never for "not
+implemented yet". An exception must: (1) cite the upstream source proving the
+capability is absent (a vendor doc quote, or an honest "no live CLI available to
+verify" when that citation cannot be obtained), (2) exclude only that backend
+from that one row via `ui-parity.test.ts`'s `CAPABILITIES` table `except` list,
+and (3) still assert every row the backend's wire format can produce. Cursor is
+the first backend to use this: its documented print-mode `result` frame carries
+no `usage`, and `thinking` events are documented as suppressed in print mode —
+both cited inline next to the exclusion in the test.
 
 ## 7. The golden-fixture testing contract
 
@@ -424,13 +477,17 @@ To be first-class:
    immutable state.
 5. **v1 alongside v2** — wire `SessionOptions.onUiEvent`; keep the v1
    `AgentEvent` stream flowing unchanged.
-6. **Golden fixtures** — `packages/cezar/src/core/__fixtures__/<runner>/*.ndjson` +
-   `*.expected.json`, wire-faithful and citing their upstream source, covering
-   **every** parity matrix capability (§6), and a `<runner>-ui-mapper.test.ts`
-   replaying them.
-7. **Parity** — add the id to `BACKENDS` in `ui-parity.test.ts`; every capability
-   row must pass. (If the backend has no wire parent attribution, document the
-   nesting cell's substitute the way codex's review-mode items are handled.)
+6. **Golden fixtures** — `packages/cezar/src/core/__fixtures__/pi/*.ndjson` + `*.expected.json`,
+   wire-faithful and citing their upstream source, covering every parity matrix
+   capability the backend's wire format is able to produce (§6) — and a
+   `pi-ui-mapper.test.ts` replaying them. Where a capability genuinely cannot be
+   produced, cite why in the fixture/test the way cursor's `usage`/`thinking`
+   exclusions do; never fabricate a frame to fill a row.
+7. **Parity** — add `pi` to `BACKENDS` in `ui-parity.test.ts`; every capability
+   row must pass, or be excluded via that row's `except` list with a cited
+   reason (§6) — never silently skipped. (If the backend has no wire parent
+   attribution, document the nesting cell's substitute the way codex's
+   review-mode items are handled.)
 8. **Plumbing** — the run-store `runner` enum, workflow step schema, the
    `POST /api/runs` / `PUT /api/config` bodies, `resumeCommand()`, the web
    `Runner` type, composer pills/presets, and Settings → Agents. Keep additive
@@ -440,10 +497,19 @@ To be first-class:
    the existing inconsistencies (opencode drops a bare model silently) — do not
    reproduce a silent-drop. A backend with no default provider gets no entry in
    `BACKEND_MODEL_MAP`'s default column, so a bare id fails loud.
-10. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`):
+10. **Permissions** — a backend cezar starts in an "approve everything" mode MUST still answer an
+   approval request that arrives anyway. No cockpit surface can answer one yet, so a run parked on
+   a `session/request_permission` would be a state with no exit; `copilot-acp-runner.ts`
+   auto-approves with a `note` instead.
+11. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`):
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
    without widening other backends.
+12. **Private MCP** — honor `AgentRunSpec.mcpServers` through the backend's own launch-time
+   channel (a flag, a config override, an env var, or ACP's `session/new` `mcpServers`), never by
+   writing into `cwd`; translators live in `private-mcp.ts`. Add the id to `PRIVATE_MCP_RUNNERS`
+   only once that works — a backend outside the list gets a run note naming the servers it could
+   not attach (spec `.ai/specs/2026-10-07-private-project-mcp.md`).
 
 ## 10. The plan channel (PR #443)
 
@@ -484,3 +550,64 @@ breaking change requiring the documented deprecation path.
 - `BACKWARD_COMPATIBILITY.md` — §7 (this protocol) and §2/§3 (SSE names, NDJSON).
 - `.ai/analysis/cockpit-ui-redesign/agent-event-protocols.md` — the deep design record (§7, §7.1).
 - `.ai/specs/2026-07-14-cockpit-ui-redesign.md` — the spec (protocol v2, parity requirement).
+
+## Optional account usage metadata (#1340 component)
+
+`AgentRunSpec.onUsageWindows?: (observation: UsageWindowsObservation) => void`
+receives backend-neutral metadata during **both** `run` and `startSession`.
+Claude maps `rate_limit_event`, including `allowed` and `unifiedWindows`, and
+canonical `Claude AI usage limit reached|<epoch>` markers in errored terminal
+`result` frames, either in the string `result` or string entries of `errors[]`.
+Multiple canonical markers in one frame produce one observation with the latest
+trusted future reset. Terminal markers reuse the auto-resume parser and its seven-day
+bound, require a strictly future reset, and emit one account-wide blocked
+`terminal-limit` window (`kind: other`, unknown duration) through the same
+account-bound callback. No window cadence is inferred; expired markers are ignored.
+This metadata is retained independently of whether auto-resume is enabled;
+Codex maps `account/rateLimits/updated`. No model turn is created to refresh this
+channel. Missing events are normal. Callback failures cannot fail an agent run.
+The integration caller captures the **resolved account of that specific step**
+in its callback closure; a runner must not guess a workspace account.
+
+The Zod contract is `packages/contract/src/usage-windows.ts`. All times are epoch
+milliseconds. An observation carries provider, source, observation time and
+windows. Each window carries an id, kind, optional limit id, applicability,
+model list, nullable reset/duration/percentage, status and observation time.
+Percentages may exceed 100. Unknown applicability must make selection unavailable,
+not fall back to a different model's window. For `rate_limit_event`, Claude only marks the explicitly
+named rejected window blocked; a rejected overage does not override allowed main
+usage. Unknown Claude/model-specific limit names and non-general Codex buckets
+are deliberately `applicability: unknown`; names are not model selectors.
+Codex keyed buckets take precedence over the legacy alias. Missing windows are
+partial observations; explicit null windows clear previous knowledge. A primary
+window can be weekly and secondary can be null: labels must use duration.
+
+`saveUsageWindows(binding, observation)` and `loadUsageWindows(binding)` in
+`workspace/usage-windows.ts` bind snapshots to provider, account id, resolved
+profile location and optional hashed identity. Writes use the workspace sandbox
+guard, a bounded cross-process lease and atomic 0600 replacement under CEZ_HOME.
+Corrupt/unwritable state degrades to no data with one redacted warning per file.
+Newer observations replace older windows; other windows and accounts survive.
+A verified identity change discards the old login's windows. Unidentified observations cannot overwrite identified snapshots or remove established holds, including when the profile location changes. Bind the exact same
+identity when reading; absent identity is not a wildcard.
+
+`futureUsageWindows(snapshot, now)` retains each known reset until it expires,
+with **no snapshot TTL**. `isUsageWindowBlocking(window, now)` treats an observed
+block as active until that window resets; it does not assert live allowance.
+The parent selector must enforce applicability and the seven-day upper bound; these helpers never select or schedule a task.
+
+`probeCodexUsageWindows(resolvedProfile, { force?, identityOnly? })` takes
+a trusted server-resolved Codex profile, never an HTTP-supplied path, environment
+or executable. It returns `{ binding, observation } | null` and does not persist. Usage reads run during preview and when a scheduled start checks for a newer blocking reset at its due time. Account-binding revalidation uses `identityOnly`, which skips `account/rateLimits/read`. Ordinary Codex steps start no probe and record no usage windows. Only a scheduled run bound to a Codex identity attributes streamed observations, re-verifying through the short identity cache (at most one app-server per cache window); an unanswered check skips that observation and a changed identity disables collection for the stream. `probeCodexIdentity(profile, { force? })` tells an unanswered read (`{ unavailable: true }`) from a definitive answer (`{ identity }`, `null` for an API-key login). These checks never create model turns.
+It uses the existing executable resolver and curated runner environment with the
+resolved CODEX_HOME pinned, and the profile directory as cwd. It sends only
+`initialize`, `initialized`, `account/read` (`refreshToken: false`) and
+`account/rateLimits/read`: no thread, turn or model call. Runtime (including
+profile checks) is bounded to 5 seconds, combined stdout/stderr to 256 KiB,
+concurrency to four, cache to 64 entries/15 seconds and single-flight per
+account/location. `force` bypasses the cache for a fresh identity comparison.
+API-key/no-identity accounts cannot be bound by identity; scheduled starts bind them by profile location. Identity hashes stable account metadata;
+credentials and raw protocol/error messages are never returned or persisted.
+The short-lived process is killed when the read finishes or exceeds a bound.
+Fixtures and tests live alongside `core/usage-windows*`, `core/codex-usage-probe*`
+and `workspace/usage-windows.test.ts`.

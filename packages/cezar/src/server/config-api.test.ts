@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -78,6 +78,7 @@ describe('the config API', () => {
       baseBranch: null,
       defaultRunner: 'claude',
       systemPrompt: null,
+      branchNaming: null,
       defaultModels: {},
       modelsLocked: false,
       maxParallel: 2,
@@ -85,6 +86,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -178,6 +187,66 @@ describe('the config API', () => {
     expect(rawFile().defaultModels).toBeUndefined();
   });
 
+  it('an explicit auto default beats the coding agent\'s own configured model (#906)', async () => {
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    mkdirSync(join(homeRoot, '.codex'), { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), '{"model":"opus"}');
+    writeFileSync(join(homeRoot, '.codex', 'config.toml'), 'model = "gpt-5-codex"\n');
+
+    // The defect: clearing the preset is indistinguishable from never setting one, so the
+    // native file shows straight back through and the picker snaps back to its model.
+    await put({ defaultModels: { claude: null } });
+    expect((await getBody()).defaultModels).toMatchObject({ claude: 'opus' });
+
+    // The override says "ignore that default" — answered as '', which IS auto in every picker.
+    const res = await put({ defaultModelsAuto: { claude: true } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ defaultModels: { claude: '', codex: 'gpt-5-codex' } });
+    // Only the runner asked for: codex still shows its own native default.
+    expect((await getBody()).defaultModels).toEqual({ claude: '', codex: 'gpt-5-codex' });
+
+    // Naming a real preset later simply wins over the override.
+    await put({ defaultModels: { claude: 'sonnet' } });
+    expect((await getBody()).defaultModels).toMatchObject({ claude: 'sonnet' });
+  });
+
+  it('PUT defaultModelsAuto merges per runner and stores only a real opinion (#906)', async () => {
+    await put({ defaultModelsAuto: { claude: true } });
+    await put({ defaultModelsAuto: { codex: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ claude: true, codex: true });
+    // false and null both mean "no opinion", so they delete rather than persist.
+    await put({ defaultModelsAuto: { codex: false } });
+    expect(rawFile().defaultModelsAuto).toEqual({ claude: true });
+    await put({ defaultModelsAuto: { claude: null } });
+    expect(rawFile().defaultModelsAuto).toBeUndefined();
+    expect((await getBody()).defaultModels).toEqual({});
+  });
+
+  it('the fixed-model policy refuses an auto override too (#906)', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), '{"model":"opus"}');
+
+    expect((await put({ defaultModelsAuto: { claude: true } })).status).toBe(409);
+    // Refused before any write — the config file was never even created.
+    expect(existsSync(configPath())).toBe(false);
+    expect((await getBody()).defaultModels).toEqual({ claude: 'opus' });
+  });
+
+  it('a config written before #906 round-trips untouched — the new key stays absent', async () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ skillsRepos: [{ repo: 'me/skills' }], defaultModels: { claude: 'opus' } }),
+      'utf8',
+    );
+    await put({ baseBranch: 'develop' });
+    expect(rawFile()).toEqual({
+      skillsRepos: [{ repo: 'me/skills' }],
+      defaultModels: { claude: 'opus' },
+      baseBranch: 'develop',
+    });
+  });
+
   it('PUT merges into the raw file — user keys survive, defaults never materialize', async () => {
     writeFileSync(
       configPath(),
@@ -195,6 +264,7 @@ describe('the config API', () => {
       baseBranch: 'develop',
       defaultRunner: 'claude',
       systemPrompt: 'Be brief.',
+      branchNaming: null,
       defaultModels: { claude: 'opus' },
       modelsLocked: false,
       maxParallel: 5,
@@ -202,6 +272,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -278,6 +356,54 @@ describe('liveTitleUpdates round-trip (task auto-naming spec)', () => {
   });
 });
 
+describe('branchNaming round-trip (spec 2026-10-11-branch-naming-instructions)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let app: Hono;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-branch-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const put = (body: unknown) =>
+    apiRequest(app, '/api/v1/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const rawFile = () =>
+    JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
+
+  it('stores the instructions trimmed, answers them, and clears on null or ""', async () => {
+    const set = (await (await put({ branchNaming: '  start with feature/  ' })).json()) as Record<string, unknown>;
+    expect(set.branchNaming).toBe('start with feature/');
+    expect(rawFile().branchNaming).toBe('start with feature/');
+
+    const emptied = (await (await put({ branchNaming: '' })).json()) as Record<string, unknown>;
+    expect(emptied.branchNaming).toBeNull();
+    expect(rawFile().branchNaming).toBeUndefined();
+
+    await put({ branchNaming: 'x' });
+    const cleared = (await (await put({ branchNaming: null })).json()) as Record<string, unknown>;
+    expect(cleared.branchNaming).toBeNull();
+    expect(rawFile().branchNaming).toBeUndefined();
+  });
+
+  it('refuses instructions over the cap with the limit in the message', async () => {
+    const res = await put({ branchNaming: 'x'.repeat(4_001) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('4000');
+  });
+});
+
 describe('reviewGate round-trip (optional review gate, #489)', () => {
   let repoRoot: string;
   let store: RunStore;
@@ -303,6 +429,41 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     });
   const rawFile = () =>
     JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
+
+  it('PUT round-trips the trunk-based keys and clears them on null (spec 2026-10-20-trunk-based-projects)', async () => {
+    const on = (await (await put({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      landingBlocked: null,
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    });
+    expect(rawFile().skillsRepos).toEqual([]);
+
+    const off = (await (await put({
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      requiredChecks: null,
+      defaultSkill: '',
+      askSkill: null,
+      teamSkills: true,
+    })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ profile: null, taskWorkspace: null, landing: null, requiredChecks: [], defaultSkill: null, teamSkills: true });
+    expect(Object.keys(rawFile()).sort()).toEqual([]);
+  });
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {
     // Default (no config key) is null — the CEZ_REVIEW_GATE env (OFF) decides.

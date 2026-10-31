@@ -1,0 +1,29 @@
+---
+title: "Make room for tasks waiting on CI"
+description: "Set an extra session pool for agents waiting for CI results."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/resources-section.tsx
+    line: 185
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-24-long-running-waiting-sessions.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+An agent session waiting on CI can move into the monitoring pool, allowing other tasks to keep working.
+
+## Where to find it
+
+Settings → Resources → Extra monitoring sessions
+
+## How to use it
+
+1. Set the number of extra sessions.
+2. Run a workflow that reports monitoring activity.
+3. Check that other tasks continue running in parallel.
+
+> **Good to know**: When the monitoring pool fills up, sessions waiting for results may still hold up the queue.

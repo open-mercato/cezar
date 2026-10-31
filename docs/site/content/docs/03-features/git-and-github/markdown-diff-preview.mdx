@@ -1,0 +1,25 @@
+---
+title: "Preview formatted Markdown in changes"
+description: "Switch a changed Markdown file from its diff to a readable document preview."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-git/diff-controls.tsx
+    line: 42
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+Select a changed Markdown file in Changes and turn on Preview Markdown to see the formatted document. Turn it off to return to the diff.
+
+## Where to find it
+
+Task → Changes → Preview Markdown
+
+## How to use it
+
+1. Open Changes and select a Markdown file.
+2. Turn on Preview Markdown beside the diff controls.
+3. Turn it off to return to the comparison.
+
+> **Good to know**: The switch appears when the view has a Markdown file to display. Some diff controls are hidden on small screens.

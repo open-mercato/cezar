@@ -33,16 +33,40 @@ export interface ResolvedAgentProfile {
 }
 
 /**
+ * Which `agentHomePaths()` entry is each provider's own per-user home.
+ *
+ * A `Record<ProviderId, …>` rather than the ternary chain this used to be: the chain defaulted
+ * every id it did not name to Claude's home, so a newly added provider inherited `~/.claude` as
+ * its "discovered account" and the Settings → Agent accounts row printed another vendor's folder
+ * under its name — which is exactly what happened to `copilot` (#582). Adding a provider without
+ * a row here is now a type error.
+ *
+ * Pi's agent directory is discovered from `PI_CODING_AGENT_DIR` or its documented `~/.pi/agent`
+ * default. It cannot carry additional accounts because Pi has no documented profile variable.
+ */
+const PROVIDER_HOME: Record<ProviderId, (home: ReturnType<typeof agentHomePaths>) => string> = {
+  claude: (home) => home.claude,
+  codex: (home) => home.codex,
+  opencode: (home) => home.opencodeConfig,
+  cursor: (home) => home.cursor,
+  pi: (home) => home.pi,
+  junie: (home) => home.junie,
+  copilot: (home) => home.copilot,
+  antigravity: (home) => home.antigravity,
+};
+
+/**
  * The implicit account for a provider: whatever `agentHomePaths()` discovers, which already
- * honours the vendors' own `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `XDG_CONFIG_HOME`. Setting one of
- * those on the cezar process therefore moves the DEFAULT account rather than being ignored.
+ * honours the vendors' own `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `CURSOR_CONFIG_DIR` /
+ * `COPILOT_HOME` / `XDG_CONFIG_HOME`. Setting one of those on the cezar process therefore moves
+ * the DEFAULT account rather than being ignored.
  */
 export function defaultAgentProfile(
   provider: ProviderId,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedAgentProfile {
   const home = agentHomePaths(env);
-  const path = provider === 'codex' ? home.codex : provider === 'opencode' ? home.opencodeConfig : home.claude;
+  const path = PROVIDER_HOME[provider](home);
   return {
     id: DEFAULT_AGENT_ACCOUNT_ID,
     provider,
@@ -109,6 +133,17 @@ export function selectProfile(
   if (chosen === undefined || chosen === DEFAULT_AGENT_ACCOUNT_ID) return defaultAgentProfile(provider, env);
   const stored = store.accounts.find((a) => a.id === chosen && a.provider === provider);
   return stored ? resolveStoredProfile(stored) : defaultAgentProfile(provider, env);
+}
+
+/**
+ * The id of the account a run on `provider` ends up on — `selectProfile`'s answer, as the key the
+ * usage-limit hold uses (#1722). One resolver so the hold and the spawn cannot drift apart.
+ */
+export function resolveAccountId(
+  store: AgentAccountStore,
+  options: { provider: ProviderId; repoRoot?: string; profileId?: string },
+): string {
+  return selectProfile(store, options).id;
 }
 
 /**

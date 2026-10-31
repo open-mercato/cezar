@@ -230,6 +230,66 @@ describe('AddProjectDialog', () => {
     expect(document.querySelector('[data-slot="fs-error"]')?.className).toContain('break-words')
   })
 
+  it('a folder macOS privacy blocks offers System Settings, a retry, and a way back', async () => {
+    let blocked = true
+    serve({
+      browse: {
+        '': json(HOME),
+        '/home/me': json(HOME),
+        '/home/me/Projects': () =>
+          blocked
+            ? json({ error: 'macOS privacy settings do not allow cezar to read this folder.' }, 403)
+            : json(PROJECTS),
+      },
+    })
+    renderDialog()
+    await waitFor(() => expect(rows().getByText('Projects')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Open Projects' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="fs-privacy-settings"]')).toBeTruthy())
+    expect(document.querySelector('[data-slot="fs-privacy-settings"]')?.getAttribute('href')).toBe(
+      'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders',
+    )
+    // A failed listing has no "up" row, so the error itself leads back out.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await waitFor(() => expect(breadcrumb().textContent).toBe('/home/me'))
+
+    // Allowed in System Settings meanwhile — "Try again" lists it without leaving the folder.
+    fireEvent.click(screen.getByRole('button', { name: 'Open Projects' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
+    blocked = false
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(rows().getByText('cezar')).toBeTruthy())
+  })
+
+  it.each(['C:\\', '\\\\?\\C:\\'])('Back from a Windows listing error returns to %s', async (root) => {
+    const folder = `${root}Repos`
+    const listing: FsBrowseResponse = {
+      path: root, parent: null, truncated: false,
+      dirs: [{ name: 'Repos', path: folder, isRepo: false }],
+    }
+    serve({ browse: {
+      '': json(listing),
+      [root]: json(listing),
+      [folder]: json({ error: 'no such directory' }, 404),
+    } })
+    renderDialog()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Open Repos' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Open Repos' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Back' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await waitFor(() => expect(breadcrumb().textContent).toBe(root))
+    expect(fetchMock.mock.calls.some(([input]) =>
+      new URL(String(input), 'http://localhost').searchParams.get('path') === root,
+    )).toBe(true)
+  })
+
+  it('a plain browse failure offers no privacy settings', async () => {
+    serve({ browse: { '': json({ error: 'no such directory' }, 404) } })
+    renderDialog()
+    await waitFor(() => expect(document.querySelector('[data-slot="fs-error"]')).toBeTruthy())
+    expect(document.querySelector('[data-slot="fs-privacy-settings"]')).toBeNull()
+  })
+
   it('surfaces the truncated flag rather than showing a silently short list', async () => {
     serve({ browse: { '': json({ ...PROJECTS, truncated: true }) } })
     renderDialog()

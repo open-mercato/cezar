@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FoldersIcon, XIcon } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { Link as RouterLink } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import {
@@ -18,6 +19,7 @@ import {
   type WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
@@ -82,7 +84,7 @@ export function ProjectsSection() {
 
   if (config.isPending || projects.isPending) {
     return (
-      <p data-slot="projects-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="projects-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading projects…
       </p>
     )
@@ -131,7 +133,7 @@ function ProjectsPane({
         configKey="projectsDir"
         value={config.projectsDir}
         title="Default checkout folder"
-        hint="Where “Clone from GitHub” puts new projects: <folder>/<project name>."
+        hint="Where “Clone from GitHub” and “New project” put new projects: <folder>/<project name>."
         placeholder="~/cezar/projects"
         slot="checkout"
         savedLabel="Checkout folder"
@@ -233,11 +235,11 @@ function WorkspaceRootField({
       {serverError !== null ? (
         // The mockup's error line: the reason, then what did NOT happen — a failed probe
         // persists nothing, and saying so stops the reader wondering which value is live.
-        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-[11px] text-danger">
+        <p data-slot={`projects-${slot}-root-error`} role="alert" className="text-meta text-danger">
           {serverError} — setting unchanged
         </p>
       ) : (
-        <p className="text-[11px] text-soft-foreground">
+        <p className="text-meta text-soft-foreground">
           {footer}
         </p>
       )}
@@ -268,14 +270,14 @@ function RegistryTable({
   return (
     <SettingsField
       title="Registered projects"
-      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
+      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once (leave it empty to inherit the workspace limit); the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
       {/* Defensive: `GET /api/v1/projects` names at least the folder this server is serving
           whenever the registry is empty (the unregistered row), and the registry's own rows
           otherwise — so today this branch cannot render. Kept because an empty table with
           headers and no rows would be a worse answer than a sentence if that ever changes. */}
       {registry.projects.length === 0 ? (
-        <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
+        <p data-slot="projects-empty" className="text-ui text-soft-foreground">
           No projects registered yet.
         </p>
       ) : (
@@ -297,7 +299,7 @@ function RegistryTable({
               <col style={{ width: '92px' }} />
             </colgroup>
             <thead>
-              <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
+              <tr className="border-b border-border text-left text-label text-soft-foreground">
                 <th scope="col" className="px-3 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
                 <th scope="col" className="px-3 py-2 font-medium">Tags</th>
@@ -351,25 +353,25 @@ function ProjectRow({
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
       <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
         <span className="block truncate text-foreground">{project.name}</span>
-        <span className="block truncate font-mono text-[11px] text-soft-foreground" title={project.root}>
+        <span className="block truncate font-mono text-meta text-soft-foreground" title={project.root}>
           {project.root}
         </span>
       </th>
       <td className="px-3 py-2">
         <span
           data-slot="project-status"
-          className={project.status === 'missing' ? 'text-[12px] text-danger' : 'text-[12px] text-soft-foreground'}
+          className={project.status === 'missing' ? 'text-label text-danger' : 'text-label text-soft-foreground'}
         >
           {STATUS_LABEL[project.status]}
         </span>
         {project.unregistered ? (
           // Where `source` (how it got into the registry) would go — it is not in the registry,
           // and this is the row's whole story, so it says that instead.
-          <span data-slot="project-unregistered" className="ml-1 text-[11px] text-soft-foreground">
+          <span data-slot="project-unregistered" className="ml-1 text-meta text-soft-foreground">
             · not registered
           </span>
         ) : project.status !== 'missing' ? (
-          <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
+          <span className="ml-1 text-meta text-soft-foreground">· {project.source}</span>
         ) : null}
       </td>
       <td className="px-3 py-2">
@@ -377,24 +379,44 @@ function ProjectRow({
             the per-project cap are stored ON the entry, and Remove would 404. The Add button in
             the Actions cell is the only thing this row can honestly offer. */}
         {project.unregistered ? (
-          <span className="text-[12px] text-soft-foreground">—</span>
+          <span className="text-label text-soft-foreground">—</span>
         ) : (
           <ProjectTagsEditor project={project} vocabulary={vocabulary} />
         )}
       </td>
       <td className="px-3 py-2">
         {project.unregistered ? (
-          <span className="text-[12px] text-soft-foreground">—</span>
+          <span className="text-label text-soft-foreground">—</span>
         ) : (
-          <MaxParallelSelect project={project} workspaceMax={workspaceMax} />
+          <MaxParallelStepper project={project} workspaceMax={workspaceMax} />
         )}
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
         {project.unregistered ? '—' : shortDate(project.addedAt)}
       </td>
-      <td className="px-3 py-2 text-right">
+      <td className="px-3 py-2 text-right whitespace-nowrap">
+        {/* Into the project's own settings (unified settings, spec 2026-10-13). An EXPLICIT
+            `/p/<id>` path — this pane renders outside every project scope, so the scoped Link
+            would have nothing to prefix with. Neither a missing project (its panes all 409) nor
+            the unregistered launch folder (not a project) gets one. */}
+        {!project.unregistered && project.status !== 'missing' ? (
+          <Button asChild variant="ghost" size="sm">
+            <RouterLink
+              to={`/p/${encodeURIComponent(project.id)}/settings`}
+              data-action="project-settings"
+              aria-label={`Settings for ${project.name}`}
+            >
+              Settings
+            </RouterLink>
+          </Button>
+        ) : null}
         {project.unregistered ? (
-          <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} />
+          <AddBootProjectButton
+            root={project.root}
+            name={project.name}
+            disabled={disabled}
+            notAddable={project.notAddable === true}
+          />
         ) : (
           <Button
             type="button"
@@ -428,16 +450,19 @@ function ProjectRow({
  * pre-judging which folders qualify.
  *
  * Exported for the project's own General page, which faces the same row and must not invent a
- * second way to say this — the same reason `MaxParallelSelect` and `STATUS_LABEL` are shared.
+ * second way to say this — the same reason `MaxParallelStepper` and `STATUS_LABEL` are shared.
  */
 export function AddBootProjectButton({
   root,
   name,
   disabled = false,
+  notAddable = false,
 }: {
   root: string
   name: string
   disabled?: boolean
+  /** The server refuses this folder (`$HOME`, a task worktree): explain instead of 400-ing. */
+  notAddable?: boolean
 }) {
   const register = useRegisterProject()
   return (
@@ -447,8 +472,12 @@ export function AddBootProjectButton({
       size="sm"
       data-action="project-add-boot"
       aria-label={`Add ${name} to your projects`}
-      title="cezar is serving this folder — save it to your projects"
-      disabled={disabled || register.isPending}
+      title={
+        notAddable
+          ? 'Your home directory or a cezar task worktree cannot be a project — start cezar in a project folder, or use Open local folder'
+          : 'cezar is serving this folder — save it to your projects'
+      }
+      disabled={disabled || notAddable || register.isPending}
       onClick={() =>
         register.mutate(root, {
           onSuccess: () => toast(`${name} added to your projects`),
@@ -550,7 +579,7 @@ export function ProjectTagsEditor({
           data-slot="project-tag"
           // `whitespace-nowrap`: a hyphenated tag (`open-mercato`) was wrapping mid-word into a
           // two-line chip, which read as two tags.
-          className="inline-flex max-w-full items-center gap-1 rounded-full bg-violet/15 py-px pr-1 pl-2 text-[11px] font-medium whitespace-nowrap text-violet"
+          className="inline-flex max-w-full items-center gap-1 rounded-full bg-violet/15 py-px pr-1 pl-2 text-meta font-medium whitespace-nowrap text-violet"
         >
           {tag}
           <button
@@ -645,7 +674,7 @@ export function ProjectTagsEditor({
                 if (last !== undefined) remove(last)
               }
             }}
-            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-input bg-card px-1.5 text-[12px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-input bg-card px-1.5 text-label outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
           />
         </PopoverAnchor>
         <PopoverContent
@@ -673,7 +702,7 @@ export function ProjectTagsEditor({
           // and picking a suggestion for the happy path.
           onInteractOutside={(event) => event.preventDefault()}
         >
-          <p className="px-2 pt-1 pb-1.5 text-[10.5px] text-soft-foreground">
+          <p className="px-2 pt-1 pb-1.5 text-micro text-soft-foreground">
             Tags used in this workspace
           </p>
           {suggestions.map((tag, index) => (
@@ -693,7 +722,7 @@ export function ProjectTagsEditor({
               }}
               onMouseEnter={() => setHighlight(index)}
               className={cn(
-                'flex w-full items-center rounded-sm px-2 py-1 text-left text-[12px] font-medium text-violet',
+                'flex w-full items-center rounded-sm px-2 py-1 text-left text-label font-medium text-violet',
                 index === highlight && 'bg-muted',
               )}
             >
@@ -707,15 +736,16 @@ export function ProjectTagsEditor({
 }
 
 /**
- * Per-project "Max parallel tasks" selector (spec 2026-07-22). `Inherit
- * workspace (N)` is the unset default; `1..16` pins a per-project ceiling.
- * Bound directly to the server value (`project.maxParallel`) and saved on
- * change, mirroring the workspace `Max parallel` control (resources-section.tsx)
- * — a failed save reverts because the value never leaves the server's, and the
- * hook invalidates the projects query so a success re-renders the row. The
- * workspace cap still clamps at runtime, which the section hint explains.
+ * Per-project "Max parallel tasks" stepper (spec 2026-07-22). An empty field is
+ * the unset default — it inherits the workspace limit, which the placeholder
+ * names; `1..16` pins a per-project ceiling. Bound to the server value
+ * (`project.maxParallel`) and saved on commit, mirroring the workspace
+ * `Max parallel` control (resources-section.tsx) — a failed save reverts to the
+ * server's value, and the hook invalidates the projects query so a success
+ * re-renders the row. The workspace cap still clamps at runtime, which the
+ * section hint explains.
  */
-export function MaxParallelSelect({
+export function MaxParallelStepper({
   project,
   workspaceMax,
 }: {
@@ -723,18 +753,19 @@ export function MaxParallelSelect({
   workspaceMax: number
 }) {
   const update = useUpdateProject()
-  // `''` is the inherit sentinel; a number is an explicit per-project ceiling.
-  const value = project.maxParallel === undefined ? '' : String(project.maxParallel)
   return (
-    <select
+    <IntegerStepper
       aria-label={`Max parallel tasks for ${project.name}`}
       data-slot="project-max-parallel"
-      value={value}
-      disabled={update.isPending}
-      onChange={(event) => {
-        const raw = event.target.value
-        const next = raw === '' ? null : Number(raw)
-        update.mutate(
+      value={project.maxParallel ?? null}
+      min={MAX_PARALLEL_MIN}
+      max={MAX_PARALLEL_MAX}
+      allowEmpty
+      emptyStepFrom={Math.min(MAX_PARALLEL_MAX, Math.max(MAX_PARALLEL_MIN, workspaceMax))}
+      placeholder={`Inherit (${workspaceMax})`}
+      className="w-40"
+      onCommit={(next) =>
+        update.mutateAsync(
           { id: project.id, maxParallel: next },
           {
             onSuccess: () =>
@@ -746,18 +777,7 @@ export function MaxParallelSelect({
             onError: (error: Error) => toast(error.message, { tone: 'danger' }),
           },
         )
-      }}
-      className="block w-44 rounded-md border border-input bg-card px-2 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-    >
-      <option value="">Inherit workspace ({workspaceMax})</option>
-      {Array.from(
-        { length: MAX_PARALLEL_MAX - MAX_PARALLEL_MIN + 1 },
-        (_, i) => i + MAX_PARALLEL_MIN,
-      ).map((n) => (
-        <option key={n} value={n}>
-          {n}
-        </option>
-      ))}
-    </select>
+      }
+    />
   )
 }

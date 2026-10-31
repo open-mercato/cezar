@@ -1,0 +1,36 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "c6b62c6f-7ead-4fd6-9922-e952131177ff",
+    "backend": "cursor",
+    "model": "Composer 2",
+    "cwd": "/repo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "I'll fix the bug."
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "I'll fix the bug."
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn"
+  }
+]

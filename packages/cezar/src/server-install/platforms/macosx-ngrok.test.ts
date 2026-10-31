@@ -2,14 +2,31 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { cezarLaunchdPlist, launchdPlist, macosxNgrok } from './macosx-ngrok.ts';
+import { cezarLaunchdPlist, launchdPlist, macosxNgrok, macosxNgrokIdentityStep } from './macosx-ngrok.ts';
 import { availablePlatformIds, getStrategy } from '../strategies.ts';
 import { runInstall, runUninstall } from '../engine.ts';
 import { loadServerState } from '../state.ts';
 import { createAutoUi } from '../ui.ts';
-import type { Runner } from '../types.ts';
+import { StepAborted } from '../steps.ts';
+import type { InstallContext, Runner, Ui } from '../types.ts';
 
 const okRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
+
+function redeployCtx(over: { runner?: Runner; ui?: Ui; dryRun?: boolean } = {}): InstallContext {
+  return {
+    state: { schema: 1, installed: true, primaryPort: 4321, steps: {} },
+    ui: over.ui ?? createAutoUi(),
+    instance: 'default',
+    runner: over.runner ?? okRunner,
+    save: async () => {},
+    dryRun: over.dryRun ?? false,
+    assumeYes: true,
+    reconfigure: new Set(),
+    repoRoot: '/repo',
+    now: '2026-09-16T00:00:00.000Z',
+    prefs: {},
+  };
+}
 
 describe('macosx-ngrok', () => {
   let home: string;
@@ -38,6 +55,13 @@ describe('macosx-ngrok', () => {
     expect(p).toContain('<key>KeepAlive</key>');
   });
 
+  it('cezar launchd plist has one PATH key and carries instance identity', () => {
+    const plist = cezarLaunchdPlist('/repo', 4321, ['/usr/bin/node', '/repo/dist/index.js'], 'install-a');
+    expect(plist.match(/<key>PATH<\/key>/g)).toHaveLength(1);
+    expect(plist).toContain('<key>CEZ_INSTANCE_ID</key>');
+    expect(plist).toContain('<string>install-a</string>');
+  });
+
   it('cezarLaunchdPlist embeds the argv, port, workdir and env', () => {
     const p = cezarLaunchdPlist('/repo', 4321, ['/usr/local/bin/node', '/app/dist/index.js']);
     expect(p).toContain('<string>/usr/local/bin/node</string>');
@@ -48,6 +72,35 @@ describe('macosx-ngrok', () => {
     expect(p).toContain('<string>/repo</string>');
     expect(p).toContain('<key>CEZ_REMOTE</key>');
     expect(p).toContain('<string>ai.cezar.cockpit</string>');
+  });
+
+  it('identity verification accepts a matching health identity and reports legacy payloads as inconclusive', async () => {
+    const messages: string[] = [];
+    const ctx = {
+      state: { schema: 1, installed: false, primaryPort: 4321, steps: {}, instanceId: 'install-a' },
+      instance: 'default', ui: { ...createAutoUi(), success: (m: string) => messages.push(m), warn: (m: string) => messages.push(m) },
+      runner: { capture: async (_program: string, args: string[]) => ({
+        code: 0,
+        stdout: args.some((a) => a.includes('/api/tunnels')) ? '{"public_url":"https://x"}' : '{"instanceId":"install-a"}\n200',
+        stderr: '',
+      }), interactive: async () => 0 },
+      save: async () => {}, dryRun: false, assumeYes: true, reconfigure: new Set<string>(), repoRoot: '/repo', now: '', prefs: {},
+    } as never;
+    await macosxNgrokIdentityStep.run(ctx);
+    expect(messages.some((m) => m.includes('identity matches'))).toBe(true);
+  });
+
+  it('identity verification rejects a different local cockpit', async () => {
+    const ctx = {
+      state: { schema: 1, installed: false, primaryPort: 4321, steps: {}, instanceId: 'install-a' },
+      instance: 'default', ui: createAutoUi(), runner: { capture: async (_program: string, args: string[]) => ({
+        code: 0,
+        stdout: args.some((a) => a.includes('/api/tunnels')) ? '{"public_url":"https://x"}' : '{"instanceId":"other"}\n200',
+        stderr: '',
+      }), interactive: async () => 0 },
+      save: async () => {}, dryRun: false, assumeYes: true, reconfigure: new Set<string>(), repoRoot: '/repo', now: '', prefs: {},
+    } as never;
+    await expect(macosxNgrokIdentityStep.run(ctx)).rejects.toThrow(/serving another install/);
   });
 
   it('dry-run install walks every step and server-uninstall reverses it', async () => {
@@ -238,5 +291,35 @@ describe('macosx-ngrok review fixes (PR #423)', () => {
     expect(domainValidate?.('https://cezar.ngrok.app')).toBeDefined();
     expect(domainValidate?.('cezar.ngrok.app')).toBeUndefined();
     expect(domainValidate?.('')).toBeUndefined(); // blank = ephemeral, allowed
+  });
+});
+
+describe('macosx-ngrok redeploy restart verification (#1011)', () => {
+  it('fails when the cockpit kickstart exits non-zero', async () => {
+    const interactive = async (_program: string, args: string[]) => (args.includes('kickstart') ? 1 : 0);
+    const capture = async () => ({ code: 0, stdout: '{"tunnels":[{"public_url":"https://x.ngrok.app"}]}', stderr: '' });
+
+    await expect(macosxNgrok.redeploy!(redeployCtx({ runner: { capture, interactive } }))).rejects.toBeInstanceOf(StepAborted);
+  });
+
+  it('fails when the ngrok kickstart exits non-zero', async () => {
+    let kickstarts = 0;
+    const interactive = async () => {
+      kickstarts += 1;
+      return kickstarts === 2 ? 1 : 0;
+    };
+    const capture = async () => ({ code: 0, stdout: '', stderr: '' });
+
+    await expect(macosxNgrok.redeploy!(redeployCtx({ runner: { capture, interactive } }))).rejects.toThrow(/ngrok tunnel/);
+  });
+
+  it('fails when launchd reports the same cockpit PID after kickstart', async () => {
+    const interactive = async () => 0;
+    const capture = async (_program: string, args: string[]) =>
+      args.includes('print')
+        ? { code: 0, stdout: 'pid = 4242', stderr: '' }
+        : { code: 0, stdout: '{"tunnels":[{"public_url":"https://x.ngrok.app"}]}', stderr: '' };
+
+    await expect(macosxNgrok.redeploy!(redeployCtx({ runner: { capture, interactive } }))).rejects.toThrow(/did not actually restart/);
   });
 });

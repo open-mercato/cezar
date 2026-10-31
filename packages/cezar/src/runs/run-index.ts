@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -37,5 +37,77 @@ export function readRunIndexFromDisk(dataDir: string): RunRecord[] {
     // index rather than failing the whole workspace's search — the same degrade-quietly rule
     // the rest of the registry follows.
     return [];
+  }
+}
+
+type ActivityInput = Pick<RunRecord, 'createdAt' | 'startedAt' | 'finishedAt'> & {
+  steps?: ReadonlyArray<{ startedAt?: string; finishedAt?: string }>;
+};
+
+/** Newest first, comparing instants rather than strings: stored timestamps mix `…00Z` and
+ *  `…00.123Z`, which order wrongly as text within one second. Unparseable falls back to text. */
+export function compareIsoDesc(a: string, b: string): number {
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return b.localeCompare(a);
+  return tb - ta;
+}
+
+/** When a run last moved — the key the workspace index sorts and caps on, and the time the
+ *  Updated column prints. Steps count: every Continue is a new step, while the run's own
+ *  `startedAt` stays at the first launch and `finishedAt` is cleared while it is live. */
+export function lastActivityAt(run: ActivityInput): string {
+  let latest = run.finishedAt ?? run.startedAt ?? run.createdAt;
+  for (const step of run.steps ?? []) {
+    const at = step.finishedAt ?? step.startedAt;
+    if (at !== undefined && compareIsoDesc(at, latest) < 0) latest = at;
+  }
+  return latest;
+}
+
+/** Newest activity first; a comparator for `Array.prototype.sort`. */
+export const byLastActivityDesc = (a: ActivityInput, b: ActivityInput): number =>
+  compareIsoDesc(lastActivityAt(a), lastActivityAt(b));
+
+/** Diagnostic read for complete workspace summaries. The legacy wrapper above deliberately
+ * keeps its all-or-nothing behavior; dashboard coverage instead accounts for every omitted row. */
+export function readRunIndexDiagnostic(dataDir: string, projectRoot: string): {
+  runs: RunRecord[];
+  state: 'complete' | 'partial' | 'unavailable';
+  omittedRuns: number;
+  reason?: string;
+} {
+  try {
+    accessSync(projectRoot, constants.R_OK | constants.X_OK);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8'));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return { runs: [], state: 'complete', omittedRuns: 0 };
+      }
+      throw error;
+    }
+    if (!Array.isArray(raw)) throw new Error('Invalid run index');
+    const runs: RunRecord[] = [];
+    let omittedRuns = 0;
+    for (const entry of raw) {
+      const parsed = runRecordSchema.safeParse(entry);
+      // Reading another project's index does not prove that its owning process exited.
+      // Preserve its recorded state; only a real recovery path may declare interruption.
+      if (parsed.success) runs.push(reconcileLoadedRun(parsed.data, { keepLive: true }));
+      else omittedRuns++;
+    }
+    const unverifiedLive = runs.some((run) => ['running', 'waiting', 'queued'].includes(run.status));
+    const reasons = [
+      ...(omittedRuns ? ['Some task records could not be read'] : []),
+      ...(unverifiedLive ? ['Showing saved task states; live state is not verified by this server'] : []),
+    ];
+    return {
+      runs, state: omittedRuns || unverifiedLive ? 'partial' : 'complete', omittedRuns,
+      ...(reasons.length ? { reason: reasons.join('. ') } : {}),
+    };
+  } catch {
+    return { runs: [], state: 'unavailable', omittedRuns: 0, reason: 'Project or task index is unavailable' };
   }
 }

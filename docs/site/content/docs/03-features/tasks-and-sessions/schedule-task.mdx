@@ -1,0 +1,27 @@
+---
+title: "Schedule a task to start later"
+description: "Write a task now and choose its start date and time."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/start-time-picker.tsx
+    line: 163
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+Prepare a task now and defer execution to a chosen date and time. Set the workflow, account, and model, then use the clock beside the task field. The form shows the time in the server time zone.
+
+## Where to find it
+
+New task → clock button → Pick date & time
+
+## How to use it
+
+1. Describe the task and choose the workflow, account, and model.
+2. Click the clock beside the task field and choose Pick date & time.
+3. Set a future date and time in the displayed server time zone.
+4. Check the time and click Schedule task.
+
+> **Good to know**: The server must be running at the chosen time. This is the earliest start; queue and account limits still apply. Attachments and tasks linked to a todo prevent deferred starts. Generating a plan uses tokens immediately; execution of an approved plan can be deferred. `CEZ_AUTOMATIONS=0` disables scheduling.

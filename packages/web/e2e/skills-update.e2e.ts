@@ -8,10 +8,11 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
  * Automatic Open Mercato skill updates against the real CEZ_DRY_RUN cockpit.
  *
  * Reachability: dry-run deliberately reports a deterministic `current` state with no tracked
- * installation, so this spec covers the inherited preference, its persisted override, the
- * honest no-marker navigation state, and the dry-run apply success/upgrade-notes hand-off. An
- * `available` marker is covered structurally by the app-shell unit suite; manufacturing one in
- * Chrome would require a production-only lock file and network-backed `npx skills check`.
+ * installation, so this spec covers the inherited preference, its persisted override, the clear
+ * no-tracked-skills status, the honest no-marker navigation state, and the dry-run apply
+ * success/upgrade-notes hand-off. An `available` marker is covered structurally by the app-shell
+ * unit suite; manufacturing one in Chrome would require a production-only lock file and
+ * network-backed `npx skills check`.
  */
 
 const artifactsDir = resolve(
@@ -55,9 +56,6 @@ describe('automatic Open Mercato skills updates', () => {
 
     expect(browser.isVisible('[data-slot="skills-auto-update"]')).toBe(true)
     expect(browser.text('[data-slot="skills-settings-section"]')).toContain('On (default)')
-    expect(browser.text('[data-slot="skills-installation-status"]')).toContain(
-      'No tracked Open Mercato installation found.',
-    )
     browser.screenshot(`${artifactsDir}/settings-skills-auto-update.png`)
 
     browser.click('[data-slot="skills-auto-update"]')
@@ -75,6 +73,16 @@ describe('automatic Open Mercato skills updates', () => {
       config = await api('/api/v1/workspace/config')
     }
     expect(config.skillsAutoUpdate).toBeNull()
+  })
+
+  it('explains when no Open Mercato skills are tracked for updates', () => {
+    browser.goto(`${baseUrl}/p/${projectId}/skills`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="skills-update-card"]')?.textContent?.includes('No installed Open Mercato skills are tracked for updates.')`,
+    )
+    expect(browser.text('[data-slot="skills-update-card"]')).toContain(
+      'No installed Open Mercato skills are tracked for updates.',
+    )
   })
 
   it('keeps the navigation marker absent for the dry-run current state', () => {
@@ -99,7 +107,7 @@ describe('automatic Open Mercato skills updates', () => {
     browser.goto(`${baseUrl}/p/${projectId}/skills?skill=__import`)
     browser.waitForFunction(`document.querySelector('[data-slot="skills-update-card"]') !== null`)
     expect(browser.text('[data-slot="skills-update-card"]')).toContain(
-      'Installed Open Mercato skills are up to date.',
+      'Skill files were updated.',
     )
     expect(browser.text('[data-slot="skills-upgrade-notes"]')).toContain('/om-apply-upgrade-notes')
     browser.screenshot(`${artifactsDir}/skills-update-success.png`)

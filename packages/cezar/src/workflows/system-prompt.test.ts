@@ -5,13 +5,18 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { CLAUDE_HEADLESS_GUIDANCE } from '../core/claude-cli-runner.ts';
 import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
+  GLOBAL_INSTRUCTIONS_HEADING,
+  PROJECT_INSTRUCTIONS_HEADING,
   composeSystemPrompt,
+  dispatchPromptPart,
   makeRunTitle,
   resolveExtraSystemPrompt,
   skillSystemPrompt,
@@ -32,6 +37,33 @@ describe('resolveExtraSystemPrompt', () => {
     ['both blank', '', '   ', undefined],
   ] as const)('%s', (_name, override, configDefault, expected) => {
     expect(resolveExtraSystemPrompt(override, configDefault)).toBe(expected);
+  });
+
+  it('global instructions alone ride along unlabelled', () => {
+    expect(resolveExtraSystemPrompt(undefined, undefined, '  Global rule  ')).toBe('Global rule');
+    expect(resolveExtraSystemPrompt(undefined, '   ', 'Global rule')).toBe('Global rule');
+  });
+
+  it('merges global FIRST and the project prompt after it, labelled as winning', () => {
+    const merged = resolveExtraSystemPrompt(undefined, 'Project rule', 'Global rule');
+    expect(merged).toBe(
+      `${GLOBAL_INSTRUCTIONS_HEADING}\n\nGlobal rule\n\n---\n\n${PROJECT_INSTRUCTIONS_HEADING}\n\nProject rule`,
+    );
+  });
+
+  it('a per-run override replaces the project prompt but keeps the global one', () => {
+    const merged = resolveExtraSystemPrompt('Override', 'Project rule', 'Global rule');
+    expect(merged).toContain('Global rule');
+    expect(merged).toContain('Override');
+    expect(merged).not.toContain('Project rule');
+  });
+
+  it('a dispatched child keeps ONE copy of the dispatch prompt when global instructions wrap it', () => {
+    const seed = composeDispatchPrompt('implement');
+    const extra = resolveExtraSystemPrompt(seed, 'Project rule', 'Global rule');
+    expect(dispatchPromptPart(seed, extra)).toBeUndefined();
+    expect(composeSystemPrompt(dispatchPromptPart(seed, extra), extra)!.split(seed).length - 1).toBe(1);
+    expect(dispatchPromptPart(seed, 'Unrelated extra')).toBe(seed);
   });
 });
 
@@ -90,6 +122,10 @@ describe('skill-aware task naming (#432)', () => {
     // A bare number without a skill stays bare — no `469: 469`.
     expect(makeRunTitle('469', workflow)).toBe('469');
     expect(makeRunTitle('#469', workflow)).toBe('#469');
+    // An attachment-only task (telemetry 18c930de) is named after its attachments.
+    expect(makeRunTitle('', workflow, 1)).toBe('Task from 1 attachment');
+    expect(makeRunTitle('', workflow, 2)).toBe('Task from 2 attachments');
+    expect(makeRunTitle('', workflow)).toBe('(untitled task)');
   });
 });
 
@@ -221,7 +257,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const argv = JSON.parse(lines[index] as string) as string[];
     const idx = argv.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThanOrEqual(0);
-    return argv[idx + 1] as string;
+    const prompt = argv[idx + 1] as string;
+    // The Claude runner owns a backend-local suffix for denied-tool guidance;
+    // these tests assert workflow composition before that transport decoration.
+    const suffix = `\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`;
+    return prompt.endsWith(suffix) ? prompt.slice(0, -suffix.length) : prompt;
   }
 
   it('dispatch on (the default): every task is taught the cez task CLI ahead of the base prompt', async () => {
@@ -290,7 +330,8 @@ describe('systemPrompt end-to-end (dry run)', () => {
       delete process.env.CEZ_API_URL;
     }
     expect(capturedSystemPrompt()).not.toContain('cez automation');
-  });
+    // Two whole runs in one case: the default 5 s is one slow machine away from a timeout.
+  }, 30_000);
 
   it('no override: the config default reaches the CLI and is echoed on the record', async () => {
     const id = await runToEnd({ task: 'do the thing' });
@@ -604,7 +645,9 @@ describe('the global follow-up gate (dry run)', () => {
   const capturedSystemPrompt = (index = 0): string => {
     const lines = readFileSync(argsFile, 'utf8').trim().split('\n');
     const argv = JSON.parse(lines[index] as string) as string[];
-    return argv[argv.indexOf('--append-system-prompt') + 1] as string;
+    const prompt = argv[argv.indexOf('--append-system-prompt') + 1] as string;
+    const suffix = `\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`;
+    return prompt.endsWith(suffix) ? prompt.slice(0, -suffix.length) : prompt;
   };
 
   it('without CEZ_FOLLOWUPS the agent is never told about the inbox', async () => {
@@ -612,7 +655,21 @@ describe('the global follow-up gate (dry run)', () => {
     rmSync(todosFile, { force: true });
     rmSync(inheritedTodos, { force: true });
 
-    const id = await runToEnd({ task: 'do the thing mock:done' });
+    // This case asserts the follow-up gate only; keep ambient cockpit flags from
+    // adding the automation prompt when the suite runs inside cezar.
+    const savedAutomations = process.env.CEZ_AUTOMATIONS;
+    const savedApiUrl = process.env.CEZ_API_URL;
+    delete process.env.CEZ_AUTOMATIONS;
+    delete process.env.CEZ_API_URL;
+    let id: string;
+    try {
+      id = await runToEnd({ task: 'do the thing mock:done' });
+    } finally {
+      if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
+      else process.env.CEZ_AUTOMATIONS = savedAutomations;
+      if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+      else process.env.CEZ_API_URL = savedApiUrl;
+    }
 
     expect(capturedSystemPrompt()).toBe(composeSystemPrompt(CONFIG_PROMPT, HANDOFF_ONLY_INSTRUCTIONS));
     expect(capturedSystemPrompt()).not.toContain('CEZ_TODOS_FILE');

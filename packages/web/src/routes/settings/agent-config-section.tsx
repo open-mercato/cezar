@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { availableRunners } from '@/routes/new-task-form'
+import { formatJson } from '@/lib/format-json'
 import { cn } from '@/lib/utils'
 import { AGENT_DESCRIPTORS, descriptorFor, type AgentDescriptor } from './agent-descriptors'
 
@@ -25,8 +26,30 @@ import { AGENT_DESCRIPTORS, descriptorFor, type AgentDescriptor } from './agent-
  * every write regardless).
  */
 
+/**
+ * What an absent private MCP file opens on (spec 2026-10-07-private-project-mcp): the `.mcp.json`
+ * shape with placeholders that cannot run anything — the file reaches every agent launch the moment
+ * it is saved, so an example `npx -y <package>` would fetch and execute whatever owns that name.
+ */
+const PRIVATE_MCP_STARTER = `{
+  "mcpServers": {
+    "example-stdio": {
+      "command": "/absolute/path/to/your-mcp-server",
+      "args": [],
+      "env": { "API_TOKEN": "your-personal-token" }
+    },
+    "example-http": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer your-personal-token" }
+    }
+  }
+}
+`
+
 /** What this file actually governs for a run — the honest label the spec insists on. */
 function effectLabel(file: AgentConfigFile): string {
+  if (file.private) return 'Private to this project — added to every run at launch, takes effect on the next session. Never committed.'
   if (file.seeded) return 'Copied into each run’s worktree — takes effect on your next run.'
   if (file.tracked === 'tracked') return 'Runs read the committed copy — this edit applies after you commit it.'
   if (file.tracked === 'outside-repo') return 'Applies to every session on this machine.'
@@ -43,7 +66,7 @@ export function AgentConfigSection() {
 
   if (listing.isPending) {
     return (
-      <p data-slot="agent-config-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="agent-config-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading agent config…
       </p>
     )
@@ -78,7 +101,7 @@ function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; 
       {!listing.editable && (
         <div
           data-slot="agent-config-readonly"
-          className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[13px] text-soft-foreground"
+          className="rounded-md border border-border bg-muted/40 px-3 py-2 text-ui text-soft-foreground"
         >
           Read-only: agent config is edited from the machine that owns the checkout (this cockpit runs in hosted
           mode). You can still see every file and which one wins.
@@ -97,13 +120,13 @@ function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; 
             data-selected={d.id === agent.id}
             onClick={() => pickAgent(d.id)}
             className={cn(
-              'flex items-center gap-2 rounded-md px-3 py-1.5 text-[13px] transition-colors',
+              'flex items-center gap-2 rounded-md px-3 py-1.5 text-ui transition-colors',
               d.id === agent.id ? 'bg-background font-semibold shadow-sm' : 'hover:bg-muted/60',
             )}
           >
             {d.label}
             {!installed.includes(d.id) && (
-              <Badge variant="outline" className="text-[10px] text-soft-foreground">
+              <Badge variant="outline" className="text-micro text-soft-foreground">
                 not installed
               </Badge>
             )}
@@ -112,7 +135,7 @@ function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; 
       </div>
 
       {agent.note && (
-        <p data-slot="agent-config-agent-note" className="text-[12px] text-soft-foreground">
+        <p data-slot="agent-config-agent-note" className="text-label text-soft-foreground">
           {agent.note}
         </p>
       )}
@@ -131,7 +154,7 @@ function AgentConfigView({ listing, installed }: { listing: AgentConfigListing; 
           {selected ? (
             <FileEditor key={selected.id} file={selected} />
           ) : (
-            <div className="flex h-full min-h-40 items-center justify-center rounded-md border border-dashed border-border text-[13px] text-soft-foreground">
+            <div className="flex h-full min-h-40 items-center justify-center rounded-md border border-dashed border-border text-ui text-soft-foreground">
               Select a config file to view or edit it.
             </div>
           )}
@@ -160,10 +183,10 @@ function AgentPane({
         if (files.length === 0 && !(isClaudeMcp && listing.userMcp)) return null
         return (
           <section key={g.id} data-slot="agent-config-group" data-group={g.id} data-agent={agent.id}>
-            <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-soft-foreground">
+            <p className="mb-1 eyebrow text-soft-foreground">
               {g.label}
             </p>
-            {g.note && <p className="mb-2 text-[12px] text-soft-foreground">{g.note}</p>}
+            {g.note && <p className="mb-2 text-label text-soft-foreground">{g.note}</p>}
             <ul className="flex flex-col gap-1">
               {files.map((file) => (
                 <li key={file.id}>
@@ -173,17 +196,22 @@ function AgentPane({
                     data-selected={file.id === selectedId}
                     onClick={() => onSelect(file.id)}
                     className={cn(
-                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-colors',
+                      'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui transition-colors',
                       file.id === selectedId ? 'bg-primary/15 text-foreground' : 'hover:bg-muted/60',
                     )}
                   >
-                    <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{file.label}</span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-label">{file.label}</span>
                     {file.seeded && (
-                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                      <Badge variant="outline" className="shrink-0 text-micro">
                         seeded
                       </Badge>
                     )}
-                    {!file.exists && <span className="shrink-0 text-[11px] text-soft-foreground">absent</span>}
+                    {file.private && (
+                      <Badge variant="outline" className="shrink-0 text-micro">
+                        private
+                      </Badge>
+                    )}
+                    {!file.exists && <span className="shrink-0 text-meta text-soft-foreground">absent</span>}
                   </button>
                 </li>
               ))}
@@ -201,8 +229,8 @@ function AgentPane({
 function UserMcpBlock({ userMcp }: { userMcp: NonNullable<AgentConfigListing['userMcp']> }) {
   return (
     <div data-slot="agent-config-user-mcp" className="mt-3">
-      <h4 className="mb-1 text-[12px] font-semibold">User &amp; local scopes</h4>
-      <p className="mb-2 text-[12px] text-soft-foreground">
+      <h4 className="mb-1 text-label font-semibold">User &amp; local scopes</h4>
+      <p className="mb-2 text-label text-soft-foreground">
         Managed by <code className="font-mono">claude mcp add</code> in {userMcp.path} — cezar does not edit
         Claude’s state file.
       </p>
@@ -211,17 +239,17 @@ function UserMcpBlock({ userMcp }: { userMcp: NonNullable<AgentConfigListing['us
           <ul className="flex flex-wrap gap-1">
             {userMcp.servers.map((name) => (
               <li key={name}>
-                <Badge variant="outline" className="font-mono text-[11px]">
+                <Badge variant="outline" className="font-mono text-meta">
                   {name}
                 </Badge>
               </li>
             ))}
           </ul>
         ) : (
-          <p className="text-[12px] text-soft-foreground">No user-scoped MCP servers.</p>
+          <p className="text-label text-soft-foreground">No user-scoped MCP servers.</p>
         )
       ) : (
-        <p className="text-[12px] text-soft-foreground">Could not read the file.</p>
+        <p className="text-label text-soft-foreground">Could not read the file.</p>
       )}
     </div>
   )
@@ -238,7 +266,8 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
   const loadedVersion = fileQuery.data?.version ?? null
   useEffect(() => {
     if (fileQuery.data) {
-      setDraft(fileQuery.data.content)
+      // An absent private MCP file opens on a starter in the `.mcp.json` shape rather than a blank page.
+      setDraft(file.private && !fileQuery.data.exists ? PRIVATE_MCP_STARTER : fileQuery.data.content)
       setConflict(false)
       setFormatError(null)
     }
@@ -251,8 +280,10 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
   const save = () => {
     setFormatError(null)
     setConflict(false)
+    // Plain JSON only: re-indenting JSONC/TOML would need a parser that keeps comments.
+    const body = file.format === 'json' ? (formatJson(content) ?? content) : content
     put.mutate(
-      { content, version: loadedVersion },
+      { content: body, version: loadedVersion },
       {
         onSuccess: () => {
           setDraft(null)
@@ -270,52 +301,55 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-[13px]">{file.label}</span>
-        <Badge variant="outline" className="text-[10px] uppercase">
+        <span className="font-mono text-ui">{file.label}</span>
+        <Badge variant="outline" className="text-micro uppercase">
           {file.format}
         </Badge>
         <a
           href={file.docsUrl}
           target="_blank"
           rel="noreferrer"
-          className="text-[12px] text-soft-foreground underline hover:text-foreground"
+          className="text-label text-soft-foreground underline hover:text-foreground"
         >
           docs
         </a>
       </div>
 
-      <p data-slot="agent-config-precedence" className="text-[12px] text-soft-foreground">
+      <p data-slot="agent-config-precedence" className="text-label text-soft-foreground">
         {file.precedence}
       </p>
-      <p data-slot="agent-config-effect" className="text-[12px] text-foreground/80">
+      <p data-slot="agent-config-effect" className="text-label text-foreground/80">
         {effectLabel(file)}
         {file.hotReload ? ` ${file.hotReload}` : ''}
       </p>
 
       {fileQuery.isPending ? (
-        <p className="text-[13px] text-soft-foreground">Loading file…</p>
+        <p className="text-ui text-soft-foreground">Loading file…</p>
       ) : fileQuery.isError ? (
-        <p className="text-[13px] text-destructive">{fileQuery.error.message}</p>
+        <p className="text-ui text-destructive">{fileQuery.error.message}</p>
       ) : (
         <CodeEditor
           value={content}
           language={file.format}
           readOnly={!canWrite}
-          onChange={setDraft}
+          onChange={(next) => {
+            setDraft(next)
+            setFormatError(null) // the error described the text that was saved, not this one
+          }}
           aria-label={`${file.label} contents`}
           className="h-[26rem]"
         />
       )}
 
       {formatError && (
-        <p data-slot="agent-config-format-error" className="text-[12px] text-destructive">
+        <p data-slot="agent-config-format-error" className="text-label text-destructive">
           {formatError}
         </p>
       )}
       {conflict && (
         <div
           data-slot="agent-config-conflict"
-          className="flex items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px]"
+          className="flex items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-label"
         >
           <span>The file changed on disk since you opened it.</span>
           <Button size="sm" variant="outline" onClick={() => void fileQuery.refetch()}>
@@ -332,12 +366,15 @@ export function FileEditor({ file }: { file: AgentConfigFile }) {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setDraft(null)}
+            onClick={() => {
+              setDraft(null)
+              setFormatError(null)
+            }}
             disabled={!dirty || put.isPending}
           >
             Revert
           </Button>
-          {dirty && <span className="text-[12px] text-soft-foreground">Unsaved changes</span>}
+          {dirty && <span className="text-label text-soft-foreground">Unsaved changes</span>}
         </div>
       )}
     </div>

@@ -154,21 +154,23 @@ describe('toolDisplay', () => {
         expected: { toolKind: 'task', title: 'Agent', subtitle: undefined },
       },
 
-      // ---- skill (claude's Skill invocation — #529) ----
+      // ---- skill (claude's Skill invocation — #529; own kind since #1202) ----
+      // `skill`, not `task`: the Agents dock counts `task` items as live sub-agents, and a skill
+      // is instructions for the current agent, not a second one.
       {
         name: 'Skill',
         input: { skill: 'om-auto-fix-issue', args: '529' },
-        expected: { toolKind: 'task', title: 'Skill: om-auto-fix-issue', subtitle: '529' },
+        expected: { toolKind: 'skill', title: 'Skill: om-auto-fix-issue', subtitle: '529' },
       },
       {
         name: 'skill',
         input: { skill: 'om-code-review' },
-        expected: { toolKind: 'task', title: 'Skill: om-code-review', subtitle: undefined },
+        expected: { toolKind: 'skill', title: 'Skill: om-code-review', subtitle: undefined },
       },
       {
         name: 'Skill',
         input: {},
-        expected: { toolKind: 'task', title: 'Skill', subtitle: undefined },
+        expected: { toolKind: 'skill', title: 'Skill', subtitle: undefined },
       },
 
       // ---- plan: claude TodoWrite, opencode todowrite, codex todoList/plan ----

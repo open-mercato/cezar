@@ -1,0 +1,26 @@
+---
+title: "Fetch and push commits in the Git view"
+description: "Use Fetch, Pull, Push, or Sync and check the commits waiting on each side."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/repo-git/repo-sync-bar.tsx
+    line: 18
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+The Git view shows the tracked branch (upstream) and incoming and outgoing commit counts. Fetch refreshes this information. Pull brings in changes, Push sends local commits, and Sync does both. Use Publish branch for a branch without an upstream.
+
+## Where to find it
+
+Git → sync bar
+
+## How to use it
+
+1. Check the upstream and incoming and outgoing counts.
+2. Click Fetch to refresh remote information.
+3. Choose Pull, Push, or Sync for the direction of the changes.
+4. Use Publish branch when the branch has no upstream.
+
+> **Good to know**: Pull only allows fast-forward: moving the branch forward without merging divergent histories. If histories have diverged, Cezar asks you to merge or rebase manually. Sync runs pull, then push. The counts show when the last fetch occurred.

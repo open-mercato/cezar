@@ -1,3 +1,8 @@
+import { worktreeLifecycleInvalidationSchema } from '@open-mercato/cezar-api-client'
+import { lifecycleQueryKeys } from './worktree-lifecycle'
+import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
+import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
+import { dashboardLive } from './dashboard-live'
 import { trackerChangedEventSchema } from '@open-mercato/cezar-api-client'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
@@ -10,16 +15,20 @@ import {
 import {
   applyRunDeleted,
   applyRunEvent,
+  isFullRunRecord,
   createUsageStore,
   EMPTY_USAGE,
   mergeRun,
   parseWorkspaceEvent,
   type GlobalEvent,
+  type RunSummary,
   type UsageStore,
 } from './events'
 import { apiPath, getApiScope, queryScope } from '@open-mercato/cezar-api-client'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
-import { RUN_EVENT_BATCH_MS } from './run-events'
+import { ApiError, getProjectRun } from './client'
+import { HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS } from './run-events'
+import { hiddenTabAwaitsUiState, hiddenTabNeedsWorkspaceStream } from './hidden-stream'
 import type {
   ApiRun,
   HealthResponse,
@@ -52,7 +61,7 @@ import type {
 
 // Route-relative: `apiPath` adds the version (and would add the project scope, though this
 // stream is workspace-level and never scoped).
-const SSE_URL = apiPath('/workspace/events')
+const SSE_URL = `${apiPath('/workspace/events')}?slim=1`
 
 /** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
@@ -113,7 +122,7 @@ export function onWorkspaceEvent(
  * busy minute would be a refetch per event. One request per quiet moment is the whole point.
  */
 const RUNS_INDEX_REFRESH_DEBOUNCE_MS = 400
-const RECONCILE_TIMEOUT_MS = 15_000
+export const RECONCILE_TIMEOUT_MS = 15_000
 
 /** Built per mount, not module-level: a pending timer holds the `queryClient` it will write to,
  *  and one that outlives its provider would invalidate a cache nobody is reading. `cancel` runs
@@ -135,6 +144,130 @@ function createRunsIndexRefresher(queryClient: QueryClient): {
     cancel() {
       clearTimeout(pending)
       pending = undefined
+    },
+  }
+}
+
+/** How many times one hydration is attempted, and the wait before each retry. A run's last frame
+ *  can arrive and then its single read fail transiently; without a retry the task would not appear
+ *  until the next reconnect. A 4xx is a considered answer and is not retried, matching the query
+ *  client's policy (`query-client.ts`). */
+const UNKNOWN_RUN_RETRY_DELAYS_MS = [500, 1_500] as const
+
+/** The latest stream event for a run being hydrated. A frame that arrives while the read is in
+ *  flight is the freshest status and must land on top of the fetched record; a deletion is a
+ *  tombstone that the fetched record must not resurrect. */
+type PendingUnknownRunEvent =
+  | { kind: 'run'; frame: RunSummary }
+  | { kind: 'deleted' }
+
+/** The hydration hooks the run-event path calls: a slim frame for an unknown run, and its
+ *  deletion. `cancel` is torn down with the effect. */
+export interface UnknownRunHydrator {
+  run: (runId: string, frame: RunSummary) => void
+  deleted: (runId: string) => void
+  cancel: () => void
+}
+
+/** Fetch one run the active list does not hold yet, and insert it as a row.
+ *
+ *  A slim `run` frame cannot become a list row on its own — it has no `steps` — so the list has
+ *  to learn the whole record. Refetching the whole list would cost one `GET /runs` for a single
+ *  new task; the bounded read is `GET /runs/:id`, scoped to the project the frame arrived in. A
+ *  run's create → queued → running frames arrive in separate batches, so the request is deduped
+ *  per run while one is in flight, and the newest such frame is applied over the fetched record
+ *  once it resolves. The project id, list key and request key are all captured when the frame
+ *  arrives: every retry reads that same project (`getProjectRun`, not the active scope) and writes
+ *  that same list, so a project switch inside the window can neither fetch nor contaminate another
+ *  project's cache. */
+function createUnknownRunFetcher(queryClient: QueryClient): UnknownRunHydrator {
+  const inFlight = new Set<string>()
+  const pending = new Map<string, PendingUnknownRunEvent>()
+  const retryTimers = new Set<ReturnType<typeof setTimeout>>()
+  let disposed = false
+
+  const forget = (requestKey: string): void => {
+    inFlight.delete(requestKey)
+    pending.delete(requestKey)
+  }
+
+  const applyHydrated = (requestKey: string, listKey: readonly unknown[], run: ApiRun): void => {
+    const queued = pending.get(requestKey)
+    forget(requestKey)
+    if (queued?.kind === 'deleted') {
+      // The run was deleted while we were reading it: apply the tombstone, do not resurrect it.
+      queryClient.setQueryData<ApiRun[]>(listKey, (list) => applyRunDeleted(list, run.id))
+      return
+    }
+    queryClient.setQueryData<ApiRun[]>(listKey, (list) => {
+      // The fetched read is only inserted when the row is still absent. Another path (a reconcile,
+      // a mutation) landing the row first makes its record authoritative, but the queued stream
+      // frame is newer than our read and must still be folded on rather than dropped.
+      const hydrated = list !== undefined && list.some((row) => row.id === run.id)
+        ? list
+        : applyRunEvent(list, run)
+      return queued?.kind === 'run' ? applyRunEvent(hydrated, queued.frame) : hydrated
+    })
+  }
+
+  const attempt = (
+    requestKey: string,
+    listKey: readonly unknown[],
+    projectId: string,
+    runId: string,
+    retry: number,
+  ): void => {
+    void getProjectRun(projectId, runId)
+      .then((run) => {
+        if (disposed) return
+        applyHydrated(requestKey, listKey, run)
+      })
+      .catch((error: unknown) => {
+        if (disposed) return
+        const delay = UNKNOWN_RUN_RETRY_DELAYS_MS[retry]
+        const clientError = error instanceof ApiError && error.status >= 400 && error.status < 500
+        if (delay === undefined || clientError) {
+          // Bounded retries exhausted (or the run is gone): forget it so the next frame can start
+          // a fresh hydration instead of the request being deduped against a dead one. Exhaustion
+          // means the run's last frame (and its event) never landed, so ask the captured project's
+          // list once — the same recovery a reconnect would have performed.
+          forget(requestKey)
+          if (delay === undefined) {
+            void queryClient.invalidateQueries({ queryKey: listKey, refetchType: 'active' })
+          }
+          return
+        }
+        const timer = setTimeout(() => {
+          retryTimers.delete(timer)
+          if (!disposed) attempt(requestKey, listKey, projectId, runId, retry + 1)
+        }, delay)
+        retryTimers.add(timer)
+      })
+  }
+
+  return {
+    run(runId, frame) {
+      if (disposed) return
+      const projectId = queryScope()
+      const requestKey = `${projectId}\0${runId}`
+      if (inFlight.has(requestKey)) {
+        pending.set(requestKey, { kind: 'run', frame })
+        return
+      }
+      inFlight.add(requestKey)
+      attempt(requestKey, [projectId, 'runs', 'list'], projectId, runId, 0)
+    },
+    deleted(runId) {
+      if (disposed) return
+      const requestKey = `${queryScope()}\0${runId}`
+      if (inFlight.has(requestKey)) pending.set(requestKey, { kind: 'deleted' })
+    },
+    cancel() {
+      disposed = true
+      for (const timer of retryTimers) clearTimeout(timer)
+      retryTimers.clear()
+      inFlight.clear()
+      pending.clear()
     },
   }
 }
@@ -234,6 +367,7 @@ function createRunEventBatcher(
   queryClient: QueryClient,
   usage: UsageStore,
   onDroppedProject: (project: string) => void,
+  unknownRun: UnknownRunHydrator,
 ): {
   onEvent: (event: Extract<GlobalEvent, { type: 'run' | 'run-deleted' }>, project: string) => void
   beginReconcile: () => void
@@ -257,7 +391,7 @@ function createRunEventBatcher(
     for (const queued of events.values()) {
       // The route can change while the 50 ms window is open. Never resolve the cache keys from
       // the new scope for an event that arrived under the old one.
-      if (queued.project === project) applyGlobalEvent(queryClient, usage, queued.event)
+      if (queued.project === project) applyGlobalEvent(queryClient, usage, queued.event, unknownRun)
       else onDroppedProject(queued.project)
     }
   }
@@ -318,11 +452,19 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     // Events happened while we were disconnected, and the index is cross-project — nothing else
     // here covers it.
     workspaceQueryKeys.runsIndex,
+    workspaceQueryKeys.dashboard,
     queryKeys.todos,
     queryKeys.health,
     // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
     queryKeys.worktrees,
+    lifecycleQueryKeys.all(),
     workspaceQueryKeys.providerStatus,
+    // Host totals (spec 2026-09-20-host-resource-telemetry): a remote cockpit's only refresh is
+    // this reconcile, so the Machine card must be in the list — the local cockpit ignores it
+    // because its frames arrive over the `host` topic.
+    workspaceQueryKeys.hostUsage,
+    // Its poll stops once a check settles, and no stream carries skills news.
+    workspaceQueryKeys.skillsUpdateAll,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
@@ -337,6 +479,7 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
         queryClient.invalidateQueries({ queryKey: ['tracker'], predicate: q => q.queryKey[2] !== 'items' || q.getObserversCount() === 0 }),
         queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
       ])),
+      queryClient.invalidateQueries({queryKey: ['worktree-lifecycle'], refetchType: 'none'}),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
@@ -375,16 +518,29 @@ function activeProject(queryClient: QueryClient): string | undefined {
 
 /** Fold one stream message into the cache. The reducers it calls are pure and table-tested in
  *  events.ts; this is only the wiring from an event to the cache it belongs in. */
-function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: GlobalEvent): void {
+function applyGlobalEvent(
+  queryClient: QueryClient,
+  usage: UsageStore,
+  event: GlobalEvent,
+  unknownRun: UnknownRunHydrator,
+): void {
   switch (event.type) {
     case 'run': {
-      queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) => applyRunEvent(list, event.run))
+      const listKey = queryKeys.runs.list()
+      const list = queryClient.getQueryData<ApiRun[]>(listKey)
+      if (list && !isFullRunRecord(event.run) && !list.some((row) => row.id === event.run.id)) {
+        // A run this list never held arrives as a slim frame, which is not a row: fetch the one.
+        unknownRun.run(event.run.id, event.run)
+      } else {
+        queryClient.setQueryData<ApiRun[]>(listKey, (current) => applyRunEvent(current, event.run))
+      }
       // Only a detail cache that exists: `setQueryData` would happily create one, leaving an entry
       // for a run nobody opened — and, worse, one built from a summary rather than from
       // `GET /api/runs/:id`, which the next reader would then be served as if it were fetched.
       const key = queryKeys.runs.detail(event.run.id)
       if (queryClient.getQueryData(key) !== undefined) {
-        queryClient.setQueryData<ApiRun>(key, (previous) => mergeRun(previous, event.run))
+        queryClient.setQueryData<ApiRun>(key, (previous) =>
+          previous === undefined ? previous : mergeRun(previous, event.run))
       }
       // The Changes tab stops polling once a run leaves the active set (queries.ts:
       // refetchInterval only lives while active), so end-of-run writes would otherwise wait
@@ -401,6 +557,9 @@ function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: Gl
       return
     }
     case 'run-deleted': {
+      // A deletion for a run still being hydrated is a tombstone: the in-flight read must not
+      // resurrect the row when it resolves.
+      unknownRun.deleted(event.id)
       queryClient.setQueryData<ApiRun[]>(queryKeys.runs.list(), (list) => applyRunDeleted(list, event.id))
       // Removed, not set to undefined: the run is gone server-side, so its detail and diff caches
       // are garbage. Anything still mounted on them refetches and gets the server's 404 — the
@@ -443,15 +602,47 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     if (typeof Source !== 'function') return
 
     let source: EventSource | null = null
+    let lifecycleTimer: ReturnType<typeof setTimeout> | undefined
+    let lifecycleMaxTimer: ReturnType<typeof setTimeout> | undefined
+    const lifecycleScopes = new Set<string>()
+    const refreshLifecycle = () => {
+      clearTimeout(lifecycleTimer); clearTimeout(lifecycleMaxTimer)
+      lifecycleTimer = undefined; lifecycleMaxTimer = undefined
+      const active = activeProject(queryClient)
+      for (const project of lifecycleScopes) {
+        const scope = project === active ? queryScope() : project
+        void queryClient.invalidateQueries({queryKey: lifecycleQueryKeys.all(scope), refetchType: project === active ? 'active' : 'none'})
+        if (project === active) void queryClient.invalidateQueries({queryKey: queryKeys.worktrees})
+      }
+      lifecycleScopes.clear()
+    }
+    let dashboardTimer: ReturnType<typeof setTimeout> | undefined
+    let dashboardMax: ReturnType<typeof setTimeout> | undefined
+    const refreshDashboard = () => {
+      clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
+      dashboardTimer = undefined; dashboardMax = undefined
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active', predicate: q => q.queryKey[2] !== 'telemetry' && q.queryKey[2] !== 'automations' && !(q.queryKey[2] === 'feed' && q.queryKey[3] === 'github') })
+    }
+    const stageDashboardRefresh = () => {
+      clearTimeout(dashboardTimer)
+      dashboardTimer = setTimeout(refreshDashboard, 250)
+      dashboardMax ??= setTimeout(refreshDashboard, 1000)
+    }
     const runsIndexRefresher = createRunsIndexRefresher(queryClient)
+    const unknownRunFetcher = createUnknownRunFetcher(queryClient)
     const inactiveProjectRefresher = createInactiveProjectRefresher(queryClient)
     const runEventBatcher = createRunEventBatcher(
       queryClient,
       usage,
       inactiveProjectRefresher.onEvent,
+      unknownRunFetcher,
     )
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
+    // Set when a tab return reopens the socket: its `open` then runs the one reconcile, so the
+    // return handler does not run a second one of its own.
+    let reconcileOnOpen = false
+    let reopenReconcileTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
     // Liveness watchdog — the same one the per-run transcript stream has carried since #424, and
     // missing here until a thread showed a `done` header over a session that was visibly still
@@ -552,6 +743,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     }
 
     const connect = (): void => {
+      dashboardLive.connected(false)
       source?.close()
       // A fresh socket resets the clock: its first frames are still on the way, so it must not be
       // judged dead before any of them land.
@@ -567,8 +759,12 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // Not the first one: at boot the queries are fetching anyway, and invalidating them here
         // would only ask the same questions twice. Every later open is a *re*connect — we were
         // disconnected, events happened without us, and the cache is now a guess.
-        if (everOpened) reconcileNow()
+        clearTimeout(reopenReconcileTimer)
+        reopenReconcileTimer = undefined
+        if (everOpened || reconcileOnOpen) reconcileNow()
+        dashboardLive.connected(true)
         everOpened = true
+        reconcileOnOpen = false
       })
 
       for (const name of EVENT_NAMES) {
@@ -585,6 +781,17 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // the namer had rewritten stayed stale until the next tick, and the tick does not run
           // in a background tab, so coming back to one showed yesterday's rows until a reload.
           runsIndexRefresher.onEvent(parsed.event)
+          if (parsed.event.type === 'run' || parsed.event.type === 'run-deleted') {
+            stageDashboardRefresh()
+            if (parsed.project) dashboardTransition(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run)
+            if (parsed.project && (parsed.event.type === 'run-deleted' || parsed.event.run.status !== 'running')) dashboardLive.remove(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run.id)
+          }
+          if (name === 'usage') {
+            try {
+              const metadata = dashboardWorkspaceUsageSchema.safeParse(JSON.parse((event as MessageEvent<string>).data))
+              if (metadata.success) dashboardLive.replace(metadata.data.project, metadata.data.samples ?? [], metadata.data.sentAt)
+            } catch { /* malformed frame leaves the last good sample to expire */ }
+          }
           // Another project's news never patches the active scope. Its own cache is marked stale
           // in a debounced batch so a later project switch refetches truth without cross-project
           // bleed. `ping` (project null) always passes — liveness is not project-owned.
@@ -597,10 +804,23 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           } else if (parsed.event.type === 'todos' && reconciliationDepth > 0) {
             if (parsed.project !== null) pendingTodos.add(parsed.project)
           } else {
-            applyGlobalEvent(queryClient, usage, parsed.event)
+            applyGlobalEvent(queryClient, usage, parsed.event, unknownRunFetcher)
           }
         })
       }
+
+      current.addEventListener('worktree-lifecycle', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        const parsed = worktreeLifecycleInvalidationSchema.safeParse(payload)
+        if (!parsed.success) return
+        lifecycleScopes.add(parsed.data.projectId)
+        clearTimeout(lifecycleTimer)
+        lifecycleTimer = setTimeout(refreshLifecycle, 100)
+        lifecycleMaxTimer ??= setTimeout(refreshLifecycle, 1000)
+      })
 
       for (const name of WORKSPACE_EVENT_NAMES) {
         current.addEventListener(name, (event) => {
@@ -628,7 +848,16 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // line every few hundred ms, and re-listing the registry on each would turn one clone
           // into a request flood (the dialog's own success handler invalidates once, at the end).
           if (name !== 'checkout-progress' && name !== 'automation-change' && name !== 'tracker-changed') {
+            if (payload && typeof payload === 'object') {
+              if (name === 'project-removed' && 'id' in payload && typeof payload.id === 'string') {
+                dashboardProjectTransition(payload.id, true)
+                dashboardLive.remove(payload.id)
+              } else if (name === 'project-added' && 'project' in payload && payload.project && typeof payload.project === 'object' && 'id' in payload.project && typeof payload.project.id === 'string') {
+                dashboardProjectTransition(payload.project.id, false)
+              }
+            }
             void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+            void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active' })
           }
           for (const listener of [...workspaceListeners]) listener(name, payload)
         })
@@ -659,22 +888,67 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // what a restarting server produces (the request is answered with a non-2xx while it
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
+        dashboardLive.connected(false)
         if (current.readyState === CLOSED) reopenLater()
       })
     }
 
+    const reconcileOnReopen = (): void => {
+      reconcileOnOpen = true
+      clearTimeout(reopenReconcileTimer)
+      // The stream can stay down while plain HTTP works (a proxy that drops SSE, a server
+      // restarting): the reader still gets the reconcile, just later.
+      reopenReconcileTimer = setTimeout(() => {
+        reopenReconcileTimer = undefined
+        if (disposed || !reconcileOnOpen) return
+        reconcileOnOpen = false
+        reconcileNow()
+      }, RECONCILE_TIMEOUT_MS)
+    }
+
+    // #1753: release the socket once the tab has stayed hidden past the grace, unless a hidden-tab
+    // feature (run notifications) still reads it. The return path below reconnects and reconciles.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    const releaseWhileHidden = (): void => {
+      hiddenTimer = undefined
+      if (disposed || document.visibilityState !== 'hidden') return
+      if (hiddenTabNeedsWorkspaceStream(queryClient)) {
+        // Settings not loaded yet: look again instead of holding the stream forever (#1782).
+        if (hiddenTabAwaitsUiState(queryClient)) hiddenTimer = setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+        return
+      }
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      const current = source
+      source = null
+      dashboardLive.connected(false)
+      current?.close()
+    }
+
+    // A tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState === 'hidden') hiddenTimer ??= setTimeout(releaseWhileHidden, HIDDEN_STREAM_GRACE_MS)
+    }
+
     const onVisibilityChange = (): void => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState === 'hidden') {
+        armHiddenTimer()
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       // The phone-in-a-pocket case: mobile browsers freeze background tabs, so the stream may have
       // been dead for an hour with no error handler ever running. Whatever is on screen right now
       // is what the reader is about to trust, so ask the server before they read it.
-      reconcileNow()
       if (!source || source.readyState === CLOSED) {
         // Don't make them wait out a backoff that started while they were away.
         clearTimeout(reopenTimer)
         reopenTimer = undefined
+        reconcileOnReopen()
         connect()
+        return
       }
+      reconcileNow()
     }
 
     const onPageHide = (): void => {
@@ -686,6 +960,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       reopenTimer = undefined
       const current = source
       source = null
+      dashboardLive.connected(false)
       current?.close()
     }
 
@@ -693,8 +968,9 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // Only a bfcache restore (`persisted`) finds this document alive with its stream closed
       // by onPageHide; on a normal load this effect just ran and the stream is fresh.
       if (!event.persisted) return
-      reconcileNow()
+      reconcileOnReopen()
       connect()
+      armHiddenTimer()
     }
 
     // Only while the tab is visible: a hidden tab is legitimately throttled into silence, and
@@ -712,12 +988,19 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
     connect()
+    armHiddenTimer()
 
     return () => {
       disposed = true
       clearTimeout(reopenTimer)
+      clearTimeout(reopenReconcileTimer)
       clearInterval(livenessTimer)
+      clearTimeout(hiddenTimer)
+      dashboardLive.connected(false)
+      clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
+      clearTimeout(lifecycleTimer); clearTimeout(lifecycleMaxTimer); lifecycleScopes.clear()
       runsIndexRefresher.cancel()
+      unknownRunFetcher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()
       pendingTodos.clear()
@@ -729,6 +1012,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // dropped reference leaks a connection per remount, and StrictMode remounts every effect.
       const current = source
       source = null
+      dashboardLive.connected(false)
       current?.close()
     }
   }, [queryClient, usage, url])

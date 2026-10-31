@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
+import { RegistryCache } from '../self-update/registry.ts';
+import { SelfUpdateService } from '../self-update/service.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
@@ -114,6 +116,30 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     expect(semaphore.busy()).toBe(1);
   });
 
+  it('keeps a parked dispatch parent slot-exempt while a direct child is in flight (#1697)', () => {
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1, maxMonitoringSessions: 0 } });
+    const { store, manager } = project('cez-monitor-parent-', semaphore);
+    const internals = manager as unknown as {
+      active: Map<string, object>;
+      waiting: Set<string>;
+      monitoring: Set<string>;
+      enterMonitoring(runId: string, spawnParked: boolean): void;
+      busySlots(): number;
+    };
+    const parent = store.createRun({ title: 'parent', workflow: 'quick-task', task: 't', steps: [] });
+    const child = store.createRun({ title: 'child', workflow: 'quick-task', task: 't', steps: [] });
+    store.updateRun(child.id, { status: 'queued', dispatch: { rootRunId: parent.id, parentRunId: parent.id } });
+    internals.active.set(parent.id, {});
+    internals.waiting.add(parent.id);
+    // Second park, after the first reviewer reported: this turn dispatched nothing.
+    internals.enterMonitoring(parent.id, false);
+    expect(internals.busySlots()).toBe(0);
+    // Every child settled: the parent is an ordinary watcher again, capped at 0 sessions.
+    store.updateRun(child.id, { status: 'done' });
+    internals.enterMonitoring(parent.id, false);
+    expect(internals.busySlots()).toBe(1);
+  });
+
   afterEach(async () => {
     // Settle everything before tearing the fixtures down: cancel whatever is
     // still live and wait for terminal statuses, so no check-step child or
@@ -166,6 +192,32 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     );
     expect(a.store.getRun(third.id)?.status).toBe('done');
   }, 45_000);
+
+  // #1524: the self-update dialog read the boot project's store only, so tasks in any other
+  // project — or every task, when cezar booted outside a project — counted as zero.
+  it('the self-update status counts running and queued runs in every project', async () => {
+    const semaphore = new WorkspaceSemaphore({ initial: { maxParallel: 1 } });
+    const a = project('cez-wsem-upd-a-', semaphore);
+    const b = project('cez-wsem-upd-b-', semaphore);
+    const offline = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
+    const selfUpdate = new SelfUpdateService({
+      pkgName: 'x',
+      version: '0.0.0',
+      entry: 'index.js',
+      restart: () => {},
+      runs: semaphore,
+      registry: new RegistryCache('x', offline),
+    });
+    expect((await selfUpdate.status()).activeRuns).toBe(0);
+
+    const slowA = a.manager.startRun(SLOW, { task: 'running in A' });
+    await waitFor(() => a.store.getRun(slowA.id)?.status === 'running', 'the A run to start');
+    const queuedB = b.manager.startRun(SLOW, { task: 'queued in B' });
+    expect(b.store.getRun(queuedB.id)?.status).toBe('queued');
+
+    expect((await selfUpdate.status()).activeRuns).toBe(2);
+    expect(semaphore.idle()).toBe(false);
+  });
 
   it('a slot freed in one project starts the run queued in ANOTHER project', async () => {
     // The starvation regression: `RunManager` only ever pumps ITSELF, so a
@@ -467,7 +519,10 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     // A second child takes the only dispatch slot, so `dispatchBusy() === cap`.
     const holder = a.manager.startRun(HOLD_LONG, { task: 'holds the only dispatch slot' });
     a.store.updateRun(holder.id, { dispatch: { rootRunId: 'root', parentRunId: 'root' } });
-    await waitFor(() => internals.dispatchBusy() === 1, 'the cap to be full');
+    await waitFor(
+      () => internals.dispatchBusy() === 1 && a.store.getRun(holder.id)?.status === 'running',
+      'the cap to be full',
+    );
 
     // Resuming never passes through `pump()/startable()`: it re-enters the counted set with no cap
     // check, exactly as `maxParallel` treats a resume (#347 — gating resumes is the deadlock).
