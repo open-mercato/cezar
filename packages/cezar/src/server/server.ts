@@ -870,6 +870,8 @@ const startRunSchema = z
     // audit trail survives the composer detour. Bounded like every other
     // string here; a todo id is a short generated key.
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    // The GitHub item the task was handed from (#1601); provenance for the GitHub page's marker.
+    sourceUrl: z.string().url().max(2048, 'must be at most 2048 characters').optional(),
     // The composer's Dispatch toggle (spec 2026-09-10-dispatch): this task is the root of a
     // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
     // off: the task itself is still perfectly valid as an ordinary run.
@@ -5055,6 +5057,7 @@ export function createApp(deps: ServerDeps) {
         newBranch: parsed.data.newBranch,
         branch: parsed.data.branch,
         ...(parsed.data.readOnly ? { readOnly: true } : {}),
+        ...(parsed.data.sourceUrl ? { sourceUrl: parsed.data.sourceUrl } : {}),
         autonomous: parsed.data.autonomous,
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
