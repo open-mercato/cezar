@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Lead run — linked workers</title><link rel="stylesheet" href="tokens.css"><script>if(location.hash==="#light")document.documentElement.classList.add("light")</script></head><body>
+<div class="app"><aside class="side"><div class="brand">cezar</div><div class="nav">Dashboard</div><div class="nav">Tasks (all projects)</div><div class="navsec">Projects</div><div class="nav on">api</div><div class="nav">infra</div><div class="nav">payments-sdk</div><div class="nav">web</div><div class="nav">worker</div></aside>
+<main class="main" style="max-width:1040px">
+ <div class="crumb">api / Tasks / a1b2c3d4</div>
+ <div class="row" style="justify-content:space-between"><div><h1>Add discount code to checkout</h1><p class="sub"><span class="dot d-run"></span> Waiting for 1 task · system-task · branch <span class="mono">cez/a1b2c3d4</span> · $3.10 of $12.00</p></div><div class="row"><span class="chip lime">System: storefront</span><span class="chip violet">lead</span></div></div>
+ <div class="card" style="margin-top:18px">
+  <h3>Waiting for <span class="chip">TaskWaitsLine — extended to list settled and created edges</span></h3>
+  <table><tr><th>Repo</th><th>Task</th><th>Status</th><th>Branch / PR</th><th>Edge</th><th></th></tr>
+   <tr><td><b>web</b></td><td>Discount field in checkout form</td><td><span class="dot d-rev"></span> review</td><td><span class="chip mono">cez/e5f6a7b8</span></td><td><span class="chip">settled</span></td><td class="soft">open ↗</td></tr>
+   <tr><td><b>worker</b></td><td>Apply discount on order finalise</td><td><span class="dot d-run"></span> running</td><td><span class="chip mono">cez/c9d0e1f2</span></td><td><span class="chip" style="color:var(--pending)">pending · 23 h 10 m left</span></td><td class="soft">Stop waiting</td></tr>
+  </table>
+ </div>
+ <div class="grid2" style="grid-template-columns:1.2fr 1fr">
+  <div class="card"><h3>Session</h3>
+<div class="pre"><b>▸ plan</b>  api: add discountCode to POST /checkout (contract)
+         web: form field + client type      worker: apply on finalise
+         payments-sdk: no change
+<b>▸ commit</b> cez/a1b2c3d4 — openapi/api.yaml + handler
+<b>▸ hand off</b> web    → task e5f6a7b8 (reads cez/a1b2c3d4:openapi/api.yaml)
+<b>▸ hand off</b> worker → task c9d0e1f2 (reads cez/a1b2c3d4:schemas/events/)
+<b>▸ waiting</b> — parked, no slot held
+<b>▸ woken</b>   web settled: review · branch cez/e5f6a7b8 · $1.40
+         report: "field + type regenerated from contract; tests pass"
+<b>▸ waiting</b> for worker…</div></div>
+  <div class="card"><h3>Final summary <span class="chip">filled in when the lead finishes</span></h3>
+   <table><tr><th>#</th><th>Repo</th><th>Branch</th><th>PR</th></tr>
+    <tr><td>1</td><td><b>api</b></td><td class="mono">cez/a1b2c3d4</td><td class="soft">when opened</td></tr>
+    <tr><td>2</td><td><b>worker</b></td><td class="mono">cez/c9d0e1f2</td><td class="soft">—</td></tr>
+    <tr><td>3</td><td><b>web</b></td><td class="mono">cez/e5f6a7b8</td><td class="soft">—</td></tr></table>
+   <p class="note" style="margin-top:8px">Merge order is advice: providers first (api), then consumers. Each branch still goes through its own review gate; cezar never merges.</p>
+   <div class="banner" style="margin-top:10px">On a worker's page: <b style="color:var(--foreground)">Created by</b> "Add discount code to checkout" in <b style="color:var(--foreground)">api</b> (CreatedByLine, unchanged)</div>
+  </div>
+ </div>
+</main></div><span class="tag-mock">mockup — illustrative</span></body></html>
