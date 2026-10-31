@@ -52,7 +52,6 @@ import { ghostChip, useOnboardingWrite } from '@/components/onboarding-kit'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
-import { SkillPreviewDialog } from '@/components/skill-detail'
 import { SourcePill } from '@/components/source-pill'
 import {
   Command,
