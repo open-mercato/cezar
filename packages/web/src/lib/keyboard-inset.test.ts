@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   keyboardAwareCollisionPadding,
   keyboardInset,
+  useKeyboardOpen,
   useViewportInsets,
   viewportInsets,
   watchKeyboardInset,
+  watchKeyboardOpen,
   watchViewportInsets,
+  type KeyboardOpenWindow,
   type KeyboardViewport,
   type KeyboardWindow,
   type ViewportInsets,
@@ -221,5 +224,121 @@ describe('watchKeyboardInset — the stubbed adapter', () => {
     const stop = watchKeyboardInset(win(null), (px) => applied.push(px))
     expect(applied).toEqual([0])
     stop() // must not throw
+  })
+})
+
+describe('watchKeyboardOpen', () => {
+  /** A drivable phone: `resize` moves the layout viewport and fires what the engine would. */
+  function phone({ coarse = true, height = 800, width = 390 } = {}) {
+    const viewport = new StubViewport(height)
+    const listeners = new Set<() => void>()
+    const stub: KeyboardOpenWindow = {
+      innerHeight: height,
+      innerWidth: width,
+      visualViewport: viewport,
+      addEventListener: (_type, listener) => void listeners.add(listener),
+      removeEventListener: (_type, listener) => void listeners.delete(listener),
+      matchMedia: () => ({ matches: coarse }),
+    }
+    const field = document.createElement('textarea')
+    document.body.append(field)
+    const states: boolean[] = []
+    const stop = watchKeyboardOpen(stub, document, (open) => states.push(open))
+    const fire = () => {
+      for (const listener of listeners) listener()
+      viewport.fire('resize')
+    }
+    return { stub, viewport, field, states, stop, fire, listeners }
+  }
+  const last = (states: boolean[]) => states[states.length - 1]
+
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  it('opens on iOS: innerHeight stays, the visual viewport shrinks', () => {
+    const { viewport, field, states, fire } = phone()
+    expect(last(states)).toBe(false)
+    field.focus()
+    viewport.height = 460
+    fire()
+    expect(last(states)).toBe(true)
+    field.blur()
+    expect(last(states)).toBe(false)
+  })
+
+  it('stays open when iOS pans to the field and the inset reads 0', () => {
+    const { stub, viewport, field, states, fire } = phone()
+    field.focus()
+    viewport.height = 460
+    viewport.offsetTop = 340
+    fire()
+    expect(keyboardInset(stub)).toBe(0)
+    expect(last(states)).toBe(true)
+  })
+
+  it('opens under resizes-content: the inset stays 0, innerHeight shrinks', () => {
+    const { stub, viewport, field, states, fire } = phone()
+    field.focus()
+    stub.innerHeight = 500
+    viewport.height = 500
+    fire()
+    expect(keyboardInset(stub)).toBe(0)
+    expect(last(states)).toBe(true)
+  })
+
+  it('closes when Android back drops the keyboard and focus stays in the field', () => {
+    const { stub, viewport, field, states, fire } = phone()
+    field.focus()
+    stub.innerHeight = 500
+    viewport.height = 500
+    fire()
+    stub.innerHeight = 800
+    viewport.height = 800
+    fire()
+    expect(document.activeElement).toBe(field)
+    expect(last(states)).toBe(false)
+  })
+
+  it('keeps each orientation its own tallest height, so a rotation is not a keyboard', () => {
+    const { stub, viewport, field, states, fire } = phone()
+    field.focus()
+    Object.assign(stub, { innerWidth: 800, innerHeight: 390 })
+    viewport.height = 390
+    fire()
+    expect(last(states)).toBe(false)
+    stub.innerHeight = 200
+    viewport.height = 200
+    fire()
+    expect(last(states)).toBe(true)
+  })
+
+  it.each([
+    ['a URL bar coming back', { covered: 60, focused: true, coarse: true }],
+    ['pinch zoom with nothing focused', { covered: 300, focused: false, coarse: true }],
+    ['a desktop window dragged shorter', { covered: 300, focused: true, coarse: false }],
+  ])('stays closed for %s', (_name, { covered, focused, coarse }) => {
+    const { stub, viewport, field, states, fire } = phone({ coarse })
+    if (focused) field.focus()
+    stub.innerHeight = 800 - covered
+    viewport.height = 800 - covered
+    fire()
+    expect(states.every((open) => !open)).toBe(true)
+  })
+
+  it('cleanup detaches every listener', () => {
+    const { viewport, field, states, stop, listeners } = phone()
+    stop()
+    expect(listeners.size).toBe(0)
+    expect(viewport.listeners.get('resize')?.size).toBe(0)
+    field.focus()
+    expect(states).toHaveLength(1)
+  })
+})
+
+describe('useKeyboardOpen', () => {
+  it('stays false without matchMedia or a visualViewport (jsdom, older engines)', () => {
+    const { result } = renderHook(() => useKeyboardOpen())
+    expect(result.current).toBe(false)
   })
 })

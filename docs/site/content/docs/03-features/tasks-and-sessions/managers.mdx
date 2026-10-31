@@ -78,9 +78,15 @@ Type `/` in the chat for commands:
 
 The manager handles one turn at a time. Messages you send during a turn run next, folded into one turn. A manager runs only for a turn, so an idle chat costs nothing and survives a restart.
 
+### On a phone
+
+Below tablet width the chat keeps to one header row, with back, the manager's name and the gear. The arrow opens the list of managers, where the menu button is. The projects picker moves into the gear.
+
+With an empty draft, **status**, **attention** and **prs** chips sit above the composer. A tap sends that command right away. The Refresh control hides while the keyboard is open.
+
 ## Connect repositories
 
-A manager starts with **All projects**, which covers every project registered in Cezar, including projects you add later. To limit it, open the projects picker under the manager's name and select individual projects. The chat records each change, for example *Connected to api, web*.
+A manager starts with **All projects**, which covers every project registered in Cezar, including projects you add later. To limit it, open the projects picker under the manager's name, or in the gear on a phone, and select individual projects. The chat records each change, for example *Connected to api, web*.
 
 Cezar refuses any `cez-manager` command that targets a project the manager is not connected to. An approval also fails if you disconnected its project after the manager proposed it.
 

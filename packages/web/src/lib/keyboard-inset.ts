@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
+import { isEditableTarget } from './use-command-shortcut'
+
 /**
  * The iOS virtual-keyboard adapter (spec iOS checklist; tech research §7): Safari does NOT
  * resize the layout viewport when the keyboard opens, so a bottom-docked composer gets
@@ -162,4 +164,69 @@ export function useKeyboardInsetVar(onSettle?: (px: number) => void): void {
       (px) => onSettleRef.current?.(px),
     )
   }, [])
+}
+
+/** Below any docked keyboard, above an iOS hardware-keyboard bar or a URL bar coming back. */
+const KEYBOARD_MIN_PX = 120
+
+/** What {@link watchKeyboardOpen} reads beyond the inset math. */
+export interface KeyboardOpenWindow extends KeyboardWindow {
+  innerWidth: number
+  addEventListener(type: 'resize', listener: () => void): void
+  removeEventListener(type: 'resize', listener: () => void): void
+  matchMedia?(query: string): { matches: boolean }
+}
+
+export interface KeyboardOpenDocument {
+  activeElement: Element | null
+  addEventListener(type: 'focusin' | 'focusout', listener: () => void): void
+  removeEventListener(type: 'focusin' | 'focusout', listener: () => void): void
+}
+
+/**
+ * Whether a software keyboard is up. iOS shrinks the visual viewport; engines honoring
+ * `interactive-widget=resizes-content` shrink `innerHeight` as well, read
+ * against the tallest height seen at this width (rotating changes the width). Touch and a focused
+ * field gate both: pinch zoom, a resized desktop window and a keyboard dismissed by Android's back
+ * button (focus stays, height returns) are not an open keyboard.
+ */
+export function watchKeyboardOpen(
+  win: KeyboardOpenWindow,
+  doc: KeyboardOpenDocument,
+  apply: (open: boolean) => void,
+): () => void {
+  const tallest = new Map<number, number>()
+  const onChange = () => {
+    const tall = Math.max(tallest.get(win.innerWidth) ?? 0, win.innerHeight)
+    tallest.set(win.innerWidth, tall)
+    // Not `keyboardInset`: iOS pans to reveal the field, and `offsetTop` hides the keyboard from it.
+    const shrunk = win.visualViewport ? win.innerHeight - win.visualViewport.height : 0
+    const covered = Math.max(shrunk, tall - win.innerHeight)
+    apply(
+      covered >= KEYBOARD_MIN_PX &&
+        isEditableTarget(doc.activeElement) &&
+        (win.matchMedia?.('(pointer: coarse)').matches ?? false),
+    )
+  }
+  onChange()
+  const viewport = win.visualViewport
+  win.addEventListener('resize', onChange)
+  viewport?.addEventListener('resize', onChange)
+  viewport?.addEventListener('scroll', onChange)
+  doc.addEventListener('focusin', onChange)
+  doc.addEventListener('focusout', onChange)
+  return () => {
+    win.removeEventListener('resize', onChange)
+    viewport?.removeEventListener('resize', onChange)
+    viewport?.removeEventListener('scroll', onChange)
+    doc.removeEventListener('focusin', onChange)
+    doc.removeEventListener('focusout', onChange)
+  }
+}
+
+/** The React binding, for chrome that steps aside while typing. */
+export function useKeyboardOpen(): boolean {
+  const [open, setOpen] = useState(false)
+  useEffect(() => watchKeyboardOpen(window as unknown as KeyboardOpenWindow, document, setOpen), [])
+  return open
 }

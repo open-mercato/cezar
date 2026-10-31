@@ -202,6 +202,104 @@ describe('/manager/:id', () => {
     expect(await screen.findByText('This manager no longer exists')).toBeTruthy()
   })
 
+  it('merges the phone header into one row: back to the whole list, projects in the gear', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    const heading = await screen.findByRole('heading', { name: 'Global Manager' })
+    expect(heading.closest('header')?.className).toContain('max-md:h-13')
+    expect(screen.getByRole('link', { name: 'All managers' }).getAttribute('href')).toBe('/manager?all=1')
+    expect(screen.getByRole('button', { name: 'Connected projects' }).parentElement?.className).toBe('max-md:hidden')
+    fireEvent.click(screen.getByRole('button', { name: 'Manager settings' }))
+    const menu = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-slot="manager-settings-menu"]')
+      expect(found).not.toBeNull()
+      return found!
+    })
+    expect(menu.querySelector('[data-slot="manager-projects-picker"]')).not.toBeNull()
+  })
+
+  it('hides the shell top bar only while the chat is on screen', async () => {
+    const bar = document.body.appendChild(document.createElement('header'))
+    bar.dataset.slot = 'mobile-top-bar'
+    seedChat()
+    const client = renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    expect(bar.hidden).toBe(true)
+    server.managers = []
+    act(() => applyManagerEvent(client, 'manager-change', JSON.stringify({ id: 'global', deleted: true })))
+    await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager'))
+    expect(bar.hidden).toBe(false)
+    bar.remove()
+  })
+
+  it('drops the inert + on phones, and sizes the controls for a thumb', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    expect(screen.getByRole('button', { name: 'Attach files' }).className).toContain('max-md:hidden')
+    expect(composer().className).toContain('max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]')
+    expect(screen.getByRole('button', { name: 'Send' }).className).toContain('pointer-coarse:max-md:h-11')
+  })
+
+  it('offers chips on an empty draft only, and a chip sends its command once', async () => {
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    const chips = () => [...document.querySelectorAll('[data-slot="manager-chips"] button')].map((chip) => chip.textContent)
+    fireEvent.change(composer(), { target: { value: 'x' } })
+    expect(chips()).toEqual([])
+    fireEvent.change(composer(), { target: { value: '' } })
+    expect(chips()).toEqual(['status', 'attention', 'prs'])
+    const chip = screen.getByRole('button', { name: /^attention/ })
+    fireEvent.click(chip)
+    fireEvent.click(chip)
+    await waitFor(() => expect(posted('/global/messages')[0]?.body).toEqual({ text: 'What needs my attention right now?' }))
+    expect(posted('/global/messages')).toHaveLength(1)
+  })
+
+  it('hides the Refresh footer while the keyboard is open', async () => {
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: query !== '(min-width: 768px)', addEventListener() {}, removeEventListener() {} }))
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByRole('heading', { name: 'Global Manager' })
+    expect(document.querySelector('[data-slot="manager-footer"]')).not.toBeNull()
+    act(() => {
+      composer().focus()
+      Object.defineProperty(window, 'innerHeight', { value: 500, configurable: true })
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(document.querySelector('[data-slot="manager-footer"]')).toBeNull()
+    act(() => {
+      Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+      window.dispatchEvent(new Event('resize'))
+    })
+    expect(document.querySelector('[data-slot="manager-footer"]')).not.toBeNull()
+  })
+
+  it('re-pins a reader at the tail once the keyboard settles, and writes --kb', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const viewport = Object.assign(new EventTarget(), { height: 800, offsetTop: 0 })
+    Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true })
+    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true })
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box, 'scrollHeight', { value: 900, configurable: true })
+    viewport.height = 460
+    act(() => {
+      viewport.dispatchEvent(new Event('resize'))
+      vi.advanceTimersByTime(250)
+    })
+    expect(document.documentElement.style.getPropertyValue('--kb')).toBe('340px')
+    expect(box.scrollTop).toBe(900)
+    cleanup()
+    expect(document.documentElement.style.getPropertyValue('--kb')).toBe('0px')
+    Object.defineProperty(window, 'visualViewport', { value: null, configurable: true })
+    vi.useRealTimers()
+  })
+
   it('does not let the second click of a double-click on Send stop the turn it started', async () => {
     seedChat({ status: 'working' })
     renderAt('/manager/global')
@@ -236,6 +334,18 @@ describe('/manager/:id', () => {
     Object.defineProperty(box, 'scrollHeight', { value: 900, configurable: true })
     grow()
     expect(box.scrollTop).toBe(900)
+  })
+
+  it('watches the transcript box as well, which shrinks when the chips come back', async () => {
+    const watched = new Set<Element>()
+    vi.stubGlobal('ResizeObserver', class {
+      observe(target: Element) { watched.add(target) }
+      disconnect() {}
+    })
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    expect(watched.has(document.querySelector('[data-slot="manager-transcript"]')!)).toBe(true)
   })
 
   it('tells an empty chat what to do', async () => {
