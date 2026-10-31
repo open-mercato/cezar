@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils'
 import type { Accent, Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
 import { useProjectOrder } from '@/lib/use-project-order'
+import { useLiveUsageEnabled, writeLiveUsageEnabled } from '@/lib/live-usage-pref'
 import { toast } from '@/components/ui/toaster'
 
 /**
@@ -229,6 +230,7 @@ function BrandingFields() {
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
   const { accent, density, width, setAccent, setDensity, setWidth } = useAppearance()
+  const liveUsage = useLiveUsageEnabled()
 
   return (
     <div
@@ -256,6 +258,22 @@ export function AppearanceSection() {
         hint="Full gives task sessions, commits, and skill content the whole available area. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
       >
         <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
+      </Field>
+
+      <Field
+        title="Usage gauges"
+        hint="Claude account, plan limits left (5h, 7d) and context fill in the task header. Applies to this browser."
+      >
+        <Segmented
+          slot="appearance-live-usage"
+          label="Usage gauges"
+          value={liveUsage ? 'on' : 'off'}
+          options={[
+            { value: 'on', label: 'Show' },
+            { value: 'off', label: 'Hide' },
+          ]}
+          onChange={(value) => writeLiveUsageEnabled(value === 'on')}
+        />
       </Field>
 
       <ProjectOrderField />
