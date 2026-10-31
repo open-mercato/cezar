@@ -42,10 +42,6 @@ export function App() {
             card or route) is live per viewport. Muted here at the root because the widget lives in
             the shell for the session, above every route. */}
         <HostUsageProvider>
-          {/* Beside the stream on purpose: it watches the run-list cache the stream patches
-              (and reconciliation refetches), turning attention transitions into browser
-              notifications when the tab is hidden (R6 1.7). Renders nothing. */}
-          <RunNotifications />
           {/* And beside it for the same reason: the star ask's one-time toast watches the same
               run-list cache for the user's first successful run. Once per browser, ever, and
               silent when promos are off (`CEZ_NO_BANNER=1`). Renders nothing. */}
@@ -56,6 +52,10 @@ export function App() {
             <AppearanceProvider>
               <BrowserRouter>
                 <LastLocationController />
+                {/* Inside the router so a notification click can navigate to its run (#1761). Watches the
+                    run-list cache the stream patches and turns attention transitions into browser
+                    notifications when the tab is hidden (R6 1.7). Renders nothing. */}
+                <RunNotifications />
                 {/* Page views + error hooks; the server forwards them only after the user opted in
                     (docs/telemetry.md). Renders nothing. */}
                 <Telemetry />
