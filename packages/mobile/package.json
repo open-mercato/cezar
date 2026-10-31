@@ -1,0 +1,21 @@
+{
+  "name": "@open-mercato/cezar-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "iOS and Android shell for a hosted cezar (spec 2026-10-31-mobile-apps-manager-first). Not an npm workspace on purpose: it pulls Capacitor, which the service, contract and cockpit never need.",
+  "type": "module",
+  "scripts": {
+    "sync": "cap sync",
+    "check": "node scripts/check-framework-free.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:swift": "sh scripts/test-swift.sh"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/ios": "^8.6.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0"
+  }
+}
