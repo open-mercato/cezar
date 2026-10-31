@@ -1511,9 +1511,9 @@ export async function updateProject(
 // ---- run mutations ------------------------------------------------------------------------
 
 /** ×1 answers the run record; ×2/×3 answers `{ runs }` — narrow on `'runs' in result`. */
-export async function createRun(input: CreateRunInput): Promise<CreateRunResponse> {
+export async function createRun(input: CreateRunInput, projectScope = queryScope()): Promise<CreateRunResponse> {
   return unwrap(
-    await cez.api.v1.p[':projectId'].runs.$post({ param: { projectId: queryScope() }, json: input }),
+    await cez.api.v1.p[':projectId'].runs.$post({ param: { projectId: projectScope }, json: input }),
     '/runs',
   )
 }

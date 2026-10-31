@@ -70,6 +70,7 @@ import {
   type GithubSort,
 } from './github-filter'
 import { GithubLoading } from './github-loading'
+import { IssueFixListProvider, IssueFixListToolbar, IssueFixRowControls, useIssueFixContext } from './issue-fix-actions'
 import { HandToAgent } from './hand-to-agent'
 import { SwipeLaunchSheet, SwipeReveal, useRowSwipe } from './swipe-launch'
 import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
@@ -561,7 +562,8 @@ export function GithubRoute({
   )
 
   return (
-    <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<>
+    <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<IssueFixListProvider
+        enabled={view === 'issues'} items={[...items, ...searchHits]} queued={queued} engine={engine} onQueued={markQueued}>
         <header data-slot="gh-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="text-lg font-semibold">GitHub</h1>
@@ -648,6 +650,8 @@ export function GithubRoute({
             />
           </div>
         </header>
+
+        <IssueFixListToolbar />
 
         {items.length === 0 ? (
           // Nothing in the OPEN list matched. Rather than the old flat "no match" — which was a
@@ -765,7 +769,7 @@ export function GithubRoute({
           engine={engine}
           onQueued={markQueued}
         />
-    </>} detail={<>
+    </IssueFixListProvider>} detail={<>
         {selected ? (
           <GithubDetail
             item={selected}
@@ -842,6 +846,7 @@ const GithubRow = memo(function GithubRow({
 }: GithubRowProps) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
+  const issueFix = useIssueFixContext()
   const swipe = useRowSwipe(() => onSwipe?.(item))
 
   // Warm the thread on hover/focus (#664) so opening the row is usually instant — best-effort,
@@ -869,6 +874,7 @@ const GithubRow = memo(function GithubRow({
     // Clip only mid-swipe: an always-clipped <li> would cut off the link's default focus ring.
     <li className={cn('relative rounded-md', swipe.offset !== 0 && 'overflow-hidden')}>
       {onSwipe ? <SwipeReveal offset={swipe.offset} /> : null}
+      {issueFix ? <IssueFixRowControls item={item} actions={issueFix.actions} queued={queued} /> : null}
       <Link
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
@@ -884,6 +890,7 @@ const GithubRow = memo(function GithubRow({
         className={cn(
           'relative flex touch-pan-y flex-col gap-1 rounded-md bg-background px-2.5 py-2 transition-colors hover:bg-muted',
           active && 'bg-muted',
+          issueFix && 'pr-20',
         )}
       >
         <span className="flex min-w-0 items-center gap-2">
