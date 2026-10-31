@@ -53,9 +53,12 @@ function Check({ on }: { on: boolean }) {
 }
 
 export function ProjectsPicker({ value, onChange }: { value: ManagerProjects; onChange: (next: ManagerProjects) => void }) {
-  const projects = useProjects().data?.projects ?? []
+  const registry = useProjects().data?.projects
+  const projects = registry ?? []
   const nameOf = (id: string) => projects.find((project) => project.id === id)?.name
-  const selected = value === 'all' ? [] : value
+  // A project removed from cezar stays in the definition, where no option could untick it.
+  const selected = value === 'all' ? [] : registry ? value.filter((id) => nameOf(id) !== undefined) : value
+  const allRemoved = value !== 'all' && registry !== undefined && selected.length === 0
   const toggle = (id: string) => {
     const next = selected.includes(id) ? selected.filter((entry) => entry !== id) : [...selected, id]
     // The contract refuses an empty list, and no project at all is not a manager.
@@ -65,7 +68,7 @@ export function ProjectsPicker({ value, onChange }: { value: ManagerProjects; on
     <Popover>
       <PopoverTrigger asChild>
         <button type="button" data-slot="manager-projects-picker" aria-label="Connected projects" className={PICKER_TRIGGER}>
-          <TriggerLabel>{projectsLabel(value, nameOf)}</TriggerLabel>
+          <TriggerLabel>{allRemoved ? 'Project removed' : projectsLabel(value === 'all' ? value : selected, nameOf)}</TriggerLabel>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] p-0">

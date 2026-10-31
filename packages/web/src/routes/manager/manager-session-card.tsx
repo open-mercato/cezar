@@ -41,15 +41,17 @@ export function SessionCard({
           <span className="block truncate text-sm font-semibold">
             {run ? runTitle(run as unknown as RunRecord) : `Session ${runId.slice(0, 8)}`}
           </span>
-          <span className="mt-0.5 flex min-h-4 items-center gap-2">
-            {attention ? (
-              <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
-                <StatusDot tone={attention.tone} pulse={attention.pulse} />
-                {attention.label}
-              </span>
-            ) : null}
-            {stat ? <DiffStatLabel stat={stat} /> : null}
-          </span>
+          {attention || stat ? (
+            <span className="mt-0.5 flex min-h-4 items-center gap-2">
+              {attention ? (
+                <span className="flex items-center gap-1.5 text-meta text-muted-foreground">
+                  <StatusDot tone={attention.tone} pulse={attention.pulse} />
+                  {attention.label}
+                </span>
+              ) : null}
+              {stat ? <DiffStatLabel stat={stat} /> : null}
+            </span>
+          ) : null}
         </span>
         <ChevronRightIcon aria-hidden="true" className="size-5 shrink-0" />
       </Link>

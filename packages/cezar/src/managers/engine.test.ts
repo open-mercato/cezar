@@ -279,6 +279,9 @@ describe('ManagerEngine', () => {
       restarted.start();
       expect(store.message(id, 's')).toMatchObject({ streaming: false, stopped: true, text: 'half' });
       expect(store.message(id, 'a')).toMatchObject({ status: 'failed' });
+      // Nobody pressed Stop: the chat has to say what really cut the reply short.
+      expect(store.messages(id).filter((message) => message.kind === 'notice').map((message) => 'text' in message && message.text))
+        .toEqual(['cezar restarted during this reply.']);
     });
 
     it('never re-runs an unanswered message on its own; it says so', async () => {

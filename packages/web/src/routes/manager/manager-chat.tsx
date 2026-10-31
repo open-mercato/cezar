@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon, PlusIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router'
+import { Link, Navigate, useParams } from 'react-router'
 
 import {
   applyManagerChange,
@@ -19,6 +19,7 @@ import { useHealth } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Composer } from '@/components/composer/composer'
 import { Button } from '@/components/ui/button'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { MANAGER_COMMANDS, parseManagerCommand } from '@/lib/managers'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
@@ -30,6 +31,10 @@ import { ManagerSettings, pickModel } from './manager-settings'
 
 /** Older history loads this far before the reader reaches the top. */
 const HISTORY_SLACK_PX = 400
+
+/** Send vanishes under the pointer and Stop slides into its place: a double-click must not stop
+ *  the turn it just started. */
+const STOP_AFTER_SEND_GUARD_MS = 600
 
 /** Per-manager drafts for the session: switching chats must not eat what was typed. */
 const drafts = new Map<string, string>()
@@ -53,6 +58,18 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     else if (lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
   }, [messages])
+
+  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the tail.
+  useEffect(() => {
+    const box = ref.current
+    const content = box?.firstElementChild
+    if (!box || !content) return undefined
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) box.scrollTop = box.scrollHeight
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [])
 
   const onScroll = useCallback(() => {
     const box = ref.current
@@ -118,13 +135,16 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       .finally(() => setDeciding(false))
   }, [id])
 
+  const lastSent = useRef(0)
   const stop = useCallback(() => {
+    if (Date.now() - lastSent.current < STOP_AFTER_SEND_GUARD_MS) return
     void stopManager(id).catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
   }, [id])
 
   const submit = async (text: string) => {
     const command = parseManagerCommand(text)
     scroll.jump()
+    lastSent.current = Date.now()
     if (command?.name === 'stop') return stopManager(id)
     if (command?.name === 'check') {
       await checkManager(id)
@@ -149,7 +169,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <ManagerSettings manager={manager} onPatch={onPatch} />
       </header>
 
-      <div ref={scroll.ref} data-slot="manager-transcript" onScroll={scroll.onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      <div ref={scroll.ref} data-slot="manager-transcript" onScroll={scroll.onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]">
         <div className="mx-auto flex w-full max-w-[860px] flex-col gap-5 px-4 py-6 md:px-6">
           {hasNextPage ? (
             <Button variant="ghost" size="sm" className="self-center" disabled={isFetchingNextPage} onClick={loadOlder}>
@@ -158,6 +178,11 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
           ) : null}
           {chat.isError ? (
             <p role="alert" className="text-center text-sm text-danger">{chat.error.message}</p>
+          ) : null}
+          {chat.isSuccess && chat.messages.length === 0 ? (
+            <p data-slot="manager-empty" className="py-10 text-center text-sm text-muted-foreground">
+              Ask {manager.name} what needs you, or to start something.
+            </p>
           ) : null}
           {chat.messages.map((message) => (
             <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} deciding={deciding} />
@@ -179,6 +204,22 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         ) : null}
         <Composer
           key={id}
+          compact
+          footerStart={
+            // Drawn in the frame, and the spec keeps it inert until a runner path can take files.
+            <IconTooltip label="Attachments aren't available for managers yet" side="top">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-disabled="true"
+                aria-label="Attach files"
+                className="mb-0.5 size-8 shrink-0 cursor-not-allowed text-muted-foreground opacity-60 hover:bg-transparent"
+              >
+                <PlusIcon aria-hidden="true" className="size-4" />
+              </Button>
+            </IconTooltip>
+          }
           value={draft}
           onValueChange={(text) => {
             setDraft(text)
@@ -211,7 +252,12 @@ export function ManagerChatRoute() {
   const enabled = useHealth().data?.capabilities.managers === true
   const managers = useManagers(enabled)
   const manager = managers.data?.managers.find((entry) => entry.id === id)
+  // Deleted under the reader, here or in another tab: this screen is gone, so is its Settings
+  // popover and any callback it held. "No longer exists" is for a link that never resolved.
+  const seen = useRef<string | undefined>(undefined)
+  if (manager) seen.current = id
   if (manager) return <ManagerChat key={id} manager={manager} />
+  if (managers.data && seen.current === id) return <Navigate to="/manager" replace />
   if (managers.isError) return <CenteredState icon={<BotIcon aria-hidden="true" />} tone="danger" title="Managers are unavailable" subtitle={managers.error.message} />
   if (managers.data) {
     return (

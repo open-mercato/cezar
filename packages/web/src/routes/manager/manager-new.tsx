@@ -24,6 +24,21 @@ export const MANAGER_PRESETS = [
   },
 ] as const
 
+const NAME_LIMIT = 40
+
+/** Every manager called "Manager" can't be told apart in the sidebar. A preset names itself; a typed
+ *  prompt lends its first line, cut at a word. */
+export function managerNameFrom(prompt: string): string {
+  const text = prompt.trim()
+  const preset = MANAGER_PRESETS.find((entry) => entry.prompt === text)
+  if (preset) return preset.label
+  const line = (text.split('\n')[0] ?? '').replace(/[.!?:,;]+$/, '').trim()
+  if (line.length <= NAME_LIMIT) return line
+  const cut = line.slice(0, NAME_LIMIT)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > 12 ? cut.slice(0, space) : cut).trimEnd()}…`
+}
+
 interface Setup {
   projects: ManagerProjects
   runner?: string
@@ -56,10 +71,12 @@ export function ManagerNewRoute() {
   const [prompt, setPrompt] = useState('')
   const [setup, setSetup] = useState<Setup>({ projects: 'all', effort: 'medium' })
   const onChange = (patch: ManagerPatch) => setSetup((current) => applySetupPatch(current, patch))
-  const first = (managers.data?.managers.length ?? 0) === 0
+  // Only a loaded list can say "first": a pasted /manager/new must not flash it.
+  const first = managers.data?.managers.length === 0
 
   const submit = async (text: string) => {
-    const input: CreateManagerInput = { instructions: text, ...setup }
+    const name = managerNameFrom(text)
+    const input: CreateManagerInput = { instructions: text, ...(name ? { name } : {}), ...setup }
     const manager = await create.mutateAsync(input)
     // The manager exists now, so a failed first message is a toast in its chat, not a lost setup.
     await sendManagerMessage(manager.id, text).catch((error: unknown) =>

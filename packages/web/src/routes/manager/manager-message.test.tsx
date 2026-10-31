@@ -82,7 +82,7 @@ describe('ManagerMessageRow', () => {
 
   it('says a stopped or failed turn', () => {
     renderMessage(assistantMessage(2, { text: '', stopped: true, error: 'Boom' }))
-    expect(screen.getByText('Response stopped by the user.')).toBeTruthy()
+    expect(screen.getByText('Response stopped.')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('Boom')
   })
 
