@@ -7,8 +7,8 @@ Please upgrade to the newest release before reporting an issue.
 
 | Version  | Supported          |
 | -------- | ------------------ |
-| 0.14.x   | :white_check_mark: |
-| < 0.14   | :x:                |
+| 0.15.x   | :white_check_mark: |
+| < 0.15   | :x:                |
 
 ## Reporting a Vulnerability
 

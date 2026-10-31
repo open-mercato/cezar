@@ -48,4 +48,14 @@ describe('aggregateTreeUsage', () => {
     // pid 900 (999999 KB) is a sibling under init, not under 500 — must not be counted.
     expect(aggregateTreeUsage(procs, 500)?.rssBytes).toBe(175000 * 1024);
   });
+
+  it('keeps complete totals for ancestor and descendant roots from one snapshot', () => {
+    expect(aggregateTreeUsage(procs, 500)).toEqual({ cpuPct: 17, rssBytes: 175000 * 1024, procCount: 3 });
+    expect(aggregateTreeUsage(procs, 501)).toEqual({ cpuPct: 7, rssBytes: 75000 * 1024, procCount: 2 });
+  });
+
+  it('terminates when a torn snapshot contains a pid-reuse cycle', () => {
+    const cycle = parsePsOutput('700 701 100 1\n701 700 200 2\n');
+    expect(aggregateTreeUsage(cycle, 700)).toEqual({ cpuPct: 3, rssBytes: 300 * 1024, procCount: 2 });
+  });
 });

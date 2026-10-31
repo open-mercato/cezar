@@ -103,15 +103,16 @@ export const agentAccountSelectionSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  antigravity: z.string().optional(),
 });
 export type AgentAccountSelection = z.infer<typeof agentAccountSelectionSchema>;
 
 /**
  * `GET /api/v1/workspace/agent-profiles` — every account, discovered defaults first.
  *
- * `editable` is false in hosted mode (`CEZ_REMOTE`), where the whole family is refused: defining
- * a profile points an agent at a local directory, and the listing echoes absolute paths carrying
- * the username. Same posture as `PUT /api/v1/agent-config/:id`.
+ * `editable` is false in hosted mode (`CEZ_REMOTE`) unless the operator explicitly enables remote
+ * account management: defining a profile points an agent at a local directory, and the listing
+ * echoes absolute paths carrying the username.
  */
 export const agentProfilesResponseSchema = z.object({
   editable: z.boolean(),
@@ -125,7 +126,7 @@ export const agentProfilesResponseSchema = z.object({
    *  Served here rather than on `GET /api/v1/projects` because it is stored beside the accounts it
    *  names (`~/.cezar/agent-accounts.json`) — one file, so deleting an account and scrubbing every
    *  reference to it is one atomic write, and neither can be dropped by a cezar version that never
-   *  heard of accounts. Empty in hosted mode, where the whole family is withheld. */
+   *  heard of accounts. Empty when remote account management is withheld. */
   selections: z.record(z.string(), agentAccountSelectionSchema),
   /** The machine-wide fallback account per provider, used by any repo that has chosen none. */
   defaults: agentAccountSelectionSchema,
@@ -161,10 +162,51 @@ export const agentProfileSelectionsResponseSchema = z.object({
 });
 export type AgentProfileSelectionsResponse = z.infer<typeof agentProfileSelectionsResponseSchema>;
 
+/** Ordered provider/account fallback after a recognized usage-exhaustion error. */
+export const agentFallbackCandidateSchema = z.object({
+  provider: providerIdSchema,
+  profileId: z.string().min(1).max(64).default(DEFAULT_AGENT_ACCOUNT_ID),
+  model: z.string().min(1).max(200).optional(),
+});
+export type AgentFallbackCandidate = z.infer<typeof agentFallbackCandidateSchema>;
+
+export const agentFallbackPolicySchema = z.object({
+  enabled: z.boolean(),
+  candidates: z.array(agentFallbackCandidateSchema).max(10),
+  revision: z.number().int().nonnegative(),
+  incarnation: z.string().nullable(),
+  revocation: z.string().nullable(),
+});
+export type AgentFallbackPolicy = z.infer<typeof agentFallbackPolicySchema>;
+
+export const getAgentFallbackPolicyQuerySchema = z.object({
+  projectId: z.string().min(1).max(64),
+});
+export type GetAgentFallbackPolicyQuery = z.infer<typeof getAgentFallbackPolicyQuerySchema>;
+
+export const putAgentFallbackPolicySchema = z.object({
+  projectId: z.string().min(1).max(64),
+  expectedRevision: z.number().int().nonnegative(),
+  expectedIncarnation: z.string().nullable(),
+  enabled: z.boolean(),
+  candidates: z.array(agentFallbackCandidateSchema).max(10).superRefine((items, ctx) => {
+    const seen = new Set<string>();
+    items.forEach((item, index) => {
+      const key = `${item.provider}:${item.profileId}`;
+      if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index], message: 'duplicate fallback candidate' });
+      seen.add(key);
+    });
+  }),
+}).superRefine((value, ctx) => {
+  if (value.enabled && value.candidates.length === 0) {
+    ctx.addIssue({ code: 'custom', path: ['candidates'], message: 'enabled fallback policy requires at least one candidate' });
+  }
+});
+export type PutAgentFallbackPolicy = z.infer<typeof putAgentFallbackPolicySchema>;
 
 /** `GET /api/v1/workspace/agent-profiles/:id/status` — one account's auth state, probed for real.
- *  `?refresh=1` drops this account's cached answer and re-probes. Kept off the listing so a cold
- *  load pays no CLI spawn. */
+ *  `?refresh=1` drops this account's cached answer and re-probes; `?recheck=1` (the pane's Check
+ *  again) also lets that probe lift a dead login. Kept off the listing so a cold load pays no CLI spawn. */
 export const agentAccountStatusResponseSchema = z.object({ status: providerStatusSchema });
 export type AgentAccountStatusResponse = z.infer<typeof agentAccountStatusResponseSchema>;
 
@@ -174,7 +216,8 @@ export type AgentAccountStatusResponse = z.infer<typeof agentAccountStatusRespon
  * A SEPARATE, on-demand route rather than a field on the listing, and that is the whole point of
  * "hidden by default": if the listing carried an email, hiding it in the UI would be theatre — it
  * would already be in the response, the query cache and devtools. It is fetched only when the user
- * asks, is refused in hosted mode, and is never logged or persisted.
+ * asks, is refused in hosted mode unless remote account management was explicitly enabled, and is
+ * never logged or persisted.
  *
  * `fields` is a labelled list rather than a fixed shape because what an agent knows about its own
  * login differs; inventing an empty "Organization" for one that has no such concept would be a

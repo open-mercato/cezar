@@ -114,15 +114,15 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
     <header data-slot="tracker-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
       <div className="flex min-w-0 items-center gap-2.5">
         <h1 className="text-lg font-semibold">{provider}</h1>
-        <span className="min-w-0 truncate font-mono text-[11px] text-soft-foreground" title={association.externalName}>{association.externalName}</span>
+        <span className="min-w-0 truncate font-mono text-meta text-soft-foreground" title={association.externalName}>{association.externalName}</span>
         <Link to="/settings/tracker" aria-label="Connection settings" title="Connection settings" className="ml-auto shrink-0 text-soft-foreground hover:text-foreground"><SettingsIcon className="size-3.5" /></Link>
-        <button type="button" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55">
+        <button type="button" aria-label="Refresh" title={`Refresh from ${provider}`} disabled={watch.checking || result.isFetching} onClick={() => void refresh()} className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-micro font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55">
           <RefreshCwIcon aria-hidden="true" className={cn('size-[9px]', (watch.checking || result.isFetching) && 'motion-safe:animate-spin')} />
           {watch.checkedAt ? `synced ${shortAge(watch.checkedAt)} ago` : 'refresh'}
         </button>
       </div>
       <div className="mt-2.5 flex items-center justify-between border-b border-border pb-2">
-        <h2 className="text-[13px] font-medium">Issues · {items.length}{result.hasNextPage ? '+' : ''}</h2>
+        <h2 className="text-ui font-medium">Issues · {items.length}{result.hasNextPage ? '+' : ''}</h2>
         <select aria-label="Issue state" className="min-w-0 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={state} onChange={(event) => { setState(event.target.value as 'active' | 'all'); setStateExplicit(true) }}><option value="active">Active</option><option value="all">All states</option></select>
       </div>
       <form className="mt-2.5 flex items-center gap-2 pb-3" onSubmit={(event) => {
@@ -132,7 +132,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
         if (next === query && nextState === state) void refresh()
         else { setQuery(next); setState(nextState) }
       }}>
-        <div className="relative min-w-0 flex-1"><SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground" /><input type="search" aria-label="Search tracker" maxLength={256} className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" /></div>
+        <div className="relative min-w-0 flex-1"><SearchIcon aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground" /><input type="search" aria-label="Search tracker" maxLength={256} className="w-full rounded-md border border-input bg-card py-1 pr-2 pl-7 text-ui outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={queryDraft} onChange={(event) => setQueryDraft(event.target.value)} placeholder="Search issues…" /></div>
         <Button type="submit" variant="outline" size="sm" disabled={result.isFetching}>Search</Button>
         <TrackerLabelFilter options={items.flatMap(item => item.labels)} selected={labels} onChange={setLabels} />
       </form>
@@ -176,9 +176,9 @@ function TrackerRow({ scopePending, association, item, active }: { scopePending:
     event.dataTransfer.effectAllowed = 'copy'
   }
   return <li><Link to={`/tracker/${encodeURIComponent(item.id)}`} draggable onMouseEnter={preload} onFocus={preload} onDragStart={drag} data-slot="tracker-row" aria-current={active ? 'page' : undefined} title="Drag into the composer to prefill a task" className={cn('flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted', active && 'bg-muted')}>
-    <span className="flex min-w-0 items-center gap-2"><CircleDotIcon aria-hidden="true" className="size-3.5 shrink-0 text-violet" /><span className={cn('min-w-0 truncate text-[13px] font-medium', active && 'font-semibold')}>{item.title}</span></span>
-    <span className="flex min-w-0 items-center gap-2 pl-[22px] font-mono text-[10.5px] text-muted-foreground"><span className="shrink-0">{item.id}</span><span className="min-w-0 truncate">{item.author}</span><span className="shrink-0" title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)}</span></span>
-    <span className="flex flex-wrap gap-1 pl-[22px]"><span className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{label}</span>)}</span>
+    <span className="flex min-w-0 items-center gap-2"><CircleDotIcon aria-hidden="true" className="size-3.5 shrink-0 text-violet" /><span className={cn('min-w-0 truncate text-ui font-medium', active && 'font-semibold')}>{item.title}</span></span>
+    <span className="flex min-w-0 items-center gap-2 pl-[22px] font-mono text-micro text-muted-foreground"><span className="shrink-0">{item.id}</span><span className="min-w-0 truncate">{item.author}</span><span className="shrink-0" title={new Date(item.updatedAt).toLocaleString()}>{shortAge(item.updatedAt)}</span></span>
+    <span className="flex flex-wrap gap-1 pl-[22px]"><span className="rounded border border-border px-1.5 py-px text-micro text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-micro text-muted-foreground">{label}</span>)}</span>
   </Link></li>
 }
 
@@ -218,12 +218,12 @@ function TrackerDetail({ scopePending, association, id, selection, onSelectionCh
   return (
     <article data-slot="tracker-detail-inner" className="min-w-0 px-4 py-4 md:px-7 md:py-5">
       <DetailBackLink />
-      <p className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
+      <p className="flex flex-wrap items-center gap-x-1.5 font-mono text-micro text-soft-foreground">
         <span>{item.id}</span>·<span>issue</span>·<span>opened by {item.author}</span>·<span title={new Date(item.createdAt).toLocaleString()}>{shortAge(item.createdAt)} ago</span>·
         <a className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground hover:underline" href={item.url} target="_blank" rel="noopener noreferrer">open on {TRACKER_PROVIDERS[association.kind].label}<ExternalLinkIcon aria-hidden="true" className="size-2.5" /></a>
       </p>
       <h2 className="mt-2 text-xl leading-snug font-semibold">{item.title}</h2>
-      <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="rounded border border-border px-1.5 py-px text-[10px] text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-[10px] text-muted-foreground">{label}</span>)}</div>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5"><span className="rounded border border-border px-1.5 py-px text-micro text-muted-foreground">{item.status}</span>{item.labels.map(label => <span key={label} className="rounded-full border border-border px-1.5 py-px text-micro text-muted-foreground">{label}</span>)}</div>
       {failure}
       {trackerLosses(item).length ? <div className="mt-4 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm"><AlertTriangleIcon className="mr-2 inline size-4" />This snapshot is incomplete. Review the limitations in the handoff panel.</div> : null}
       <section data-slot="tracker-body" className="mt-5 text-sm"><Markdown>{item.body.trim() || '*No description was provided.*'}</Markdown></section>

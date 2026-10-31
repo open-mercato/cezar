@@ -230,6 +230,27 @@ it('updates a waiting project row to review while keeping it actionable', async 
   expect(link.getAttribute('aria-disabled')).toBeNull()
 })
 
+it('keeps a waiting row actionable when its session closes on an unanswered question', async () => {
+  const row = { projectId: 'alpha', id: 'live-awaiting', title: 'Asked task', status: 'waiting' as const, archived: false, createdAt: at }
+  setup(true, '', { ...fixture, page: { total: 1, nextOffset: null, rows: [row] } })
+  fireEvent.click(await screen.findByRole('button', { name: /^alpha: Needs you/ }))
+  const link = await screen.findByRole('link', { name: row.title })
+  act(() =>
+    dashboardTransition(row.projectId, {
+      id: row.id,
+      status: 'failed',
+      archived: false,
+      awaitingAnswerSince: at,
+    }),
+  )
+  expect(link.getAttribute('aria-disabled')).toBeNull()
+  expect(screen.queryByText(/No longer needs you/)).toBeNull()
+  // …and once the answer reopens it and it settles as a plain failure, it no longer needs you.
+  act(() => dashboardTransition(row.projectId, { id: row.id, status: 'failed', archived: false }))
+  expect(link.getAttribute('aria-disabled')).toBe('true')
+  expect(screen.getByText(/No longer needs you/)).toBeTruthy()
+})
+
 it.each([
   ['Completed', 'done'],
   ['Failed outcomes', 'failed'],

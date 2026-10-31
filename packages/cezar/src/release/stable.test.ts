@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compareStableVersions,
   computeStableVersion,
+  highestLatest,
+  newestLineTag,
   isReleaseBump,
+  nextMinorVersion,
+  parseReleaseBranch,
+  planRelease,
+  releaseBranchFor,
+  resolveStableDistTag,
   stampStableManifests,
   type ReleaseManifests,
 } from './stable.ts';
@@ -127,5 +135,110 @@ describe('stampStableManifests', () => {
     stampStableManifests(manifests, '0.1.6');
     expect(manifests.cezar.version).toBe('0.1.5');
     expect(manifests.alias.dependencies).toEqual({ '@scope/impl': '^0.1.5' });
+  });
+});
+
+describe('release lines', () => {
+  it('names the maintenance branch of a version and parses it back', () => {
+    expect(releaseBranchFor('0.15.2')).toBe('release/v0.15.x');
+    expect(parseReleaseBranch('refs/heads/release/v0.15.x')).toEqual({ major: 0, minor: 15 });
+    expect(parseReleaseBranch('release/0.9.x')).toBeNull();
+    expect(parseReleaseBranch('main')).toBeNull();
+    expect(nextMinorVersion('0.15.2')).toBe('0.16.0');
+  });
+
+  it('orders versions numerically, not as strings', () => {
+    expect(compareStableVersions('0.15.10', '0.15.9')).toBeGreaterThan(0);
+    expect(compareStableVersions('v0.16.0', '0.15.99')).toBeGreaterThan(0);
+    expect(compareStableVersions('1.0.0', '1.0.0')).toBe(0);
+  });
+});
+
+describe('planRelease', () => {
+  const tags = ['v0.14.0', 'v0.15.0', 'v0.15.1', 'v0.15.2', 'desktop-v0.1.7'];
+  const released = ['v0.14.0', 'v0.15.0', 'v0.15.1', 'v0.15.2'];
+  const plan = (over: Partial<Parameters<typeof planRelease>[0]> = {}) =>
+    planRelease({
+      branch: 'release/v0.15.x',
+      manifestVersion: '0.15.2',
+      tags,
+      releasedTags: released,
+      manifestPublished: true,
+      ...over,
+    });
+
+  it('bumps the patch first once the committed version is tagged and released', () => {
+    expect(plan()).toEqual({ ok: true, version: '0.15.3', bumped: true, resume: false, previousTag: 'v0.15.2' });
+  });
+
+  it("ships a fresh line's x.y.0 as committed", () => {
+    expect(plan({ branch: 'release/v0.16.x', manifestVersion: '0.16.0', manifestPublished: false })).toEqual({
+      ok: true,
+      version: '0.16.0',
+      bumped: false,
+      resume: false,
+      previousTag: 'v0.15.2',
+    });
+  });
+
+  it('ships a bump whose run died before tagging, as long as nothing reached npm', () => {
+    expect(plan({ manifestVersion: '0.15.3', manifestPublished: false })).toMatchObject({
+      ok: true,
+      version: '0.15.3',
+      bumped: false,
+      resume: false,
+    });
+  });
+
+  it('resumes a tagged version that has no GitHub Release, at that version, never a newer one', () => {
+    expect(plan({ manifestVersion: '0.15.3', tags: [...tags, 'v0.15.3'] })).toEqual({
+      ok: true,
+      version: '0.15.3',
+      bumped: false,
+      resume: true,
+      previousTag: 'v0.15.2',
+    });
+  });
+
+  it('refuses an untagged version that already has packages on npm (a deleted tag)', () => {
+    const result = plan({ manifestVersion: '0.15.3', manifestPublished: true });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/restore the tag/);
+  });
+
+  it('judges resume by its own line only', () => {
+    // v0.16.0 has no Release yet, but it is another line's business.
+    expect(plan({ tags: [...tags, 'v0.16.0'] })).toMatchObject({ version: '0.15.3', resume: false, previousTag: 'v0.15.2' });
+  });
+
+  it('refuses a branch that is not a release line, or manifests from another line', () => {
+    expect(plan({ branch: 'main', manifestVersion: '0.16.0' }).ok).toBe(false);
+    expect(plan({ manifestVersion: '0.16.0' }).ok).toBe(false);
+    expect(plan({ manifestVersion: '0.15.2-nightly.1' }).ok).toBe(false);
+  });
+});
+
+describe('newestLineTag / highestLatest', () => {
+  it('picks the newest tag of one line, ignoring other lines and non-release tags', () => {
+    expect(newestLineTag(['v0.15.9', 'v0.15.10', 'v0.16.0', 'desktop-v0.15.99'], { major: 0, minor: 15 })).toBe('v0.15.10');
+    expect(newestLineTag(['v0.16.0'], { major: 0, minor: 15 })).toBeNull();
+  });
+
+  it('takes the highest stable latest across the release set', () => {
+    expect(highestLatest(['0.16.1', '0.16.2', null, '0.16.2-nightly.1'])).toBe('0.16.2');
+    expect(highestLatest([null, undefined])).toBeNull();
+  });
+});
+
+describe('resolveStableDistTag', () => {
+  it('moves latest only for the newest line', () => {
+    expect(resolveStableDistTag('0.15.3', '0.15.2')).toBe('latest');
+    expect(resolveStableDistTag('0.16.0', '0.15.3')).toBe('latest');
+    expect(resolveStableDistTag('0.15.4', '0.16.0')).toBe('latest-0.15');
+  });
+
+  it('treats a registry with no stable latest as nothing to protect', () => {
+    expect(resolveStableDistTag('0.1.0', null)).toBe('latest');
+    expect(resolveStableDistTag('0.1.0', 'garbage')).toBe('latest');
   });
 });

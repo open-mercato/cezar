@@ -2,7 +2,7 @@ import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUpRightIcon, StarIcon } from 'lucide-react'
 
-import { queryKeys, useStarCount } from '@/api/queries'
+import { queryKeys, useStarCount, useWorkspaceConfig } from '@/api/queries'
 import { useDashboardInsights } from '@/api/dashboard-insights'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import {
@@ -54,9 +54,14 @@ const otherDialogOpen = () => document.querySelector('[role="dialog"],[role="ale
  */
 export function StarPromo() {
   const queryClient = useQueryClient()
-  const starCount = useStarCount()
-  const allowed = starCount.data?.available === true
-  const count = starCount.data?.available ? (starCount.data.count ?? null) : null
+  const workspaceConfig = useWorkspaceConfig()
+  const branding = workspaceConfig.data?.branding
+  const customBranding = branding !== undefined && (
+    branding.name !== 'cezar' || branding.logoUrl !== null
+  )
+  const starCount = useStarCount(workspaceConfig.data !== undefined && !customBranding)
+  const allowed = !customBranding && starCount.data?.available === true
+  const count = !customBranding && starCount.data?.available ? (starCount.data.count ?? null) : null
   const [open, setOpen] = useState(false)
 
   // Refs, not effect dependencies: rebuilding the cache subscription when the count resolves
@@ -138,7 +143,7 @@ export function StarPromo() {
     }
   }, [queryClient])
 
-  return <StarAskDialog open={open} onOpenChange={setOpen} count={count} />
+  return customBranding ? null : <StarAskDialog open={open} onOpenChange={setOpen} count={count} />
 }
 
 /** The record update for each way out — every one of them is a single, equal-weight click. */
@@ -188,14 +193,14 @@ export function StarAskDialog({
             </span>
           </div>
           {count !== null && (
-            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-card/80 px-2.5 py-0.5 font-mono text-[11px] text-muted-foreground backdrop-blur">
+            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-card/80 px-2.5 py-0.5 font-mono text-meta text-muted-foreground backdrop-blur">
               ⭐ {formatStarCount(count)} stars on GitHub
             </span>
           )}
         </div>
         <div className="space-y-4 p-6">
           <div className="space-y-2">
-            <span className="section-mark block font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span className="section-mark block eyebrow text-muted-foreground">
               Open source · MIT
             </span>
             <DialogTitle className="text-xl font-semibold tracking-tight">
@@ -208,7 +213,7 @@ export function StarAskDialog({
           </div>
           {stats && (
             <div className="rounded-lg border bg-card-2 p-3">
-              <span className="block font-mono text-[10.5px] uppercase tracking-[0.12em] text-soft-foreground">
+              <span className="block eyebrow text-soft-foreground">
                 Your last 30 days with cezar
               </span>
               <dl

@@ -264,7 +264,9 @@ describe('health topic + cache (live-server path)', () => {
     if (!health) throw new Error('no health topic registered');
     const viaSocket = await health.snapshot();
     const response = await apiRequest(app, '/api/v1/health');
-    expect(await response.json()).toEqual(viaSocket);
+    const viaHttp = await response.json() as { runtimeId?: string };
+    expect(viaHttp).toEqual(viaSocket);
+    expect(viaHttp.runtimeId).toMatch(/^[0-9a-f-]{36}$/);
   }, TEST_BUDGET_MS);
 
   it('shares one compute between concurrent reads (in-flight dedupe)', async () => {

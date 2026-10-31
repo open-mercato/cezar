@@ -28,10 +28,16 @@ export function CommitDialog({
   run,
   open,
   onOpenChange,
+  andPush = false,
+  onCommitted,
 }: {
   run: ApiRun
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** "Commit and push": the same dialog, saying so — the host pushes from `onCommitted`. */
+  andPush?: boolean
+  /** Fired once the commit has landed (before the dialog closes). */
+  onCommitted?: () => void
 }) {
   const queryClient = useQueryClient()
   const [message, setMessage] = useState('')
@@ -50,11 +56,13 @@ export function CommitDialog({
   const commit = useMutation({
     mutationFn: (text: string) => commitRun(run.id, text),
     onSuccess: (result) => {
-      toast(`Committed ${result.sha.slice(0, 7)}`)
+      toast(`Committed ${result.sha.slice(0, 7)}${andPush ? ' — pushing…' : ''}`)
+      onCommitted?.()
       onOpenChange(false)
       // The diff is anchored at the merge-base, so the files stay visible — but the record's
       // diffStat and the repo commit log moved; refetch what claims to know them.
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.changes(run.id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.gitStatus(run.id) })
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
@@ -70,10 +78,11 @@ export function CommitDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-slot="commit-dialog">
         <DialogHeader>
-          <DialogTitle>Commit changes</DialogTitle>
+          <DialogTitle>{andPush ? 'Commit and push' : 'Commit changes'}</DialogTitle>
           <DialogDescription>
             Stages everything in the task&apos;s worktree (git add -A) and commits to{' '}
-            {run.branch ? <span className="font-mono">{run.branch}</span> : 'its branch'}.
+            {run.branch ? <span className="font-mono">{run.branch}</span> : 'its branch'}
+            {andPush ? ', then pushes it' : ''}.
           </DialogDescription>
         </DialogHeader>
         <Textarea
@@ -109,7 +118,7 @@ export function CommitDialog({
             disabled={message.trim().length === 0 || commit.isPending}
             onClick={submit}
           >
-            {commit.isPending ? 'Committing…' : 'Commit'}
+            {commit.isPending ? 'Committing…' : andPush ? 'Commit and push' : 'Commit'}
           </Button>
         </DialogFooter>
       </DialogContent>

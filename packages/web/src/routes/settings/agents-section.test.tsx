@@ -14,6 +14,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Settings → Agents (R6 Step 1.5): the form round-trip against a stateful `/api/v1/config` stub
@@ -28,6 +29,7 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
@@ -121,6 +123,7 @@ function serve({
     baseBranch: null,
     defaultRunner: 'claude',
     systemPrompt: null,
+    branchNaming: null,
     defaultModels: {},
     modelsLocked: false,
     maxParallel: 2,
@@ -128,6 +131,7 @@ function serve({
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
+    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
     ...config,
   }
   const json = (payload: unknown, status = 200) =>
@@ -157,6 +161,9 @@ function serve({
         if (body?.baseBranch !== undefined) state.baseBranch = (body.baseBranch as string | null) || null
         if (body?.systemPrompt !== undefined) {
           state.systemPrompt = (body.systemPrompt as string | null) || null
+        }
+        if (body?.branchNaming !== undefined) {
+          state.branchNaming = (body.branchNaming as string | null) || null
         }
         if (body?.liveTitleUpdates !== undefined) {
           state.liveTitleUpdates = body.liveTitleUpdates as boolean | null
@@ -228,10 +235,12 @@ function renderAt(entry: string) {
   const client = gateSeededClient()
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
   return client
@@ -239,6 +248,8 @@ function renderAt(entry: string) {
 
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/config')
 const form = () => document.querySelector('[data-slot="agents-section"]')
+const instructions = () => document.querySelector('[data-slot="instructions-section"]')
+const tasks = () => document.querySelector('[data-slot="tasks-section"]')
 
 afterEach(() => {
   act(() => resetToasts())
@@ -307,6 +318,9 @@ describe('the agents form', () => {
     ).toBeTruthy()
   })
 
+  // Provider status gates only the runner and model controls. The textareas and toggles that used
+  // to prove "unrelated settings stay usable" now live in Instructions and Tasks, which never
+  // consult provider status at all.
   it('disables only provider-specific controls while provider status is pending', async () => {
     serve({ providerStatusPending: true })
     renderAt('/settings/agents')
@@ -314,8 +328,6 @@ describe('the agents form', () => {
     const claude = await screen.findByRole('radio', { name: 'claude' })
     expect((claude as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
-    expect((screen.getByLabelText<HTMLTextAreaElement>('System prompt')).disabled).toBe(false)
-    expect((screen.getByLabelText<HTMLButtonElement>('Live title updates')).disabled).toBe(false)
   })
 
   it('keeps unrelated settings usable when provider status errors', async () => {
@@ -325,8 +337,6 @@ describe('the agents form', () => {
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
-    expect(screen.getByLabelText<HTMLButtonElement>('Review changes before finishing').disabled).toBe(false)
   })
 
   it('keeps unrelated settings usable and provider controls disabled for malformed status data', async () => {
@@ -339,7 +349,6 @@ describe('the agents form', () => {
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
     expect(screen.queryByText(secret)).toBeNull()
   })
 
@@ -353,7 +362,6 @@ describe('the agents form', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect((claude as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
   })
 
   it('renders every knob from GET /api/v1/config', async () => {
@@ -372,37 +380,9 @@ describe('the agents form', () => {
     expect(screen.getByRole('radio', { name: 'claude' }).getAttribute('aria-checked')).toBe('false')
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').value).toBe('opus')
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').value).toBe('')
-    expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').value).toBe('Be brief.')
-    await waitFor(() =>
-      expect(screen.getByLabelText<HTMLSelectElement>('Base branch').value).toBe('develop'),
-    )
-  })
-
-
-  it('live title updates: the switch defaults ON and PUTs the toggle', async () => {
-    serve()
-    renderAt('/settings/agents')
-    await waitFor(() => expect(form()).not.toBeNull())
-
-    const toggle = screen.getByLabelText('Live title updates')
-    expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toBeTruthy()
-    fireEvent.click(toggle)
-    await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ liveTitleUpdates: false })
-    await waitFor(() => expect(screen.getByText('Off')).toBeTruthy())
-  })
-
-  it('review gate: the switch defaults OFF and PUTs the toggle (#489)', async () => {
-    serve()
-    renderAt('/settings/agents')
-    await waitFor(() => expect(form()).not.toBeNull())
-
-    const toggle = screen.getByLabelText('Review changes before finishing')
-    // Default off — the mirror image of live-title-updates.
-    expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toMatch(/false|unchecked/)
-    fireEvent.click(toggle)
-    await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ reviewGate: true })
+    // What the user writes for a model, and how a task behaves, live in their own sections.
+    expect(screen.queryByLabelText('System prompt')).toBeNull()
+    expect(screen.queryByLabelText('Base branch')).toBeNull()
   })
 
   it('default runner round-trips: click PUTs the patch and the control follows the answer', async () => {
@@ -418,7 +398,7 @@ describe('the agents form', () => {
     )
   })
 
-  it('model presets round-trip per runner — auto sends null to clear the key', async () => {
+  it('model presets round-trip per runner — auto clears the preset AND claims the override (#906)', async () => {
     serve({ config: { defaultModels: { codex: 'gpt-5-codex' } } })
     renderAt('/settings/agents')
     await waitFor(() => expect(form()).not.toBeNull())
@@ -426,14 +406,23 @@ describe('the agents form', () => {
     const claude = screen.getByLabelText<HTMLSelectElement>('Default model for claude')
     fireEvent.change(claude, { target: { value: 'opus' } })
     await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ defaultModels: { claude: 'opus' } })
+    // Naming a model releases the auto override — the two are alternatives, never both.
+    expect(puts()[0]?.body).toEqual({
+      defaultModels: { claude: 'opus' },
+      defaultModelsAuto: { claude: false },
+    })
     // The readback is the server's merged truth: codex's preset survived claude's write.
     await waitFor(() => expect(claude.value).toBe('opus'))
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').value).toBe('gpt-5-codex')
 
     fireEvent.change(claude, { target: { value: '' } })
     await waitFor(() => expect(puts()).toHaveLength(2))
-    expect(puts()[1]?.body).toEqual({ defaultModels: { claude: null } })
+    // Clearing the preset alone let the native settings file show back through, which is why
+    // picking auto used to snap straight back to the model it names (#906).
+    expect(puts()[1]?.body).toEqual({
+      defaultModels: { claude: null },
+      defaultModelsAuto: { claude: true },
+    })
     await waitFor(() => expect(claude.value).toBe(''))
   })
 
@@ -489,55 +478,6 @@ describe('the agents form', () => {
     expect(screen.getByLabelText('Default model for codex').textContent).toContain('gpt-5.6-codex')
   })
 
-  it('system prompt saves trimmed on the explicit button, and an emptied box clears with null', async () => {
-    serve({ config: { systemPrompt: 'Be brief.' } })
-    renderAt('/settings/agents')
-    await waitFor(() => expect(form()).not.toBeNull())
-
-    const box = screen.getByLabelText<HTMLTextAreaElement>('System prompt')
-    const saveButton = () => document.querySelector<HTMLButtonElement>('[data-action="agents-save-prompt"]')!
-    // Unchanged draft: nothing to save.
-    expect(saveButton().disabled).toBe(true)
-
-    fireEvent.change(box, { target: { value: '  Answer in Polish.  ' } })
-    expect(saveButton().disabled).toBe(false)
-    fireEvent.click(saveButton())
-    await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ systemPrompt: 'Answer in Polish.' })
-    // Saved: the button falls back to disabled once the answer lands.
-    await waitFor(() => expect(saveButton().disabled).toBe(true))
-
-    fireEvent.change(box, { target: { value: '' } })
-    fireEvent.click(saveButton())
-    await waitFor(() => expect(puts()).toHaveLength(2))
-    expect(puts()[1]?.body).toEqual({ systemPrompt: null })
-  })
-
-  it('an over-limit prompt disables Save with the reason — no request leaves', async () => {
-    serve()
-    renderAt('/settings/agents')
-    await waitFor(() => expect(form()).not.toBeNull())
-
-    fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'x'.repeat(20_001) } })
-    const save = document.querySelector<HTMLButtonElement>('[data-action="agents-save-prompt"]')!
-    expect(save.disabled).toBe(true)
-    expect(document.querySelector('[data-slot="agents-prompt-limit"]')?.textContent).toContain('20,000')
-    fireEvent.click(save)
-    expect(puts()).toHaveLength(0)
-  })
-
-  it('base branch round-trips through the same PUT — "" means follow the checked-out branch', async () => {
-    serve({ config: { baseBranch: 'develop' } })
-    renderAt('/settings/agents')
-    await waitFor(() => expect(form()).not.toBeNull())
-    const picker = await waitFor(() => screen.getByLabelText<HTMLSelectElement>('Base branch'))
-    expect(picker.value).toBe('develop')
-
-    fireEvent.change(picker, { target: { value: '' } })
-    await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ baseBranch: null })
-  })
-
   it('a PUT refusal surfaces the server\'s own words (409 → danger toast)', async () => {
     serve({ putStatus: 409, putError: 'config.json is locked by another cockpit' })
     renderAt('/settings/agents')
@@ -590,6 +530,7 @@ describe('the agents form', () => {
         'cursor',
         'pi',
         'copilot',
+        'antigravity',
       ])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
@@ -599,7 +540,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       expect(rows().map((r) => r.textContent)).toEqual([
         'claude · Default/home/u/.claude',
         'claude · Klaudiusz~/.claude-klaudiusz',
@@ -609,6 +550,7 @@ describe('the agents form', () => {
         'cursorCursor Agent CLI',
         'pipi CLI (provider/model)',
         'copilotGitHub Copilot CLI (ACP)',
+        'antigravityGoogle Antigravity CLI (agy)',
       ])
       // The discovered account is the checked row until the repo says otherwise.
       expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
@@ -631,7 +573,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       fireEvent.click(rowFor('claude', 'klaudiusz')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -654,7 +596,7 @@ describe('the agents form', () => {
 
       // Wait for the SPLIT state: until the accounts land, claude is one plain row, and clicking
       // that one writes no selection — which is correct, and would make this pass for no reason.
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       fireEvent.click(rowFor('claude', '')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -669,7 +611,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       fireEvent.click(rowFor('codex')!)
 
       await waitFor(() => expect(puts()).toHaveLength(1))
@@ -701,11 +643,124 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(8))
+      await waitFor(() => expect(rows()).toHaveLength(9))
       const pane = document.querySelector('[data-slot="agents-runner"]')?.closest('section')
       expect(pane?.textContent).toContain('never committed')
       // The consequence a reader cannot guess: sessions live in the account's own folder.
       expect(pane?.textContent).toContain('can’t be resumed here')
     })
+  })
+})
+
+/** Settings → Instructions: the textareas that moved out of Agents keep their contract. */
+describe('the instructions section', () => {
+  it('system prompt saves trimmed on the explicit button, and an emptied box clears with null', async () => {
+    serve({ config: { systemPrompt: 'Be brief.' } })
+    renderAt('/settings/instructions')
+    await waitFor(() => expect(instructions()).not.toBeNull())
+
+    const box = screen.getByLabelText<HTMLTextAreaElement>('System prompt')
+    const saveButton = () => document.querySelector<HTMLButtonElement>('[data-action="instructions-save-prompt"]')!
+    // Unchanged draft: nothing to save.
+    expect(saveButton().disabled).toBe(true)
+
+    fireEvent.change(box, { target: { value: '  Answer in Polish.  ' } })
+    expect(saveButton().disabled).toBe(false)
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ systemPrompt: 'Answer in Polish.' })
+    // Saved: the button falls back to disabled once the answer lands.
+    await waitFor(() => expect(saveButton().disabled).toBe(true))
+
+    fireEvent.change(box, { target: { value: '' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ systemPrompt: null })
+  })
+  it('branch naming saves trimmed on its own button and clears with null (spec 2026-10-11-branch-naming-instructions)', async () => {
+    serve({ config: { branchNaming: 'start with feature/' } })
+    renderAt('/settings/instructions')
+    await waitFor(() => expect(instructions()).not.toBeNull())
+
+    const box = screen.getByLabelText<HTMLTextAreaElement>('Branch naming')
+    expect(box.value).toBe('start with feature/')
+    const saveButton = () => document.querySelector<HTMLButtonElement>('[data-action="instructions-save-branch-naming"]')!
+    expect(saveButton().disabled).toBe(true)
+
+    fireEvent.change(box, { target: { value: '  type/area/slug  ' } })
+    expect(saveButton().disabled).toBe(false)
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ branchNaming: 'type/area/slug' })
+    await waitFor(() => expect(saveButton().disabled).toBe(true))
+
+    fireEvent.change(box, { target: { value: '' } })
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ branchNaming: null })
+
+    // Over the cap: Save is disabled with the reason and nothing leaves.
+    fireEvent.change(box, { target: { value: 'x'.repeat(4_001) } })
+    expect(saveButton().disabled).toBe(true)
+    expect(document.querySelector('[data-slot="instructions-branch-naming-limit"]')?.textContent).toContain('4,000')
+  })
+  it('an over-limit prompt disables Save with the reason — no request leaves', async () => {
+    serve()
+    renderAt('/settings/instructions')
+    await waitFor(() => expect(instructions()).not.toBeNull())
+
+    fireEvent.change(screen.getByLabelText('System prompt'), { target: { value: 'x'.repeat(20_001) } })
+    const save = document.querySelector<HTMLButtonElement>('[data-action="instructions-save-prompt"]')!
+    expect(save.disabled).toBe(true)
+    expect(document.querySelector('[data-slot="instructions-prompt-limit"]')?.textContent).toContain('20,000')
+    fireEvent.click(save)
+    expect(puts()).toHaveLength(0)
+  })
+
+  it('embeds the prompt templates list under its own anchor', async () => {
+    serve()
+    renderAt('/settings/instructions')
+    await waitFor(() => expect(instructions()).not.toBeNull())
+    const anchor = document.getElementById('prompt-templates')
+    expect(anchor?.querySelector('[data-slot="prompt-templates-section"], [data-slot="prompt-templates-loading"]')).not.toBeNull()
+  })
+})
+
+/** Settings → Tasks: the lifecycle and git knobs that moved out of Agents keep their contract. */
+describe('the tasks section', () => {
+  it('live title updates: the switch defaults ON and PUTs the toggle', async () => {
+    serve()
+    renderAt('/settings/tasks')
+    await waitFor(() => expect(tasks()).not.toBeNull())
+
+    const toggle = screen.getByLabelText('Live title updates')
+    expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toBeTruthy()
+    fireEvent.click(toggle)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ liveTitleUpdates: false })
+    await waitFor(() => expect(screen.getByText('Off')).toBeTruthy())
+  })
+  it('review gate: the switch defaults OFF and PUTs the toggle (#489)', async () => {
+    serve()
+    renderAt('/settings/tasks')
+    await waitFor(() => expect(tasks()).not.toBeNull())
+
+    const toggle = screen.getByLabelText('Review changes before finishing')
+    // Default off — the mirror image of live-title-updates.
+    expect(toggle.getAttribute('aria-checked') ?? toggle.getAttribute('data-state')).toMatch(/false|unchecked/)
+    fireEvent.click(toggle)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ reviewGate: true })
+  })
+  it('base branch round-trips through the same PUT — "" means follow the checked-out branch', async () => {
+    serve({ config: { baseBranch: 'develop' } })
+    renderAt('/settings/tasks')
+    await waitFor(() => expect(tasks()).not.toBeNull())
+    const picker = await waitFor(() => screen.getByLabelText<HTMLSelectElement>('Base branch'))
+    expect(picker.value).toBe('develop')
+
+    fireEvent.change(picker, { target: { value: '' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ baseBranch: null })
   })
 })

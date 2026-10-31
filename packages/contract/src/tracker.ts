@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-/** Jira Cloud and Linear are the two read-only tracker providers supported by this contract. */
+/** Jira Cloud and Linear are the two tracker providers supported by this contract. */
 export const trackerKindSchema = z.enum(['jira', 'linear']);
 export type TrackerKind = z.infer<typeof trackerKindSchema>;
 
@@ -37,6 +37,12 @@ export const trackerAssociationSchema = z
   })
   .strict();
 export type TrackerAssociation = z.infer<typeof trackerAssociationSchema>;
+
+/** What a tracker automation can fire on. Lives beside the association rather than in
+ *  `automations.ts` because `runs.ts` describes it too (a run's `automationTracker` provenance),
+ *  and `automations.ts` already imports `runs.ts` — this module imports neither. */
+export const trackerAutomationEventSchema = z.enum(['issue.opened', 'issue.status_changed', 'issue.labeled', 'issue.unlabeled']);
+export type TrackerAutomationEvent = z.infer<typeof trackerAutomationEventSchema>;
 
 /** Non-secret read identity; display-name changes do not move an issue to another source. */
 export function trackerReadScope(association: TrackerAssociation): string {

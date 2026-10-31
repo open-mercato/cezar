@@ -129,6 +129,32 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.busy()).toBe(1);
   });
 
+  it('idle() only when no participant holds a slot or has a queue', () => {
+    const sem = new WorkspaceSemaphore();
+    expect(sem.idle()).toBe(true);
+    const offQueued = sem.register(participant(0, 1000));
+    expect(sem.idle()).toBe(false);
+    offQueued();
+    const offBusy = sem.register(participant(1));
+    expect(sem.idle()).toBe(false);
+    offBusy();
+    sem.register(participant(0));
+    expect(sem.idle()).toBe(true);
+  });
+
+  // The self-update warning read the BOOT project's store only — empty when cezar boots
+  // outside a project, so "Update when idle" never appeared while other projects ran tasks.
+  it('activeRuns() sums every project, and counts nothing for participants that do not report', () => {
+    const sem = new WorkspaceSemaphore();
+    sem.register({ ...participant(0), activeRuns: () => 0 });
+    const offB = sem.register({ ...participant(1), activeRuns: () => 2 });
+    sem.register({ ...participant(0), activeRuns: () => 1 });
+    sem.register(participant(0));
+    expect(sem.activeRuns()).toBe(3);
+    offB();
+    expect(sem.activeRuns()).toBe(1);
+  });
+
   it('refresh() swaps the cached limits and pumps every participant', async () => {
     let limits = { maxParallel: 1, memoryLimitMb: null as number | null };
     const sem = new WorkspaceSemaphore({ load: () => Promise.resolve({ ...limits }) });

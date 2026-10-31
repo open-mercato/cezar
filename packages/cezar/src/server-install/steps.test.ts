@@ -111,6 +111,33 @@ describe('sudoStep', () => {
     ).rejects.toBeInstanceOf(StepSkipped);
   });
 
+  it('surfaces a terminal verification reason and does not offer a futile retry', async () => {
+    const verify = vi.fn(async () => false);
+    const confirm = vi.fn(async () => true);
+    const errors: string[] = [];
+    const ui = { ...scriptedUi(['delegate'], [true]), error: (message: string) => errors.push(message), confirm } as Ui;
+    const ctx = makeCtx({ ui });
+
+    await expect(
+      sudoStep(ctx, {
+        description: 'reload nginx',
+        command: 'nginx -t && systemctl reload nginx',
+        verify,
+        verifyFailure: async () => ({
+          retryable: false,
+          message:
+            'nginx configuration test failed; fix the generated configuration before rerunning this step.\n' +
+            'nginx: [emerg] unknown directive "http2" in /etc/nginx/sites-enabled/cezar:12',
+        }),
+      }),
+    ).rejects.toBeInstanceOf(StepAborted);
+    expect(errors).toEqual([
+      'nginx configuration test failed; fix the generated configuration before rerunning this step.\n' +
+        'nginx: [emerg] unknown directive "http2" in /etc/nginx/sites-enabled/cezar:12',
+    ]);
+    expect(confirm).toHaveBeenCalledTimes(1); // only the delegate completion prompt
+  });
+
   it('--yes on a skippable step skips (not aborts) when verification fails', async () => {
     const verify = vi.fn(async () => false);
     const ctx = makeCtx({

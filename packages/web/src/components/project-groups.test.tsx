@@ -7,6 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { ProjectGroups } from '@/components/project-groups'
+import { PROJECT_FOLDERS_STORAGE_KEY } from '@/lib/project-folders'
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from '@/lib/sidebar-collapse'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -367,6 +368,34 @@ describe('ProjectGroups', () => {
     await waitFor(() => expect(posts).toEqual(['/api/v1/p/cezar/runs/other-project-task/pin']))
   })
 
+  it("archives through the row's OWN project, not the one the URL names", async () => {
+    // The pin's twin: `queryScope()` would archive in whichever project the page is standing in.
+    const posts: { path: string; body: unknown }[] = []
+    fetchMock.mockImplementation(async (input, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        posts.push({ path, body: JSON.parse(String(init.body)) })
+        return json({})
+      }
+      if (path === '/api/v1/p/cezar/runs') return json([run({ id: 'other-project-task', status: 'done' })])
+      if (path === '/api/v1/p/shop/runs') return json([])
+      return json({ error: 'not found' }, 404)
+    })
+    storeCollapsed({ cezar: false })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/',
+    )
+
+    await waitFor(() => expect(taskLinks('cezar')).toHaveLength(1))
+    fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Archive task' }))
+    await waitFor(() =>
+      expect(posts).toEqual([
+        { path: '/api/v1/p/cezar/runs/other-project-task/archive', body: { archived: true, surface: 'sidebar' } },
+      ]),
+    )
+  })
+
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
     serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])
@@ -674,6 +703,71 @@ describe('ProjectGroups', () => {
       // link into a scope where nothing answers.
       expect(group('shop').querySelector('a')).toBeNull()
       expect(disclosure('shop')).toBeNull()
+    })
+  })
+
+  describe('project folders', () => {
+    it('opens the wrapper while the scoped project lives inside it', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'client', name: 'Client A', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/shop/runs': [] })
+      renderGroups(
+        [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+        '/p/shop/',
+      )
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="client"]')
+      expect(folder?.querySelector('button[aria-expanded="true"]')).not.toBeNull()
+    })
+
+    it('renders empty folder and shows "No projects" when expanded', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'empty-folder', name: 'Empty Folder', projectIds: [] }]),
+      )
+      storeCollapsed({ 'folder:empty-folder': false })
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="empty-folder"]')
+      expect(folder).not.toBeNull()
+      expect(folder?.querySelector('span[aria-label="0 projects"]')?.textContent).toBe('0')
+      expect(folder?.textContent).toContain('No projects')
+      expect(folder?.querySelector('button[aria-label="Edit Empty Folder"]')).not.toBeNull()
+    })
+
+    it('creates a new folder via the dialog and moves project from previous folder', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'old-folder', name: 'Old Folder', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+
+      const newFolderBtn = screen.getByRole('button', { name: 'New folder' })
+      fireEvent.click(newFolderBtn)
+
+      const nameInput = screen.getByPlaceholderText('Client name')
+      fireEvent.change(nameInput, { target: { value: 'New Folder' } })
+
+      const shopCheckbox = screen.getByRole('checkbox', { name: 'shop' })
+      fireEvent.click(shopCheckbox)
+
+      const saveBtn = screen.getByRole('button', { name: 'Save folder' })
+      fireEvent.click(saveBtn)
+
+      const stored = JSON.parse(localStorage.getItem(PROJECT_FOLDERS_STORAGE_KEY) ?? '[]')
+      const oldFolder = stored.find((f: { id: string }) => f.id === 'old-folder')
+      const newFolder = stored.find((f: { name: string }) => f.name === 'New Folder')
+
+      expect(oldFolder?.projectIds).toEqual([])
+      expect(newFolder?.projectIds).toEqual(['shop'])
     })
   })
 })

@@ -1,0 +1,25 @@
+---
+title: "A subtask that reviews another branch"
+description: "Ask a separate agent to assess changes and return a verdict."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/dispatch/task-cli.ts
+    line: 29
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Create a review subtask and use --review-of to identify the branch or run to inspect. The agent receives the review scope and expected evidence, then returns approve, changes, or reject.
+
+## Where to find it
+
+CLI → cez task create --kind review
+
+## How to use it
+
+1. Use cez task create "review the changes" --kind review --review-of &lt;branch or run>.
+2. Add the scope and expected evidence.
+3. Read the report with approve, changes, or reject.
+
+> **Good to know**: Review is a separate assignment type intended for assessment rather than implementation.
