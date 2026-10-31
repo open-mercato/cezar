@@ -351,8 +351,9 @@ export class ManagerEngine {
     if (held) return undefined;
     const dir = this.deps.store.dir(id);
     assertCezarHomeWriteIsSandboxed(dir);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
     try {
+      // Inside the try: a timer and the boot path call this, and a read-only home must not throw.
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
       const release = lockfile.lockSync(join(dir, 'lease'), {
         realpath: false,
         stale: LEASE_STALE_MS,
@@ -572,6 +573,8 @@ export class ManagerEngine {
     // Picked on the card or typed in the composer: either way the card has its answer.
     for (const message of this.deps.store.messages(id).filter(openAsk)) {
       this.publish(id, { ...message, askAnswer: text }, true);
+      // Asked from a session the chat never saw: `Header: choice` alone answers nothing.
+      if (message.turn !== 'chat') this.addNote(id, askNote(message));
     }
     this.publish(id, { id: randomUUID(), seq: this.deps.store.nextSeq(id), at: this.iso(), kind: 'user', text }, true);
     this.enqueue(id, { kind: 'chat', text });
@@ -688,9 +691,11 @@ export class ManagerEngine {
       await this.watchTurn(id, manager, snapshot, fresh, item.forced, turn);
       return;
     }
-    const notes = this.takeNotes(id);
     if (item.kind === 'chat') {
-      await this.visibleTurn(id, manager, chatPrompt(item.text, notes), 'chat', turn);
+      // Only the session the user talks to needs them, and only a turn that landed has heard them.
+      const { notes } = store.state(id);
+      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes), 'chat', turn);
+      if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
       return;
     }
     const job = manager.jobs.find((candidate) => candidate.id === item.jobId);
@@ -701,16 +706,15 @@ export class ManagerEngine {
       ...current,
       jobs: current.jobs.map((candidate) => (candidate.id === job.id ? { ...candidate, lastRunAt } : candidate)),
     }));
-    await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt, notes), 'job', turn, job.name);
+    await this.visibleTurn(id, manager, jobPrompt(job.name, job.prompt), 'job', turn, job.name);
   }
 
-  private takeNotes(id: string): string[] {
-    const { notes } = this.deps.store.state(id);
-    if (notes.length > 0) this.deps.store.updateState(id, (state) => ({ ...state, notes: [] }));
-    return notes;
+  private addNote(id: string, note: string): void {
+    this.deps.store.updateState(id, (state) => ({ ...state, notes: [...state.notes, note].slice(-20) }));
   }
 
-  private async visibleTurn(id: string, manager: Manager, prompt: string, kind: ManagerTurnKind, turn: ActiveTurn, jobName?: string): Promise<void> {
+  /** True when the agent really took the turn. */
+  private async visibleTurn(id: string, manager: Manager, prompt: string, kind: ManagerTurnKind, turn: ActiveTurn, jobName?: string): Promise<boolean> {
     const { store } = this.deps;
     const base = { id: randomUUID(), seq: store.nextSeq(id), at: this.iso(), kind: 'assistant' as const, turn: kind, ...(jobName ? { jobName } : {}) };
     this.publish(id, { ...base, text: '', streaming: true, commands: [] }, true);
@@ -736,7 +740,7 @@ export class ManagerEngine {
       }
     }).catch(turnFailure);
     if (throttle) clearTimeout(throttle);
-    if (!store.get(id)) return;
+    if (!store.get(id)) return false;
     this.addCost(id, result.costUsd);
     const judgement = judged(result.text.replace(QUIET_LINE, '').trim());
     // Read mid-turn (an approval card landed): at its old seq this reply would never count as new.
@@ -754,6 +758,7 @@ export class ManagerEngine {
     }, true);
     const body = alertBody(judgement);
     if (body) this.alert(id, seq, body);
+    return !result.error && !turn.stopped;
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -779,7 +784,7 @@ export class ManagerEngine {
     turn: ActiveTurn,
   ): Promise<void> {
     const { store } = this.deps;
-    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.takeNotes(id)), turn, () => undefined).catch(turnFailure);
+    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh), turn, () => undefined).catch(turnFailure);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     if (turn.stopped) return;
@@ -1149,7 +1154,7 @@ export class ManagerEngine {
     if (message.status !== 'pending') return { error: `this action is already ${message.status}`, status: 409 };
     const settle = (status: ManagerActionStatus, result: string) => {
       this.publish(id, { ...message, status, result }, true);
-      this.deps.store.updateState(id, (state) => ({ ...state, notes: [...state.notes, `${describe(message.action)}: ${result}`].slice(-20) }));
+      this.addNote(id, `${describe(message.action)}: ${result}`);
       this.emitChange(id);
     };
     if (decision === 'reject') {
@@ -1239,6 +1244,10 @@ const clipSummary = (text: string): string =>
 
 const openAsk = (message: ManagerMessage): message is Extract<ManagerMessage, { kind: 'assistant' }> =>
   message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined;
+
+/** The question alone: the rest of a watch or job reply stays out of the session that can act. */
+const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): string =>
+  `Your ${message.turn} turn asked the user, who answers in their next message: ${(message.ask?.questions ?? []).map((question) => `${question.header}: ${question.question}`).join(' / ')}`.slice(0, 2_000);
 
 const actionProject = (action: ManagerActionRequest): string | undefined =>
   action.type === 'add-job' ? undefined : action.projectId;

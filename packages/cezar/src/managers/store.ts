@@ -41,7 +41,7 @@ const stateSchema = z
     /** Highest `seq` the user has opened; -1 so a first message at seq 0 still counts as unread. */
     readSeq: z.number().int().min(-1).catch(-1),
     watchFailures: z.number().int().min(0).catch(0),
-    /** What happened since the agent's last turn (a merge it proposed…), folded into the next. */
+    /** What the chat session has not heard yet (a decision, a question asked elsewhere). */
     notes: z.array(z.string()).catch([]),
   })
   .passthrough();

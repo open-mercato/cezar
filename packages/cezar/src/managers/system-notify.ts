@@ -38,7 +38,8 @@ export function systemNotifyCommand(title: string, body: string, platform: NodeJ
   if (platform === 'darwin') {
     return {
       file: 'osascript',
-      args: ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', title, body],
+      // `--` is load-bearing: a title starting `-e` would otherwise compile as AppleScript.
+      args: ['-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv)', '-e', 'end run', '--', title, body],
     };
   }
   if (platform === 'win32') {

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -400,6 +400,28 @@ describe('ManagerEngine', () => {
       expect(prompt).toContain('Nightly 149');
       expect(prompt).not.toContain('Nightly 10"');
       expect(Object.keys(store.state(id).reported)).toHaveLength(150);
+    });
+
+    it('an unwritable home costs a lease, not a throw from the timer or the boot', async () => {
+      const engine = makeEngine();
+      await create(engine);
+      rmSync(join(home, 'managers'), { recursive: true, force: true });
+      writeFileSync(join(home, 'managers'), '');
+      expect(engine.recover()).toBe(false);
+    });
+
+    it('a question from a watch reaches the chat that gets the answer', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      backend.scripts.push(say(`CEZ:ASK ${JSON.stringify({ questions: [{ header: 'Merge', question: 'Merge #7 now?', options: [{ label: 'Yes' }, { label: 'No' }] }] })}`));
+      due(id);
+      engine.tick();
+      await settled(engine);
+      backend.scripts.push(say('On it.'));
+      engine.send(id, 'Merge: Yes');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.userPrompt).toContain('Merge #7 now?');
+      expect(store.state(id).notes).toEqual([]);
     });
 
     it('a corrupt timestamp reads as due, never NaN', async () => {
@@ -843,6 +865,27 @@ describe('ManagerEngine', () => {
       if ('error' in proposed) throw proposed;
       await engine.decide(id, proposed.actionId, 'approve');
       expect(actions(id)[0]).toMatchObject({ status: 'failed', result: 'Required checks are failing.' });
+    });
+
+    it('a decision reaches the chat, past a watch and a failed turn', async () => {
+      const engine = makeEngine({ github: readyPrGithub });
+      const id = await create(engine);
+      const proposed = await engine.propose(id, { action: merge });
+      if ('error' in proposed) throw proposed;
+      await engine.decide(id, proposed.actionId, 'reject');
+      backend.scripts.push(say(MANAGER_QUIET));
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: '2026-01-01T00:00:00.000Z' }));
+      engine.tick();
+      await settled(engine);
+      backend.scripts.push({ fail: 'down' });
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(store.state(id).notes).toHaveLength(1);
+      backend.scripts.push(say('ok'));
+      engine.send(id, 'again');
+      await settled(engine);
+      expect(backend.specs.at(-1)?.userPrompt).toContain('Rejected');
+      expect(store.state(id).notes).toEqual([]);
     });
 
     it('a decision that throws fails the card instead of leaving it running', async () => {

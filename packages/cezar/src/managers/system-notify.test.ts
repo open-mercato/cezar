@@ -10,6 +10,11 @@ describe('systemNotifyCommand', () => {
     expect(command.args.slice(0, -2).join(' ')).not.toContain('rm -rf');
   });
 
+  it('ends osascript options before the text: a dash-leading name is no script line', () => {
+    const title = '-eproperty a:(do shell script "x")';
+    expect(systemNotifyCommand(title, 'b', 'darwin')!.args.slice(-3)).toEqual(['--', title, 'b']);
+  });
+
   it('keeps text out of the PowerShell command line', () => {
     const command = systemNotifyCommand('Manager', hostile, 'win32')!;
     expect(command.args.join(' ')).not.toContain('rm -rf');

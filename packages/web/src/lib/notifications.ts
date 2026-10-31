@@ -147,7 +147,7 @@ export function diffManagerAttention(
   const counts = new Map(managers.map((manager) => [manager.id, managerAttentionCount(manager)]))
   const entering = previous === null
     ? []
-    : managers.filter((manager) => managerAttentionCount(manager) > (previous.get(manager.id) ?? 0))
+    : managers.filter((manager) => manager.notify !== false && managerAttentionCount(manager) > (previous.get(manager.id) ?? 0))
   return { entering, counts }
 }
 

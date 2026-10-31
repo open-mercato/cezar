@@ -199,6 +199,7 @@ describe('diffManagerAttention', () => {
     expect(diffManagerAttention(before, [manager({ pendingActions: 2 })]).entering).toHaveLength(1)
     expect(diffManagerAttention(before, [manager({ unread: 1 })]).entering).toHaveLength(0)
     expect(diffManagerAttention(before, [manager({})]).entering).toHaveLength(0)
+    expect(diffManagerAttention(before, [manager({ important: 2, notify: false })]).entering).toHaveLength(0)
   })
 
   it('counts a manager born since from zero', () => {
