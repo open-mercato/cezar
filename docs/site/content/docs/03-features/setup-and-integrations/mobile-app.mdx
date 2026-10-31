@@ -1,0 +1,26 @@
+---
+title: "Cezar mobile app"
+description: "Reach a hosted cezar from an Android or iOS app."
+related:
+  links:
+    - features/setup-and-integrations/desktop-app
+sources:
+  - label: "Implementation"
+    path: packages/mobile/README.md
+---
+The mobile app connects to a cezar you host and shows that server's own cockpit, starting on Manager. It keeps your login in the phone's secure storage and can hold several servers. It is not in any store yet, so you build it yourself. Agents never run on the phone.
+
+## Where to find it
+
+`packages/mobile` in the cezar repository. The README there has the build steps.
+
+## How to use it
+
+1. Build the debug app and install it on your phone.
+2. Enter your server's `https://` address.
+3. If the server has a Basic login, enter the username and password. The app saves them only after the server accepts them.
+4. To change server, use the server list. **Forget** deletes that server's password and website data from the phone.
+
+The server must run in hosted mode. Links that leave your server open in the system browser.
+
+> **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. The Android debug build has been tested on an emulator. The iOS code has not been compiled yet.
