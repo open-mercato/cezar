@@ -491,6 +491,18 @@ describe('/manager/:id', () => {
       expect(calls.some((call) => call.path.includes('pending=1'))).toBe(true)
     })
 
+    it('waits for the first page: there is nothing to page back from before it', async () => {
+      server.managers = [managerFixture({ pendingActions: 1 })]
+      server.pages = () => new Promise<never>(() => {}) as never
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        if (String(input).includes('/messages?')) return new Promise<Response>(() => {})
+        return json({ managers: server.managers })
+      })
+      renderAt('/manager/global')
+      await screen.findByRole('textbox')
+      expect(pill()).toBeNull()
+    })
+
     it('stops paging when a page fails', async () => {
       server.managers = [managerFixture({ pendingActions: 1 })]
       server.pending = { messages: [actionMessage(10)], hasMore: false }

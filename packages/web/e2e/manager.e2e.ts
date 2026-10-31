@@ -139,12 +139,25 @@ describe('Managers', () => {
 
   it('only merges on approval, and a rejection merges nothing', async () => {
     clickText('Approve', '[data-slot="manager-action"]')
+    // The confirmation step: nothing has merged until the sheet is confirmed (mobile spec).
+    browser.waitForFunction(`document.querySelector('[data-slot="manager-action-sheet"]') !== null`)
+    expect(browser.text('[data-slot="manager-action"]')).not.toContain('Merged #128')
+    clickText('Merge', '[data-slot="manager-action-sheet"]')
     browser.waitForFunction(`document.querySelector('[data-slot="manager-action"]').dataset.status === 'done'`)
     expect(browser.text('[data-slot="manager-action"]')).toContain('Merged #128')
 
     send('please merge it')
     browser.waitForFunction(`document.querySelectorAll('[data-slot="manager-action"]').length === 2`)
     settled()
+    // A phone gets a bottom sheet across the whole width, above the safe area.
+    browser.setViewport(390, 844)
+    clickText('Approve', '[data-slot="manager-action"][data-status="pending"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="manager-action-sheet"]') !== null`)
+    await new Promise((r) => setTimeout(r, 600))
+    const sheet = JSON.parse(String(browser.evaluate(`JSON.stringify((({ left, right, bottom }) => ({ left, right, bottom }))(document.querySelector('[data-slot="manager-action-sheet"]').getBoundingClientRect()))`))) as { left: number; right: number; bottom: number }
+    expect(sheet).toEqual({ left: 0, right: 390, bottom: 844 })
+    clickText('Cancel', '[data-slot="manager-action-sheet"]')
+    browser.setViewport(1440, 900)
     clickText('Reject', '[data-slot="manager-action"][data-status="pending"]')
     browser.waitForFunction(`document.querySelectorAll('[data-slot="manager-action"]')[1].dataset.status === 'rejected'`)
     expect((await managers())[0]!.pendingActions).toBe(0)

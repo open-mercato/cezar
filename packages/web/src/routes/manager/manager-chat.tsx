@@ -207,7 +207,7 @@ function usePendingJump(
   }
 
   // Waits for the first page: with none loaded there is no `before` to page back from.
-  return { show: chat.isSuccess && pendingActions > scroll.pendingInView, count: pendingActions, jump, jumping }
+  return { show: chat.data !== undefined && pendingActions > scroll.pendingInView, count: pendingActions, jump, jumping }
 }
 
 function ManagerChat({ manager }: { manager: ManagerSummary }) {
