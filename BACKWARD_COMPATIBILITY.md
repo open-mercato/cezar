@@ -82,7 +82,7 @@ Consumed by the bundled React cockpit (`packages/cezar/web/dist`, shipped in loc
 
 What is protected now: **the shape of each route under `/api/v1`**, the three-way scope aliasing, and the SSE event vocabulary. Removing or renaming a route, or changing a response shape, is breaking exactly as before. Routes:
 
-- Static/GUI: `GET /` and every SPA shell route, `/new` (bookmarklet deep-link, query `?skill=&ref=&auto=&key=`), `/assets/:file`, `/icon.svg` (canonical brand mark / favicon; `/open-mercato.svg` remains as a compatibility alias serving the same bytes)
+- Static/GUI: `GET /` and every SPA shell route, `/new` (bookmarklet deep-link, query `?skill=&ref=&auto=&key=`), `/assets/:file`, `/icon.svg` (canonical brand mark / favicon; `/open-mercato.svg` remains as a compatibility alias serving the same bytes), `/manifest.webmanifest`, `/apple-touch-icon.png`, `/icon-192.png`, `/icon-512.png` (installable cockpit, #1762)
 - Meta: `GET /api/v1/health` (the **only** CORS-open route — bookmarklets probe it cross-origin; its shape `{version, latestVersion, repoRoot, repo, checks, defaultRunner}` is the most externally-depended-on JSON in the app), `GET /api/v1/launch-key`
   - `version` is a display string: a server running from a source checkout (including one linked into `~/.cezar/versions/`) answers `<release>-dev` (#1530). Update decisions compare the raw version server-side; a consumer comparing `version` as semver must read `X-dev` as release `X` (the desktop shell does since #1530; older shells may offer a spurious update to a linked checkout, and only act on a click).
   - `repoRoot` is the absolute checkout path in local mode (the shape the saved bookmarklets read) but only the checkout's **basename** in hosted mode (`CEZ_REMOTE`), where health is CORS-open off the loopback and the absolute path would leak the developer's username (#431). Always present, always a string — but a hosted consumer must not treat it as a filesystem path.
@@ -629,6 +629,15 @@ config exception names it.
   poll may now spend up to 100 records instead of `filters.maxRecords` — never more, because the
   definition schema already capped `maxRecords` at 100 — and its `no-match` row names the pinned
   band instead of saying `Scheduled check completed.` No configuration key is added.
+
+## Phones open on Manager — deliberate, 2026-11-01
+
+Spec `.ai/specs/2026-10-31-mobile-apps-manager-first.md`, Decision 3. On a phone (coarse primary pointer, short screen side under 600), the first location of a page load being exactly `/` now opens `/manager` when `capabilities.managers` is true and first-run setup is finished. It used to restore the last project page, which moves one tap away, behind Code in the drawer.
+
+Unchanged: desktop browsers, tablets, in-app links to `/`, `/` with a query or hash, deep links, servers with `CEZ_MANAGERS=0` or no answer from health, and `start_url: "/"` in the manifest.
+
+On a phone `/manager` with one manager now opens its chat, and `/manager?all=1` always shows the list. A `CezarMobile/` User-Agent token shows a `cezar://servers` link in the menu.
+
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.

@@ -10,10 +10,11 @@ import {
   useParams,
 } from 'react-router'
 
-import { useHealth, useProjects } from './api/queries'
+import { useHealth, useProjects, useProviderStatus, useWorkspaceUiState } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { lazyRoute } from './lib/telemetry'
 import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
+import { isFirstLocation, isPhone, phoneLanding, rememberFirstLocation } from './lib/phone-app'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
@@ -295,6 +296,42 @@ function LegacyPathRedirect() {
   )
 }
 
+/** A fresh load of the bare `/` on a phone (spec 2026-10-31-mobile-apps-manager-first, Decision 3).
+ *  Its own component so nobody else pays for its queries; anything but a yes is the restore. */
+function PhoneFreshLoad() {
+  const health = useHealth()
+  const projects = useProjects()
+  const providers = useProviderStatus()
+  const uiState = useWorkspaceUiState()
+  const landing = phoneLanding({
+    health: health.data,
+    healthFailed: health.isError,
+    registry: projects.data,
+    registryFailed: projects.isError,
+    providers: providers.data,
+    providersFailed: providers.isError,
+    agentCheckSkipped: uiState.data && uiState.data.onboarding?.agentCheckSkipped === true,
+    uiStateFailed: uiState.isError,
+  })
+  if (landing === 'wait') return <ScopeResolving />
+  return landing === 'manager' ? <Navigate to="/manager" replace /> : <LegacyPathRedirect />
+}
+
+/** Everything `/` and flat. Only the first location may count: the Code link and every Back to
+ *  tasks link point at `/`, and would bounce straight back to Manager otherwise. */
+function FlatPathRoute() {
+  const location = useLocation()
+  const freshBareRoot =
+    location.pathname === '/' && location.search === '' && location.hash === '' && isFirstLocation(location.key)
+  return freshBareRoot && isPhone() ? <PhoneFreshLoad /> : <LegacyPathRedirect />
+}
+
+/** Outside `Routes` so it runs on a deep-link boot too, which never reaches `FlatPathRoute`. */
+function FirstLocationFlag(): null {
+  rememberFirstLocation(useLocation().key)
+  return null
+}
+
 export interface PageTitleContext {
   pageLabel: string | null
   taskId: string | null
@@ -355,6 +392,8 @@ function ManagersGate({ children }: { children: ReactNode }) {
 export const AppRoutes = memo(function AppRoutes() {
   const capabilities = useHealth().data?.capabilities
   return (
+    <>
+    <FirstLocationFlag />
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
         <Route index element={<TasksOverviewRoute />} />
@@ -699,7 +738,8 @@ export const AppRoutes = memo(function AppRoutes() {
 
       {/* Everything else IS a legacy flat URL — the boot-project redirect owns it. The 404 for
           truly unknown paths still renders, scoped, after the redirect. */}
-      <Route path="*" element={<LegacyPathRedirect />} />
+      <Route path="*" element={<FlatPathRoute />} />
     </Routes>
+    </>
   )
 })
