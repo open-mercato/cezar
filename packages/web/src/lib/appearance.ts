@@ -3,7 +3,7 @@
  * The authoritative store is the server's `ui-state.json` (`GET/PUT /api/ui-state`, additive
  * `appearance` key) so the choice follows the repo, not the browser. localStorage keeps a
  * per-browser MIRROR of the last-applied values purely so the pre-paint script in
- * `packages/web/index.html` can stamp `data-accent`/`data-density` before first paint — the same
+ * `packages/web/index.html` can stamp `data-accent`/`data-density`/`data-width` before first paint — the same
  * no-flash trick the theme uses. When the server answers, its value wins and the mirror is
  * rewritten.
  *
@@ -25,14 +25,14 @@ export type Accent = 'lime' | 'violet'
  *  `ultra` ("Compact for real") → 3px (~25%). See the `:root[data-density]` blocks in index.css. */
 export type Density = 'comfortable' | 'compact' | 'ultra'
 
-/** Reading width flips the shared `--measure` token (index.css `:root[data-width="wide"]`):
- *  `narrow` caps reading content at 820px and `wide` raises it to 1180px. Used by task and skill
- *  detail views; type size and spacing stay untouched. */
+/** Reading width flips the shared `--measure` token (index.css `:root[data-width="narrow"]`):
+ *  `wide` is the legacy spelling for the zero-config full-width mode; `narrow` restores the old
+ *  820px reading column. Used by task and skill detail views; type size and spacing stay untouched. */
 export type Width = 'narrow' | 'wide'
 
 export const DEFAULT_ACCENT: Accent = 'lime'
 export const DEFAULT_DENSITY: Density = 'comfortable'
-export const DEFAULT_WIDTH: Width = 'narrow'
+export const DEFAULT_WIDTH: Width = 'wide'
 
 export interface Appearance {
   accent: Accent

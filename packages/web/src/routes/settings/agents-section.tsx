@@ -47,7 +47,7 @@ export function AgentsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="agents-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="agents-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading agent settings…
       </p>
     )
@@ -262,12 +262,12 @@ function DefaultAgentField({
       {!providerStatus.isPending &&
       !providerStatus.isError &&
       providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-ui text-muted-foreground">
           This provider is disabled. Enable it above or choose another provider.
         </p>
       ) : null}
       {hasAccounts ? (
-        <p className="max-w-md text-[13px] text-muted-foreground">
+        <p className="max-w-md text-ui text-muted-foreground">
           Tasks already started under another account can’t be resumed here — their sessions live in
           that account’s folder.
         </p>
@@ -282,7 +282,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-ui text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>

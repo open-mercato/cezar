@@ -112,6 +112,7 @@ const RESERVED = new Set([
   'Mod+P', // ⌘P palette
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
+  'Alt+D', // Design Mode in the Preview
   'Mod+Shift+`', // new terminal tab
   'Alt+Up', // previous / next task (use-task-switch-shortcut.ts)
   'Alt+Down',

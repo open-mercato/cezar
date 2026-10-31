@@ -1,5 +1,12 @@
+import { capabilitiesSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
-import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import {
+  agentAccountsEnabled,
+  isLoopbackHost,
+  isLoopbackHostHeader,
+  normalizeHostname,
+  resolveCapabilities,
+} from './capabilities.ts';
 
 /**
  * `resolveCapabilities` takes its env as a parameter, so these drive it
@@ -25,6 +32,9 @@ const REAL_LOOPBACK = [
   '::1',
   '[::1]',
   '0:0:0:0:0:0:0:1',
+  '::ffff:127.0.0.1',
+  '[::ffff:127.1.2.3]:4321',
+  '0:0:0:0:0:ffff:7f00:1',
 ];
 
 // Every one of these is registrable by an attacker and resolvable to 127.0.0.1.
@@ -51,6 +61,16 @@ const NOT_LOOPBACK = [
   'example.com',
   '::2',
   '::1:1',
+  '::ffff:192.168.1.1',
+  '::ffff:127.0.0.256',
+  '::ffff:127.0.0',
+  '::ffff:127.0.0.1.evil.com',
+  '::ffff:127.0.0.1:80',
+  '[::ffff:127.0.0.1]evil.com',
+  '::ffff:127.00.0.1',
+  '::ffff:127.0.0.01',
+  '[::ffff:127.00.0.1]',
+  '[::ffff:127.0.0.01]',
 ];
 
 describe('normalizeHostname', () => {
@@ -62,6 +82,9 @@ describe('normalizeHostname', () => {
     ['[0:0:0:0:0:0:0:1]:4321', '0:0:0:0:0:0:0:1'],
     ['[0000:0000:0000:0000:0000:0000:0000:0001]', '0:0:0:0:0:0:0:1'],
     ['::1', '0:0:0:0:0:0:0:1'], // bare IPv6 literal: >1 colon, so never `name:port`
+    ['[::ffff:127.0.0.1]:4321', '0:0:0:0:0:ffff:7f00:1'],
+    ['::ffff:127.1.2.3', '0:0:0:0:0:ffff:7f01:203'],
+    ['::ffff:7f00:1', '0:0:0:0:0:ffff:7f00:1'],
     ['LocalHost.:4321', 'localhost'], // lowercased, trailing FQDN dot dropped
     ['fe80::1%eth0', 'fe80:0:0:0:0:0:0:1'], // IPv6 zone id stripped
     ['[::1%25eth0]:4321', '0:0:0:0:0:0:0:1'], // bracketed, zone id + port
@@ -74,6 +97,13 @@ describe('normalizeHostname', () => {
     '[::1]evil.com',
     '127.0.0.1:evil.com', // port that is not digits
     'evil.com:80:127.0.0.1',
+    '::ffff:127.0.0.1:80',
+    '[::ffff:127.0.0.1]evil.com',
+    '[::ffff:127.0.0.256]',
+    '::ffff:127.00.0.1',
+    '::ffff:127.0.0.01',
+    '[::ffff:127.00.0.1]',
+    '[::ffff:127.0.0.01]',
   ])('returns "" for the unparseable authority %s', (input) => {
     expect(normalizeHostname(input)).toBe('');
   });
@@ -151,6 +181,20 @@ describe('resolveCapabilities — localHandoff', () => {
   });
 });
 
+describe('agentAccountsEnabled', () => {
+  it('is available locally without configuration', () => {
+    expect(agentAccountsEnabled({})).toBe(true);
+  });
+
+  it('is off remotely unless the operator opts in with exact 1', () => {
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1' })).toBe(false);
+    expect(agentAccountsEnabled({}, '0.0.0.0')).toBe(false);
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1', CEZ_REMOTE_AGENT_ACCOUNTS: 'true' })).toBe(false);
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1', CEZ_REMOTE_AGENT_ACCOUNTS: '1' })).toBe(true);
+    expect(agentAccountsEnabled({ CEZ_REMOTE_AGENT_ACCOUNTS: '1' }, '0.0.0.0')).toBe(true);
+  });
+});
+
 describe('resolveCapabilities — designMode (spec 2026-10-09-design-mode)', () => {
   it('is on for a local cockpit by default', () => {
     expect(resolveCapabilities({}, undefined).designMode).toBe(true);
@@ -191,6 +235,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       automations: true,
+      webhooks: false,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -320,5 +365,36 @@ describe('resolveCapabilities — usage presentation', () => {
       tokenUsageMetrics: true,
       costMetrics: true,
     });
+  });
+});
+
+describe('resolveCapabilities — lifecycle webhooks', () => {
+  it.each([undefined, '', '0', 'true', 'yes'])('is off unless explicitly opted in (%s)', value => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: value, CEZ_WORKFLOW_WEBHOOKS: '1' }).webhooks).toBe(false);
+  });
+  it('enables lifecycle delivery independently of workflow graph webhooks', () => {
+    expect(resolveCapabilities({ CEZ_WEBHOOKS: '1', CEZ_WORKFLOW_WEBHOOKS: '0' }).webhooks).toBe(true);
+  });
+});
+
+describe('webhook platform availability', () => {
+  it.each(['linux', 'darwin', 'win32', 'freebsd'])('reports platform support independently of opt-in on %s', platform => {
+    const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: platform });
+    try {
+      const supported = ['linux', 'darwin', 'win32'].includes(platform);
+      for (const flag of [undefined, '0', 'true', '1']) {
+        const capabilities = resolveCapabilities({ CEZ_WEBHOOKS: flag });
+        expect(capabilitiesSchema.strict().parse(capabilities)).toEqual(capabilities);
+        expect(capabilities.webhooks).toBe(supported && flag === '1');
+        expect(capabilities).toEqual({
+          localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true,
+          dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          webhooks: supported && flag === '1',
+          ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
+        });
+        if (supported) expect(capabilities).not.toHaveProperty('webhooksUnavailableReason');
+      }
+    } finally { Object.defineProperty(process, 'platform', original); }
   });
 });

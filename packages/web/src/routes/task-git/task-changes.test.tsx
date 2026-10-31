@@ -48,7 +48,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 /** The PROJECT-scoped `/repo` answer. The remote that gates Push is read from here rather than
@@ -288,6 +288,10 @@ describe('the Changes tab route', () => {
     // `calc` left is the floating dock's clearance at the column's end).
     expect(pane.className).not.toContain('sticky')
     expect(pane.className).not.toContain('max-h-')
+    // The splitter sits beside the scroller, not inside it, so it never scrolls away.
+    const splitter = pane.nextElementSibling as HTMLElement
+    expect(splitter.dataset.slot).toBe('tree-pane-resize')
+    expect(pane.querySelector('[role="separator"]')).toBeNull()
     expect(pane.className).not.toContain('100dvh')
     // The diff scrolls in its own column, which it finds through the marker (desktop: jsdom).
     const diffPane = document.querySelector('[data-slot="diff-pane"]') as HTMLElement
@@ -325,6 +329,36 @@ describe('the Changes tab route', () => {
     expect(document.querySelector('[data-slot="repointed-head-note"]')?.textContent).toContain(
       "HEAD is on review/pr-42, not this task's branch cez/abc12345 — showing only what this task changed there.",
     )
+  })
+
+  describe('image old sides', () => {
+    const SHA = 'a'.repeat(40)
+    const IMAGES: ChangesPayload = {
+      files: [
+        { path: 'gone.png', status: 'deleted', adds: 0, dels: 0, binary: true, image: true, patch: '' },
+        { path: 'new.png', oldPath: 'old.png', status: 'renamed', adds: 0, dels: 0, binary: true, image: true, patch: '' },
+      ],
+      stat: { adds: 0, dels: 0, files: 2 },
+    }
+    const srcs = () => [...document.querySelectorAll('[data-slot="diff-image-side"] img')].map((img) => img.getAttribute('src'))
+
+    it('loads them at the payload’s baseSha — a rename from its old path', async () => {
+      stubFetch({ 'GET /api/v1/runs/r1/changes': () => jsonResponse({ ...IMAGES, baseSha: SHA }) })
+      renderChangesRoute()
+      await waitFor(() => expect(srcs()).toHaveLength(3))
+      expect(srcs()).toEqual([
+        `/api/v1/runs/r1/files?path=gone.png&raw=1&rev=${SHA}`,
+        `/api/v1/runs/r1/files?path=old.png&raw=1&rev=${SHA}`,
+        '/api/v1/runs/r1/files?path=new.png&raw=1',
+      ])
+    })
+
+    it('without a baseSha, wires no old side', async () => {
+      stubFetch({ 'GET /api/v1/runs/r1/changes': () => jsonResponse(IMAGES) })
+      renderChangesRoute()
+      await waitFor(() => expect(screen.getByText(/only the new side can be previewed/)).not.toBeNull())
+      expect(srcs()).toEqual(['/api/v1/runs/r1/files?path=new.png&raw=1'])
+    })
   })
 
   it('a 409 ("no worktree") renders the server reason and offers no git step', async () => {

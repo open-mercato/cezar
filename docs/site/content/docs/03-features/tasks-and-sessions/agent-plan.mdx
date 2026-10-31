@@ -1,0 +1,25 @@
+---
+title: "The agent's current plan and TODO list"
+description: "Follow the agent's plan without searching the conversation."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/task-thread.tsx
+    line: 495
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Plan panel above the message field shows the latest plan reported by the agent. It lists completed, active, pending, and abandoned items. When collapsed, it keeps the count and current step visible.
+
+## Where to find it
+
+Task → Chat → Plan
+
+## How to use it
+
+1. Open a task where the agent has reported a plan.
+2. Expand Plan to see individual items.
+3. After the session closes, check whether the plan is marked left unfinished.
+
+> **Good to know**: The plan comes from the agent; this view does not let you edit your own TODO list. It is separate from workflows and Inbox. Availability depends on the runner, which is the mechanism that launches the agent.

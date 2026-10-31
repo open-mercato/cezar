@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, promises as fsp, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { renameSyncWithRetry } from '../fs-rename.ts';
+import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
@@ -161,6 +160,7 @@ const agentDefaultsSchema = z
         pi: z.string().trim().min(1).max(200).optional().catch(undefined),
         junie: z.string().trim().min(1).max(200).optional().catch(undefined),
         copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
+        antigravity: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()
@@ -188,6 +188,11 @@ const disabledProvidersSchema = z
     return PROVIDER_IDS.filter((provider) => seen.has(provider));
   });
 
+const MAX_ORG_SKILLS_REPOS = 20;
+const orgSkillsRepoSchema = z
+  .object({ repo: z.string().min(1).max(500), ref: z.string().min(1).max(200).default('main') })
+  .passthrough();
+
 const workspaceConfigSchema = z
   .object({
     /** Optional instance name shown in the cockpit; absent keeps the product default. */
@@ -207,6 +212,23 @@ const workspaceConfigSchema = z
     /** Optional auto-update override. Absence inherits the environment/default
      *  and must stay absent on unrelated merge-writes. */
     skillsAutoUpdate: z.boolean().optional().catch(undefined),
+    /** The user's own skills repos (e.g. an organisation's), merged into every project's team
+     *  skills after the project's own `skillsRepos`. Absent = none. */
+    orgSkillsRepos: z
+      .array(z.unknown())
+      .optional()
+      .catch(undefined)
+      // Same bounds as the PUT schema, applied per entry so one bad row never evicts the rest.
+      .transform((entries) =>
+        entries === undefined
+          ? undefined
+          : entries
+              .flatMap((entry) => {
+                const parsed = orgSkillsRepoSchema.safeParse(entry);
+                return parsed.success ? [parsed.data] : [];
+              })
+              .slice(0, MAX_ORG_SKILLS_REPOS),
+      ),
     /** Release channel the self-updater follows (`stable` → npm `latest`, `nightly` → `nightly`,
      *  `development` → none: a worktree or PR preview picked by hand). Absent inherits
      *  `CEZ_UPDATE_CHANNEL`, then stable. */
@@ -227,6 +249,9 @@ const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
+    /** Global instructions: read by every agent step in every project, merged BEFORE the
+     *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
+    systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -313,18 +338,29 @@ function parseWorkspaceConfig(raw: string): WorkspaceConfig | null {
   }
 }
 
+/** The file's text, or null when it does not exist. Any other failure (a
+ *  Windows sharing violation that outlived the retries, EACCES) is thrown:
+ *  "unreadable" must never be mistaken for "absent". */
+async function readConfigText(path: string): Promise<string | null> {
+  try {
+    return await readFileWithRetry(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
 /** The snapshot is only worth restoring while it still holds projects — an
  *  empty one carries no information the defaults do not already have. */
 async function loadWorkspaceConfigBackup(path: string): Promise<WorkspaceConfig | null> {
-  let raw: string;
-  try {
-    raw = await readFile(workspaceConfigBackupPath(path), 'utf8');
-  } catch {
-    return null;
-  }
+  const raw = await readConfigText(workspaceConfigBackupPath(path));
+  if (raw === null) return null;
   const parsed = parseWorkspaceConfig(raw);
   return parsed && parsed.projects.length > 0 ? parsed : null;
 }
+
+/** Thrown by a merge-write that could not read the file it was about to replace. */
+export class WorkspaceConfigUnreadableError extends Error {}
 
 /**
  * Read `~/.cezar/config.json` on demand — never cached, never throws. A
@@ -344,23 +380,45 @@ async function loadWorkspaceConfigBackup(path: string): Promise<WorkspaceConfig 
  * `mergeWriteWorkspaceConfig` for why resolving it twice is a data-loss bug.
  */
 export async function loadWorkspaceConfig(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  return readWorkspaceConfig(path, false);
+}
+
+/** `strict` (merge-writes): a file that exists but cannot be read throws
+ *  instead of degrading to defaults, which the write would then persist over
+ *  both the config and its snapshot — the Windows registry wipe this guards. */
+async function readWorkspaceConfig(path: string, strict: boolean): Promise<WorkspaceConfig> {
   let raw: string | null = null;
+  let unreadable: { path: string; error: unknown } | undefined;
   try {
-    raw = await readFile(path, 'utf8');
-  } catch {
-    // missing/unreadable — the backup below is the next chance
+    raw = await readConfigText(path);
+  } catch (error) {
+    unreadable = { path, error }; // the backup below is the next chance
   }
   if (raw !== null && raw.trim() !== '') {
     const parsed = parseWorkspaceConfig(raw);
     if (parsed) return parsed;
   }
-  const restored = await loadWorkspaceConfigBackup(path);
+  const backupPath = workspaceConfigBackupPath(path);
+  const restored = await loadWorkspaceConfigBackup(path).catch((error: unknown) => {
+    unreadable ??= { path: backupPath, error };
+    return null;
+  });
   if (restored) {
-    const cause = raw === null ? 'is missing' : 'is empty or corrupt';
+    const cause = unreadable !== undefined ? 'is unreadable' : raw === null ? 'is missing' : 'is empty or corrupt';
     console.warn(
-      `[cez] workspace config ${path} ${cause} — restored ${restored.projects.length} project(s) from ${workspaceConfigBackupPath(path)}`,
+      `[cez] workspace config ${path} ${cause} — restored ${restored.projects.length} project(s) from ${backupPath}`,
     );
     return restored;
+  }
+  if (unreadable !== undefined) {
+    const code = (unreadable.error as NodeJS.ErrnoException).code ?? 'error';
+    if (strict) {
+      throw new WorkspaceConfigUnreadableError(`[cez] cannot read ${unreadable.path} (${code}) — refusing to overwrite it`, {
+        cause: unreadable.error,
+      });
+    }
+    console.warn(`[cez] workspace config ${unreadable.path} is unreadable (${code}) — using defaults for now`);
+    return defaultWorkspaceConfig();
   }
   if (raw === null) return defaultWorkspaceConfig();
   console.warn(
@@ -421,6 +479,44 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
   }
 }
 
+/** Async twin of {@link atomicWriteJsonSync} for files a request may be READING concurrently: the
+ *  sync retry blocks the event loop, so a reader's open handle — which is what makes a win32
+ *  rename fail EPERM — can never close until the budget is spent (telemetry 4a7c9f6c). */
+export async function atomicWriteJson(path: string, value: unknown): Promise<void> {
+  assertCezarHomeWriteIsSandboxed(path);
+  await fsp.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = atomicTmpPath(path);
+  try {
+    const handle = await fsp.open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await renameWithRetry(tmp, path);
+  } catch (error) {
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+  await fsp.chmod(path, 0o600).catch(() => {});
+}
+
+const pathQueues = new Map<string, Promise<unknown>>();
+
+/** Runs `task` after every earlier one queued for `path` in this process has settled, so one
+ *  request's read-modify-write never reads the file while another's rename replaces it. */
+export function serializedByPath<T>(path: string, task: () => Promise<T>): Promise<T> {
+  const previous = pathQueues.get(path) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  const settled = next.catch(() => {});
+  pathQueues.set(path, settled);
+  void settled.then(() => {
+    if (pathQueues.get(path) === settled) pathQueues.delete(path);
+  });
+  return next;
+}
+
 /**
  * Read-modify-write merge: re-read the file, apply `mutator`, atomic-rename
  * write (`0600`, dir `0700`). Because every writer re-reads immediately before
@@ -429,7 +525,8 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
  * read→rename window — acceptable for a registry that self-heals on next
  * boot). The mutator may mutate its argument in place or return a replacement.
  * Returns the config that was written. Throws on write failure (e.g. a
- * read-only home) — degrading is the caller's policy, per house rules.
+ * read-only home) and on a file that exists but cannot be read
+ * (`WorkspaceConfigUnreadableError`) — degrading is the caller's policy.
  *
  * The path is resolved ONCE, before the `await`, and the same value feeds the
  * read and the write. Resolving it twice used to lose the whole registry:
@@ -444,20 +541,22 @@ export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
 ): Promise<WorkspaceConfig> {
   const path = workspaceConfigPath();
-  const current = await loadWorkspaceConfig(path);
-  const next = mutator(current) ?? current;
-  atomicWriteJsonSync(path, next);
-  // Refresh the snapshot after EVERY successful write, including an emptied
-  // registry (#731). Skipping the empty case left a stale non-empty backup:
-  // removing the last project, then losing config.json, resurrected the project
-  // the user had deliberately unregistered. An empty snapshot is not restored on
-  // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
-  // registry the user intended rather than the old projects.
-  try {
-    atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
-  } catch {
-    // Best-effort: the registry itself is already safely on disk, and a
-    // failed snapshot must never turn a successful write into an error.
-  }
-  return next;
+  return serializedByPath(path, async () => {
+    const current = await readWorkspaceConfig(path, true);
+    const next = mutator(current) ?? current;
+    await atomicWriteJson(path, next);
+    // Refresh the snapshot after EVERY successful write, including an emptied
+    // registry (#731). Skipping the empty case left a stale non-empty backup:
+    // removing the last project, then losing config.json, resurrected the project
+    // the user had deliberately unregistered. An empty snapshot is not restored on
+    // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
+    // registry the user intended rather than the old projects.
+    try {
+      await atomicWriteJson(workspaceConfigBackupPath(path), next);
+    } catch {
+      // Best-effort: the registry itself is already safely on disk, and a
+      // failed snapshot must never turn a successful write into an error.
+    }
+    return next;
+  });
 }

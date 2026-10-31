@@ -135,6 +135,12 @@ describe('the review gate on the thread', () => {
     expect(document.querySelector('[data-slot="review-panel"]')).toBeNull()
   })
 
+  it('leaves the panel out for an in-place task — the composer and the header Commit cover it', () => {
+    stubFetch()
+    renderWithProviders(<ThreadView run={{ ...run('review'), worktree: false }} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="review-panel"]')).toBeNull()
+  })
+
   it('shows the working spinner ONLY while the run is running (the live heartbeat)', () => {
     stubFetch()
     const { rerenderWithProviders } = renderWithProviders(
@@ -342,6 +348,8 @@ describe('the review gate on the thread', () => {
       expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
         text: 'Review feedback:\nuse the available provider',
         runner: 'codex',
+        // The delivery seam's key: a re-post of these notes cannot reopen the session twice.
+        idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     )
   })

@@ -1,0 +1,26 @@
+---
+title: "Send a webhook from a workflow"
+description: "Send an HTTP POST after a selected step."
+version: opt-in
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5890
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Webhook node sends an HTTP POST request to a supplied HTTP or HTTPS address. Place it after the step that should trigger the message, then connect done and failed. Enable the feature with `CEZ_WORKFLOW_WEBHOOKS=1`.
+
+## Where to find it
+
+`CEZ_WORKFLOW_WEBHOOKS=1` → Workflows → Webhook
+
+## How to use it
+
+1. Start Cezar with `CEZ_WORKFLOW_WEBHOOKS=1`.
+2. Add a Webhook node and an HTTP or HTTPS URL.
+3. Connect done and failed.
+
+> **Good to know**: Webhooks are disabled by default. With `CEZ_DRY_RUN=1`, Cezar sends no requests.

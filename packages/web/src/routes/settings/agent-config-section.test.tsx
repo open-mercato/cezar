@@ -41,7 +41,7 @@ const HEALTH = {
   version: '0.0.0',
   repoRoot: '/repo',
   repo: null,
-  checks: [{ name: 'claude', available: true }],
+  checks: [{ name: 'claude', available: true }, { name: 'pi', available: true }],
   defaultRunner: 'claude',
   forge: null,
   capabilities: { localHandoff: true },
@@ -89,6 +89,25 @@ afterEach(() => {
 })
 
 describe('AgentConfigSection', () => {
+  it('shows Pi settings and shared instructions, including absent files', async () => {
+    serve({
+      editable: true,
+      files: [
+        fileOf({ id: 'pi.user.settings', label: '~/.pi/agent/settings.json', runners: ['pi'], format: 'jsonc', scope: 'user', exists: false }),
+        fileOf({ id: 'project.agents', label: 'AGENTS.md', runners: ['pi'], kind: 'memory', format: 'markdown', exists: true }),
+      ],
+      userMcp: null,
+    })
+    renderSection()
+    await waitFor(() => expect(agentTab('pi')).toBeTruthy())
+    fireEvent.click(agentTab('pi'))
+    await waitFor(() => expect(screen.getByText('~/.pi/agent/settings.json')).toBeTruthy())
+    expect(screen.getByText('~/.pi/agent/settings.json').parentElement?.textContent).toContain('absent')
+    expect(screen.getByText('AGENTS.md')).toBeTruthy()
+    expect(document.querySelector('[data-slot="agent-config-group"][data-group="settings"]')).toBeTruthy()
+    expect(document.querySelector('[data-slot="agent-config-group"][data-group="memory"]')).toBeTruthy()
+  })
+
   it('renders the agent selector with a not-installed badge from health', async () => {
     serve({
       editable: true,
@@ -217,6 +236,51 @@ describe('AgentConfigSection', () => {
     fireEvent.change(editor, { target: { value: '{"a":2}' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(screen.getByText(/Saved/)).toBeTruthy())
+  })
+
+  it.each([
+    ['json', '{"a": {"b":[1]}}', '{\n  "a": {\n    "b": [\n      1\n    ]\n  }\n}'],
+    ['jsonc', '// keep\n{"a":1}', '// keep\n{"a":1}'],
+  ] as const)('autoformats %s on save only when it is plain JSON', async (format, typed, sent) => {
+    serve({
+      editable: true,
+      files: [fileOf({ id: 'claude.project.settings', label: '.claude/settings.json', format })],
+      userMcp: null,
+    })
+    renderSection()
+    fireEvent.click(await screen.findByText('.claude/settings.json'))
+    const editor = (await screen.findByLabelText('.claude/settings.json contents')) as HTMLTextAreaElement
+    fireEvent.change(editor, { target: { value: typed } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const putCall = () => vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === 'PUT')
+    await waitFor(() => expect(putCall()).toBeTruthy())
+    expect(JSON.parse(String(putCall()![1]!.body)).content).toBe(sent)
+  })
+
+  it.each(['edit', 'revert'] as const)('a format error clears on %s', async (action) => {
+    serve({
+      editable: true,
+      files: [fileOf({ id: 'claude.project.settings', label: '.claude/settings.json' })],
+      userMcp: null,
+    })
+    const ok = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) =>
+      init?.method === 'PUT'
+        ? new Response(JSON.stringify({ error: 'Invalid json: Expected double-quoted property name' }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          })
+        : ok(input, init),
+    )
+    renderSection()
+    fireEvent.click(await screen.findByText('.claude/settings.json'))
+    const editor = (await screen.findByLabelText('.claude/settings.json contents')) as HTMLTextAreaElement
+    fireEvent.change(editor, { target: { value: '{"a":2,}' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(document.querySelector('[data-slot="agent-config-format-error"]')).toBeTruthy())
+    if (action === 'edit') fireEvent.change(editor, { target: { value: '{"a":2}' } })
+    else fireEvent.click(screen.getByRole('button', { name: 'Revert' }))
+    expect(document.querySelector('[data-slot="agent-config-format-error"]')).toBeNull()
   })
 
   it('an absent private MCP file opens on a starter whose placeholders cannot run anything', async () => {

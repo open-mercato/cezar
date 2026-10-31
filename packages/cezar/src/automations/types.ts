@@ -1,3 +1,4 @@
+import { deferredStartStateSchema } from '@open-mercato/cezar-contract';
 import { z } from 'zod';
 import {
   DISPATCH_MAX_SUBTASKS,
@@ -5,6 +6,8 @@ import {
   trackerAutomationEventSchema,
   trackerAssociationSchema,
   automationScheduleSchema,
+  automationSchedulesSchema,
+  automationScheduleIssue,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -89,7 +92,7 @@ export const automationTaskSchema = z
 const fillGithubDefaults = (raw: unknown): unknown => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const record = raw as Record<string, unknown>;
-  if (record.kind === 'schedule') return raw;
+  if (record.kind === 'schedule') return { ...record, schedule: record.schedule ?? (Array.isArray(record.schedules) ? record.schedules[0] : undefined) };
   return {
     ...record,
     intervalSeconds: record.intervalSeconds ?? (record.kind === 'tracker' ? 1800 : 300),
@@ -112,12 +115,16 @@ export const automationDefinitionObjectSchema = z
     filters: automationFiltersSchema.optional(),
     trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
+    schedules: automationSchedulesSchema.optional(),
     task: automationTaskSchema,
+    deferredStart: deferredStartStateSchema.optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
   .passthrough()
   .superRefine((definition, ctx) => {
+    const scheduleIssue = automationScheduleIssue(definition, definition.kind);
+    if (scheduleIssue) ctx.addIssue({ code: 'custom', path: ['schedules'], message: scheduleIssue });
     // `checkout`/`allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3) name a pull
     // request's head, so they mean something only where every event IS a pull request.
     const prHeadKeys = (['checkout', 'allowForkHeads'] as const).filter((key) => definition.task[key] !== undefined);
@@ -150,9 +157,14 @@ export const automationDefinitionObjectSchema = z
         message: "allowForkHeads is meaningful only with checkout: 'pr-head'",
       });
     }
+    if (definition.deferredStart && (definition.kind !== 'schedule' || definition.schedule?.type !== 'once')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['deferredStart'], message: 'a composer start requires a one-time schedule' });
+    }
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule'], message: 'a scheduled automation needs a schedule' });
+      } else if (definition.schedule.type === 'once' && !definition.schedule.date) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule', 'date'], message: 'a one-time schedule needs a date' });
       }
       return;
     }
@@ -193,6 +205,9 @@ export const automationDefinitionsFileSchema = z
   .object({
     version: z.literal(1).default(1),
     automations: z.array(z.unknown()).default([]),
+    // Keep raw idempotency evidence, even when damaged. The store validates on access:
+    // dropping a row (or the whole file) could allow a creation key to launch twice.
+    deferredCreations: z.unknown().optional(),
     tombstones: z.record(z.string(), z.string().datetime()).optional(),
   })
   .passthrough();

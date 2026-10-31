@@ -466,6 +466,22 @@ describe('AppShell', () => {
       expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
     })
 
+    it('dots a nav item whose feature shipped since the user started (spec 2026-10-26, "Coming back")', () => {
+      renderShell('/', { newNavItems: new Set(['/workflows', '/settings']) })
+      const markers = [...document.querySelectorAll('[data-slot="nav-new-marker"]')]
+      expect(markers).toHaveLength(2)
+      expect(markers.map((marker) => marker.closest('a')?.getAttribute('href'))).toEqual(['/workflows', '/settings'])
+      expect(screen.getByRole('link', { name: /Workflows\s*New/ })).toBeDefined()
+    })
+
+    it('puts the "What\u2019s new" row in the sidebar footer, above the host widget', () => {
+      renderShell('/', { whatsNew: <button type="button" data-slot="whats-new">What’s new</button>, hostWidget: <div data-slot="host-widget" /> })
+      const footer = document.querySelector('[data-slot="sidebar-footer"]')
+      const row = footer?.querySelector('[data-slot="whats-new"]')
+      expect(row).not.toBeNull()
+      expect(row?.compareDocumentPosition(footer!.querySelector('[data-slot="host-widget"]')!) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+
     it('renders no Skills marker without an actionable update', () => {
       renderShell()
       expect(document.querySelector('[data-slot="nav-update-marker"]')).toBeNull()

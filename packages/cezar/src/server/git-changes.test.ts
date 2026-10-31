@@ -18,6 +18,7 @@ import {
   patchByPath,
   pushCurrentBranch,
   worktreeGitStatus,
+  readImageAtRev,
   readWorktreePath,
   splitPatch,
   type ChangesPayload,
@@ -219,6 +220,21 @@ describe('collectChanges — structured diff vs base', () => {
     if (!result.ok) return;
     expect(result.changes.files[0]?.patch.length).toBeLessThan(300);
     expect(result.changes.files[0]?.patch).toContain('… (patch truncated)');
+  });
+
+  it("excludeCezarData leaves cezar's own .ai/cezar files out of an in-place task's Changes", async () => {
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    mkdirSync(join(dir, '.ai/cezar'), { recursive: true });
+    for (const name of ['.gitignore', 'config.json', 'ui-state.json']) writeFileSync(join(dir, '.ai/cezar', name), '{}\n');
+    writeFileSync(join(dir, 'summary.md'), 'notes\n');
+
+    const scoped = await collectChanges(dir, 'main', { intentToAdd: false, excludeCezarData: true });
+    expect(scoped.ok && scoped.changes.files.map((f) => f.path)).toEqual(['summary.md']);
+    // The repo-wide view still shows everything.
+    const all = await collectChanges(dir, 'main', { intentToAdd: false });
+    expect(all.ok && all.changes.files.length).toBe(4);
   });
 
   it('intentToAdd:false never stages into the index (#major-index-mutation)', async () => {
@@ -478,6 +494,43 @@ describe('imageMimeType — the raw-serving allowlist (R5 Step 1.6)', () => {
   });
 });
 
+describe('readImageAtRev — an image as committed at a sha', () => {
+  let dir: string;
+  let sha: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-image-rev-'));
+    initRepo(dir);
+    writeFileSync(join(dir, 'a.png'), Buffer.from([137, 80, 78, 71, 0, 1]));
+    writeFileSync(join(dir, 'big.png'), Buffer.alloc(FILE_CONTENT_CAP + 1));
+    writeFileSync(join(dir, 'a.txt'), 'text\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    sha = g(dir, 'rev-parse', 'HEAD').trim();
+    rmSync(join(dir, 'a.png'));
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('reads bytes that are no longer in the working tree', async () => {
+    const result = await readImageAtRev(dir, sha, 'a.png');
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.mime).toBe('image/png');
+    expect([...result.bytes]).toEqual([137, 80, 78, 71, 0, 1]);
+  });
+
+  it('refuses refs, non-images, oversized blobs, traversal and absent paths', async () => {
+    expect((await readImageAtRev(dir, 'HEAD', 'a.png')).kind).toBe('refused');
+    expect((await readImageAtRev(dir, `--output=${sha}`, 'a.png')).kind).toBe('refused');
+    expect(await readImageAtRev(dir, sha, 'a.txt')).toMatchObject({ error: expect.stringContaining('limited to images') });
+    expect(await readImageAtRev(dir, sha, 'big.png')).toMatchObject({ error: expect.stringContaining('too large') });
+    expect((await readImageAtRev(dir, sha, '../a.png')).kind).toBe('refused');
+    expect((await readImageAtRev(dir, sha, './a.png')).kind).toBe('refused');
+    expect((await readImageAtRev(dir, sha, 'missing.png')).kind).toBe('refused');
+  });
+});
+
 describe('isOsOpenableImage — the OS-launcher allowlist (#365)', () => {
   it('allows raster images, matching the raw allowlist case-insensitively', () => {
     expect(isOsOpenableImage('logo.png')).toBe(true);
@@ -592,6 +645,22 @@ describe('session git API routes', () => {
     expect((await apiRequest(app, `/api/v1/runs/${removed.id}/git/status`)).status).toBe(409);
   });
 
+  it('GET /git/status answers for an in-place write task from the checkout, never for a read-only one', async () => {
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/config.json'), '{}\n');
+    writeFileSync(join(repoRoot, 'summary.md'), 'notes\n');
+    const inPlace = store.createRun({ title: 'in place', workflow: 'quick-task', task: 'x', steps: [] });
+    store.updateRun(inPlace.id, { worktree: false });
+    const res = await apiRequest(app, `/api/v1/runs/${inPlace.id}/git/status`);
+    expect(res.status).toBe(200);
+    // cezar's own files are not the task's work; no upstream means null counts.
+    expect(await res.json()).toMatchObject({ uncommitted: 1, unpushed: null, behind: null });
+
+    const asked = store.createRun({ title: 'ask', workflow: 'quick-task', task: 'x', steps: [] });
+    store.updateRun(asked.id, { worktree: false, readOnly: true });
+    expect((await apiRequest(app, `/api/v1/runs/${asked.id}/git/status`)).status).toBe(409);
+  });
+
   it('GET /changes uses the persisted task branch to detect a repointed HEAD', async () => {
     writeFileSync(join(worktree, 'reviewed.txt'), 'reviewed branch history\n');
     g(worktree, 'add', '-A');
@@ -604,6 +673,31 @@ describe('session git API routes', () => {
     const body = (await res.json()) as ChangesPayload;
     expect(body.files.map((file) => file.path)).toEqual(['reviewed.txt']);
     expect(body.repointedHead).toEqual({ headBranch: 'review/pr-42', taskBranch: 'task' });
+  });
+
+  it('runs without a worktree never serve ignored files from the real checkout', async () => {
+    const bare = store.createRun({ title: 'i', workflow: 'quick-task', task: 'i', worktree: false, steps: [] });
+    writeFileSync(join(repoRoot, '.gitignore'), '.env\nprivate/\n');
+    writeFileSync(join(repoRoot, '.env'), 'TOKEN=secret\n');
+    mkdirSync(join(repoRoot, 'private'), { recursive: true });
+    writeFileSync(join(repoRoot, 'private', 'endpoints.json'), '{"secret":"whsec_x"}\n');
+    writeFileSync(join(repoRoot, 'visible.txt'), 'ok\n');
+
+    for (const path of ['.env', 'private/endpoints.json', 'private', 'private/', './.env', 'private/absent.json']) {
+      const res = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=${encodeURIComponent(path)}`);
+      expect(res.status).toBe(409);
+      const body = await res.text();
+      expect(body).not.toContain('secret');
+      expect(body).toContain('not in the repository index');
+    }
+    const listing = await apiRequest(app, `/api/v1/runs/${bare.id}/files`);
+    expect(listing.status).toBe(200);
+    const names = ((await listing.json()) as { entries: Array<{ name: string }> }).entries.map((entry) => entry.name);
+    expect(names).toContain('visible.txt');
+    expect(names).not.toContain('.env');
+    expect(names).not.toContain('private');
+    const visible = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=visible.txt`);
+    expect(visible.status).toBe(200);
   });
 
   it('runs without a worktree read Changes, Files and Commits from the current checkout', async () => {
@@ -745,6 +839,36 @@ describe('session git API routes', () => {
     const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=huge.png&raw=1`);
     expect(res.status).toBe(409);
     expect(((await res.json()) as { error: string }).error).toContain('too large');
+  });
+
+  it('GET /files?raw=1&rev=<baseSha> serves a deleted image from the diff base, cacheable forever', async () => {
+    writeFileSync(join(worktree, 'gone.png'), PNG);
+    g(worktree, 'add', '-A');
+    g(worktree, 'commit', '-m', 'image on task');
+    g(worktree, 'branch', '-f', 'main');
+    rmSync(join(worktree, 'gone.png'));
+
+    const changes = (await (await apiRequest(app, `/api/v1/runs/${run.id}/changes`)).json()) as ChangesPayload;
+    expect(changes.files.find((f) => f.path === 'gone.png')?.status).toBe('deleted');
+    expect(changes.baseSha).toBe(g(worktree, 'rev-parse', 'main').trim());
+
+    const res = await apiRequest(app, `/api/v1/runs/${run.id}/files?path=gone.png&raw=1&rev=${changes.baseSha}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(res.headers.get('content-security-policy')).toContain('sandbox');
+    expect(res.headers.get('cache-control')).toContain('immutable');
+    expect(Buffer.from(await res.arrayBuffer()).equals(PNG)).toBe(true);
+  });
+
+  it('GET /files?rev= refuses refs, non-images and a non-raw request', async () => {
+    const sha = g(worktree, 'rev-parse', 'HEAD').trim();
+    const status = async (query: string) =>
+      (await apiRequest(app, `/api/v1/runs/${run.id}/files?${query}`)).status;
+    expect(await status('path=base.txt&raw=1&rev=main')).toBe(400);
+    expect(await status(`path=base.txt&raw=1&rev=${sha}`)).toBe(409);
+    expect(await status(`path=base.png&raw=0&rev=${sha}`)).toBe(409);
+    expect(await status(`path=${encodeURIComponent('../x.png')}&raw=1&rev=${sha}`)).toBe(409);
   });
 
   it('GET /files?raw=1 still rejects traversal with a 409', async () => {

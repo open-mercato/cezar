@@ -70,7 +70,7 @@ it('tracker uses durable receipts across repeated history and does not fabricate
   const { TrackerPoller } = await import('./tracker-poller.ts');
   const store = AutomationStore.open(mkdtempSync(join(tmpdir(), 'event-cycle-')));
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.status_changed'], targetStatusIds: ['todo'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   store.setState(definition.id, () => ({ baselineAt: '2026-09-19T00:00:00.000Z' }));
   const candidate = { eventId: 'history:1', event: 'issue.status_changed' as const, timestamp: '2026-09-19T01:00:00.000Z', tieBreaker: '1', association, provider: 'jira' as const, issueId: '123', key: 'P-1', title: 'test', url: 'https://example.atlassian.net/browse/P-1', labels: [], status: 'todo', change: { toId: 'todo' } };
   let candidates = [candidate];
@@ -179,7 +179,7 @@ it('previews a new paused tracker within lookback without making execute import 
   const { TrackerPoller } = await import('./tracker-poller.ts');
   const store = AutomationStore.open(mkdtempSync(join(tmpdir(), 'event-cycle-')));
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: false, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: false, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   const timestamp = new Date(Date.now() - 86_400_000).toISOString();
   const candidate = { eventId: 'created:1', event: 'issue.opened' as const, timestamp, tieBreaker: '1', association, provider: 'jira' as const, issueId: '123', key: 'P-1', title: 'test', url: 'https://example.atlassian.net/browse/P-1', labels: [], status: 'todo', change: {} };
   const pollEvents = vi.fn(async ({ baselineAt }: { baselineAt: string }) => ({ candidates: timestamp > baselineAt ? [candidate] : [], checkpoint: 'complete', complete: true }));
@@ -205,7 +205,7 @@ it.each(['missing', 'corrupt', 'orphan-checkpoint'])('recovers %s tracker state 
   const dir = mkdtempSync(join(tmpdir(), 'tracker-recovery-'));
   const store = AutomationStore.open(dir);
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   if (damage === 'corrupt') writeFileSync(join(dir, 'automation-state.json'), '{broken');
   if (damage === 'orphan-checkpoint') store.setState(definition.id, () => ({ checkpoint: 'orphan' }));
   const opened = { id: '1', key: 'P-1', title: 'test', url: 'https://example.atlassian.net/browse/P-1', createdAt: '2026-09-19T00:00:00.000Z', status: 'todo', labels: [] };
@@ -240,7 +240,7 @@ it('persists queue progress and a visible history gap without duplicating surviv
   const dir = mkdtempSync(join(tmpdir(), 'tracker-gap-'));
   const store = AutomationStore.open(dir);
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.status_changed'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.status_changed'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   store.setState(definition.id, () => ({ baselineAt: '2026-09-19T00:00:00.000Z' }));
   const issue = { id: '1', key: 'P-1', title: 'test', url: 'https://example.atlassian.net/browse/P-1', createdAt: '2026-09-18T00:00:00.000Z', status: 'todo', labels: [] };
   let deleted = false;
@@ -273,7 +273,7 @@ it('persists slow Jira scan progress across restart and launches its eventual ev
   const dir = mkdtempSync(join(tmpdir(), 'tracker-deadline-'));
   const store = AutomationStore.open(dir);
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: '1', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.status_changed'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.status_changed'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   const baselineAt = '2026-09-19T00:00:00.000Z';
   store.setState(definition.id, () => ({ baselineAt }));
   const source = createJiraEventSource(association, async (path, _init, signal) => {
@@ -319,7 +319,7 @@ it('persists required labels and only previews/launches matching creations', asy
   const dir = mkdtempSync(join(tmpdir(), 'label-cycle-'));
   const store = AutomationStore.open(dir);
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: true, name: 'bugs', intervalSeconds: 1800, trackerTrigger: { association, events: ['issue.opened'], requiredLabels: ['bug'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'bugs', intervalSeconds: 1800, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.opened'], requiredLabels: ['bug'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   expect(AutomationStore.open(dir).get(definition.id)?.trackerTrigger?.requiredLabels).toEqual(['bug']);
   store.setState(definition.id, () => ({ baselineAt: '2026-09-19T00:00:00.000Z' }));
   const base = { event: 'issue.opened' as const, timestamp: '2026-09-19T01:00:00.000Z', tieBreaker: '1', association, provider: 'jira' as const, issueId: '123', key: 'P-1', title: 'test', url: 'https://example.atlassian.net/browse/P-1', labels: [], status: 'todo', change: {} };
@@ -342,7 +342,7 @@ it.each(['not_configured', 'credentials_missing'] as const)('backs off without l
   const { TrackerPoller } = await import('./tracker-poller.ts');
   const store = AutomationStore.open(mkdtempSync(join(tmpdir(), 'missing-tracker-')));
   const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
-  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, trackerTrigger: { association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'test', intervalSeconds: 1800, trackerTrigger: { access: { version: 1, writes: [] }, association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
   const launchTracker = vi.fn();
   const poller = new TrackerPoller();
   const poll = vi.spyOn(poller, 'poll');
@@ -353,4 +353,22 @@ it.each(['not_configured', 'credentials_missing'] as const)('backs off without l
   expect(launchTracker).not.toHaveBeenCalled();
   expect(poll).not.toHaveBeenCalled();
   expect(store.state(definition.id)).toMatchObject({ consecutiveFailures: 1, backoffUntil: expect.any(String) });
+});
+
+it('a tracker automation awaiting access review says so once and keeps its checkpoint', async () => {
+  const { ProjectTrackerAutomationScheduler } = await import('./scheduler.ts');
+  const { TrackerPoller } = await import('./tracker-poller.ts');
+  const store = AutomationStore.open(mkdtempSync(join(tmpdir(), 'event-cycle-')));
+  const association = { kind: 'jira' as const, source: { id: 's', webUrl: 'https://example.atlassian.net' }, externalId: 'P', externalName: 'Project' };
+  const definition = store.create({ kind: 'tracker', enabled: true, name: 'legacy', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, trackerTrigger: { association, events: ['issue.opened'] }, task: { prompt: 'test' } }) as import('./types.ts').TrackerAutomationDefinition;
+  store.setState(definition.id, () => ({ baselineAt: '2026-09-19T00:00:00.000Z', checkpoint: 'kept' }));
+  const pollEvents = vi.fn();
+  const scheduler = new ProjectTrackerAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, launchTracker: vi.fn(),
+    tracker: { poller: new TrackerPoller(), getDriver: async () => ({ association, listIssues: vi.fn(), searchItems: vi.fn(), getItem: vi.fn(), pollEvents }) },
+  });
+  await expect(scheduler.check(definition)).rejects.toThrow('needs review');
+  await expect(scheduler.check(definition)).rejects.toThrow('needs review');
+  expect(store.logs({ automationId: definition.id }).filter(row => row.result === 'error')).toHaveLength(1);
+  expect(pollEvents).not.toHaveBeenCalled();
+  expect(store.state(definition.id)?.checkpoint).toBe('kept');
 });

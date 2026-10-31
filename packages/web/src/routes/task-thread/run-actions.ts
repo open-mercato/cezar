@@ -16,6 +16,12 @@ export { cliTargetRunner }
 // Lives in `lib/` so shared components can use it without importing a route module.
 export { isRunActive }
 
+/** Reclaim keeps the task and branch; an in-place checkout never belongs to this action. */
+export function canRemoveTaskWorktree(run: RunRecord): boolean {
+  return !isRunActive(run.status) && run.worktree !== false && !!run.worktreePath
+    && !run.worktreeReclaimedAt && !run.worktreeLifecycle?.activeOperationId
+}
+
 /** The latest agent session across steps — what Continue/Terminal resume. */
 export function lastSessionId(run: RunRecord): string | undefined {
   return [...run.steps].reverse().find((step) => step.sessionId)?.sessionId
@@ -42,6 +48,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   junie: 'junie --resume',
   pi: 'pi --session',
   copilot: 'copilot --resume',
+  antigravity: 'agy --conversation',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner
@@ -174,6 +181,17 @@ export function createPrPrompt(draft: boolean, base?: string): string {
 export function updateBranchPrompt(base?: string): string {
   const name = baseName(base)
   return name ? `Update branch from ${name}` : 'Update branch'
+}
+
+/** Create PR from an in-place task (spec 2026-10-20-trunk-based-projects): the work is uncommitted
+ *  in the checkout on the base branch, so the agent moves it to a branch and puts the checkout back. */
+export function inPlacePrPrompt(draft: boolean, base: string): string {
+  return `${draft ? 'Create draft PR' : 'Create PR'} against ${base} instead of landing: move these changes to a new branch, commit and push it, open the PR, then switch the checkout back to ${base}`
+}
+
+/** Update branch for an in-place task: bring the checkout up to date, keeping the task's changes. */
+export function inPlaceUpdatePrompt(base: string): string {
+  return `Update branch: pull the latest ${base} into the checkout (rebase, keeping these uncommitted changes)`
 }
 
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */

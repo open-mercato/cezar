@@ -1,6 +1,9 @@
 import { createJiraEventSource } from './jira-events.ts';
+import { boundedContext, CONTEXT_DESCRIPTION_LIMIT } from './context-limits.ts';
 import { z } from 'zod';
 import type {
+  TrackerContext,
+  TrackerAction,
   TrackerAssociation,
   TrackerAssociationInput,
   TrackerAssociationResult,
@@ -21,6 +24,7 @@ import {
   TrackerRequestError,
   requestFailure,
   runOperation,
+  isResponseSizeLimit,
 } from './transport.ts';
 import type { TrackerProvider, TrackerDriver } from './types.ts';
 
@@ -194,7 +198,7 @@ export function createJiraClient(
       const base = selected === 'gateway'
         ? `https://api.atlassian.com/ex/jira/${encodeURIComponent(currentSource.id)}`
         : config.origin;
-      return http.json(`${base}${path}`, { ...init, headers }, signal);
+      return http.json(`${base}${path}`, { ...init, headers }, signal, undefined, { allowEmpty: init.method === 'POST' });
     };
 
     if (transport === 'site') return request('site');
@@ -203,7 +207,10 @@ export function createJiraClient(
       transport = 'gateway';
       return result;
     } catch (error) {
-      if (!(error instanceof TrackerRequestError) || error.code !== 'unauthorized') throw error;
+      // JQL searches use POST but are reads. Only reads may try another transport;
+      // a mutation must never be sent twice after an uncertain response.
+      const readOnly = init.method === 'GET' || (init.method === 'POST' && path === '/rest/api/3/search/jql');
+      if (!readOnly || !(error instanceof TrackerRequestError) || error.code !== 'unauthorized') throw error;
       const result = await request('site');
       transport = 'site';
       return result;
@@ -390,8 +397,58 @@ export function createJiraClient(
       }
     };
 
+    const context = async (id: string): Promise<TrackerContext> => runOperation(async signal => {
+      if (!/^(?:[A-Z][A-Z0-9_]*-[1-9]\d*|[1-9]\d*)$/.test(id)) throw new TrackerRequestError('not_found', 'Invalid issue identity.');
+      const current = await source(signal);
+      ensureAssociationSource(association, current);
+      const raw = await authenticatedJson(current, `/rest/api/3/issue/${encodeURIComponent(id)}?fields=${issueFields.join(',')}`, { method: 'GET' }, signal);
+      const row = parseVendor(issueSchema.extend({ fields: issueSchema.shape.fields.extend({ status: z.object({ id: z.string(), name: z.string() }) }) }), raw);
+      const item = mapIssue(row, config.origin, association.externalId, CONTEXT_DESCRIPTION_LIMIT);
+      const comments: TrackerContext['comments'] = [];
+      let offset = 0, lossyComments = 0, pagesExhausted = false;
+      for (let pageNumber = 0; ; pageNumber++) {
+        if (pageNumber >= 100) { pagesExhausted = true; break; }
+        // Newest first, so a page or size bound drops the oldest discussion; reversed below.
+        let raw: unknown;
+        try { raw = await authenticatedJson(current, `/rest/api/3/issue/${encodeURIComponent(row.id)}/comment?startAt=${offset}&maxResults=50&orderBy=-created`, { method: 'GET' }, signal); }
+        catch (error) { if (!isResponseSizeLimit(error)) throw error; pagesExhausted = true; break; }
+        const page = parseVendor(z.object({ startAt: z.number(), total: z.number(), comments: z.array(z.object({ id: z.string(), body: z.unknown(), created: z.string(), author: z.object({ displayName: z.string() }).optional() })) }), raw);
+        if (page.startAt !== offset) return invalidResponse();
+        for (const comment of page.comments) {
+          const body = adfMarkdown(comment.body);
+          if (body.unsupportedContent) lossyComments++;
+          comments.push({ id: comment.id, body: body.body, author: comment.author?.displayName ?? 'Unknown', createdAt: comment.created });
+        }
+        offset += page.comments.length;
+        if (offset >= page.total) break;
+        if (!page.comments.length) return invalidResponse();
+      }
+      comments.reverse();
+      const transitions = parseVendor(z.object({ transitions: z.array(z.object({ id: z.string(), name: z.string(), to: z.object({ id: z.string() }), fields: z.record(z.string(), z.object({ required: z.boolean(), hasDefaultValue: z.boolean().optional() })).optional() })) }), await authenticatedJson(current, `/rest/api/3/issue/${encodeURIComponent(row.id)}/transitions?expand=transitions.fields`, { method: 'GET' }, signal));
+      return boundedContext({ issueId: row.id, item, statusId: row.fields.status.id, fetchedAt: new Date().toISOString(), comments,
+        limitations: ['Only accessible comments are included. Attachments and custom fields are not included; if required, stop and report missing context.', 'Transitions requiring additional fields are not supported.'],
+        transitions: transitions.transitions.filter(t => !Object.values(t.fields ?? {}).some(f => f.required && !f.hasDefaultValue)).map(t => ({ id: t.id, name: t.name, statusId: t.to.id })) },
+      { description: Boolean(item.unsupportedContent), comments: lossyComments, pagesExhausted });
+    }, 30000);
+    const act = async (id: string, action: TrackerAction, beforeWrite?: () => Promise<void>): Promise<void> => {
+      const fresh = await context(id);
+      if (action.kind === 'transition' && (fresh.statusId !== action.expectedStatusId || !fresh.transitions.some(t => t.id === action.transitionId))) throw new TrackerRequestError('unavailable', 'Status changed or transition is unavailable. Read the issue again.');
+      await runOperation(async signal => {
+        const current = await source(signal);
+        ensureAssociationSource(association, current);
+        // Last check before the request leaves: everything earlier is a known "not sent".
+        await beforeWrite?.();
+        const path = `/rest/api/3/issue/${encodeURIComponent(fresh.issueId)}/${action.kind === 'comment' ? 'comment' : 'transitions'}`;
+        const body = action.kind === 'comment'
+          ? { body: { type: 'doc', version: 1, content: action.body.split('\n').map(text => ({ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] })) } }
+          : { transition: { id: action.transitionId } };
+        const result = await authenticatedJson(current, path, { method: 'POST', body: JSON.stringify(body) }, signal);
+        if (action.kind === 'comment') parseVendor(z.object({ id: z.string().min(1) }), result);
+      });
+    };
+
     return {
-      association,
+      association, context, act,
       async automationOptions(query) {
         if (query?.cursor) throw new TrackerRequestError('invalid_cursor', 'This options catalog has no next page.');
         return runOperation(async signal => {

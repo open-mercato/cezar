@@ -86,6 +86,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -264,6 +272,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -413,6 +429,41 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     });
   const rawFile = () =>
     JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
+
+  it('PUT round-trips the trunk-based keys and clears them on null (spec 2026-10-20-trunk-based-projects)', async () => {
+    const on = (await (await put({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      landingBlocked: null,
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    });
+    expect(rawFile().skillsRepos).toEqual([]);
+
+    const off = (await (await put({
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      requiredChecks: null,
+      defaultSkill: '',
+      askSkill: null,
+      teamSkills: true,
+    })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ profile: null, taskWorkspace: null, landing: null, requiredChecks: [], defaultSkill: null, teamSkills: true });
+    expect(Object.keys(rawFile()).sort()).toEqual([]);
+  });
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {
     // Default (no config key) is null — the CEZ_REVIEW_GATE env (OFF) decides.

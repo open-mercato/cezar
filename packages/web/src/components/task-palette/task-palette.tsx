@@ -795,7 +795,7 @@ function PaletteFooter({ mode }: { mode: PaletteMode | 'rename' | 'record' }) {
   return (
     <div
       data-slot="task-palette-footer"
-      className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-[11px] text-soft-foreground"
+      className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-meta text-soft-foreground"
     >
       {hints.map((hint) => (
         <span key={hint}>{hint}</span>

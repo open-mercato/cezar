@@ -1,10 +1,12 @@
+import { WebhookCard } from './webhook-card'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 
-import { useProjects, useWorkspaceConfig } from '@/api/queries'
+import { useHealth, useProjects, useWorkspaceConfig } from '@/api/queries'
 import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
+import { withServedBootProject } from '@/lib/served-boot-project'
 import { ProjectFolderField } from './project-location'
 import { AddBootProjectButton, MaxParallelStepper, STATUS_LABEL } from './projects-section'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
@@ -47,14 +49,15 @@ function fullDate(iso: string): string {
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
-export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject'>> }) {
+export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'webhooks' | 'webhooksUnavailableReason'>> }) {
   const projectId = useActiveProjectId()
   const projects = useProjects()
+  const health = useHealth()
   const config = useWorkspaceConfig()
 
   if (projects.isPending) {
     return (
-      <p data-slot="project-general-loading" className="text-[13px] text-soft-foreground">
+      <p data-slot="project-general-loading" className="text-ui text-soft-foreground">
         Loading project…
       </p>
     )
@@ -66,12 +69,12 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
   // so a silent `null` would leave the whole pane blank with no hint that anything went wrong.
   if (projects.isError) {
     return (
-      <p data-slot="project-general-error" className="text-[13px] text-danger">
+      <p data-slot="project-general-error" className="text-ui text-danger">
         Could not read the project registry — {projects.error.message}
       </p>
     )
   }
-  const registry = projects.data
+  const registry = withServedBootProject(projects.data, projectId, health.data)
   const project = registry?.projects.find((entry) => entry.id === projectId)
   // No registry entry for this URL (an unscoped mount, or an id the registry does not have):
   // there is nothing true to say about a project that isn't one.
@@ -86,6 +89,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
     <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
       <ProjectFolderField />
       <ProjectFacts project={project} canRemove={managesRegistry} />
+      <WebhookCard />
       {project.unregistered ? (
         <SettingsField
           title="Add to your projects"
@@ -109,7 +113,7 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Partial<Pick<C
             ) : (
               // The stepper's "Inherit (N)" placeholder has to name N, and guessing it would be
               // the one thing this control must not do.
-              <p className="text-[13px] text-soft-foreground">Loading the workspace limit…</p>
+              <p className="text-ui text-soft-foreground">Loading the workspace limit…</p>
             )}
           </SettingsField>
           <RemoveProject project={project} bootProject={registry.bootProject} />
@@ -130,7 +134,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
     >
       <dl
         data-slot="project-facts"
-        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-[13px]"
+        className="grid grid-cols-[8rem_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-md border border-border bg-card p-3 text-ui"
       >
         <dt className="text-muted-foreground">Name</dt>
         <dd className="min-w-0 truncate text-foreground">{project.name}</dd>
@@ -229,7 +233,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           Remove {project.name}
         </Button>
         {isBoot ? (
-          <span data-slot="project-general-remove-boot" className="text-[11px] text-soft-foreground">
+          <span data-slot="project-general-remove-boot" className="text-meta text-soft-foreground">
             cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
           </span>
         ) : null}

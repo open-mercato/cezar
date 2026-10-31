@@ -1,25 +1,33 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
+import { parseUsageLimit } from './usage-limit.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
+  SERVER_PORT_ATTEMPTS,
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  isUsageLimitRejection,
   unsupportedServerMessage,
 } from './opencode-server-runner.ts';
 
-const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
+const spawnHook = vi.hoisted(() => ({
+  override: null as null | ((...args: unknown[]) => unknown),
+  actual: null as null | ((...args: unknown[]) => unknown),
+}));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
+  spawnHook.actual = actual.spawn as (...args: unknown[]) => unknown;
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) =>
@@ -209,6 +217,26 @@ describe('opencode serve startup', () => {
     expect(events).toContainEqual({ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' });
   });
 
+  it('names the early exit status and keeps the bounded stderr tail in a local note', async () => {
+    const child = silentChild();
+    spawnHook.override = () => child;
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    void session.result.catch(() => undefined);
+    (child.stderr as PassThrough).write(`${'x'.repeat(1_000)}bad config`);
+    Object.assign(child, { exitCode: 1 });
+    (child as unknown as EventEmitter).emit('exit', 1, null);
+    (child as unknown as EventEmitter).emit('close', 1, null);
+    await session.result.catch(() => undefined);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
+    ]);
+    expect(events).toContainEqual({ type: 'note', message: `opencode serve stderr: ${'x'.repeat(790)}bad config` });
+  });
+
   // 2d01c3c9: a start that keeps printing (a one-time migration) was failed at a flat 30s.
   it('keeps waiting while the server is still printing, up to the hard cap', async () => {
     const child = silentChild();
@@ -231,6 +259,49 @@ describe('opencode serve startup', () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(errorsSoFar()).toEqual([{ type: 'error', message: `opencode: opencode serve did not report a listening URL within ${SERVER_START_MAX_MS / 1000}s` }]);
     expect(events).toContainEqual(expect.objectContaining({ type: 'note', message: expect.stringContaining('opencode serve stderr: migrating') }));
+  });
+
+  function exitingChild(stderr: string): ChildProcessWithoutNullStreams {
+    const child = silentChild();
+    setTimeout(() => {
+      (child.stderr as PassThrough).end(stderr);
+      Object.assign(child, { exitCode: 1 });
+      child.emit('exit', 1, null);
+      child.emit('close', 1, null);
+    }, 5);
+    return child;
+  }
+
+  it('does not respawn a server that exited for a reason other than its port', async () => {
+    let spawns = 0;
+    spawnHook.override = () => (spawns += 1, exitingChild('Error: bad config\n'));
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    await session.result;
+    expect(spawns).toBe(1);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
+    ]);
+    expect(events).toContainEqual({ type: 'note', message: 'opencode serve stderr: Error: bad config' });
+  });
+
+  it(`gives up after ${SERVER_PORT_ATTEMPTS} spawns that all lost their port`, async () => {
+    let spawns = 0;
+    spawnHook.override = () => (spawns += 1, exitingChild('Error: Unexpected error\n\nServeError\n'));
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it', cwd: process.cwd() },
+      (event) => events.push(event),
+    );
+    await session.result;
+    expect(spawns).toBe(SERVER_PORT_ATTEMPTS);
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: 'opencode: opencode serve exited before it started listening (exit code 1)' },
+    ]);
+    expect(events.filter((e) => e.type === 'note')).toHaveLength(1);
   });
 
   // The message is a telemetry group key, so it never carries the elapsed time.
@@ -274,6 +345,19 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     expect(result.sessionId).toBe('ses_mock_1');
   }, 30_000);
 
+  it('surfaces the OpenCode error name and message for a failed prompt POST', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: '#http-error', cwd: process.cwd() },
+      (e) => events.push(e),
+    );
+    await session.result;
+    expect(errors(events)).toContainEqual({
+      type: 'error',
+      message: 'opencode: POST /session/ses_mock_1/message → 500 InternalError: Provider rejected the configured model',
+    });
+  }, 30_000);
+
   it('never adopts a server on that port that serves another directory', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     const events: AgentEvent[] = [];
@@ -291,6 +375,39 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
     await session.result.catch(() => undefined);
     expect(errors(events)).toEqual([{ type: 'error', message: 'opencode: opencode serve did not report a listening URL within 30s' }]);
   }, 30_000);
+});
+
+describe('#1756 cost on a turn a usage limit rejected', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const costs = async (marker: string): Promise<number[]> => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: `work ${marker}`, cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    return events.flatMap((e) => (e.type === 'cost' ? [e.usd] : []));
+  };
+
+  it('keeps what was spent before the limit but not the rejected message', async () => {
+    expect(await costs('#limit-cost')).toEqual([0.02]);
+  }, 30_000);
+
+  it('still counts the cost of a message that failed for another reason (#1346)', async () => {
+    const usd = await costs('#fail-cost');
+    expect(usd.reduce((a, b) => a + b, 0)).toBeCloseTo(0.0205, 6);
+  }, 30_000);
+
+  it.each([
+    [{ name: 'APIError', data: { statusCode: 429 } }, true],
+    [{ name: 'FreeUsageLimitError', data: {} }, true],
+    [{ name: 'APIError', data: { message: 'Daily quota exceeded' } }, true],
+    [{ name: 'APIError', data: { statusCode: 500, message: 'stream closed' } }, false],
+    [undefined, false],
+  ])('classifies %j as a usage-limit rejection: %s', (error, expected) => {
+    expect(isUsageLimitRejection(error)).toBe(expected);
+  });
 });
 
 describe('dc1a91a6 an OpenCode 2.x server', () => {
@@ -439,6 +556,42 @@ describe('#897 a turn that outlives its prompt POST', () => {
 
     expect(types(events)).toContain('turn-end');
     expect(fetchSpy).not.toHaveBeenCalled();
+  }, 30_000);
+
+  // The random port is in the OS ephemeral range, so it can already be taken (release 0.16.1 CI).
+  it('respawns on a fresh port when the random one is already taken', async () => {
+    const blocker = createServer();
+    let taken = 0;
+    for (let p = 40000 + Math.floor(Math.random() * 19000); !taken; p += 1) {
+      taken = await new Promise<number>((resolve) => {
+        blocker.once('error', () => resolve(0));
+        blocker.listen(p, '127.0.0.1', () => resolve(p));
+      });
+    }
+    try {
+      vi.spyOn(Math, 'random').mockReturnValueOnce((taken - 40000 + 0.5) / 20000);
+      const ports: string[] = [];
+      spawnHook.override = (file, args, options) => {
+        ports.push(String((args as string[]).at(-1)));
+        return spawnHook.actual!(file, args, options);
+      };
+      const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+      const { events, onEvent } = record();
+      const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, {
+        autoEndAfterFirstTurn: true,
+      });
+      await session.result;
+
+      expect(ports).toHaveLength(2);
+      expect(ports[0]).toBe(String(taken));
+      expect(ports[1]).not.toBe(String(taken));
+      expect(notes(events)).toEqual([]);
+      expect(errors(events)).toEqual([]);
+      expect(types(events)).toContain('turn-end');
+    } finally {
+      spawnHook.override = null;
+      await new Promise((resolve) => blocker.close(resolve));
+    }
   }, 30_000);
 
   /**
@@ -590,4 +743,130 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
       expect(notes).toEqual(reply === 'reject' ? [`opencode: refused external_directory permission for ${path}`] : []);
     }, 30_000);
   }
+});
+
+/**
+ * A spent OpenCode free tier puts the session in `retry` with `next` at the next day and no
+ * event in between; an interactive step has no wall clock, so the run held its slot for 11 h.
+ */
+describe('a session.status retry the turn cannot outwait', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const errors = (events: AgentEvent[]): string[] =>
+    events.filter((e): e is Extract<AgentEvent, { type: 'error' }> => e.type === 'error').map((e) => e.message);
+
+  it('fails a quota retry with a message that books the usage-limit resume', async () => {
+    const events: AgentEvent[] = [];
+    // `next` is an epoch instant; the resume must land on exactly it, whatever the host's zone.
+    const next = Date.now() + 3 * 60 * 60_000 + 123;
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'do it #retry-limit', cwd: process.cwd(), env: { MOCK_RETRY_NEXT: String(next) } },
+      (e) => events.push(e),
+      {},
+    );
+    await session.result;
+
+    expect(errors(events)).toHaveLength(1);
+    const [error] = errors(events);
+    expect(error).toMatch(/^opencode: usage limit reached: Free usage exceeded, subscribe to Go — retry at /);
+    expect(parseUsageLimit(error)).toEqual({ resetAt: new Date(next), evidence: 'timestamp' });
+    expect(events.at(-1)?.type).toBe('done');
+  }, 30_000);
+
+  async function retryErrors(status: Record<string, unknown>, env: Record<string, string> = {}, timeoutMs = 0): Promise<string[]> {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs }).startSession(
+      { userPrompt: 'do it #retry-limit', cwd: process.cwd(), env: { MOCK_RETRY_STATUS: JSON.stringify(status), ...env } },
+      (e) => events.push(e),
+      {},
+    );
+    await session.result;
+    return errors(events);
+  }
+
+  it('fails a long backoff with no action, and resumes only on a limit OpenCode names', async () => {
+    const next = Date.now() + 60 * 60_000;
+    const [error, ...rest] = await retryErrors({ message: 'Provider is overloaded', next });
+    expect(rest).toEqual([]);
+    expect(error).toBe(`opencode: Provider is overloaded — retry at ${new Date(next).toISOString()}`);
+    expect(parseUsageLimit(error)).toBeNull();
+  }, 30_000);
+
+  it('never books a resume for an action that is not a quota', async () => {
+    const next = Date.now() + 60 * 60_000;
+    const [error] = await retryErrors({
+      message: 'Rate limit: sign in again',
+      action: { reason: 'auth_required', provider: 'opencode', title: 'Sign in', message: 'Sign in', label: 'sign in' },
+      next,
+    });
+    expect(error).toBe(`opencode: Rate limit: sign in again — next attempt ${new Date(next).toISOString()}`);
+    expect(parseUsageLimit(error)).toBeNull();
+  }, 30_000);
+
+  it('fails a quota action with no retry instant, without inventing one', async () => {
+    const [error] = await retryErrors({
+      message: 'Go limit reached',
+      action: { reason: 'account_rate_limit', provider: 'opencode', title: 'Go limit reached', message: 'x', label: 'open settings' },
+    });
+    expect(error).toBe('opencode: usage limit reached: Go limit reached');
+    expect(parseUsageLimit(error)).toBeNull();
+  }, 30_000);
+
+  it("ignores another session's retry", async () => {
+    const status = { message: 'Free usage exceeded', action: { reason: 'free_tier_limit' }, next: Date.now() + 60 * 60_000 };
+    // Only the inactivity deadline ends this turn: the retry belongs to a subtask session.
+    expect(await retryErrors(status, { MOCK_RETRY_SESSION: 'ses_other' }, 1_500)).toEqual([
+      'opencode timed out after 2s without any output and was killed — Continue picks the task up again',
+    ]);
+  }, 30_000);
+
+  it('rides out a short transient retry', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'do it #retry-soon', cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    expect(errors(events)).toEqual([]);
+    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+  }, 30_000);
+});
+
+/** #1652: OpenCode's native `question` tool blocks the session until /question/:id/reply. */
+describe('#1652 a native question.asked', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+
+  it('shows an ask card and sends the next message back as the answer', async () => {
+    const asks: Array<{ requestId: string; questions: Array<{ header: string; options: unknown[] }> }> = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: 'pick one #question', cwd: process.cwd() },
+      () => undefined,
+      {
+        autoEndAfterFirstTurn: true,
+        onUiEvent: (e) => {
+          if (e.type === 'ask.requested') {
+            asks.push(e as never);
+            session.sendMessage([{ type: 'text', text: 'Approach: Approach B' }]);
+          }
+        },
+      },
+    );
+    const result = await session.result;
+    expect(asks).toHaveLength(1);
+    expect(asks[0]?.questions[0]).toMatchObject({ header: 'Approach' });
+    expect(asks[0]?.questions[0]?.options).toHaveLength(2);
+    expect(result.text).toContain('question answered {"answers":[["Approach B"]]}');
+  }, 30_000);
+
+  it('rejects a question the card cannot show, so the session is not left blocked', async () => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 30_000 }).startSession(
+      { userPrompt: 'pick one #question-free', cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    const result = await session.result;
+    expect(result.text).toContain('question rejected');
+  }, 30_000);
 });

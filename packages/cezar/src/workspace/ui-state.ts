@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import type { WorkspaceUiState } from '@open-mercato/cezar-contract';
+import { readFileWithRetry } from '../fs-rename.ts';
 import { workspaceUiStatePath } from '../paths.ts';
-import { atomicWriteJsonSync } from './config.ts';
+import { atomicWriteJson, serializedByPath } from './config.ts';
 
 /**
  * `~/.cezar/ui-state.json` — global GUI state, the workspace twin of the
@@ -28,7 +28,7 @@ export async function readWorkspaceUiState(
   path: string = workspaceUiStatePath(),
 ): Promise<WorkspaceUiState> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    const parsed: unknown = JSON.parse(await readFileWithRetry(path));
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as WorkspaceUiState)
       : {};
@@ -40,8 +40,10 @@ export async function readWorkspaceUiState(
 /**
  * Read-modify-write for `~/.cezar/ui-state.json`, written with the same atomic
  * per-writer tmp+rename `0600` pattern (dir `0700`) as
- * `mergeWriteWorkspaceConfig` (`atomicWriteJsonSync` — one shared writer, so
- * the unique-tmp rule cannot drift between the two files). A missing or
+ * `mergeWriteWorkspaceConfig` (`atomicWriteJson` — one shared writer, so
+ * the unique-tmp rule cannot drift between the two files). Async and queued per
+ * path: a sync rename retry starved a concurrent request's read of the same
+ * file, and its open handle failed the win32 rename EPERM (telemetry 4a7c9f6c). A missing or
  * corrupt file merges from `{}`. The mutator may mutate its argument in place
  * or return a replacement. Throws on write failure (e.g. a read-only home) —
  * degrading is the caller's policy, per house rules.
@@ -54,8 +56,10 @@ export async function mergeWriteWorkspaceUiState(
   mutator: (state: WorkspaceUiState) => WorkspaceUiState | void,
 ): Promise<WorkspaceUiState> {
   const path = workspaceUiStatePath();
-  const current = await readWorkspaceUiState(path);
-  const next = mutator(current) ?? current;
-  atomicWriteJsonSync(path, next);
-  return next;
+  return serializedByPath(path, async () => {
+    const current = await readWorkspaceUiState(path);
+    const next = mutator(current) ?? current;
+    await atomicWriteJson(path, next);
+    return next;
+  });
 }

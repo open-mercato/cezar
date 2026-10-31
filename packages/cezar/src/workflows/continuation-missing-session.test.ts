@@ -54,7 +54,8 @@ vi.mock('../core/runner-factory.ts', () => ({
   }),
 }));
 
-describe('Continue on a Claude session whose transcript is gone', () => {
+// Real runs with the mock CLI; the polls below already allow 15 s: well under a second alone, past the 5 s default under the full parallel suite.
+describe('Continue on a Claude session whose transcript is gone', { timeout: 20_000 }, () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager | undefined;
@@ -113,6 +114,10 @@ describe('Continue on a Claude session whose transcript is gone', () => {
     expect(captured.specs).toHaveLength(2);
     const [resumed, fresh] = captured.specs as [AgentRunSpec, AgentRunSpec];
     expect(resumed).toMatchObject({ resume: true, sessionId: 'old-session' });
+    // Resuming and the missing-session fallback must retain the same account-bound
+    // usage observer; otherwise fresh Claude limits never reach deferred previews.
+    expect(resumed.onUsageWindows).toEqual(expect.any(Function));
+    expect(fresh.onUsageWindows).toBe(resumed.onUsageWindows);
     expect(fresh.resume).toBe(false);
     expect(fresh.sessionId).not.toBe('old-session');
     expect(fresh.userPrompt).toContain('The previous provider session cannot be resumed');

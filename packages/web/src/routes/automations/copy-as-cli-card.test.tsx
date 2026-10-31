@@ -36,3 +36,14 @@ describe('CopyAsCliCard', () => {
     expect(screen.getByText(/^cez automation create --json/)).not.toBeNull()
   })
 })
+
+it('explains that copied tracker write access needs review before enabling', () => {
+  render(<CopyAsCliCard definition={{ name: 'Tracker', kind: 'tracker', enable: true, task: { prompt: 'Fix' }, trackerTrigger: {
+    association: { kind: 'jira', source: { id: 'cloud', webUrl: 'https://fixture.atlassian.net' }, externalId: '1', externalName: 'Project' },
+    events: ['issue.opened'], access: { version: 1, writes: ['comment'] },
+  } }} />)
+  expect(screen.getByText(/Creates a paused, read-only automation/)).not.toBeNull()
+  const command = screen.getByText(/^cez automation create --json/).textContent!
+  expect(command).toContain('"writes":[]')
+  expect(command).not.toContain('"enable":true')
+})

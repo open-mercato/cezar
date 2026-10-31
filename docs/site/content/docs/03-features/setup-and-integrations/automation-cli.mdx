@@ -1,0 +1,25 @@
+---
+title: "Copy an automation as a CLI command"
+description: "Move a rule definition into the terminal."
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/copy-as-cli-card.tsx
+    line: 13
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The editor shows a command corresponding to the automation configuration. Copy as CLI is also available in the rule menu.
+
+## Where to find it
+
+Automations → editor → Copy as CLI
+
+## How to use it
+
+1. Configure or open a rule.
+2. Copy the generated command.
+3. Before using it, check the project and connections in the destination environment.
+
+> **Good to know**: Copying the command does not run the automation.

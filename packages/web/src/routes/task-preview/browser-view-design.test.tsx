@@ -109,6 +109,61 @@ describe('the Design Mode toggle', () => {
     expect(toggle().getAttribute('aria-pressed')).toBe('false')
   })
 
+  it('switches on and off with ⌥D / Alt+D — from a text field too — and shows that key on the button', async () => {
+    renderView()
+    expect(document.querySelector('[data-slot=browser-design-key]')!.textContent).toMatch(/^(⌥D|Alt\+D)$/)
+    // On a Mac ⌥D reports the glyph it types: the physical key is what counts.
+    fireEvent.keyDown(screen.getByLabelText('Address'), { code: 'KeyD', key: '∂', altKey: true })
+    expect(toggle().getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(openDesignProxy).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(window, { code: 'KeyD', key: 'd', altKey: true })
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('leaves a bare D, and Ctrl+Alt+D (AltGr off a Mac), to the page and the fields', () => {
+    renderView()
+    fireEvent.keyDown(window, { code: 'KeyD', key: 'd' })
+    fireEvent.keyDown(window, { code: 'KeyD', key: 'd', altKey: true, ctrlKey: true })
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('leaves ⌥D to the field when Design Mode cannot switch on', () => {
+    health.designMode = false
+    renderView()
+    // `fireEvent` answers false when the default was prevented: ⌥D must still type its `∂`.
+    expect(fireEvent.keyDown(screen.getByLabelText('Address'), { code: 'KeyD', key: '∂', altKey: true })).toBe(true)
+    cleanup()
+    health.designMode = true
+    renderView(undefined, 'https://github.com/')
+    expect(fireEvent.keyDown(screen.getByLabelText('Address'), { code: 'KeyD', key: '∂', altKey: true })).toBe(true)
+    expect(fireEvent.keyDown(window, { code: 'KeyD', key: 'd', altKey: true })).toBe(true)
+  })
+
+  it('switches off when ⌥D is pressed inside the page (the picker forwards it)', async () => {
+    renderView()
+    await enterDesignMode()
+    deliver({ source: 'cezar-design', type: 'toggle' }, MIRROR, frame().contentWindow)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('never switches on from the page — its own script could post the toggle', async () => {
+    renderView()
+    await enterDesignMode()
+    fireEvent.click(toggle())
+    deliver({ source: 'cezar-design', type: 'toggle' }, MIRROR, frame().contentWindow)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('leaves ⌥D to an open dialog (Radix sets no aria-modal)', () => {
+    renderView()
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    onTestFinished(() => dialog.remove())
+    expect(fireEvent.keyDown(window, { code: 'KeyD', key: '∂', altKey: true })).toBe(true)
+    expect(toggle().getAttribute('aria-pressed')).toBe('false')
+  })
+
   it('is disabled, with the reason, for an address that cannot be mirrored', () => {
     renderView(undefined, 'https://github.com/')
     expect((toggle() as HTMLButtonElement).disabled).toBe(true)

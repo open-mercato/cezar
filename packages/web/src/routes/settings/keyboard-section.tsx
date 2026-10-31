@@ -90,7 +90,7 @@ export function KeyboardSection() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-sm font-semibold text-foreground">Task shortcuts</h2>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-ui text-muted-foreground">
               Run a task’s commands from the keyboard while the task is open. {formatChord('Mod+P')} lists them all;
               press {apple ? '⇧↵' : 'Shift+Enter'} on a row there to set its shortcut. {apple ? '⌘' : 'Ctrl'} chords also
               work while you type. {apple ? '⌥↑ / ⌥↓' : 'Alt+↑ / Alt+↓'} go to the previous / next task,{' '}
@@ -114,7 +114,7 @@ export function KeyboardSection() {
 
       {groups.map(([group, entries]) => (
         <section key={group} className="flex flex-col gap-1">
-          <h3 className="text-xs font-medium tracking-wide text-soft-foreground uppercase">{group}</h3>
+          <h3 className="eyebrow text-soft-foreground">{group}</h3>
           <ul className="flex flex-col divide-y divide-border rounded-md border border-border">
             {entries.map((entry) => {
               const chord = keybindings.bindings.get(entry.id)
