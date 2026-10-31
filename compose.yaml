@@ -1,0 +1,33 @@
+# Local cockpit. The mounted repo is the project agents work in.
+# CEZ_DRY_RUN=1 uses the built-in mock so the stack boots without a logged-in agent CLI.
+# STARIO_HOST=0.0.0.0 is hosted mode: the process requires HTTP Basic auth.
+# Set CEZ_AUTH_PASSWORD, or read the generated one from the cezar-data volume
+# (auth-password) after the first start. GET /health stays open for the healthcheck.
+services:
+  cezar:
+    build: .
+    ports:
+      - "4321:4321"
+    environment:
+      PROJECT_DATA_DIR: /data
+      CEZ_REPO: /repo
+      CEZ_DRY_RUN: "1"
+      STARIO_HOST: 0.0.0.0
+      STARIO_PORT: "4321"
+    volumes:
+      - cezar-data:/data
+      - .:/repo
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4321/health')",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  cezar-data:

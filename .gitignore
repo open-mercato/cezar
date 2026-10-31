@@ -1,4 +1,14 @@
 node_modules/
+
+# Python cockpit
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+data/
+*.sqlite3
+*.sqlite3-claim
 dist/
 *.tsbuildinfo
 .idea

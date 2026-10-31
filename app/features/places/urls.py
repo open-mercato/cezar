@@ -1,0 +1,16 @@
+from stario import Route
+
+INBOX = Route("GET /inbox")
+INBOX_READ = Route("POST /inbox/read")
+GITHUB = Route("GET /github")
+TRACKER = Route("GET /tracker")
+REPO = Route("GET /git")
+WORKFLOW = Route("GET /workflows/{name}")
+COMPARE = Route("GET /tasks/{run_id}/compare")
+SETTINGS_PRIVACY = Route("GET /settings/privacy")
+SETTINGS_AGENTS = Route("GET /settings/agents")
+SETTINGS_WEBHOOKS = Route("GET /settings/webhooks")
+SETTINGS_WEBHOOKS_SAVE = Route("POST /settings/webhooks")
+SETTINGS_WORKTREES = Route("GET /settings/worktrees")
+SETTINGS_WORKTREES_SAVE = Route("POST /settings/worktrees")
+PALETTE_RESULTS = Route("GET /palette/results")

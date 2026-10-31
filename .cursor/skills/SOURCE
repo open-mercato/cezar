@@ -1,0 +1,4 @@
+Source: https://github.com/stariodev/stario-create
+Branch: main
+Commit: e56b6cd80cfcc011c8c1be7b4da92dfba5b5c31c
+Copied: skills/ (stario-api, stario-auth, stario-client, stario-feature, stario-litewriter, stario-tailwind-daisyui)

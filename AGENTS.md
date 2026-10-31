@@ -1,5 +1,30 @@
 # AGENTS.md — working in this repository
 
+## Python cockpit (Stario)
+
+The Python app under `app/` follows [Stario](https://stario.dev/docs). Before editing it, read the skills in `.cursor/skills/`. They were copied from [stario-create](https://github.com/stariodev/stario-create) `main` at `e56b6cd80cfcc011c8c1be7b4da92dfba5b5c31c` (see `.cursor/skills/SOURCE`).
+
+| Skill | Use it for |
+| --- | --- |
+| `stario-api` | Handler, `Writer`, `Route`, `TestClient`, Datastar, SSE signatures |
+| `stario-feature` | A page: `urls.py`, `views.py`, `handlers.py`, `data.py`, commands, streams |
+| `stario-litewriter` | SQLite tables, `db.watch`, virtual columns |
+| `stario-auth` | Login, sessions, signed cookies |
+| `stario-client` | JavaScript in `static/js/`, not in a Python string |
+| `stario-tailwind-daisyui` | CSS. This cockpit's CSS is hand-written; do not add Tailwind unless asked |
+
+Stario's own guide keeps skills in `.agents/skills/`. This repo gitignores `.agents/`, so the copy lives here.
+
+Rules for `app/` from that guide:
+
+- A feature may import another feature's `urls.py` and `data.py`, not its `views.py` or `handlers.py`.
+- New `CEZ_*` reads belong in `app/config.py`. No `os.environ` elsewhere.
+- A command replies with `w.empty()` or `SSE(w).navigate(...)` before it changes state. A 303 does not change a Datastar URL.
+- JSON goes through `stario.json`. Background work is `c.app.create_task`.
+- Do not add Tailwind unless asked.
+
+Known gaps are in `MIGRATION.md` under "Deviations from the Stario skills".
+
 cezar is a **parallel coding-agents orchestrator**: a local cockpit (CLI + browser GUI) for running and tracking AI coding-agent tasks in a repo. You type a task, pick a workflow and a backend — Claude Code, Codex or OpenCode (experimental), or a mix per step — and watch it work live: steps, tool calls, tokens, diffs. Each task runs in its own git worktree, ends at a review gate (never auto-merges), and can be pushed as a draft PR through `gh`. Everything is local: no accounts, no database, no cloud — state is plain JSON, NDJSON and Markdown under `.ai/cezar/`. The server stack stays deliberately small: strict TypeScript (ESM, Node 20+), Hono + SSE, Zod at every boundary, and YAML workflows. The cockpit is React 19 + Vite + Tailwind v4 + shadcn/ui, compiled to static assets (the legacy vanilla UI was retired in R7). Every module is meant to be read in one sitting.
 
 ## Zero config

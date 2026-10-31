@@ -1,0 +1,17 @@
+from stario import Route
+
+SETTINGS = Route("GET /settings")
+SETTINGS_LIVE = Route("GET /settings/live")
+SETTINGS_SAVE = Route("POST /settings")
+TASKS_SETTINGS = Route("GET /settings/tasks")
+TASKS_SETTINGS_SAVE = Route("POST /settings/tasks")
+TRACKER_SETTINGS = Route("GET /settings/tracker")
+TRACKER_SETTINGS_SAVE = Route("POST /settings/tracker")
+GLOBAL_INSTRUCTIONS = Route("GET /settings/global-instructions")
+GLOBAL_INSTRUCTIONS_SAVE = Route("POST /settings/global-instructions")
+GLOBAL_SKILLS = Route("GET /settings/global-skills")
+GLOBAL_SKILLS_SAVE = Route("POST /settings/global-skills")
+GLOBAL_SKILLS_REMOVE = Route("POST /settings/global-skills/remove")
+RESOURCES = Route("GET /settings/resources")
+RESOURCES_SAVE = Route("POST /settings/resources")
+AGENTS_SAVE = Route("POST /settings/agents")
