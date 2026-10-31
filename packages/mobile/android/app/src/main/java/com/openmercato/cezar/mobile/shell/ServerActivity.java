@@ -51,6 +51,7 @@ public final class ServerActivity extends AppCompatActivity {
     private static final String STATE_URL = "lastUrl";
 
     private static int openCount;
+    private static boolean everOpened;
 
     private static final int FILE_CHOOSER = 1;
     /** The cockpit's dark background, behind the system bars. */
@@ -77,10 +78,16 @@ public final class ServerActivity extends AppCompatActivity {
         return openCount > 0;
     }
 
+    /** Whether this process has a webview auth cache to worry about. */
+    public static boolean everOpened() {
+        return everOpened;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         openCount++;
+        everOpened = true;
         connector = ShellServices.connector(this);
         Intent intent = getIntent();
         serverId = intent.getStringExtra(EXTRA_SERVER_ID);

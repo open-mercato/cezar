@@ -9,6 +9,7 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.openmercato.cezar.mobile.shell.OriginGate;
+import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ServerActivity;
 import com.openmercato.cezar.mobile.shell.ServerRecord;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
@@ -69,7 +70,10 @@ public class ConnectionPlugin extends Plugin {
         run(call, connector -> {
             ServerRecord server = connector.server(id);
             connector.forget(id);
-            if (server != null) getActivity().runOnUiThread(() -> clearWebsiteData(server.url));
+            if (server != null) getActivity().runOnUiThread(() -> {
+                clearWebsiteData(server.url);
+                if (ServerActivity.everOpened()) RestartActivity.restart(getActivity());
+            });
             return list(connector);
         });
     }

@@ -1,6 +1,7 @@
 package com.openmercato.cezar.mobile.shell;
 
 import java.io.IOException;
+import java.net.ProtocolException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -25,6 +26,9 @@ public final class HealthProbe {
         if (cookies != null && !cookies.isEmpty()) headers.put("Cookie", cookies);
         try {
             return HealthClassifier.classify(http.get(origin.url("/api/v1/health"), headers));
+        } catch (ProtocolException e) {
+            // HttpURLConnection can throw on a 401 with no challenge, which is no gate of ours.
+            return HealthAnswer.of(HealthAnswer.Kind.NOT_CEZAR, 401);
         } catch (SSLException e) {
             return HealthAnswer.of(HealthAnswer.Kind.TLS_FAILURE, 0);
         } catch (IOException e) {
