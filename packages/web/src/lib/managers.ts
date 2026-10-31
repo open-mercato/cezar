@@ -1,6 +1,7 @@
 import type {
   ManagerActionRequest,
   ManagerCommand as ContractManagerCommand,
+  ManagerConfirm,
   ManagerProjects,
   ManagerSummary,
 } from '@open-mercato/cezar-api-client'
@@ -236,6 +237,17 @@ export function actionTitle(action: ManagerActionRequest): string {
   if (action.type === 'merge-pr') return `Merge #${action.number}${action.title ? ` — ${action.title}` : ''}`
   if (action.type === 'enable-automation') return `Enable automation ${action.name ?? action.automationId}`
   return `Add job ${action.name}`
+}
+
+/** The types Settings → Manager can switch off. Anything else, including a type from a newer
+ *  server, always confirms. */
+export const MANAGER_CONFIRM_TYPES = ['merge-pr', 'enable-automation', 'add-job'] as const
+
+/** Fails safe (mobile spec, Confirmation setting): only an explicit `false` on a known type skips
+ *  the step. It removes a step in the cockpit; the card and its tap stay. */
+export function actionConfirms(setting: ManagerConfirm | undefined, type: string): boolean {
+  const known = MANAGER_CONFIRM_TYPES.find((entry) => entry === type)
+  return known === undefined || setting?.[known] !== false
 }
 
 // ---- back to the manager -------------------------------------------------------------------

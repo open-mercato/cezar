@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  actionConfirms,
   actionTitle,
   clearManagerOrigins,
   cronLabel,
@@ -202,5 +203,25 @@ describe('resolveManagerOrigin', () => {
 
   it('ignores malformed state', () => {
     expect(resolveManagerOrigin('r3', { manager: { id: 1 } })).toBeUndefined()
+  })
+})
+
+describe('actionConfirms', () => {
+  it('fails safe: a missing setting, a missing key and any non-false value confirm', () => {
+    expect(actionConfirms(undefined, 'merge-pr')).toBe(true)
+    expect(actionConfirms({}, 'merge-pr')).toBe(true)
+    expect(actionConfirms({ 'merge-pr': true }, 'merge-pr')).toBe(true)
+    expect(actionConfirms({ 'merge-pr': 'false' as never }, 'merge-pr')).toBe(true)
+  })
+
+  it('confirms an unknown type even when it is stored as off', () => {
+    expect(actionConfirms({ 'delete-branch': false }, 'delete-branch')).toBe(true)
+  })
+
+  it('skips the step only for the type switched off', () => {
+    const setting = { 'add-job': false }
+    expect(actionConfirms(setting, 'add-job')).toBe(false)
+    expect(actionConfirms(setting, 'merge-pr')).toBe(true)
+    expect(actionConfirms(setting, 'enable-automation')).toBe(true)
   })
 })

@@ -196,7 +196,7 @@ describe('the section registry', () => {
 
   it('splits the sections by scope (step 3.5) — each id belongs to exactly one area', () => {
     expect(visibleSettingsSections('project').map((s) => s.id)).toEqual(PROJECT_SECTIONS)
-    expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+    expect(visibleSettingsSections('global', { managers: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     // No id may appear in both areas — the two navs would then link to two different pages
     // under the same name, and the `settings/<id>` legacy redirect would be ambiguous.
     expect(PROJECT_SECTIONS.filter((id) => GLOBAL_SECTIONS.includes(id))).toEqual([])
@@ -205,11 +205,26 @@ describe('the section registry', () => {
   it('hides Projects only when the single-project capability is active', () => {
     // Accounts survives: a single-project cockpit still runs on ONE of possibly several logins,
     // so "which account" is orthogonal to "how many projects".
-    expect(visibleSettingsSections('global', { singleProject: true }).map((s) => s.id)).toEqual([
+    expect(visibleSettingsSections('global', { singleProject: true, managers: false }).map((s) => s.id)).toEqual([
       'appearance', 'notifications', 'keyboard', 'resources', 'skills', 'global-instructions', 'workspace-secrets', 'accounts', 'privacy',
     ])
-    expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
-    expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+    expect(visibleSettingsSections('global', { singleProject: false, managers: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
+  })
+
+  it('lists Manager only on a server that says it has managers', () => {
+    const nav = (capabilities?: { managers?: boolean }) => settingsSectionsByScope(capabilities).global.map((s) => s.id)
+    expect(nav()).not.toContain('manager')
+    expect(nav({})).not.toContain('manager')
+    expect(nav({ managers: false })).not.toContain('manager')
+    expect(nav({ managers: true })).toContain('manager')
+  })
+
+  it('routes Manager until health answers, so a reload never falls into the legacy redirect', () => {
+    const routed = (capabilities?: { managers?: boolean }) => visibleSettingsSections('global', capabilities).map((s) => s.id)
+    expect(routed()).toContain('manager')
+    expect(routed({ managers: true })).toContain('manager')
+    expect(routed({})).not.toContain('manager')
+    expect(routed({ managers: false })).not.toContain('manager')
   })
 })
 
