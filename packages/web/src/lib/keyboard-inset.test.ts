@@ -267,6 +267,16 @@ describe('watchKeyboardOpen', () => {
     expect(last(states)).toBe(false)
   })
 
+  it('stays open when iOS pans to the field and the inset reads 0', () => {
+    const { stub, viewport, field, states, fire } = phone()
+    field.focus()
+    viewport.height = 460
+    viewport.offsetTop = 340
+    fire()
+    expect(keyboardInset(stub)).toBe(0)
+    expect(last(states)).toBe(true)
+  })
+
   it('opens under resizes-content: the inset stays 0, innerHeight shrinks', () => {
     const { stub, viewport, field, states, fire } = phone()
     field.focus()
