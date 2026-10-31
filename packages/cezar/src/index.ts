@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
-import { allocateProjectSlug, listProjects } from './workspace/projects.ts';
+import { allocateProjectSlug, listProjects, shouldRegisterProject } from './workspace/projects.ts';
 import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
@@ -41,7 +41,7 @@ import { devVersion } from './self-update/semver.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
 import { runSelfUpdateCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
-import { initWorkspace } from './workspace/boot.ts';
+import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
@@ -59,6 +59,19 @@ import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.t
 import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
 import { launchPageUrl } from './cockpit-address.ts';
+import {
+  claimCockpitSlot,
+  inspectCockpitRuntime,
+  instanceCockpitSlot,
+  newRuntimeId,
+  publishCockpitRuntime,
+  releaseCockpitRuntime,
+  resolveCockpitSlot,
+  waitForCockpitRuntime,
+  type CockpitLease,
+  type CockpitRuntimeRecord,
+} from './runtime/cockpit-runtime.ts';
+import { handoffProject } from './runtime/cockpit-handoff.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -270,7 +283,80 @@ async function serveCommand(
   openBrowser: boolean,
   bindHost?: string,
 ): Promise<void> {
-  const bootProjectId = await initWorkspace(repoRoot);
+  const runtimeId = newRuntimeId();
+  let cockpitLease: CockpitLease | undefined;
+  let runtimeReleased = false;
+  const releaseRuntime = async (): Promise<void> => {
+    if (!cockpitLease || runtimeReleased) return;
+    runtimeReleased = true;
+    await releaseCockpitRuntime(cockpitLease).catch((error: unknown) => {
+      console.warn(`[cez] could not clean cockpit runtime state (${error instanceof Error ? error.message : String(error)})`);
+    });
+  };
+  const joinRunningCockpit = async (runtime: CockpitRuntimeRecord): Promise<void> => {
+    if (await shouldRegisterProject(repoRoot).catch(() => false)) {
+      await handoffProject(runtime, repoRoot, { openBrowser, open: openUrl });
+      return;
+    }
+    const url = launchPageUrl(runtime.origin);
+    console.log(`  cockpit already running (pid ${runtime.owner.pid}) — launch root is not registrable`);
+    console.log(`  cockpit → ${url}`);
+    if (openBrowser) openUrl(url);
+  };
+
+  // A shell launch prefers the host's default installed service, when that exact service has
+  // published a verifiable runtime lease. Named installs are deliberately never auto-selected.
+  if (!process.env.CEZ_INSTANCE_ID && process.env.CEZ_REMOTE !== '1') {
+    const installed = webhookServerInstances().find((entry) =>
+      entry.instance === 'default' && entry.state.installed && entry.state.instanceId,
+    );
+    if (installed?.state.instanceId) {
+      const discovered = await inspectCockpitRuntime(instanceCockpitSlot(installed.state.instanceId));
+      if (discovered.kind === 'verified') {
+        await joinRunningCockpit(discovered.runtime);
+        return;
+      }
+      // A published record means this exact installed-service slot has an owner. If that owner is
+      // live but its endpoint cannot be authenticated, silently falling through would start a
+      // second cockpit with the same schedulers and registry. Only a missing record (older/stopped
+      // service) or a provably dead exact process identity is safe to ignore here.
+      if (discovered.kind === 'unavailable') {
+        throw new Error(
+          `the default installed cockpit is running, but it cannot be safely reached (${discovered.reason}). ` +
+          'Stop or restart that service; cezar will not launch a duplicate.',
+        );
+      }
+    }
+  }
+
+  const slot = resolveCockpitSlot({ bindHost, port: preferredPort });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const claim = await claimCockpitSlot(slot);
+    if (claim.kind === 'primary') {
+      cockpitLease = claim.lease;
+      break;
+    }
+    if (claim.kind === 'degraded') {
+      console.warn(`[cez] singleton reuse unavailable (${claim.reason}) — starting without a runtime lease`);
+      break;
+    }
+    if (claim.kind === 'blocked') {
+      throw new Error(`cannot verify the existing cockpit owner for ${slot}: ${claim.reason}`);
+    }
+    const incumbent = await waitForCockpitRuntime(slot);
+    if (incumbent.kind === 'verified') {
+      await joinRunningCockpit(incumbent.runtime);
+      return;
+    }
+    if (incumbent.kind === 'dead' && attempt === 0) continue;
+    const reason = incumbent.kind === 'unavailable' ? incumbent.reason : 'the live owner has not become ready';
+    throw new Error(
+      `a cockpit already owns ${slot}, but it cannot be safely reached (${reason}). ` +
+      'Stop that process or wait for it to finish starting; cezar will not launch a duplicate.',
+    );
+  }
+
+  const bootProjectId = await initServeWorkspace(repoRoot);
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the
@@ -298,7 +384,7 @@ async function serveCommand(
         track('app_stop', { label: reason });
         return flushTelemetry(reason === 'signal' ? undefined : 1_000);
       })
-      .finally(() => process.exit(process.exitCode ?? 0));
+      .finally(() => void releaseRuntime().finally(() => process.exit(process.exitCode ?? 0)));
   };
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
@@ -378,10 +464,9 @@ async function serveCommand(
         store.flush({ pretty: true });
         // The old process stops here, so it reports its own stop before handing over (bounded).
         track('app_stop', { label: 'restart' });
-        void flushTelemetry(1_000).finally(() =>
+        void flushTelemetry(1_000).finally(() => void releaseRuntime().finally(() =>
           restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
-        );
-        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+        ));
       }).catch((error: unknown) => {
         console.error('cezar: lifecycle shutdown failed before restart', error);
         process.exit(1);
@@ -428,6 +513,8 @@ async function serveCommand(
     store,
     manager,
     version,
+    runtimeId,
+    runtimeHandoffToken: cockpitLease?.ownership.identity.token,
     update,
     bootProjectId,
     semaphore,
@@ -438,8 +525,20 @@ async function serveCommand(
     webhooks,
     selfUpdate,
   }, port);
-  httpServer.once('listening', () => manager.lifecycle.start());
+  httpServer.once('listening', () => {
+    const publication = cockpitLease
+      ? publishCockpitRuntime(cockpitLease, { runtimeId, port, bindHost, version })
+      : Promise.resolve();
+    void publication
+      .catch((error: unknown) => {
+        console.warn(`[cez] cockpit runtime state could not be published (${error instanceof Error ? error.message : String(error)})`);
+      })
+      .finally(() => manager.lifecycle.start());
+  });
   const url = `http://localhost:${port}`;
+  const launchUrl = bootProjectId
+    ? `${url}/p/${encodeURIComponent(bootProjectId)}/`
+    : launchPageUrl(url);
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
   console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);
@@ -449,7 +548,7 @@ async function serveCommand(
     console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
   }
   if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
-  console.log(`\n  cockpit → ${url}\n`);
+  console.log(`\n  cockpit → ${launchUrl}\n`);
   // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
   await printSkillsBanner(repoRoot);
   // The star ask's terminal line — same block, same two off switches.
@@ -507,7 +606,7 @@ async function serveCommand(
   // paint is the cockpit and never a connection error.
   if (openBrowser) {
     const healthy = await waitForHealth(`${url}/api/v1/health`, 5_000);
-    if (healthy) openUrl(launchPageUrl(url));
+    if (healthy) openUrl(launchUrl);
   }
 }
 

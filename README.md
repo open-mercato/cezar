@@ -133,7 +133,10 @@ cd your-repo
 npx cezar-run
 ```
 
-This opens the cockpit at `http://localhost:4321`. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli` still works too — it's the same package under its older name.
+This opens the cockpit at `http://localhost:4321`. If a compatible cockpit is already running,
+the command reuses it, adds the current project when needed, and opens that project's page instead
+of starting a duplicate server. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli`
+still works too — it's the same package under its older name.
 
 ```bash
 npx cezar-run run "add a --json flag to the export command"   # headless, no browser

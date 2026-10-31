@@ -37,7 +37,7 @@ import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { discoverShells } from './terminal/shells.ts';
 import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
 import { GithubPoller } from '../automations/github-poller.ts';
@@ -109,6 +109,7 @@ import {
   uploadIdParamSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  registerProjectInputSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
@@ -383,6 +384,10 @@ export interface ServerDeps {
   store: RunStore;
   manager: RunManager;
   version: string;
+  /** Random identity of this exact server process, used by safe CLI handoff. */
+  runtimeId?: string;
+  /** Private token from the `0600` runtime lease; authorizes same-user CLI project delivery. */
+  runtimeHandoffToken?: string;
   /** Mutable holder for the async npm-registry update check (#368) —
    *  `latest` appears once the registry answers with a newer version. */
   update?: { latest?: string };
@@ -491,6 +496,13 @@ export interface ServerDeps {
   hostSampler?: HostSampler;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
+}
+
+function matchesPrivateToken(received: string | undefined, expected: string | undefined): boolean {
+  if (received === undefined || expected === undefined) return false;
+  const receivedBytes = Buffer.from(received);
+  const expectedBytes = Buffer.from(expected);
+  return receivedBytes.length === expectedBytes.length && timingSafeEqual(receivedBytes, expectedBytes);
 }
 
 /** Legacy destructive callers must opt into the recoverable operation API before mutation. */
@@ -1418,6 +1430,7 @@ async function probeWritableDir(dir: string, create: boolean): Promise<string | 
 // with nothing to offer. See the `routed` assembly at the end of the function.
 export function createApp(deps: ServerDeps) {
   const { version, update, bindHost, bootProjectId } = deps;
+  const runtimeId = deps.runtimeId ?? randomUUID();
   // Boot singletons keep DELIBERATELY distinct names (`boot*`): every
   // project-scoped handler must resolve its `{store, manager, root, dataDir,
   // launchKey}` from `c.get('project')` — a bare `store`/`repoRoot` in a
@@ -1518,13 +1531,12 @@ export function createApp(deps: ServerDeps) {
   const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
-  // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
+  // The serve boot flow (`initServeWorkspace` in src/index.ts) registers the boot repo
   // and plumbs its registry id in via `deps.bootProjectId`. Legacy callers and
   // tests construct the app without one — then it is derived lazily from the
   // registry by realpath and cached on a hit. A boot repo that is not in the
-  // registry — a task worktree, `$HOME`, an unreadable workspace, or (since
-  // boot registration became seed-once) any folder started in while the user
-  // already has projects — falls back to its would-be slug, so `bootProject`
+  // registry — a task worktree, `$HOME`, an unreadable workspace, or a legacy
+  // caller that did not supply the id — falls back to its would-be slug, so `bootProject`
   // always names the repo this server was started in. Strictly non-fatal,
   // zero-config: every failure path degrades to the slug fallback, never an
   // error.
@@ -1970,6 +1982,7 @@ export function createApp(deps: ServerDeps) {
     const caps = capabilities();
     return {
       version,
+      runtimeId,
       // Spread rather than `latestVersion: update?.latest`: an `undefined` VALUE is dropped by
       // JSON.stringify, so the key is absent on the wire — but writing it unconditionally types
       // the key as always-present, which is a shape no client ever receives. The contract schema
@@ -3030,21 +3043,18 @@ export function createApp(deps: ServerDeps) {
       }
       const bootProject = await resolveBootProject(projects);
       // The folder this server was started in, when the registry does not hold
-      // it — listed ONLY while the registry is empty, which is the same "seed
-      // once" rule `shouldAutoRegisterProject` applies to the registry write
-      // (#774 follow-up). With no projects the launch folder IS the cockpit's
+      // it — listed ONLY while the registry is empty (#774 follow-up). With no
+      // projects the launch folder IS the cockpit's
       // project, and a cockpit showing the one folder it can definitely serve
       // beats an empty sidebar — that also covers the unreadable workspace,
       // where nothing is registered as far as this process can tell.
       //
-      // Once the user HAS projects, starting cezar somewhere else is opening
-      // the cockpit from a folder, not adding it: listing that folder put a row
-      // in the sidebar, the ⌘K palette and Settings that the user never asked
-      // for and has to clean up. The folder is still served — the boot context
-      // answers `/p/<bootProject>/…` and the unscoped alias, and the scope gate
-      // treats `bootProject` as known — so a legacy bookmark still resolves; it
-      // simply is not a project. Saving it stays the explicit gesture it is
-      // everywhere else: Settings → Add project, or `cezar projects add`.
+      // Once the registry HAS projects, an unregistered boot root can still
+      // exist for guarded roots, registry failures, and legacy/non-serve app
+      // constructors. Omitting that synthetic row keeps an internal worktree
+      // out of the sidebar, ⌘K palette and Settings. The folder remains served:
+      // the boot context answers `/p/<bootProject>/…` and the unscoped alias,
+      // and the scope gate treats `bootProject` as known.
       //
       // It is marked `unregistered` rather than merged in silently, so Settings
       // offers to add it instead of offering Remove/Max parallel it cannot
@@ -3074,7 +3084,12 @@ export function createApp(deps: ServerDeps) {
 
     .post('/projects', jsonZodValidator(() => registerProjectSchema, { message: 'root must be a non-empty path' }), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const registered = await registerFolder(parsed.data.root, 'local');
+      const registered = await registerFolder(parsed.data.root, 'local', {
+        trustedLocalHandoff: matchesPrivateToken(
+          c.req.header('x-cezar-runtime-handoff'),
+          deps.runtimeHandoffToken,
+        ),
+      });
       if (registered.status !== 200) return c.json(registered.body, registered.status);
       // Only a genuinely new project: a re-add answers 409 above and is not an event.
       track('project_added', { label: 'local' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
@@ -3364,9 +3379,7 @@ export function createApp(deps: ServerDeps) {
   // folder-browser dialog's commit step, step 4.2). Workspace-level like its
   // GET twin. Everything here is a guard; the registry write itself is one
   // idempotent `registerProject` call.
-  const registerProjectSchema = z.object({
-    root: z.string().trim().min(1).max(4096),
-  });
+  const registerProjectSchema = registerProjectInputSchema;
 
   /**
    * The register-a-folder half of `POST /api/projects`, factored out so the
@@ -3377,6 +3390,7 @@ export function createApp(deps: ServerDeps) {
   const registerFolder = async (
     spelled: string,
     source: 'local' | 'checkout',
+    opts: { trustedLocalHandoff?: boolean } = {},
   ): Promise<
     // Discriminated on `status`, not one object with a union `body`: a flat
     // `{ status: 200 | 400 | 409 | 500; body: RegisterProjectResponse | { error } }` made
@@ -3414,7 +3428,7 @@ export function createApp(deps: ServerDeps) {
     // `false` for a path that IS inside the root and merely absent — which
     // would tell a hosted user who typo'd a folder under their own checkout
     // root that it is "outside the browsable root".
-    const hostedBrowseRoot = capabilities().localHandoff
+    const hostedBrowseRoot = capabilities().localHandoff || opts.trustedLocalHandoff
       ? null
       : resolveBrowseRoot(await workspaceBrowseRoot());
     if (hostedBrowseRoot !== null) {
@@ -8357,8 +8371,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
   const bootProjectId = deps.bootProjectId ?? 'default';
-  // `pinned`: the boot project is served whether or not the registry holds it,
-  // and since boot registration became seed-once it usually does NOT — then
+  // `pinned`: the boot project is served whether or not the registry holds it.
+  // Guarded roots and legacy callers may still leave it unregistered — then
   // `bootProjectId` is the `'default'` alias, which `listProjects()` can never
   // name, so the coordinator's own refresh sweep would evict the store opened
   // one line below and the boot folder's automations would silently stop being
