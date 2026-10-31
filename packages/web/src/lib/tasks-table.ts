@@ -4,7 +4,7 @@ import type {
   RunRecord,
   RunStatus,
 } from '@open-mercato/cezar-api-client'
-import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
+import { compareIsoDesc, groupTitle, runTitle, type ListView } from '@/lib/task-groups'
 import { isAwaitingAnswer } from '@/lib/attention'
 
 /**
@@ -542,4 +542,25 @@ export function compareGroups(runs: readonly RunRecord[], view: ListView): Compa
     if (!members.every((member) => TERMINAL_STATUSES.has(member.status))) return []
     return [{ groupId, title: groupTitle(first), count: members.length }]
   })
+}
+
+/** The runs whose resolved references include this GitHub item, newest first (#1048).
+ *  A reference whose URL names another repository never matches — a foreign `other/repo#N` must
+ *  not surface under this repo's #N (#526/#854/#945) — so without a `repoBase` nothing can be
+ *  proven and nothing matches. */
+export function relatedTasks<T extends TaskReferenceInput & { createdAt: string }>(
+  runs: readonly T[],
+  item: { kind: 'issue' | 'pr'; number: number },
+  repoBase: string | undefined,
+): T[] {
+  if (!repoBase) return []
+  const kind = item.kind === 'pr' ? 'PR' : 'Issue'
+  const prefix = `${repoBase.toLowerCase()}/`
+  return runs
+    .filter((run) =>
+      taskReferences(run, repoBase).some(
+        (ref) => ref.kind === kind && ref.number === item.number && ref.url?.toLowerCase().startsWith(prefix),
+      ),
+    )
+    .sort((a, b) => compareIsoDesc(a.createdAt, b.createdAt))
 }
