@@ -37,7 +37,7 @@ export function ManagerSection() {
   }
 
   return (
-    <div data-slot="manager-settings" className="flex max-w-2xl flex-col gap-4">
+    <div data-slot="manager-confirm-settings" className="flex max-w-2xl flex-col gap-4">
       <div>
         <h2 className="text-sm font-semibold">Confirm before approving</h2>
         <p className="mt-1 text-sm text-muted-foreground">
