@@ -39,6 +39,7 @@ pub use disclaim::disclaim_exec_if_asked;
 use telemetry::Failure;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 /// Exit status the sidecar uses to say "relaunch me" after a self-update (EX_TEMPFAIL).
 const RESTART_EXIT_CODE: i32 = 75;
@@ -651,6 +652,42 @@ fn offer_update(window: &WebviewWindow, version: &str) {
     ));
 }
 
+/// The chords that reach the window from ANY app: ⌃⌥↑ / ⌃⌥↓ step to the previous / next task
+/// that needs you (spec 2026-10-17-task-palette § Switching by arrow). ⌃⌥ because ⌥-arrows alone
+/// are every text field's paragraph jump, and a global registration takes them from every app.
+const TASK_SWITCH_SHORTCUTS: [(Code, &str); 2] = [(Code::ArrowUp, "previous"), (Code::ArrowDown, "next")];
+
+/// What the shell runs in the page on a press: the cockpit does the stepping
+/// (`use-task-switch-shortcut.ts` listens); a cockpit that predates the event ignores it.
+fn task_switch_script(direction: &str) -> String {
+    format!(
+        "window.dispatchEvent(new CustomEvent('cezar:switch-task', {{ detail: {} }}))",
+        js_string(direction)
+    )
+}
+
+/// Registers the global task-switch chords. Another app may already own one — then that chord
+/// is logged and skipped; the in-window ⌥-arrows still work.
+fn register_task_switch_shortcuts(app: &AppHandle) {
+    for (code, direction) in TASK_SWITCH_SHORTCUTS {
+        let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), code);
+        let registered = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                let _ = window.eval(&task_switch_script(direction));
+            }
+        });
+        if let Err(error) = registered {
+            eprintln!("[shortcut] ctrl+alt+{direction} task switch not registered: {error}");
+        }
+    }
+}
+
 pub fn run() {
     telemetry::install_panic_hook();
     let shell = Arc::new(Shell {
@@ -692,7 +729,7 @@ pub fn run() {
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
-            register_new_task_shortcut(&handle, &shell_for_setup);
+            register_global_shortcuts(&handle, &shell_for_setup);
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -809,25 +846,23 @@ pub fn run() {
         });
 }
 
-/// The new-task shortcut, system-wide. Another app may already own the combination; the shell
-/// then runs without it rather than failing to start.
-fn register_new_task_shortcut(app: &AppHandle, shell: &Arc<Shell>) {
-    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-    let shell = shell.clone();
-    let plugin = tauri_plugin_global_shortcut::Builder::new()
-        .with_handler(move |app, _shortcut, event| {
-            if event.state() == ShortcutState::Pressed {
-                open_new_task(app, &shell);
-            }
-        })
-        .build();
-    if let Err(error) = app.plugin(plugin) {
+/// The shell's system-wide chords: new task and the task switch. Another app may already own a
+/// combination; the shell then runs without it rather than failing to start.
+fn register_global_shortcuts(app: &AppHandle, shell: &Arc<Shell>) {
+    if let Err(error) = app.plugin(tauri_plugin_global_shortcut::Builder::new().build()) {
         eprintln!("[shortcut] global shortcuts unavailable: {error}");
         return;
     }
-    if let Err(error) = app.global_shortcut().register(NEW_TASK_SHORTCUT) {
+    let shell = shell.clone();
+    let registered = app.global_shortcut().on_shortcut(NEW_TASK_SHORTCUT, move |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            open_new_task(app, &shell);
+        }
+    });
+    if let Err(error) = registered {
         eprintln!("[shortcut] {NEW_TASK_SHORTCUT} is taken by another app: {error}");
     }
+    register_task_switch_shortcuts(app);
 }
 
 /// Silent self-update of the shell. `CEZ_DESKTOP_NO_UPDATE=1` disables it (development builds
@@ -2237,6 +2272,16 @@ mod tests {
         let failure = stopped_failure(1).expect("a non-zero exit is reported");
         assert_eq!(failure.code, "sidecar_exited");
         assert_eq!(failure.message, "The cockpit process exited with status 1.");
+    }
+
+    /// The cockpit listens for exactly this event name and detail (`use-task-switch-shortcut.ts`).
+    #[test]
+    fn a_global_chord_dispatches_the_switch_event_the_cockpit_listens_for() {
+        assert_eq!(
+            task_switch_script("next"),
+            "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
+        );
+        assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
     }
 
     #[test]

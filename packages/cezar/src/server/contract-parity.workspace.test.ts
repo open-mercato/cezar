@@ -12,6 +12,7 @@ import type {
   agentProfileSelectionsResponseSchema,
   agentProfilesResponseSchema,
   openAgentAccountFileResponseSchema,
+  agentFallbackPolicySchema,
   removeAgentProfileResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type {
@@ -225,6 +226,10 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     (typeof client.api.v1.workspace)['agent-profiles'][':id']['status']['$get'],
     200
   >;
+  type AgentFallbackPolicy200 = InferResponseType<
+    (typeof client.api.v1.workspace)['agent-profiles']['fallback-policy']['$get'],
+    200
+  >;
   type OpenAgentAccountFile200 = InferResponseType<
     (typeof client.api.v1.workspace)['agent-profiles'][':id']['open']['$post'],
     200
@@ -259,6 +264,7 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
     Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
     Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
+    Assert<Exact<z.infer<typeof agentFallbackPolicySchema>, AgentFallbackPolicy200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoUpload200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoDelete200>>,
     Assert<Exact<z.infer<typeof stagedUploadSchema>, StageUpload200>>,
