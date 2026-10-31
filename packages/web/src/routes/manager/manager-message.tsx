@@ -172,7 +172,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
     case 'user':
       return (
         <div data-slot="manager-user" className="flex justify-end">
-          <p className="max-w-[80%] rounded-2xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
+          <p className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
         </div>
       )
     case 'assistant':

@@ -509,7 +509,7 @@ function SidebarContent({
         <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
         {/* With project groups mounted the boot repo/branch is one group header among many —
             a chip repeating it up here would just be the first group's header said twice. */}
-        {repo && !projectGroups ? (
+        {repo && !projectGroups && !managerMode ? (
           <span
             data-slot="repo-chip"
             className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
