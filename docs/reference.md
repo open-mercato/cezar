@@ -536,6 +536,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/cursor-agent` | Override which Cursor Agent CLI binary is used. Unset: `cursor-agent` on PATH, then `~/.local/bin/cursor-agent`, then `agent` on PATH. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_AGY_BIN=/path/to/agy` | Override which Google Antigravity CLI (`agy`) binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -551,7 +552,7 @@ Useful environment variables:
 | `CEZ_HIDE_TOKEN_METRICS=1` | Legacy master switch that hides both token usage and cost. It takes precedence over the two independent flags; only the exact value `1` enables it, payloads are unchanged, and a restart is required. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
-| `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
+| `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment except inherited `CEZ_TRACKER_CAPABILITY` (any casing); explicit per-launch task grants still apply. Off by default; only set it if you understand that this hands other host secrets to the agent process. |
 | `CEZ_REMOTE=1` | Hosted/server-install mode. The configured port is authoritative so an occupied port fails the real bind with `EADDRINUSE` instead of drifting away from the reverse-proxy upstream; interactive local launches keep bounded auto-increment. Read at startup. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
@@ -593,14 +594,35 @@ platform.
 
 ---
 
+## Secret storage and recovery
+
+The vault encrypts values with AES-256-GCM. It reads the data key on each use from
+an existing private `secrets/.key` file or the OS keychain. A readable legacy shared key
+is reused, including by a new home. When initialization creates a new keychain key,
+`secrets/.keychain-account` records its separate account.
+Keep the marker with backups and when moving a home. Older versions cannot read new
+keychain identities: use a separate home for downgrade and never mix old/new writers.
+
+If the keychain is locked, unlock it and retry; do not delete secrets. Damaged account
+metadata blocks writes. Settings and `cezar secrets list` show unreadable values by name,
+without revealing their contents.
+
+For a lost key, restore the key and account marker from backup. If restoration is
+impossible, remove all unreadable values with `cezar secrets list/unset` (including
+`--workspace`) and any encrypted connections with `cez tracker-connections list/remove`.
+Remove orphaned `secrets/<project>.json` files for unregistered projects manually.
+A replacement key is created only when no ciphertext remains. If the lost key belonged
+to a keychain this environment cannot use, also remove the stale `secrets/.backend`
+hint after removing the ciphertext. Paths are relative to `CEZ_HOME` (default `~/.cezar`).
+
 ## Talking to a running cockpit
 
-The cockpit is a local HTTP server; three CLIs and any script can talk to it
+The cockpit is a local HTTP server; CLI commands and scripts can talk to it
 while it runs. They find it through `CEZ_API_URL` — the address the cockpit
 printed after `cockpit →` when it started (`http://127.0.0.1:4321` unless that
 port was busy or you passed `--port`).
 
-### From a shell: `cez runs`, `cez task`, `cez automation`
+### From a shell: `cez runs`, `cez task`, `cez automation`, `cez tracker`
 
 Inside a task, cezar sets `CEZ_API_URL`, `CEZ_PROJECT_ID` and `CEZ_TASK_ID` for
 the agent. From your own terminal, set the address yourself:
@@ -612,6 +634,12 @@ cez runs list --status running,review --json
 cez automation list                 # automations, with state and counts
 cez task tree <run id>              # a dispatch tree
 ```
+
+A task started by a Jira/Linear automation also gets `CEZ_TRACKER_CAPABILITY`, a
+per-session secret for `cez tracker read|comment|transition` on its own issue only
+(see [issue trackers](issue-trackers.md)). It is generated by cezar, dies with the
+session and is never a setting; it replaces the Jira/Linear tokens tasks used to get.
+Inherited `CEZ_TRACKER_CAPABILITY` values (any casing) are stripped from agent environments, including with `CEZ_AGENT_ENV_FULL=1`; only a grant supplied explicitly through the launch's `extraEnv` is passed. Trusted and untrusted check environments also strip this inherited variable. Other environment and PATH inheritance is unchanged. This is a guarantee about the environment cezar builds: a check's login shell can still export a value from the user's profile, and this is not an OS isolation boundary. Its value is treated as a secret for transcript redaction.
 
 On a cockpit that serves several projects, add `CEZ_PROJECT_ID=<id>`
 (`cezar projects` lists the ids); without it every command addresses the

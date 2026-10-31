@@ -56,7 +56,7 @@ export function AgentsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="agents-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="agents-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading agent settings…
       </p>
     )
@@ -323,7 +323,7 @@ function FallbackField({
       && loadError.message === 'agent fallback is local-only'
     return (
       <Field title={title} hint={hint}>
-        <p data-slot="fallback-unavailable" className="max-w-md text-[13px] text-muted-foreground">
+        <p data-slot="fallback-unavailable" className="max-w-md text-ui text-muted-foreground">
           {localOnly
             ? 'Automatic fallback is available on a local cockpit only.'
             : `Fallback settings did not load — ${loadError.message}`}
@@ -339,7 +339,7 @@ function FallbackField({
   if (!policy) {
     return (
       <Field title={title} hint={hint}>
-        <p data-slot="fallback-loading" className="text-[13px] text-soft-foreground">Loading fallback settings…</p>
+        <p data-slot="fallback-loading" className="text-ui text-soft-foreground">Loading fallback settings…</p>
       </Field>
     )
   }
@@ -408,16 +408,16 @@ function FallbackField({
       />
     }>
       <div data-slot="fallback-section" className="flex max-w-md flex-col gap-3">
-        <p id="fallback-state" className="text-[13px] text-muted-foreground">
+        <p id="fallback-state" className="text-ui text-muted-foreground">
           {policy.enabled ? 'On — agents take over in the order below.' : candidates.length === 0
             ? 'Off — add an agent first.' : 'Off — the list is saved but not used.'}
         </p>
-        <p id="fallback-disclosure" className="text-[13px] text-muted-foreground">
+        <p id="fallback-disclosure" className="text-ui text-muted-foreground">
           The next agent’s provider receives the task and its repository context, and may bill its own plan.
         </p>
 
         {candidates.length === 0 ? (
-          <p data-slot="fallback-empty" className="text-[13px] text-muted-foreground">
+          <p data-slot="fallback-empty" className="text-ui text-muted-foreground">
             No fallback agents yet. Add the agent that should take over first.
           </p>
         ) : (
@@ -521,9 +521,9 @@ function FallbackField({
             <PlusIcon /> Add agent
           </Button>
         </div>
-        {full ? <p className="text-[13px] text-muted-foreground">Up to {MAX_FALLBACK_AGENTS} agents.</p> : null}
+        {full ? <p className="text-ui text-muted-foreground">Up to {MAX_FALLBACK_AGENTS} agents.</p> : null}
 
-        <div data-slot="fallback-terms" className="space-y-2 text-[13px] text-muted-foreground">
+        <div data-slot="fallback-terms" className="space-y-2 text-ui text-muted-foreground">
           <p>Settings changes apply to new tasks. Each agent is tried once. If no agent in the list can continue, the task stops and waits for you.</p>
           <details>
             <summary className="w-fit cursor-pointer rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">Scope and permissions</summary>
@@ -621,12 +621,12 @@ function DefaultAgentField({
       {!providerStatus.isPending &&
       !providerStatus.isError &&
       providerStatusFor(providerStatus.data, defaultRunner)?.enabled === false ? (
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-ui text-muted-foreground">
           This provider is disabled. Enable it above or choose another provider.
         </p>
       ) : null}
       {hasAccounts ? (
-        <p className="max-w-md text-[13px] text-muted-foreground">
+        <p className="max-w-md text-ui text-muted-foreground">
           Tasks already started under another account can’t be resumed here — their sessions live in
           that account’s folder.
         </p>
@@ -642,7 +642,7 @@ function Field({ title, hint, children, action }: { title: string; hint: string;
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-          <p className="text-[13px] text-muted-foreground">{hint}</p>
+          <p className="text-ui text-muted-foreground">{hint}</p>
         </div>
         {action}
       </div>

@@ -2,6 +2,7 @@ import type { InferRequestType, InferResponseType } from 'hono/client';
 import { hc } from 'hono/client';
 import type { JSONParsed, JSONValue } from 'hono/utils/types';
 import { describe, expect, it } from 'vitest';
+import { runnerSchema, workspaceConfigResponseSchema as workspaceConfigResponseValue } from '@open-mercato/cezar-contract';
 import type { z } from 'zod';
 import type { brandingLogoUploadSchema } from './server.ts';
 import type {
@@ -16,7 +17,13 @@ import type {
 } from '@open-mercato/cezar-contract';
 import type {
   fsBrowseResponseSchema,
+  initProjectGitResponseSchema,
+  publishProjectGithubResponseSchema,
+  agentSetupSessionSchema,
+  agentSetupStateSchema,
+  githubLoginStateSchema,
   launchKeyResponseSchema,
+  repoSuggestionsResponseSchema,
   projectsResponseSchema,
   registerProjectResponseSchema,
   removeProjectResponseSchema,
@@ -70,6 +77,23 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type Assert<T extends true> = T;
 
   /**
+   * Every dotted key path, optional keys included. `Mutual` is blind to an omitted OPTIONAL key
+   * (absent is assignable both ways), which is how the route's `models` lost two providers while
+   * the suite stayed green (#1234); comparing path sets closes that for the pair it is used on.
+   * Index signatures are skipped: the stored `models` is a passthrough bag, so the route's type
+   * carries `[x: string]: JSONValue` that the closed schema rightly does not name.
+   */
+  type Named<T> = { [K in keyof T as string extends K ? never : K]: T[K] };
+  type KeyPaths<T, P extends string = ''> = T extends readonly unknown[]
+    ? KeyPaths<T[number], `${P}[].`>
+    : T extends object
+      ? {
+          [K in keyof Named<T> & string]-?: `${P}${K}` | KeyPaths<NonNullable<Named<T>[K]>, `${P}${K}.`>;
+        }[keyof Named<T> & string]
+      : never;
+  type SameKeys<Schema, Route> = Mutual<KeyPaths<Schema>, KeyPaths<Route>>;
+
+  /**
    * `Exact`, for the two OPEN bags — the only schemas here with a catchall.
    *
    * `c.json(x)` types its route as `JSONParsed<x>` (hono's `context.d.ts`), and for every CLOSED
@@ -98,6 +122,14 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
   type UpdateProject200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['$patch'], 200>;
   type RemoveProject200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['$delete'], 200>;
   type FsBrowse200 = InferResponseType<typeof client.api.v1.fs.browse.$get, 200>;
+  type FsRepos200 = InferResponseType<typeof client.api.v1.fs.repos.$get, 200>;
+  type InitProjectGit200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['git-init']['$post'], 200>;
+  type PublishGithub200 = InferResponseType<(typeof client.api.v1.projects)[':projectId']['publish-github']['$post'], 200>;
+  type AgentSetupRead200 = InferResponseType<typeof client.api.v1.providers.setup.$get, 200>;
+  type AgentSetupStart201 = InferResponseType<typeof client.api.v1.providers.setup.sessions.$post, 201>;
+  type GithubLoginStart200 = InferResponseType<typeof client.api.v1.github.login.$post, 200>;
+  type GithubLoginRead200 = InferResponseType<typeof client.api.v1.github.login.$get, 200>;
+  type GithubLoginCancel200 = InferResponseType<typeof client.api.v1.github.login.$delete, 200>;
   type LaunchKey200 = InferResponseType<(typeof client.api.v1)['launch-key']['$get'], 200>;
 
   // ---- workspace settings + the per-repo agent knobs ---------------------------------------
@@ -218,10 +250,20 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof updateProjectResponseSchema>, UpdateProject200>>,
     Assert<Exact<z.infer<typeof removeProjectResponseSchema>, RemoveProject200>>,
     Assert<Exact<z.infer<typeof fsBrowseResponseSchema>, FsBrowse200>>,
+    Assert<Exact<z.infer<typeof repoSuggestionsResponseSchema>, FsRepos200>>,
+    Assert<Exact<z.infer<typeof initProjectGitResponseSchema>, InitProjectGit200>>,
+    Assert<Exact<z.infer<typeof publishProjectGithubResponseSchema>, PublishGithub200>>,
+    Assert<Exact<z.infer<typeof agentSetupStateSchema>, AgentSetupRead200>>,
+    Assert<Exact<z.infer<typeof agentSetupSessionSchema>, AgentSetupStart201>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginStart200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginRead200>>,
+    Assert<Exact<z.infer<typeof githubLoginStateSchema>, GithubLoginCancel200>>,
     Assert<Exact<z.infer<typeof launchKeyResponseSchema>, LaunchKey200>>,
     // workspace settings + prefs
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
+    Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, WorkspaceConfig200>>,
+    Assert<SameKeys<z.infer<typeof workspaceConfigResponseSchema>, SetWorkspaceConfig200>>,
     Assert<Exact<z.infer<typeof agentFallbackPolicySchema>, AgentFallbackPolicy200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoUpload200>>,
     Assert<Exact<z.infer<typeof workspaceBrandingLogoResponseSchema>, BrandingLogoDelete200>>,
@@ -281,6 +323,9 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     // assertion above vacuous, exactly the trap this file is meant to avoid.
     const wider: Mutual<{ a: string }, { a: string; b: number }> = 'schema-is-wider';
     const narrower: Mutual<{ a: string; b: number }, { a: string }> = 'route-is-wider';
+    // The blind spot `SameKeys` exists for: an omitted optional key is invisible to `Mutual`.
+    const blind: Mutual<{ m?: { a?: string; b?: string } }, { m?: { a?: string } }> = true;
+    const caught: SameKeys<{ m?: { a?: string; b?: string } }, { m?: { a?: string } }> = 'schema-is-wider';
     // And `ExactOpen`, which normalizes ONLY the JSON round trip: an open bag still fails when a
     // key it names disagrees with the route (here `a: number` against the route's `a: string`),
     // and still fails when it makes a key required that the route never sends. (Both pins spell
@@ -298,5 +343,11 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
       'schema-is-wider',
       'route-is-wider',
     ]);
+  });
+
+  it('names a default-model key for every runner', () => {
+    // The `models` keys are spelled by hand, so a new runner would otherwise drift it silently (#1234).
+    const models = workspaceConfigResponseValue.shape.agentDefaults.shape.models.unwrap();
+    expect(Object.keys(models.shape).sort()).toEqual([...runnerSchema.options].sort());
   });
 });

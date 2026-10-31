@@ -21,7 +21,7 @@ const GLOBAL_PROMPT_MAX = 20_000
 export function GlobalInstructionsSection() {
   const config = useWorkspaceConfig()
   if (config.isPending) {
-    return <p className="p-4 text-[13px] text-soft-foreground md:p-6">Loading instructions…</p>
+    return <p className="p-4 text-ui text-soft-foreground md:p-6">Loading instructions…</p>
   }
   if (config.isError) {
     return (
@@ -84,11 +84,11 @@ function GlobalInstructionsForm({ config }: { config: WorkspaceConfigResponse })
             Save
           </Button>
           {overLimit ? (
-            <p data-slot="global-instructions-limit" className="text-[11px] text-danger">
+            <p data-slot="global-instructions-limit" className="text-meta text-danger">
               {trimmed.length.toLocaleString()} characters — the limit is {GLOBAL_PROMPT_MAX.toLocaleString()}.
             </p>
           ) : (
-            <p className="text-[11px] text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
+            <p className="text-meta text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
           )}
         </div>
       </SettingsField>

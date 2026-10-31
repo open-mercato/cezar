@@ -30,6 +30,18 @@ export const githubItemSchema = z.object({
   body: z.string().optional(),
   url: z.string(),
   comments: z.number(),
+  /** Issue ownership; omitted when unavailable or unsupported by a forge. */
+  assignees: z.array(z.string()).optional(),
+  assigneesTruncated: z.boolean().optional(),
+  /** Authoritative closing/development links, never casual PR mentions (#1620). */
+  linkedPrs: z.array(z.object({
+    number: z.number().int().positive(),
+    title: z.string(),
+    url: z.string(),
+    state: z.enum(['open', 'merged', 'closed']),
+    isDraft: z.boolean(),
+  })).optional(),
+  linkedPrsTruncated: z.boolean().optional(),
   /** PRs only. */
   isDraft: z.boolean().optional(),
   additions: z.number().optional(),
@@ -68,6 +80,9 @@ export const githubListQuerySchema = z.object({
   refresh: z.string().optional(),
   issuesCursor: z.string().max(2_000).optional(),
   prsCursor: z.string().max(2_000).optional(),
+  /** `1` = that side is exhausted: skip it instead of restarting it from page one (#1750). */
+  issuesDone: z.string().optional(),
+  prsDone: z.string().optional(),
 });
 export type GithubListQuery = z.infer<typeof githubListQuerySchema>;
 

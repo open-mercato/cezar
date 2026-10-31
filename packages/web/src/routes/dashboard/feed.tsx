@@ -77,7 +77,7 @@ export function Feed({
           <h2 ref={heading} tabIndex={-1} className={widgetHeading}>
             {tasksOnly ? 'Recent results' : 'Recent results & GitHub'}
           </h2>
-          <span className="font-mono text-[11px] text-soft-foreground">Last 7 days</span>
+          <span className="font-mono text-meta text-soft-foreground">Last 7 days</span>
         </div>
         {!tasksOnly && (
           <SegmentedControl

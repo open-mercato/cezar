@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -260,6 +260,8 @@ export const runRecordSchema = z.object({
       event: trackerAutomationEventSchema.optional(),
       timestamp: z.string().optional(),
       change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string().url(),
     })
@@ -1220,6 +1222,11 @@ export class RunStore extends EventEmitter {
     this.setMaxListeners(100);
   }
 
+  /** Stable identity for observers that outlive a store instance. */
+  getDataDir(): string {
+    return this.dataDir;
+  }
+
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
   static open(dataDir: string, opts?: { keepLive?: boolean }): RunStore {
     const store = new RunStore(dataDir);
@@ -1791,7 +1798,8 @@ export class RunStore extends EventEmitter {
    */
   private janitorSettled(run: RunRecord): boolean {
     return (
-      run.pullRequestUrl !== undefined &&
+      (run.pullRequestUrl !== undefined ||
+        (run.referencedPrCandidates?.length ?? 0) >= MAX_PR_CANDIDATES) &&
       (run.referencedIssueCandidates?.length ?? 0) >= MAX_PR_CANDIDATES &&
       !(run.markerRefs?.issue === undefined && run.referencedIssueUrl && run.issueNumber === undefined)
     );
@@ -2018,19 +2026,9 @@ export class RunStore extends EventEmitter {
   deleteRun(id: string): boolean {
     const existed = this.forget(id);
     if (existed) {
-      try {
-        rmSync(this.eventsPath(id), { force: true });
-        rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
-        rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
-        // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
-        // unreachable by definition, and it may be holding megabytes of pasted screenshots.
-        deleteRunDrafts(this.dataDir, id);
-      } catch {
-        // best effort — the index is authoritative
-      }
+      this.deleteRunFiles(id);
       this.seqs.delete(id);
       this.scheduleSave();
-      this.emit('deleted', id);
     }
     return existed;
   }
@@ -2149,7 +2147,9 @@ export class RunStore extends EventEmitter {
     this.emit('run', run);
   }
 
-  /** Forget a run, and remember that we did. Dropping it from the map is no longer enough on its
+  /** Forget a run, and remember that we did. Every removal path funnels through this boundary,
+   * including retention pruning, so lifecycle subscribers cannot miss cleanup. Dropping it from
+   * the map is no longer enough on its
    *  own: `saveNow` unions the on-disk index back in, and the copy it re-reads is one THIS process
    *  wrote moments ago — so a plain `delete` would come straight back as a record whose event file
    *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
@@ -2159,7 +2159,9 @@ export class RunStore extends EventEmitter {
     if (this.runs.has(id)) this.observeLifecycle(id, undefined);
     this.sessionBackends.delete(id);
     this.persisted.delete(id);
-    return this.runs.delete(id);
+    const existed = this.runs.delete(id);
+    if (existed) this.emit('deleted', id);
+    return existed;
   }
 
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
@@ -2180,15 +2182,25 @@ export class RunStore extends EventEmitter {
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
-      try {
-        rmSync(this.eventsPath(stale.id), { force: true });
-        rmSync(this.handoffPath(stale.id), { force: true });
-        rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
-        deleteRunDrafts(this.dataDir, stale.id);
-        deleteRunLayouts(this.dataDir, stale.id); // spec 2026-10-07-task-workspace §5.3
-      } catch {
-        // best effort
-      }
+      this.deleteRunFiles(stale.id);
+    }
+  }
+
+  /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
+  private deleteRunFiles(id: string): void {
+    try {
+      rmSync(this.eventsPath(id), { force: true });
+      rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
+      rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+      // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
+      // unreachable by definition, and it may be holding megabytes of pasted screenshots.
+      deleteRunDrafts(this.dataDir, id);
+      deleteRunLayouts(this.dataDir, id); // spec 2026-10-07-task-workspace §5.3
+      // Mediated tracker state (server/tracker/task-access.ts paths): issue text and comment bodies.
+      rmSync(join(this.dataDir, 'runs', `${id}.tracker-context.json`), { force: true });
+      rmSync(join(this.dataDir, 'runs', `${id}.tracker-operations`), { recursive: true, force: true });
+    } catch {
+      // best effort — the index is authoritative
     }
   }
 
