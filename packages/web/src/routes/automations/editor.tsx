@@ -39,7 +39,7 @@ import { EditorGithubFields } from './editor-github-fields'
 import { EditorRunAs } from './editor-run-as'
 import { EditorScheduleFields } from './editor-schedule-fields'
 import { PLACEHOLDERS, draftSentence, railSteps } from './editor-sentence'
-import { LastRunCard } from './last-run-card'
+import { RecentRunsCard } from './recent-runs-card'
 import { NextRunsPreview } from './next-runs-preview'
 import { TemplatePalette } from './template-palette'
 import { automationsQueryKey, type AutomationActions } from './use-automations'
@@ -469,11 +469,11 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                   Preview saved matches
                 </Button>
               ) : null}
-              {automation?.lastRun ? (
-                <LastRunCard
-                  lastRun={automation.lastRun}
+              {automation ? (
+                <RecentRunsCard
+                  automationId={automation.id}
                   busy={actions?.busy}
-                  onRunNow={() => void actions?.runNow(automation)}
+                  onRunNow={actions ? () => void actions.runNow(automation) : undefined}
                   onLog={onLog}
                 />
               ) : null}

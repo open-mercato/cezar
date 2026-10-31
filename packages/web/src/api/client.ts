@@ -1962,10 +1962,10 @@ export async function commitRun(id: string, message: string): Promise<GitCommitR
 }
 
 /** What the run's worktree holds that has not left it: uncommitted files, unpushed commits. */
-export async function getRunGitStatus(id: string, opts?: ReadOptions): Promise<GitStatusResponse> {
+export async function getRunGitStatus(id: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GitStatusResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].git.status.$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      { param: { projectId: projectScope, id: encodeURIComponent(id) } },
       init(opts),
     ),
     runPath(id, '/git/status'),
@@ -2874,8 +2874,8 @@ export async function getLifecycleOperation(operationId: string, opts?: ReadOpti
 export async function getLifecycleOutput(operationId: string, afterSeq = 0, opts?: ReadOptions): Promise<LifecycleOutputResponse> {
   return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].output.$get({ param: { projectId: queryScope(), operationId }, query: { afterSeq, limit: 100 } }, init(opts)), '/worktree-lifecycle/operations/output')
 }
-export async function startLifecycleRemoval(input: StartLifecycleRemovalInput): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
-  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations.$post({ param: { projectId: queryScope() }, json: input }), '/worktree-lifecycle/operations')
+export async function startLifecycleRemoval(input: StartLifecycleRemovalInput, projectScope = queryScope()): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations.$post({ param: { projectId: projectScope }, json: input }), '/worktree-lifecycle/operations')
 }
 export async function actOnLifecycleOperation(operationId: string, input: LifecycleActionInput): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
   return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].actions.$post({ param: { projectId: queryScope(), operationId }, json: input }), '/worktree-lifecycle/operations/actions')

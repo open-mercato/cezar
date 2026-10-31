@@ -212,6 +212,16 @@ Breaking: removing/renaming a route; making a previously optional body field req
   list presentation only: automation definitions, scheduler priority, calendars and the Next
   runs rail are unchanged. No migration or required configuration is introduced.
 
+- Task-detail Remove worktree (#1600, additive) uses existing lifecycle `reclaim`,
+  including for hook-free legacy worktrees. It retains the branch, task and
+  transcript and writes only existing reclamation metadata. Dirty tracked or
+  untracked files block removal; ignored artifacts are explicitly discarded.
+  Requests, confirmation state and cache updates remain bound to the originating
+  project and run across navigation. Optional explicit scope arguments to the
+  private web helpers preserve their previous defaults. No public API, state
+  format, configuration or default changes. The git-status preflight is not atomic
+  against external filesystem writes.
+
 - `webhooks/` is private opt-in state, covered by `ensureDataGitignore` in boot and lazy project
   contexts and verified ignored/untracked before secrets are written. Files include root-bound
   installation identity, endpoints/keys/revisions/activation fences, ownership proof, bounded outbox
