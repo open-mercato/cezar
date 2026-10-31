@@ -110,7 +110,9 @@ A schedule — same "name", "description" and "task", but "kind": "schedule" and
 
 Only "filters" decide which items launch a task; the prompt never does. A condition the user states — "when user octocat opens a PR", "review requests for octocat" (\`filters.reviewers\` on a review event), "only bugs", "unless labelled wip" — goes into authors, reviewers, labels or the other filters, never only into the prompt text: a condition left in prose launches a task for every item.
 
-For a GitHub poll, name, events, intervalSeconds, filters and task are required; for a tracker poll, name, kind, trackerTrigger, intervalSeconds, filters and task; for a schedule, name, kind, schedule and task. No other top-level key is accepted. Schedules run in the cockpit's own time zone.
+For several times sharing one task, supply "schedules": [{ "type": "weekdays", "hour": 9 }, { "type": "weekly", "day": 5, "hour": 16 }] (1-16 entries). Omit "schedule" or mirror the first entry exactly. Coincident instants start one task; catch-up starts only the newest missed union occurrence. A "once" must have a date and cannot share a list with another entry. On update, explicit "schedule" without "schedules" replaces the entire list; other partial CLI edits preserve it. Multiple schedules use JSON create/update; add --cron remains a single schedule.
+
+For a GitHub poll, name, events, intervalSeconds, filters and task are required; for a tracker poll, name, kind, trackerTrigger, intervalSeconds, filters and task; for a schedule, name, kind, schedule (or schedules) and task. No other top-level key is accepted. Schedules run in the cockpit's own time zone.
 
 Prompt placeholders, substituted per launch — GitHub poll: {{github.kind}} (issue | pull request), {{github.number}}, {{github.title}}, {{github.url}}, {{github.author}}, {{github.assignees}}, {{github.labels}} and {{github.event}}; schedule: {{date}}, {{time}}, {{project}} and {{automation}}. Any other {{…}} is rejected. The matched item's title, author, labels and URL (or the scheduled instant) are also appended to every launched task as untrusted context, so the prompt need not repeat them.
 
