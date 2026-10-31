@@ -77,9 +77,16 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // `agy models` lists the signed-in account's models and exits 0 (live agy 1.4.0 output).
+  antigravity: {
+    stdout: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
+  CEZ_AGY_BIN: process.env.CEZ_AGY_BIN,
   CEZ_AGENT_MODELS_LOCKED: process.env.CEZ_AGENT_MODELS_LOCKED,
   CEZ_DRY_RUN: process.env.CEZ_DRY_RUN,
   CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
@@ -92,6 +99,7 @@ const originalEnv = {
 };
 
 beforeEach(() => {
+  delete process.env.CEZ_AGY_BIN;
   delete process.env.CEZ_AGENT_MODELS_LOCKED;
   delete process.env.CEZ_DRY_RUN;
   delete process.env.CEZ_CLAUDE_BIN;
@@ -122,6 +130,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
+  if (executable === 'agy') return connectedResults.antigravity!;
   return connectedResults.pi!;
 }
 
@@ -954,6 +963,27 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
+  it('probes Antigravity with `agy models` like any other installed CLI — no opt-in', async () => {
+    const runCommand = vi.fn(runner());
+    expect((await statuses(new ProviderAuthService({ runCommand }))).antigravity?.status).toBe('connected');
+    expect(runCommand.mock.calls.some(([bin, args]) => bin === 'agy' && args[0] === 'models')).toBe(true);
+  });
+
+  it('reads a signed-out agy as disconnected and an unrelated failure as unknown', async () => {
+    const signedOut = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agy'
+        ? { stdout: '', stderr: 'Please sign in to continue', exitCode: 1 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(signedOut)).resolves.toMatchObject({ antigravity: { status: 'disconnected' } });
+    const broken = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agy'
+        ? { stdout: '', stderr: 'network unreachable', exitCode: 1 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(broken)).resolves.toMatchObject({ antigravity: { status: 'unknown' } });
+  });
+
   it('always returns every provider in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
@@ -966,6 +996,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'antigravity' },
       ],
     });
   });
@@ -990,6 +1021,7 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp', '--no-auto-update'], timeoutMs: 10_000 },
+      { executable: 'agy', args: ['models'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1519,6 +1551,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1632,6 +1665,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -2078,6 +2112,42 @@ describe('inconclusive probe reports', () => {
     expect(await probe.cliVersion()).toBe('1.34.1');
   });
 
+  // #1580 (telemetry 298c2e1f): exit 0, 36 bytes of non-frame stdout, and `--version` with no semver.
+  describe('a `copilot` that is not a working Copilot CLI', () => {
+    const rowFor = async (version: ProviderCommandResult, onInconclusive = vi.fn()) => {
+      const service = new ProviderAuthService({
+        runCommand: async (executable, args) => {
+          if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+          if (args.includes('--version')) return version;
+          return { stdout: 'x'.repeat(36), stderr: 'y'.repeat(103), exitCode: 0 };
+        },
+        onInconclusive,
+      });
+      return (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    };
+
+    it('is not-installed with the update hint and sends no report when --version has no semver', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: 'hello\n', stderr: '', exitCode: 0 }, onInconclusive);
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('npm i -g @github/copilot') });
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('is not-installed when an old CLI rejects --no-auto-update', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: "error: unknown option '--no-auto-update'", exitCode: 1 }, onInconclusive);
+      expect(row?.status).toBe('not-installed');
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('guards: a version printed on stderr only still counts as a Copilot CLI', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: 'GitHub Copilot CLI 1.0.98.\n', exitCode: 0 }, onInconclusive);
+      expect(row?.status).toBe('unknown');
+      expect(onInconclusive).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // Telemetry f67df9d2: an asdf shim named `pi`, exit 1, nothing on stdout, Python's version on stderr.
   it('reports a version-manager shim with no version behind it as not-installed, not inconclusive', async () => {
     const onInconclusive = vi.fn();
@@ -2147,8 +2217,10 @@ describe('inconclusive probe reports', () => {
 
   it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {
     const service = new ProviderAuthService({
-      runCommand: async (executable) => executable === 'copilot'
-        ? { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
+      runCommand: async (executable, args) => executable === 'copilot'
+        ? args.includes('--version')
+          ? { stdout: 'GitHub Copilot CLI 1.0.98.\n', stderr: '', exitCode: 0 }
+          : { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
         : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
     });
     const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');

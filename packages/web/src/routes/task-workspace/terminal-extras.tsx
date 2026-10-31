@@ -167,7 +167,7 @@ export function CommandPicker({
               <span className="font-mono text-xs">{entry.command}</span>
               {/* The source file travels with the command: `dev` means one thing in a Makefile
                   and another in npm, and you are about to hand a shell one of them. */}
-              <span className="text-[11px] text-soft-foreground">
+              <span className="text-meta text-soft-foreground">
                 {entry.source}
                 {entry.detail ? ` — ${entry.detail}` : ''}
               </span>

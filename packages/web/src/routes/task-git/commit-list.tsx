@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 /** Commit rows past which the list goes through virtua. */
 export const COMMIT_VIRTUALIZE_THRESHOLD = 150
 
-/** One row: `py-2.5` (20px) + a `text-[13px]`/`leading-normal` line ≈ 40px, plus the divider. */
+/** One row: `py-2.5` (20px) + a `text-ui`/`leading-normal` line ≈ 40px, plus the divider. */
 const ROW_HEIGHT_PX = 41
 
 export interface CommitListItem {
@@ -131,22 +131,22 @@ function CommitRow({ commit, onSelect }: { commit: CommitListItem; onSelect?: (s
         }
         className="flex min-w-0 items-baseline gap-3 rounded-sm px-2 py-2.5 hover:bg-muted"
       >
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{commit.shaLabel}</span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{commit.subject}</span>
+        <span className="shrink-0 font-mono text-meta text-muted-foreground">{commit.shaLabel}</span>
+        <span className="min-w-0 flex-1 truncate text-ui font-medium">{commit.subject}</span>
         {commit.sync ? (
           <span
             data-slot="commit-sync"
             data-sync={commit.sync}
             title={commit.sync === 'outgoing' ? 'Not pushed yet' : 'On the remote, not pulled yet'}
             className={cn(
-              'shrink-0 rounded-sm border px-1 font-mono text-[10px]',
+              'shrink-0 rounded-sm border px-1 font-mono text-micro',
               commit.sync === 'outgoing' ? 'border-primary/40 text-primary' : 'border-border text-muted-foreground',
             )}
           >
             {commit.sync === 'outgoing' ? '↑ local' : '↓ incoming'}
           </span>
         ) : null}
-        <span className="hidden shrink-0 text-[11px] text-soft-foreground sm:inline">
+        <span className="hidden shrink-0 text-meta text-soft-foreground sm:inline">
           {commit.author} · {commit.when}
         </span>
       </Link>

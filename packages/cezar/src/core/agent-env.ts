@@ -241,6 +241,12 @@ export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
   // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
   copilot: ['COPILOT_'],
+  // Antigravity signs in through its own browser OAuth flow. It stores the token in the OS keyring
+  // (Secret Service over D-Bus on Linux) and, per its own changelog, BYPASSES the keyring when no
+  // `DBUS_SESSION_BUS_ADDRESS` is present — so without that one name a signed-in user looks signed
+  // out inside a run. The address is a socket path, not a secret. `XDG_RUNTIME_DIR` is already in
+  // the base list. No credential env var is documented, so `GEMINI_`/`GOOGLE_` keys stay out.
+  antigravity: ['ANTIGRAVITY_', 'DBUS_SESSION_BUS_ADDRESS'],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

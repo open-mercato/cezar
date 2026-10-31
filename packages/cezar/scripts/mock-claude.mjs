@@ -86,6 +86,12 @@ let turn = 0;
 let autonomousArmed = false;
 let askRepeat = false;
 let monitoringSticky = false;
+let askRewordClean = false;
+let askRewordMonitoring = false;
+let askRepeatClean = false;
+// `mock:ask-reword` → the same blocker on every turn, worded differently each time. This models
+// an agent trying another workaround after each nudge instead of repeating the exact question.
+let askReword = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -155,6 +161,10 @@ async function respond(userText, imageCount) {
   // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
   // CEZ:MONITORING: the watcher whose downstream work never finishes.
   if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
+  if (userText.includes('mock:ask-reword')) askReword = true;
+  if (userText.includes('mock:ask-reword-clean')) askRewordClean = true;
+  if (userText.includes('mock:ask-reword-monitoring')) askRewordMonitoring = true;
+  if (userText.includes('mock:ask-repeat-clean')) askRepeatClean = true;
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
   // `mock:done-refs` → CEZ:DONE with a task-reference line AFTER it, the order an agent that
@@ -172,7 +182,7 @@ async function respond(userText, imageCount) {
   // (#933): the handoff contract asks for those "as soon as you know", so an agent that opens
   // its PR in the same turn it parks on its sub-agents emits exactly this shape. It used to
   // bury the marker and park the run as `waiting` ("needs you").
-  const monitoringMarker = monitoringSticky || userText.includes('mock:monitoring')
+  const monitoringMarker = (monitoringSticky || userText.includes('mock:monitoring') || (askRewordMonitoring && turn === 2))
     ? userText.includes('mock:monitoring-refs')
       ? '\n\nCEZ:MONITORING\nCEZ:PR=4242\nCEZ:TITLE=waiting on dispatched sub-agents'
       : '\n\nCEZ:MONITORING'
@@ -231,7 +241,23 @@ async function respond(userText, imageCount) {
               },
             ],
           })
-      : userText.includes('mock:ask') || askRepeat
+      : (askRewordClean && turn === 2) || (askRewordMonitoring && turn === 2) || (askRepeatClean && turn === 2)
+        ? ''
+      : askReword || askRewordClean || askRewordMonitoring
+        ? '\n\nCEZ:ASK ' +
+          JSON.stringify({
+            questions: [
+              {
+                header: 'Blocked',
+                question: `The cockpit refused "cez task create" (attempt ${turn}) — how should I proceed?`,
+                options: [
+                  { label: 'Grant the capability', description: 'Enable dispatch for this run' },
+                  { label: 'Do it inline', description: 'Skip dispatch and work serially' },
+                ],
+              },
+            ],
+          })
+      : userText.includes('mock:ask') || askRepeat || askRepeatClean
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
           questions: [
@@ -290,6 +316,8 @@ async function respond(userText, imageCount) {
   // state one (7d0a1d6d), in the same `is_error` result envelope (core/agent-failure-class.ts).
   const accountOrProviderError = userText.includes('mock:overloaded')
     ? 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.'
+    : userText.includes('mock:oauthrace')
+      ? 'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute.'
     : userText.includes('mock:credit') ? 'Credit balance is too low'
     : userText.includes('mock:enospc') ? 'ENOSPC: no space left on device, write' : undefined;
   if (accountOrProviderError) {

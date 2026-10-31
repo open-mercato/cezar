@@ -29,7 +29,7 @@ let baseUrl: string
 let previousConfig: string | null = null
 let modelsLocked = false
 
-const RUNNER_IDS = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot'] as const
+const RUNNER_IDS = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'antigravity'] as const
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl

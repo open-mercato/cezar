@@ -307,6 +307,18 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
+  it('shows issue ownership beside row navigation with separate external PR links (#1620)', async () => {
+    stubFetch({ 'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, issues: [{ ...ISSUE_142, assignees: ['grace'], linkedPrs: [{ number: 180, title: 'Fix the session refresh', url: 'https://github.com/acme/demo/pull/180', state: 'open', isDraft: false }] }] }) })
+    renderAt('/github')
+    const group = await screen.findByRole('group', { name: 'Issue #142 ownership' })
+    expect(within(group).getByText('Assigned to @grace')).toBeTruthy()
+    const pr = within(group).getByRole('link', { name: 'PR #180 · Open: Fix the session refresh' })
+    expect(pr.parentElement?.closest('a')).toBeNull()
+    const row = screen.getByRole('link', { name: /Login form drops session on refresh/ })
+    fireEvent.click(row)
+    expect(await screen.findByRole('heading', { name: 'Login form drops session on refresh' })).toBeTruthy()
+  })
+
   it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
     stubFetch()
     renderAt('/github')
@@ -553,6 +565,28 @@ describe('scroll-driven paging', () => {
     // The last page is in: no sentinel, no observer, nothing left to offer.
     expect(sentinel()).toBeNull()
     expect(live()).toHaveLength(0)
+  })
+
+  it('marks the exhausted side done so the server does not restart it (#1750)', async () => {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(sent.some((r) => r.path.includes('issuesCursor=c1'))).toBe(true))
+    const next = sent.find((r) => r.path.includes('issuesCursor=c1'))!
+    expect(next.path).toContain('prsDone=1')
+    expect(next.path).not.toContain('issuesDone')
   })
 
   it('does not fetch while the sentinel stays out of view', async () => {

@@ -45,6 +45,15 @@ const cells = (id: string) => Array.from(row(id).querySelectorAll('td'))
 const headers = () => Array.from(document.querySelectorAll('th')).map((th) => th.textContent)
 
 describe('AutomationsTable', () => {
+  it('shows every trigger and the earliest union time before server due state exists (#1818)', () => {
+    const automation = { ...NIGHTLY, nextRunAt: undefined, schedule: { type: 'daily' as const, hour: 16, minute: 0 },
+      schedules: [{ type: 'daily' as const, hour: 16, minute: 0 }, { type: 'daily' as const, hour: 12, minute: 0 }] }
+    renderTable({ ...response(), automations: [automation] })
+    expect(cells(automation.id)[2]?.textContent).toBe('every day at 16:00; every day at 12:00')
+    expect(cells(automation.id)[2]?.getAttribute('title')).toBe('every day at 16:00; every day at 12:00')
+    expect(cells(automation.id)[4]?.textContent).toBe('Wed 12:00')
+  })
+
   it('lays out the design columns in order — Cost 7d hidden for now (AUTOMATION_COST_VISIBLE)', () => {
     renderTable()
 
