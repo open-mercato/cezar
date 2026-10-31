@@ -49,6 +49,8 @@ an agent from a list, cezar installs it and signs them in, in a terminal on the 
 
 ## Progress
 
+PR: #1890
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server
