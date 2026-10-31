@@ -6,6 +6,7 @@ import {
   LayoutDashboardIcon,
   MenuIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   XIcon,
 } from 'lucide-react'
@@ -23,10 +24,12 @@ import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { isManagerPathname } from '@/lib/managers'
+import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
 import { ModeSwitch } from '@/components/mode-switch'
+import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -230,8 +233,12 @@ export const AppShell = React.memo(function AppShell({
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
   const managerMode = managersAvailable && isManagerPathname(pathname)
+  // The Back to manager link is the way home from here (spec 2026-10-31-mobile-apps-manager-first).
+  const inTaskThread = matchPath({ path: '/tasks/:id/*', end: true }, areaPathname) !== null
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
+  const openMenu = React.useCallback(() => setMenuOpen(true), [])
+  const [phoneApp] = React.useState(showsBottomBar)
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -367,6 +374,9 @@ export const AppShell = React.memo(function AppShell({
           className="row-start-4 pb-[env(safe-area-inset-bottom)]"
         >
           {footerBanner}
+          {phoneApp && managersAvailable && !chromeless && !inTaskThread ? (
+            <PhoneBottomBar manager={managerMode} attention={managerAttention} menuOpen={menuOpen} onMore={openMenu} />
+          ) : null}
         </div>
       </div>
     </div>
@@ -676,6 +686,7 @@ function SidebarContent({
             <CommandPaletteHint />
           </>
         )}
+        {isCezarShell() ? <ServersLink onNavigate={onNavigate} /> : null}
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
           <div data-slot="tools-menu" className="shrink-0">
@@ -797,6 +808,16 @@ function GlobalSettingsLink({
         <SettingsIcon className="size-4" aria-hidden="true" />
       </RouterLink>
     </Button>
+  )
+}
+
+/** The shell handles `cezar://`: a page can only ask for its server list by navigating there. */
+function ServersLink({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={SIDEBAR_SECTION_LINK_CLASS}>
+      <ServerIcon className={sidebarSectionIconClass(false)} aria-hidden="true" />
+      Servers
+    </a>
   )
 }
 

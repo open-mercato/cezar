@@ -109,6 +109,7 @@ describe('/manager', () => {
 
   it('lists managers as a screen of its own on a phone', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    server.managers = [...server.managers, managerFixture({ id: 'second' })]
     renderAt('/manager')
     await waitFor(() => expect(document.querySelector('[data-route="manager-list"]')).not.toBeNull())
     expect(screen.getByTestId('at').textContent).toBe('/manager')
@@ -200,6 +201,57 @@ describe('/manager/:id', () => {
   it('keeps the dead end for a link that never resolved', async () => {
     renderAt('/manager/nope')
     expect(await screen.findByText('This manager no longer exists')).toBeTruthy()
+  })
+
+  describe('/manager on a phone', () => {
+    beforeEach(() => {
+      vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
+    })
+    const names = () => [...document.querySelectorAll('[data-route="manager-list"] a[href^="/manager/"]')]
+      .map((row) => row.getAttribute('href'))
+      .filter((href) => href !== '/manager/new')
+
+    it('opens the only manager straight in its chat', async () => {
+      server.managers = [managerFixture({ id: 'solo' })]
+      renderAt('/manager')
+      await waitFor(() => expect(screen.getByTestId('at').textContent).toBe('/manager/solo'))
+    })
+
+    it('all=1 always shows the list, so the back arrow cannot loop into the same chat', async () => {
+      server.managers = [managerFixture({ id: 'solo' })]
+      renderAt('/manager?all=1')
+      await waitFor(() => expect(names()).toEqual(['/manager/solo']))
+      expect(screen.getByRole('link', { name: 'New manager' })).toBeTruthy()
+    })
+
+    it('all=1 shows the list on a desktop too', async () => {
+      vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} }))
+      server.managers = [managerFixture({ id: 'solo' })]
+      renderAt('/manager?all=1')
+      await waitFor(() => expect(names()).toEqual(['/manager/solo']))
+    })
+
+    it('shows several as a list, managers holding approvals first and otherwise most recent', async () => {
+      server.managers = [
+        managerFixture({ id: 'newest', lastActivityAt: '2026-10-31T12:00:00.000Z' }),
+        managerFixture({ id: 'older', lastActivityAt: '2026-10-31T11:00:00.000Z' }),
+        managerFixture({ id: 'pending-old', lastActivityAt: '2026-10-31T09:00:00.000Z', pendingActions: 1 }),
+        managerFixture({ id: 'pending-new', lastActivityAt: '2026-10-31T10:00:00.000Z', pendingActions: 2 }),
+      ]
+      renderAt('/manager')
+      await waitFor(() => expect(names()).toEqual([
+        '/manager/pending-new',
+        '/manager/pending-old',
+        '/manager/newest',
+        '/manager/older',
+      ]))
+    })
+
+    it('shows the first-manager setup with no managers', async () => {
+      server.managers = []
+      renderAt('/manager')
+      expect(await screen.findByRole('heading', { name: 'Setup Your first manager' })).toBeTruthy()
+    })
   })
 
   it('merges the phone header into one row: back to the whole list, projects in the gear', async () => {

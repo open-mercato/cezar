@@ -1,6 +1,7 @@
 import { Toaster, resetToasts } from './components/ui/toaster'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -11,6 +12,7 @@ import { AppearanceProvider } from './components/appearance-provider'
 import { ListViewProvider } from './components/list-view'
 import { ThemeProvider } from './components/theme-provider'
 import { LAST_LOCATION_STORAGE_KEY } from './lib/last-location'
+import { ModeSwitch } from './components/mode-switch'
 import { AppRoutes, pageTitleContext } from './routes'
 import { resetDraft } from './routes/new-task-draft'
 
@@ -114,11 +116,15 @@ function renderAt(
     health = HEALTH,
     registry = REGISTRY,
     uiState = {},
+    providers = null,
+    extra = null,
   }: {
     seed?: boolean
     health?: typeof HEALTH | null
     registry?: ProjectsResponse | null
     uiState?: WorkspaceUiState | Record<string, unknown> | null
+    providers?: unknown
+    extra?: ReactNode
   } = {},
 ) {
   const client = createQueryClient()
@@ -128,6 +134,7 @@ function renderAt(
     if (health !== null) client.setQueryData(queryKeys.health, health)
     if (registry !== null) client.setQueryData(workspaceQueryKeys.projects, registry)
     if (uiState !== null) client.setQueryData(workspaceQueryKeys.uiState, uiState)
+    if (providers !== null) client.setQueryData(workspaceQueryKeys.providerStatus, providers)
   }
   render(
     <QueryClientProvider client={client}>
@@ -138,6 +145,7 @@ function renderAt(
               <AppRoutes />
               <LocationProbe />
               <WebhookNavigationProbe />
+              {extra}
               <Toaster />
             </ListViewProvider>
           </MemoryRouter>
@@ -714,6 +722,162 @@ describe('legacy flat URLs redirect to the boot project', () => {
 
 /** `/p/default/…` is the reserved boot alias (never an allocated slug): it resolves to the boot
  *  project and normalizes to the real slug in the address bar. */
+describe('a fresh load of / on a phone (spec 2026-10-31-mobile-apps-manager-first)', () => {
+  const MANAGER_HEALTH = {
+    ...HEALTH,
+    capabilities: { ...HEALTH.capabilities, managers: true },
+  } as typeof HEALTH
+  const SIGNED_IN = { providers: [{ provider: 'claude', status: 'connected' }] }
+  const SIGNED_OUT = { providers: [{ provider: 'claude', status: 'missing' }] }
+
+  function device({ coarse = true, width = 390, height = 844 } = {}) {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(pointer: coarse)' && coarse,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    vi.stubGlobal('screen', { width, height })
+  }
+
+  /** Every other test seeds the same way, so each case names only what it changes. */
+  const load = (entry: string, options: Parameters<typeof renderAt>[1] = {}) => {
+    rememberLocation({ projectId: 'other', pathname: '/p/other/git' })
+    return renderAt(entry, { health: MANAGER_HEALTH, providers: SIGNED_IN, ...options })
+  }
+
+  it('opens Manager on a phone', () => {
+    device()
+    load('/')
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it('opens Manager on a phone in landscape: the screen, not the viewport, decides', () => {
+    device({ width: 932, height: 430 })
+    load('/')
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it.each([
+    ['a narrow desktop window', { coarse: false, width: 1440, height: 900 }],
+    ['a tablet', { coarse: true, width: 744, height: 1133 }],
+  ])('keeps the restore on %s', (_case, screenOf) => {
+    device(screenOf)
+    load('/')
+    expect(currentPathname()).toBe('/p/other/git')
+  })
+
+  it('keeps the restore with no matchMedia, on a phone-sized screen', () => {
+    vi.stubGlobal('screen', { width: 390, height: 844 })
+    vi.stubGlobal('matchMedia', undefined)
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.health, MANAGER_HEALTH)
+    client.setQueryData(workspaceQueryKeys.projects, REGISTRY)
+    client.setQueryData(workspaceQueryKeys.uiState, {})
+    client.setQueryData(workspaceQueryKeys.providerStatus, SIGNED_IN)
+    rememberLocation({ projectId: 'other', pathname: '/p/other/git' })
+    // The theme providers need `matchMedia`; only the phone rule is under test here.
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/']}>
+          <ListViewProvider>
+            <AppRoutes />
+            <LocationProbe />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(currentPathname()).toBe('/p/other/git')
+  })
+
+  it.each([
+    ['false', { ...HEALTH, capabilities: { ...HEALTH.capabilities, managers: false } }],
+    ['absent', HEALTH],
+  ])('keeps the restore when capabilities.managers is %s', (_case, health) => {
+    device()
+    load('/', { health: health as typeof HEALTH })
+    expect(currentPathname()).toBe('/p/other/git')
+  })
+
+  it('waits for health instead of restoring before it knows', () => {
+    device()
+    load('/', { health: null })
+    expect(routeName()).toBe('scope-resolving')
+    expect(currentPathname()).toBe('/')
+  })
+
+  it('keeps the restore when health fails', async () => {
+    device()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).startsWith('/api/v1/health')) {
+          return new Response(JSON.stringify({ error: 'down' }), {
+            status: 500,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return new Promise<never>(() => {})
+      }),
+    )
+    load('/', { health: null })
+    await waitFor(() => expect(currentPathname()).toBe('/p/other/git'), { timeout: 4_000 })
+  })
+
+  it.each([
+    ['no agent is signed in', { providers: SIGNED_OUT }],
+    ['no project is a git repository', {
+      registry: { ...REGISTRY, projects: REGISTRY.projects.map((row) => ({ ...row, status: 'not-git' as const })) },
+    }],
+  ])('leaves an unfinished first run on the overview when %s', (_case, options) => {
+    device()
+    load('/', options)
+    expect(currentPathname()).toBe('/p/other/git')
+  })
+
+  it('counts a skipped sign-in page as finished', () => {
+    device()
+    load('/', { providers: SIGNED_OUT, uiState: { onboarding: { agentCheckSkipped: true } } })
+    expect(currentPathname()).toBe('/manager')
+  })
+
+  it('waits for the agent answer: the overview must not flash on the way to Manager', () => {
+    device()
+    load('/', { providers: null })
+    expect(routeName()).toBe('scope-resolving')
+  })
+
+  it.each(['/?x', '/#x'])('treats %s as explicit', (entry) => {
+    device()
+    load(entry)
+    expect(currentPathname()).toBe('/p/boot/')
+  })
+
+  it('keeps a deep link', () => {
+    device()
+    load('/p/other/git/commits')
+    expect(currentPathname()).toBe('/p/other/git/commits')
+  })
+
+  function codeLink() {
+    return screen.getByRole('link', { name: 'Code' })
+  }
+
+  it('the Code link reaches the tasks after the redirect', async () => {
+    device()
+    load('/', { extra: <ModeSwitch manager attention={false} /> })
+    expect(currentPathname()).toBe('/manager')
+    fireEvent.click(codeLink())
+    await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
+  })
+
+  it('the Code link reaches the tasks from a page loaded at /manager', async () => {
+    device()
+    load('/manager', { extra: <ModeSwitch manager attention={false} /> })
+    fireEvent.click(codeLink())
+    await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
+  })
+})
+
 describe('the /p/default alias', () => {
   it('normalizes /p/default/tasks/x to /p/<boot>/tasks/x', () => {
     renderAt('/p/default/tasks/x')

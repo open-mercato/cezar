@@ -106,7 +106,7 @@ describe('web app manifest', () => {
   }
   const html = readFileSync(resolve(webRoot, 'index.html'), 'utf8')
 
-  it('opens standalone at the root, which restores the last project', () => {
+  it('opens standalone at the root, which one rule routes on every device', () => {
     expect(manifest.display).toBe('standalone')
     expect(manifest.start_url).toBe('/')
     expect(manifest.scope).toBe('/')

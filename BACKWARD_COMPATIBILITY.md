@@ -629,6 +629,14 @@ config exception names it.
   poll may now spend up to 100 records instead of `filters.maxRecords` — never more, because the
   definition schema already capped `maxRecords` at 100 — and its `no-match` row names the pinned
   band instead of saying `Scheduled check completed.` No configuration key is added.
+## Phones open on Manager — deliberate, 2026-11-01
+
+Spec `.ai/specs/2026-10-31-mobile-apps-manager-first.md`, Decision 3. On a phone (coarse primary pointer, short screen side under 600), the first location of a page load being exactly `/` now opens `/manager` when `capabilities.managers` is true and first-run setup is finished. It used to restore the last project page, which moves one tap away, behind Code in the drawer.
+
+Unchanged: desktop browsers, tablets, in-app links to `/`, `/` with a query or hash, deep links, servers with `CEZ_MANAGERS=0` or no answer from health, and `start_url: "/"` in the manifest.
+
+On a phone `/manager` with one manager now opens its chat, and `/manager?all=1` always shows the list. A `CezarMobile/` User-Agent token shows a `cezar://servers` link in the menu.
+
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.
