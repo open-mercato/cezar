@@ -65,6 +65,19 @@ describe('PhoneBottomBar', () => {
     expect(bar()).toBeNull()
   })
 
+  it('reserves its height for the New-task FAB only while it is there', () => {
+    const reserved = () =>
+      document.querySelector<HTMLElement>('[data-slot="app-shell"]')!.style.getPropertyValue('--phone-bar')
+    device()
+    renderShell('/p/boot/')
+    expect(bar()).not.toBeNull()
+    expect(reserved()).toBe('3.5rem')
+    cleanup()
+    renderShell('/p/boot/tasks/run-1')
+    expect(bar()).toBeNull()
+    expect(reserved()).toBe('')
+  })
+
   it('is there in the shell, whose webview is not standalone', () => {
     device({ standalone: false, userAgent: 'x CezarMobile/0.1 (ios)' })
     renderShell('/manager')

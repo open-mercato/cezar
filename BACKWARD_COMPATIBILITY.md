@@ -629,6 +629,7 @@ config exception names it.
   poll may now spend up to 100 records instead of `filters.maxRecords` — never more, because the
   definition schema already capped `maxRecords` at 100 — and its `no-match` row names the pinned
   band instead of saying `Scheduled check completed.` No configuration key is added.
+
 ## Phones open on Manager — deliberate, 2026-11-01
 
 Spec `.ai/specs/2026-10-31-mobile-apps-manager-first.md`, Decision 3. On a phone (coarse primary pointer, short screen side under 600), the first location of a page load being exactly `/` now opens `/manager` when `capabilities.managers` is true and first-run setup is finished. It used to restore the last project page, which moves one tap away, behind Code in the drawer.

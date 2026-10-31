@@ -239,6 +239,7 @@ export const AppShell = React.memo(function AppShell({
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const openMenu = React.useCallback(() => setMenuOpen(true), [])
   const [phoneApp] = React.useState(showsBottomBar)
+  const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -314,6 +315,8 @@ export const AppShell = React.memo(function AppShell({
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
+      // The New-task FAB is fixed to the viewport: this lifts it off the bar's More item.
+      style={bottomBar ? ({ '--phone-bar': '3.5rem' } as React.CSSProperties) : undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
     >
       {/* Desktop shell (packages/desktop, macOS): the native title bar is a transparent overlay
@@ -374,7 +377,7 @@ export const AppShell = React.memo(function AppShell({
           className="row-start-4 pb-[env(safe-area-inset-bottom)]"
         >
           {footerBanner}
-          {phoneApp && managersAvailable && !chromeless && !inTaskThread ? (
+          {bottomBar ? (
             <PhoneBottomBar manager={managerMode} attention={managerAttention} menuOpen={menuOpen} onMore={openMenu} />
           ) : null}
         </div>
