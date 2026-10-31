@@ -1,4 +1,4 @@
-# Unreleased
+# 0.18.0 (2026-10-31)
 
 ## Highlights
 New users get a guided start: first-run onboarding signs you in to an agent, helps you pick or create a project, and connects GitHub without a terminal. Agents stall less: OpenCode's native questions now reach an ask card, and a parked parent no longer takes the parallel slot its queued reviewer needs. Windows skill runs no longer fail on long system prompts, and large or slow filesystems list faster.
