@@ -103,6 +103,8 @@ function stubFetch(
     if (method === 'GET' && path.startsWith('/api/v1/skills')) return jsonResponse(SKILLS)
     if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
     if (method === 'GET' && path === '/api/v1/ui-state') return jsonResponse({})
+    if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
+    if (method === 'GET' && path === '/api/v1/automation-log?automationId=a1') return jsonResponse({ records: [], runs: {} })
     if (method === 'GET' && path === '/api/v1/workspace/automation-templates') return jsonResponse({ templates: [] })
     if (method === 'POST' && path === '/api/v1/automations') return jsonResponse({ automation: { ...EXISTING, id: 'new', revision: 1 } }, 201)
     if (method === 'PUT' && path === '/api/v1/automations/a1') return jsonResponse({ automation: { ...EXISTING, revision: 5 } })
@@ -143,6 +145,12 @@ const fillRequired = (name = 'Nightly bump', prompt = 'Bump the deps.') => {
 // ---- new ------------------------------------------------------------------------------------
 
 describe('AutomationEditor — new', () => {
+  it('does not request recent runs for an unsaved automation (#1623)', () => {
+    const sent = stubFetch()
+    renderEditor()
+    expect(screen.queryByRole('heading', { name: 'Recent runs' })).toBeNull()
+    expect(sent.some((request) => request.path.includes('automation-log'))).toBe(false)
+  })
   it('opens with the palette, a paused daily draft, and a save disabled until name and prompt', () => {
     stubFetch()
     renderEditor()
@@ -395,6 +403,27 @@ describe('AutomationEditor — new', () => {
 // ---- edit -----------------------------------------------------------------------------------
 
 describe('AutomationEditor — edit', () => {
+  it('shows several launched tasks inline without requiring lastRun enrichment (#1623)', async () => {
+    stubFetch({
+      'GET /api/v1/automation-log?automationId=a1': () => jsonResponse({
+        records: [
+          { seq: 2, ts: '2026-10-30T10:00:00Z', automationId: 'a1', revision: 4, result: 'manual', runId: 'recent-2' },
+          { seq: 1, ts: '2026-10-29T10:00:00Z', automationId: 'a1', revision: 4, result: 'launched', runId: 'recent-1' },
+        ],
+        runs: {
+          'recent-2': { title: 'Latest automation task', status: 'running', children: [] },
+          'recent-1': { title: 'Previous automation task', status: 'done', children: [] },
+        },
+      }),
+    })
+    const { lastRun: _lastRun, ...automation } = EXISTING
+    renderEditor({ automation })
+    expect(screen.getByRole('heading', { name: 'Recent runs' })).not.toBeNull()
+    expect(await screen.findByRole('link', { name: 'Latest automation task' })).not.toBeNull()
+    expect(screen.getByRole('link', { name: 'Previous automation task' }).getAttribute('href')).toBe('/tasks/recent-1')
+    expect(screen.getByRole('button', { name: 'View log' })).not.toBeNull()
+  })
+
   it('reads the definition, shows the state pill and the last run, and PUTs with expectedRevision', async () => {
     const sent = stubFetch()
     const runNow = vi.fn(async () => undefined)
