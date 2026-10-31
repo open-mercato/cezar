@@ -1,6 +1,6 @@
 # iOS and Android apps, Manager first
 
-Refs #1762, #882, PR #1821. Depends on the unmerged Manager work (see [Dependencies](#dependencies)).
+Refs #1762, #882, PR #1821. Stacked on Manager PR #1880 (see [Dependencies](#dependencies)).
 
 ## TLDR
 
@@ -15,10 +15,10 @@ cannot: the server list, the login in the OS keychain, and later push. Everythin
   or Origin guard change is needed.
 - **Auth:** native code answers the webview's Basic challenge from the keychain. The password never
   reaches JavaScript or a URL.
-- **Manager as default:** the shell and an installed PWA start at `/manager`. A browser tab on a
-  phone keeps today's behaviour.
-- **Notifications:** no push in the first TestFlight build. Push is required before a public App
-  Store listing, and native push requires a relay the project runs.
+- **Manager as default:** the shell starts at `/manager`, and a fresh load of `/` on a phone goes
+  there too, in a browser tab or an installed PWA. Desktop browsers and tablets are unchanged.
+- **Notifications:** no push in the first TestFlight build. Push is required before a public
+  listing on either store, and native push requires a Cloudflare Worker relay the project runs.
 - **First installable thing:** the web app manifest from #1762, which needs no store account.
 
 ## Evidence and its limits
@@ -37,6 +37,8 @@ Corrections to the brief:
 | --- | --- |
 | Host guard around `server.ts:1391-1460` | It is at `packages/cezar/src/server/server.ts:1729-1798`, with the WebSocket twin at `:8439` |
 | #882 is a blocker candidate | Not for Manager. The chat does not use `/runs/:id/events`. See [#882](#882-and-pr-1821) |
+| The mobile composer is a single row | Closed on #1880 by `216f57d48`. See [Composer](#composer) |
+| Nothing on the server can trigger a push | Partly out of date: #1880 added a server-side `alert` path. See [Decision 5](#decision-5-notifications) |
 | Basic auth covers health | It does: `auth_basic` is at server level in the vhost, so `/api/v1/health` is challenged too. Probe code must expect 401 |
 
 ## Problem statement
@@ -54,30 +56,32 @@ and credentials held safely across several servers.
 
 Non-goals: running agents on the phone, a local or offline mode, a relay that tunnels traffic to
 the server, approving from a notification, a cross-project task list (the Manager's `/tasks`
-command is that list), tablets as a designed target, and a React Native client.
+command is that list), tablets as a designed target, a React Native client, a biometric lock,
+shell telemetry for now, and direct APK or F-Droid builds in v1.
 
 ## Dependencies
 
 ### On the Manager work
 
-Manager mode is **not on `main`, has no PR, and is not on `origin`** (`git ls-remote` finds no
-branch). It exists only as the local branch `cez/7c7ed729` at `d70ddc04f`, 17 commits on top of
-`f25b6b9ad`, the current `origin/main`. All seven child branches are merged into it. Reviewers of
-this spec cannot read that branch until it is pushed. Tasks M4 to M6 and M10 cannot start until it
-lands, and its default-on flag still awaits owner ratification in its own AGENTS.md entry.
+Manager lands through its own PR, **draft #1880** from `cez/7c7ed729`, at `a1ebb4f72`: 19 commits on
+top of `f25b6b9ad`, the current `origin/main`. This PR is stacked on that branch and carries only
+this spec. Tasks M4 to M6 and M10 cannot start until #1880 merges. Whether Manager is on by default
+is still open, in the pending ratification entry that #1880 adds to AGENTS.md.
 
-This spec depends on exactly these items from that branch:
+This spec depends on exactly these items from that branch, re-checked at `a1ebb4f72`:
 
 | Kind | Item | Used for |
 | --- | --- | --- |
-| Capability | `capabilities.managers` on `/api/v1/health` (optional in `packages/contract/src/health.ts`, set by `CEZ_MANAGERS !== '0'`) | Choosing the start URL |
+| Capability | `capabilities.managers` on `/api/v1/health` (optional in `packages/contract/src/health.ts`, set by `CEZ_MANAGERS !== '0'`) | Choosing the start screen |
+| Capability | `capabilities.managerSystemNotifications` (false in hosted mode) | Knowing the OS notification path is unavailable on a hosted server |
 | Routes | `GET /workspace/managers`, `GET` and `POST /workspace/managers/:id/messages` (`before`, `limit`, default 100), `POST …/stop`, `…/check`, `…/read`, `PATCH /workspace/managers/:id` | The chat |
 | Route | `POST /workspace/managers/:id/actions/:actionId/decision` | Approvals |
 | Events | `manager-change`, `manager-message` on `/workspace/events` | Live chat |
-| Shapes | `managerSummarySchema` (`unread`, `pendingActions`), `managerMessageSchema`, `managerActionRequestSchema` (`merge-pr`, `enable-automation`, `add-job`) | Cards, counts |
+| Shapes | `managerSummarySchema` (`unread`, `important`, `headline`, `pendingActions`, `notify`), `managerMessageSchema`, `managerActionRequestSchema` (`merge-pr`, `enable-automation`, `add-job`) | Cards, counts |
 | Web routes | `/manager`, `/manager/new`, `/manager/:id`, `ManagersGate` | Start URL and fallback |
-| Components | `ManagerIndexRoute`, `ManagerListScreen`, `ManagerChat`, `ActionCard`, `Composer` `compact`, `ModeSwitch`, the Back to manager link | Layout work |
+| Components | `ManagerIndexRoute`, `ManagerListScreen`, `ManagerChat`, `ActionCard`, `Composer` `compact` and `footerEnd`, `ModeSwitch`, the Back to manager link | Layout work |
 | Lib | `diffManagerAttention`, `describeManagerNotification`, `orderManagers` | Notifications, list order |
+| Engine | `ManagerEngine.alert` (`engine.ts:719`), called for proposals and important replies | The push sink |
 | Design | `.ai/specs/2026-10-31-managers.md`, including its approval guard and the rule that only the `decision` route performs a proposal | Safety |
 
 Manager's own "Not in v1" list stands: no attachments in the composer, no autonomous merges.
@@ -91,17 +95,18 @@ say so plainly.
 
 ### #882 and PR #1821
 
-Neither blocks the Manager screens. The chat pages through `/workspace/managers/:id/messages` and
+#882 does not block the Manager screens. The chat pages through `/workspace/managers/:id/messages` and
 listens on `/workspace/events`. The task thread already pages history with a cursor and `afterSeq`
 (`packages/web/src/api/run-history.ts`, `run-events.ts`), and #1821 bounds the remaining cursorless
 fallback. It is open, mergeable and labelled `do-not-merge`, `needs-qa`, `risk-high`.
 
 Long task threads opened from a card are the exposed path, so M2 measures one on a real device over
-a tunnel. If the phone still stalls there, #1821 blocks the M9 test builds. Otherwise it stays independent.
+a tunnel. What happens to #1821 is open: see [Q11](#q11-what-becomes-of-pr-1821s-do-not-merge).
 
 ## Decision 1: the shell
 
-**Recommendation: Capacitor, loading the server's cockpit from the server.**
+**Recommendation: Capacitor, loading the server's cockpit from the server.** Still open: see
+[Q2](#q2-accept-capacitor).
 
 | | Tauri 2 mobile | Capacitor |
 | --- | --- | --- |
@@ -209,13 +214,17 @@ Switching is reachable from three places, so that an old server cannot trap the 
 link in the cockpit's More menu (`cezar://servers`, shown only with the User-Agent token), a home
 screen quick action, and the shell's connection-error screen.
 
-**HTTP is refused in v1.** iOS blocks cleartext by default and credentials must not cross it.
-Tailscale users can use `tailscale serve` for HTTPS [M].
+**Proposed: HTTP is refused in v1.** iOS blocks cleartext by default and credentials must not cross
+it. Tailscale users can use `tailscale serve` for HTTPS [M]. Still open: see
+[Q5](#q5-allow-plain-http-for-lan-or-tailscale-addresses).
 
 ## Decision 3: Manager as default
 
-**Default means the start URL the shell opens on a cold launch.** It does not change what `/` does
-on any server.
+**Default means where a fresh start lands on a phone.** There are two entry points with one target:
+the shell's cold launch, and a fresh page load of the bare `/` in a phone browser, whether a tab or
+an installed PWA. Desktop browsers and tablets keep today's behaviour.
+
+### In the shell
 
 | Situation | Shell opens |
 | --- | --- |
@@ -228,6 +237,57 @@ on any server.
 
 Native code reads health before loading a page. An old server has no `/manager` route, so a blind
 load would land on its legacy redirect. Capability, not version number, decides this.
+
+### In a phone browser
+
+The decision is made in the page, in the bare-root branch of `LegacyPathRedirect`
+(`packages/web/src/routes.tsx`), because the server sends every client the same document.
+
+**How a phone is detected:**
+
+```ts
+const isPhone = () =>
+  matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 600
+```
+
+| Part | Why |
+| --- | --- |
+| Primary pointer is coarse | A narrow desktop window has a fine pointer, so it stays unchanged. So does a touchscreen laptop |
+| Short side of the **screen**, not the viewport | Rotating or resizing changes nothing, and a large phone in landscape still counts |
+| 600, not the `md` breakpoint of 768 | 600 is Android's own phone and tablet line, and an iPad mini is about 744 wide [M]. Using `md` would catch it |
+| No User-Agent sniffing | It is brittle, and the screen and pointer say what matters |
+| No `matchMedia` means not a phone | Same stance as `useDesktopViewport` |
+
+**The redirect fires only when all of these hold:**
+
+1. The path is exactly `/` with no query or hash. The existing rule that query or hash makes `/`
+   explicit still applies.
+2. This is the first location of this page load, read once from a one-shot flag set at boot.
+3. `isPhone()` is true.
+4. Health has settled and `capabilities.managers === true`.
+5. First-run setup is finished. `FirstRun` renders on the tasks overview
+   (`tasks-overview.tsx:1714`), so an unfinished setup must land there.
+
+Otherwise the existing restore runs unchanged. It stores and validates the last project page as it
+does today.
+
+Condition 2 is load-bearing. `ModeSwitch`'s Code link and several "Back to tasks" links point at
+`/`. Without the flag they would bounce back to Manager and a phone user could never reach tasks.
+
+| Server | Phone browser gets |
+| --- | --- |
+| Has Manager, managers exist | `/manager` |
+| Has Manager, no managers yet | `/manager`, showing first-manager setup. The drawer's Code link leaves it |
+| `CEZ_MANAGERS=0` | The existing restore, with no note. `ManagersGate` still sends a pasted `/manager` to `/` |
+| Older server | Its own older cockpit, which has no such rule. An absent capability reads as false in any case |
+| Health request fails | The existing restore |
+
+**What this replaces.** `/` restored your last page on a fresh load. On a phone, that no longer
+happens at `/`: the restore moves one tap away, behind Code in the drawer. Reopening a deep link or
+a tab the browser restored keeps its URL, so only someone opening the bare root is affected.
+
+The manifest keeps `start_url: "/"`, so one rule covers tabs and PWAs. A phone PWA reaches Manager
+through the rule, and a PWA installed on a desktop or tablet keeps restoring its last page.
 
 What `/manager` shows on a phone:
 
@@ -243,7 +303,7 @@ checks that `/manager/new` does not dead-end there.
 ### Navigation
 
 Below `md` the sidebar is a drawer, so reaching tasks takes two taps through `ModeSwitch`. In the
-shell and an installed PWA, add a bottom bar with three items:
+shell and a phone PWA, add a bottom bar with three items:
 
 | Item | Goes to | Note |
 | --- | --- | --- |
@@ -254,13 +314,13 @@ shell and an installed PWA, add a bottom bar with three items:
 The bar hides while the keyboard is open and inside a task thread, where the existing Back to
 manager link is the way home. Android's back button walks webview history, then leaves the app.
 
-### Shell only, or mobile web too
+### What applies where
 
-- **Start at `/manager`:** shell and installed PWA only (manifest `start_url`, falling through
-  `ManagersGate` to `/` when managers are off). A browser tab's bare `/` keeps restoring the last
-  project page. That behaviour works today and existing phone users rely on it.
-- **Bottom bar:** shell and PWA only, detected by the User-Agent token or `display-mode: standalone`.
-- **Chat layout and cards:** every phone width. Those are defects, not preferences.
+| Behaviour | Shell | Phone PWA | Phone browser tab | Tablet and desktop |
+| --- | --- | --- | --- | --- |
+| Start at `/manager` | Yes | Yes | Yes | No |
+| Bottom bar | Yes | Yes | No. The browser's own bottom bar is there, and the drawer reaches tasks | No |
+| Chat layout and cards | Yes | Yes | Yes | Layout by width. Confirmation applies at every width |
 
 ## Decision 4: Manager chat on a phone
 
@@ -280,8 +340,9 @@ manager link is the way home. Android's back button walks webview history, then 
 │ [status] [attention] [prs]   │  shown when the draft is empty
 │ ┌──────────────────────────┐ │
 │ │ Type / for commands      │ │  row 1: text, full width
-│ │ Chron 15  Opus Med   🎙 ➤│ │  row 2: pickers, mic, send
+│ │ Opus Med        🎙 [Send]│ │  row 2: model, mic, send
 │ └──────────────────────────┘ │
+│              Refresh: 15 min │  hidden while typing
 ├──────────────────────────────┤
 │  Manager    Tasks     More   │  hidden while typing
 └──────────────────────────────┘
@@ -294,16 +355,16 @@ them into one row at about 52pt.
 
 ### Composer
 
-The gap is real. `composer-reference.png` shows two rows, text above controls. The branch ships
-`compact`, one row of an inert `+`, the text, mic and send, with the pickers in a separate footer
-below. Below `md`, `compact` becomes the stacked layout:
+The single-row gap is closed on #1880. Commit `216f57d48` makes `compact` wrap below `md`: the text
+takes its own row, with the `+`, a model pill, mic, Stop and an always-present Send pill below it,
+matching `composer-reference.png`. Desktop keeps one row.
 
-- Row 1 is the textarea at full width, capped at about 35dvh so it cannot push the chat off screen.
-- Row 2 holds the Chron and model pickers on the left, and mic, Stop and Send on the right.
-- The inert `+` is dropped on phones. It does nothing until attachments exist.
-- Send stays in place, disabled when empty, so the row does not shift.
-- Controls grow from `size-8` to 44pt on coarse pointers.
-- Desktop keeps the one-row layout from the Manager design.
+Left for M4:
+
+- Remove the inert `+` on phones. It does nothing until attachments exist.
+- Cap the textarea at about 35dvh. Its fixed `max-h-[220px]` can fill the space above a keyboard.
+- Grow the round controls from 40px (`size-10`) to 44pt on coarse pointers.
+- Hide the Refresh footer while the keyboard is open.
 
 The chat does not call `useKeyboardInsetVar`, while the task thread does (`task-thread.tsx:333`).
 Add it. `interactive-widget=resizes-content` alone is not honoured by WebKit [M].
@@ -319,7 +380,7 @@ The guard does not change: only the `decision` route acts, and pinned cards refu
 | Change | Why |
 | --- | --- |
 | Card fills the column, with equal 44pt buttons | `size="sm"` is too small for a thumb |
-| Approve opens a bottom sheet restating what will happen; Reject acts at once | A mis-tap while scrolling must not merge or start unattended work |
+| Approve opens a confirmation sheet restating what will happen, subject to the setting below; Reject acts at once | A mis-tap while scrolling must not merge or start unattended work |
 | Sheet by type: **merge** shows project, PR, title, method, head sha and a link to the PR; **automation** shows name, revision and summary; **job** shows name, interval and full prompt | The sheet is where the user reads the pinned facts |
 | Job prompt and automation summary collapse to three lines, expanding in the sheet | `pre max-h-40` is a scroll trap inside a scrolling chat, and a prompt can be 20,000 characters |
 | `deciding` moves from the chat to each card | Today one decision disables every card |
@@ -328,6 +389,24 @@ The guard does not change: only the `decision` route acts, and pinned cards refu
 
 The pill needs one additive server change: `pending=1` on `GET /workspace/managers/:id/messages`,
 returning only pending `action` messages, with the schema added to the contract first.
+
+### Confirmation setting
+
+A user setting chooses which approval types need the confirmation step. **All three are on by
+default: merges, automations and jobs.**
+
+| Item | Decision |
+| --- | --- |
+| Place | A new global Manager section in Settings (`routes/settings/registry.tsx`), hidden when `capabilities.managers` is not true |
+| Controls | Three switches: Merges, Automations, Jobs |
+| Storage | `managerConfirm` in `workspaceUiStateSchema`, keyed by action type (`merge-pr`, `enable-automation`, `add-job`), with the contract changed first |
+| Reach | One value per server, for every device on it. Two servers mean two settings. It applies at every width, as a sheet on phones and a dialog on desktop |
+| Fails safe | A missing key, a missing or loading state, or an unknown future action type all confirm |
+| Off | Approve sends the decision directly. The card still appears and still needs that tap |
+
+The setting removes a step in the cockpit and nothing else. The `decision` route, the head sha and
+revision pins, and the rule that only a person approves all stay as they are. It is not an autonomy
+setting, and no value of it lets a manager act alone.
 
 ### Reconnecting and data use
 
@@ -354,16 +433,19 @@ What exists today:
 
 - `run-notifications.tsx` needs an open page and the `Notification` API. That API is probably absent
   in both webviews [M], in which case `notificationSupport()` reports `unsupported` and degrades cleanly.
-- Attention is computed in the browser (`diffManagerAttention`), so **nothing on the server knows
-  when to push**. Any push option needs new server detection.
+- #1880 adds a server-side trigger: `ManagerEngine.alert` fires for a new proposal (`engine.ts:1098`)
+  and an important reply (`:715`, `:789`), and it respects `notify: false` and read state. It only
+  reaches `notifySystem`, the OS notification, which is off in hosted mode. So **a hosted server
+  detects these events but has nowhere to send them**.
+- Needs-you tasks have no such trigger outside the browser (`describeRunNotification`) or webhooks.
 - Outbound webhooks reach Slack and Discord for `task.attention_required` and similar, but they are
   per-project, behind `CEZ_WEBHOOKS=1`, and have no Manager event.
 
 | Option | Reaches closed app | Needs | Ongoing cost |
 | --- | --- | --- | --- |
 | None | No | Nothing | None. Testers can use webhooks for tasks |
-| Web Push to installed PWA | Yes [M, iOS 16.4+ for installed apps] | Service worker, VAPID keys the server generates itself, server detection | None. No relay [M] |
-| Native push | Yes | Relay, APNs key, FCM service account, server detection, native code | See below |
+| Web Push to installed PWA | Yes [M, iOS 16.4+ for installed apps] | Service worker, VAPID keys the server generates itself, a server sink | None. No relay [M] |
+| Native push | Yes | Relay, APNs key, FCM service account, a server sink, native code | See below |
 | Background polling | Unreliable. iOS schedules it at its own discretion [M] | Native code | Battery, missed approvals |
 
 **The relay is unavoidable for native push.** APNs and FCM credentials belong to the app's publisher.
@@ -371,18 +453,19 @@ A self-hosted server cannot hold them without shipping a secret in an npm packag
 
 Relay cost: one small Cloudflare Worker, likely within free or $5/month tiers [M]; an APNs `.p8` key
 and FCM service account in its secrets; rate limiting and token handling; on-call ownership of a
-service, which this project does not have today; and a privacy policy that names it.
+service, which this project does not have today; and a privacy policy that names it. The relay is a
+stateless Cloudflare Worker. Its owner is still to be named, and M11 cannot start until one is.
 
 **Order:**
 
-1. Server detection for new pending approvals and needs-you tasks, emitting to a small sink
-   interface in `packages/cezar/src/push/`.
-2. Web Push sink. It reaches installed PWAs at no cost and proves detection. M1 must first check
+1. A small sink interface in `packages/cezar/src/push/`, fed from `ManagerEngine.alert`, plus a new
+   server-side trigger for needs-you tasks.
+2. Web Push sink. It reaches installed PWAs at no cost and proves the path. M1 must first check
    that a service worker registers behind Basic auth.
 3. Relay sink plus native registration.
 
 **Payload rules:** text is generic ("Cezar needs you") with an opaque server key and nothing else.
-No prompt, title, project, PR number or path reaches Apple, Google or the relay. This matches the
+`alert`'s body can quote a pull request title, so the sink discards it. No prompt, title, project, PR number or path reaches Apple, Google or the relay. This matches the
 telemetry rule. The tap opens that server's `/manager`, where the real content loads over the
 user's own authenticated connection. The badge is the sum of `pendingActions`.
 
@@ -390,14 +473,18 @@ user's own authenticated connection. The badge is the sum of `pendingActions`.
 
 **Consent:** a push leaves the machine, so AGENTS.md § Zero config applies. The server contacts the
 relay only after a device registers through an in-app toggle, and `CEZ_PUSH=0` blocks it regardless.
-This is default-off in effect, but it has no env opt-in, so it needs a recorded decision (Q9).
+That in-app toggle plus `CEZ_PUSH=0` is the accepted control. There is no env opt-in, so M10 records
+it in AGENTS.md § Zero config as an owner-approved exception, in the same commit.
 
 ## Decision 6: distribution
 
 | Item | Decision |
 | --- | --- |
-| Identifiers | `com.openmercato.cezar.mobile` on both stores. Desktop keeps `com.openmercato.cezar`. Treat these as permanent once published |
-| Display name | Cezar, subject to store availability |
+| Accounts | Open Mercato owns the Apple and Google accounts |
+| Identifiers | `com.openmercato.cezar.mobile` on both stores, accepted. Desktop keeps `com.openmercato.cezar`. This cannot change once published |
+| Store name | Cezar if available, otherwise Cezar Cockpit. Unlike the bundle ID, the store name can change later |
+| Channels | The stores only. No direct APK or F-Droid build in v1 |
+| Shell telemetry | None now, planned for later. The cockpit's existing consent still applies inside the webview |
 | Versioning | Independent of the server, like the desktop shell's 0.1.x. Build number comes from the CI run |
 | iOS signing | App Store distribution certificate and an App Store Connect API key in new secrets. The existing `APPLE_*` secrets are Developer ID, for desktop |
 | Android signing | Upload key in secrets, with Play App Signing holding the release key [M] |
@@ -405,7 +492,7 @@ This is default-off in effect, but it has no env opt-in, so it needs a recorded 
 | CI release | `mobile-release.yml` on a `mobile-v*` tag, version matched against the manifest, skipping signing when secrets are absent, modelled on `desktop-release.yml`. Maintainers only |
 | Runners | macOS for iOS, Linux for Android. The repository is public, so hosted runners should be free [M] |
 | iOS testing | TestFlight internal first, which needs no App Review [M]. External testers need a beta review [M] |
-| Android testing | Play internal testing. A new **personal** account must pass a 12-tester, 14-day closed test before production; organisation accounts are exempt [M] |
+| Android testing | Play internal testing. A new **personal** account must pass a 12-tester, 14-day closed test before production; organisation accounts are exempt [M], so an Open Mercato organisation account should avoid it |
 | Fees | Apple $99/year, Google $25 once [M]. The Apple membership that signs desktop should cover iOS |
 
 ### Version compatibility
@@ -432,10 +519,16 @@ minimum server version. An old server still works, without Manager.
 | 2.1 [V] | Include a demo account "and turn on your back-end service!" | A reviewer has no server | Run a demo cockpit, below |
 | 5.1.1 [V] | A privacy policy link in metadata and in the app | None exists for an app | Write one, naming the relay once it exists |
 
-The demo must be a `CEZ_DRY_RUN=1` cockpit on an isolated VM, reset nightly, with a throwaway Basic
-login, because a real cockpit gives shell access to anyone holding the password. Apps with a
-user-entered server URL are an established category (Home Assistant, Nextcloud) [M], but a rejection
-under 4.2 is still plausible. A rejection does not affect TestFlight or the PWA.
+**Demo server.** Host it on a small Ubuntu VPS under Open Mercato, with the existing `ubuntu-vps`
+install. Cloudflare does not fit, because cezar needs a long-running Node process. The Worker relay
+is separate. The provider is still to be confirmed.
+
+The demo must run with `CEZ_DRY_RUN=1`, because a real cockpit gives shell access to anyone holding
+the password. The installer has no flag for this, so a systemd drop-in adds `CEZ_DRY_RUN=1` and
+`CEZ_TERMINAL=0`. The box holds nothing else, resets nightly and uses a throwaway Basic login.
+
+Apps with a user-entered server URL are an established category (Home Assistant, Nextcloud) [M], but
+a rejection under 4.2 is still plausible. A rejection does not affect TestFlight or the PWA.
 
 Play's data safety form and any webview-app policy are [M]. Review them in task M9.
 
@@ -445,20 +538,20 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 
 | # | Task | Ships | Depends on | Size |
 | --- | --- | --- | --- | --- |
-| M1 | **Installable cockpit (#1762).** Manifest with `crossorigin="use-credentials"` so it loads behind Basic auth, icons, no `/api` caching. Check iOS install behind Basic auth and service worker registration | **First thing a user can install** | None | S |
+| M1 | **Installable cockpit (#1762).** Manifest with `start_url: "/"` and `crossorigin="use-credentials"` so it loads behind Basic auth, icons, no `/api` caching. Check iOS install behind Basic auth and service worker registration | **First thing a user can install** | None | S |
 | M2 | **Shell spike.** Throwaway build proving every item below | Go or no-go report | None | M |
-| M3 | **Land Manager.** Push the branch, open the PR, ratify the flag | Manager on `main` | Maintainer | Outside this work |
-| M4 | **Phone chat.** One-row header, stacked composer, keyboard inset, chips, measure streaming | Better chat in every phone browser | M3 | M |
-| M5 | **Phone approvals.** Sheet, 44pt buttons, per-card state, refusal on card, pill, `pending=1` | Safe approvals on phones | M3 | M |
-| M6 | **Manager first.** One-manager chat, pending-first order, PWA `start_url`, bottom bar | PWA opens to Manager | M1, M3 | S to M |
+| M3 | **Land Manager.** PR #1880, including the decision on default-on | Manager on `main` | Maintainer | Outside this work |
+| M4 | **Phone chat.** One-row header, composer leftovers, keyboard inset, chips, measure streaming | Better chat in every phone browser | M3 | M |
+| M5 | **Approvals.** Confirmation sheet and dialog, the Settings section with one switch per type (default all on), 44pt buttons, per-card state, refusal on card, pill, `pending=1` | Safer approvals at every width, on phones first | M3 | M |
+| M6 | **Manager first.** `isPhone`, the bare-`/` redirect with its five conditions, one-manager chat, pending-first order, bottom bar for shell and phone PWA | Every phone browser and phone PWA opens to Manager. Desktop unchanged | M3, M1 for the bar | S to M |
 | M7 | **Shell v0.1.** `packages/mobile`, connect screen, keychain, challenge handling, health routing, server list, external links | Debug builds | M2 | L |
-| M8 | **Mobile CI.** `mobile-check.yml`, `mobile-release.yml`, signing | Automated test builds | M7, Q3 | M |
+| M8 | **Mobile CI.** `mobile-check.yml`, `mobile-release.yml`, signing | Automated test builds | M7, Open Mercato accounts | M |
 | M9 | **Test tracks.** TestFlight internal and Play internal, privacy policy draft, store metadata | **First native install for testers** | M8, M4 to M6 | S |
-| M10 | **Server push detection and Web Push.** `push/` sink, device registry in `~/.cezar/`, routes, in-app toggle | PWA notifications | M3, M1, Q9 | M |
-| M11 | **Relay and native push.** Worker, keys, native registration | Native notifications | M10, M9, Q6 | L |
-| M12 | **Public release.** Demo server, submission, review responses | Public listings | M11, Q7, Q10 | M, plus review time |
+| M10 | **Server push detection and Web Push.** `push/` sink, device registry in `~/.cezar/`, routes, in-app toggle | PWA notifications | M3, M1 | M |
+| M11 | **Relay and native push.** Worker, keys, native registration | Native notifications | M10, M9, relay owner named | L |
+| M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | M11, VPS provider confirmed | M, plus review time |
 
-M1 and M2 can start now. M4, M5 and M7 can run in parallel with disjoint files. M4 and M5 both touch
+Native push is required before M12 on both stores. M1 and M2 can start now. M4, M5 and M7 can run in parallel with disjoint files. M4 and M5 both touch
 the Manager routes but different components.
 
 **M2 must answer, on real iOS and Android devices:**
@@ -476,19 +569,24 @@ the Manager routes but different components.
 
 | Risk | Likelihood | Effect | Response |
 | --- | --- | --- | --- |
-| Manager branch changes shape before landing | Medium | Dependency table goes stale | Re-check the table at M3 |
+| #1880 changes shape before landing | Medium | Dependency table goes stale | Re-check the table at M3. It already moved once, closing the composer gap |
+| Phone rule catches the wrong device or traps a user | Low | Wrong landing, or no way to tasks | Tests for each device case and for the Code link |
 | [M] Capacitor claims turn out wrong | Medium | Shell plan changes | M2 runs first; fallback is plain native |
 | Page script reaches the keychain | Low | Credential theft by agent output | No bridge on server pages, plus a test |
 | Apple rejects under 4.2 | Medium | No public iOS listing | Push first; TestFlight and PWA unaffected |
-| Relay becomes an unowned service | Medium | Push outage | Stateless design; Q6 names an owner |
-| Mis-tapped merge | Low | Unwanted merge | Sheet, plus server pins |
-| Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain; Q12 adds a biometric lock |
+| Relay becomes an unowned service | Medium | Push outage | Stateless design; name an owner before M11 |
+| Mis-tapped merge | Low | Unwanted merge | Confirmation on by default, plus server pins |
+| Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain. A biometric lock is deferred |
 
 ## Backward compatibility
 
 - Additive only: `pending=1`, push routes, manifest route, User-Agent handling. New routes go through
   the contract, the chained family and the BACKWARD_COMPATIBILITY.md §2 inventory.
-- `/` is unchanged for browsers. Desktop keeps the one-row composer.
+- On a phone, a fresh load of the bare `/` now opens `/manager` when the server has Manager mode, and
+  the implementing PR records that in BACKWARD_COMPATIBILITY.md. Desktop browsers, tablets, in-app
+  links to `/`, `/` with a query or hash, and deep links are unchanged. Desktop keeps the one-row
+  composer.
+- `managerConfirm` is an optional ui-state key. An older cockpit ignores it and keeps it.
 - New env var `CEZ_PUSH` goes into `.env.example` and `docs/reference.md` in the commit that adds it.
 - Any `~/.cezar/` device registry is rebuildable: deleting it only means re-enabling push on devices.
 - A user-visible change updates its page under `docs/site` and `docs/server-install`.
@@ -498,6 +596,11 @@ the Manager routes but different components.
 - Unit: start-URL routing, health-answer mapping, card and sheet behaviour, the empty-input case for
   `pending=1` (spec rule: a pass-through needs a test on empty input), and sink payloads carrying no
   user text.
+- Phone rule, each pinned: phone, landscape phone, narrow desktop window, tablet, no `matchMedia`,
+  managers false, absent, health failed, unfinished first run, `/?x`, and the Code link not bouncing
+  back. Prove the Code-link test fails without the one-shot flag.
+- Confirmation setting: absent and unknown types confirm, a switched-off type sends directly, and the
+  `decision` request is identical either way.
 - E2E: the existing dry-run Manager walk at a phone viewport, extended for the sheet and bottom bar.
 - Native: Basic challenge against a local nginx, wrong password, foreign-host challenge cancelled,
   plugin refused from a server origin, forget-server clearing everything.
@@ -506,26 +609,97 @@ the Manager routes but different components.
 
 ## Open questions for the maintainer
 
-| # | Decision | Recommended answer |
+These three stay open, and the maintainer asked for more detail on them. The decisions already taken
+follow in the [Decisions](#decisions) table.
+
+### Q2: Accept Capacitor?
+
+**Recommended: yes, conditional on M2.** This means M2 is built with Capacitor, and the shell work in
+M7 starts only if it passes.
+
+The question comes down to one fact: which framework lets native code answer a Basic auth challenge
+inside the webview. Tauri cannot in wry 0.55.1 [V]. That Capacitor can is [M], from memory only.
+
+| Option | For | Against | What it changes |
+| --- | --- | --- | --- |
+| Capacitor | Native code is reachable. Official push plugin [M]. No Rust mobile toolchain | Every claim is [M]. Its bridge may reach server pages. Its server URL is build-time [M] | New JS and native dependency in `packages/mobile` |
+| Plain Swift and Kotlin | Full control, no bridge at all, no framework upgrades | Two small codebases with no sharing, and the connect screen is written twice | No bundled page. Push written by hand |
+| Tauri with a patched wry | Matches the desktop toolchain | A fork to carry across upgrades, plus an NDK build. Sharing is config only | A Rust mobile build in CI |
+
+M2's questions 1 to 4 and 6 settle it. If question 3 fails, the choice moves to plain native, not to
+Tauri. If question 6 finds a hook in current wry, Tauri needs a second look, though Capacitor would
+still lead on push.
+
+Accepting now costs nothing if M2 fails, since M2 is throwaway. The bundle ID and accounts do not
+depend on this choice.
+
+### Q5: Allow plain HTTP for LAN or Tailscale addresses?
+
+**Recommended: no in v1.** Refusing now can be relaxed later, but allowing it and withdrawing it later
+would break people.
+
+This affects anyone reaching cezar at `http://` on a home network or a raw Tailscale address. Basic
+auth sends the password with every request, so on plain HTTP anyone on that network can read it, and
+that password gives shell access to the server.
+
+| Option | For | Against | What it changes |
+| --- | --- | --- | --- |
+| Refuse | Simple and safe. Nothing to justify to Apple | LAN users need a certificate or a tunnel | Nothing. `tailscale serve` gives Tailscale users HTTPS [M] |
+| Allow Tailscale addresses only | WireGuard already encrypts that path, so the password is protected | The shell can only check the address range, and a wrong range check exposes the password. Global cleartext settings still apply | Range check, warning screen, platform exceptions |
+| Allow any private address | Covers every home setup | The password crosses the local network in the clear | As above, and a warning the user can dismiss |
+
+Both allow options need cleartext exceptions. On iOS an arbitrary user-entered address likely needs
+a broad App Transport Security exception that App Review asks to justify. On Android it likely means
+allowing cleartext globally, because the address is not known at build time [M]. So both also add to
+review risk.
+
+### Q11: What becomes of PR #1821's do-not-merge?
+
+**Recommended: keep `do-not-merge`, and fix the client gap before merging.** This replaces the earlier
+answer of waiting for M2, because the review finding below hits phones in particular. It still does
+not block the Manager screens.
+
+State: the PR is open and mergeable, last updated 2026-10-30, and its final review on that date says
+changes are needed. `useRunEvents` (`packages/web/src/api/run-events.ts`) reconnects with `afterSeq`
+and no cursor, which takes the new tail path. If more than 1.5 MB was missed, the server sends
+`history-truncated`, no web code listens for it, and **the transcript silently has a hole**.
+
+That is the normal phone case. iOS suspends the webview in the background, a long task keeps writing,
+and the app reconnects after more than 1.5 MB was missed. A silent gap in a transcript the user is
+reading to make a decision is worse than a slow load.
+
+| Option | For | Against | What it changes |
+| --- | --- | --- | --- |
+| Fix the client: handle `history-truncated` by paging the gap | Bounded replay and a complete transcript | The most work, and it needs its own test | Client change in #1821 |
+| Read in full when `afterSeq > 0` | Small, as the review suggests | Reconnect cost stays high on a long gap, the phone case | Server change in #1821 |
+| Park #1821 until M2 measures | No work now | #882 stays open. If M2 stalls, M9 waits on this | Nothing yet |
+
+If M2 shows long threads stalling on a phone, #1821 blocks the M9 test builds. If they do not, it stays
+an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not need to wait for it.
+
+## Decisions
+
+| # | Decision | Answer |
 | --- | --- | --- |
-| Q1 | When does Manager land, and is its default-on flag ratified? | Push and open the PR now. M4 to M6 and M10 wait on it |
-| Q2 | Accept Capacitor? | Yes, conditional on M2 |
-| Q3 | Which legal entity owns the Apple and Google accounts, and who pays? | The Open Mercato organisation, using the Apple team that signs desktop, and a Google organisation account to avoid the closed-test rule |
-| Q4 | Accept `com.openmercato.cezar.mobile`? | Yes. It is permanent, so decide before M7 |
-| Q5 | Allow plain HTTP for LAN or Tailscale addresses? | No in v1 |
-| Q6 | Will the project run a push relay, and who owns it? | Yes, a stateless Cloudflare Worker, with a named owner before M11 |
-| Q7 | Is push required before a public listing? | Yes, on both stores for one consistent product |
-| Q8 | Should a phone browser tab also start at `/manager`? | No. Revisit with usage data |
-| Q9 | Does an in-app toggle plus `CEZ_PUSH=0` satisfy the network opt-in rule, or must push need `CEZ_PUSH=1`? | In-app toggle, recorded in AGENTS.md as an owner-approved exception, as telemetry consent works |
-| Q10 | Will the project host a dry-run demo server for reviewers? | Yes, an isolated VM reset nightly |
-| Q11 | What becomes of PR #1821's `do-not-merge`? | Decide after M2's measurement. It is not a Manager blocker |
-| Q12 | Add an optional Face ID or fingerprint lock? | Yes, as a setting after M9, off by default |
-| Q13 | Confirm every approval, or merges only? | All three types: each is irreversible or runs unattended |
-| Q14 | Send shell telemetry? | None in the shell for v1. The cockpit's existing consent still applies inside it |
-| Q15 | Offer a direct Android APK or F-Droid build? | Not in v1 |
-| Q16 | Is "Cezar" the public store name? | Yes if available, otherwise "Cezar Cockpit" |
-| Q17 | May public listings wait on M12, leaving PWA and TestFlight as the only channels until then? | Yes |
+| Q1 | How does Manager land? | Through its own PR, #1880, and the mobile work stacks on it. Default-on is still open |
+| Q3 | Who owns the store accounts? | Open Mercato |
+| Q4 | Bundle ID | `com.openmercato.cezar.mobile` accepted |
+| Q6 | Does the project run a push relay? | Yes, as a Cloudflare Worker. Owner still to be named |
+| Q7 | Is push required before a public listing? | Yes |
+| Q8 | Should a phone browser tab also start at `/manager`? | Yes, changed from the original recommendation. See [In a phone browser](#in-a-phone-browser) |
+| Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0` |
+| Q10 | Is there a demo server for reviewers? | Yes, on a small Ubuntu VPS under Open Mercato with the `ubuntu-vps` install, not Cloudflare. Provider still to be confirmed |
+| Q12 | Optional biometric lock | Deferred, out of the current plan |
+| Q13 | Which approvals need confirmation? | Changed: a user setting per type, default on for merges, automations and jobs. See [Confirmation setting](#confirmation-setting) |
+| Q14 | Shell telemetry | None now, planned for later |
+| Q15 | Direct APK or F-Droid build | Not in v1 |
+| Q16 | Public store name | Cezar if available, otherwise Cezar Cockpit. It can change later, unlike the bundle ID |
+| Q17 | May public listings wait on M12? | Yes |
+
+Three of these leave a follow-up open: Manager's default-on decision (Q1), the relay owner (Q6) and
+the VPS provider (Q10).
 
 ## Changelog
 
 - 2026-10-31: Initial design.
+- 2026-11-01: Stacked on #1880 and re-checked against it. Recorded maintainer decisions. A phone browser now starts at `/manager`, and confirmation became a per-type setting. Expanded Q2, Q5 and Q11.
