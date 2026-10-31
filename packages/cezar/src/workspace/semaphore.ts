@@ -1,5 +1,12 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
+import type { HostUsage } from '@open-mercato/cezar-contract';
+import { currentHostUsage, HOST_SAMPLE_INTERVAL_MS, HOST_SAMPLE_STALE_MS, onHostUsage } from '../core/host-usage.ts';
+import { allUsage, onUsage, type ProcessUsage } from '../core/process-usage.ts';
+import { agentMemoryBlock, hostReserveBlock, type HostReserve } from './host-headroom.ts';
+import { createAdmissionGovernor, type AdmissionGovernor } from '../core/admission-governor.ts';
+import { setAdmissionStatusProvider, type AdmissionStatus } from '../core/admission-status.ts';
+import { createCgroupPressureSource } from '../core/cgroup-pressure.ts';
 import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
@@ -48,6 +55,20 @@ export interface WorkspaceResourceLimits {
   autoResumeOnUsageLimit?: boolean;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
   memoryLimitMb: number | null;
+  /** OS priority for agent process trees (spec 2026-10-21-host-resource-limits). Absent = normal. */
+  agentCpuPriority?: AgentCpuPriority;
+  /** Host headroom to keep free before starting a NEW run. Absent = off. */
+  hostReserve?: HostReserve;
+  /** Ceiling on the summed RSS of all agent trees before a NEW run starts. Absent/null = off. */
+  totalAgentMemoryMb?: number | null;
+  /**
+   * ADMISSION ceiling on dispatch children (spec 2026-09-20-dispatch-admission-scheduler): at
+   * most this many are STARTED from the queue at a time, workspace-wide; a parked child returning
+   * to work is never re-gated (#347), so the running count may exceed it. `null`/`0` = no cap.
+   * Optional so an older `load` stub keeps working — an absent key reads as "no cap", i.e. today's
+   * behavior.
+   */
+  dispatchMaxConcurrent?: number | null;
   /**
    * Per-project concurrency ceilings, keyed by realpath-normalized project
    * root (the registry stores normalized `root`). A root absent from the map
@@ -57,6 +78,8 @@ export interface WorkspaceResourceLimits {
    */
   projectLimits?: ReadonlyMap<string, number>;
 }
+
+export type AgentCpuPriority = 'normal' | 'low' | 'idle';
 
 /** Realpath-normalize a root the same way the registry does
  *  (`workspace/projects.ts` `normalizeRoot`), but synchronously — this answers
@@ -92,6 +115,15 @@ export interface SemaphoreParticipant {
   /** Slots this manager currently holds. The #347 exemption lives in the
    *  participant's own accounting: `waiting` runs are already subtracted. */
   busySlots(): number;
+  /**
+   * Dispatch children THIS manager holds that are actually consuming a compute slot
+   * (`starting`, or `active` and not `waiting`) — the per-run predicate in `pump()`
+   * consults the workspace-wide sum so a fan-out in one project cannot take the
+   * dispatch budget of another (spec 2026-09-20-dispatch-admission-scheduler).
+   * Optional so a stub participant — and any caller that predates the key — keeps
+   * working; absent simply holds no dispatch slot.
+   */
+  dispatchBusy?(): number;
   /** Kick the manager's queue — capacity may have appeared. Awaited by
    *  `release()` so the manager taking a freed slot has registered it before
    *  the next participant evaluates capacity. */
@@ -122,6 +154,7 @@ const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
   autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
+  dispatchMaxConcurrent: null,
 };
 
 /** Production loader: the `resources` slice of `~/.cezar/config.json`
@@ -143,6 +176,10 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
+    agentCpuPriority: resources.agentCpuPriority,
+    hostReserve: resources.hostReserve,
+    totalAgentMemoryMb: resources.totalAgentMemoryMb,
+    dispatchMaxConcurrent: resources.dispatchMaxConcurrent,
     projectLimits,
   };
 }
@@ -155,21 +192,168 @@ export interface WorkspaceSemaphoreOptions {
    *  schema's own defaults (`maxParallel: 2`, no memory limit), so a manager
    *  constructed without boot wiring behaves like a fresh workspace. */
   initial?: Partial<WorkspaceResourceLimits>;
+  /** Telemetry seams for the host-headroom gate; tests inject fakes, production reads the
+   *  process-wide samplers. */
+  host?: {
+    current(): HostUsage | undefined;
+    subscribe(listener: () => void): () => void;
+    agentUsage(): Record<string, Pick<ProcessUsage, 'rssBytes'>>;
+    subscribeAgents(listener: () => void): () => void;
+    now(): number;
+  };
+  /**
+   * The adaptive admission governor (spec 2026-09-20-adaptive-admission-governor): the REDUCTION
+   * layer under the configured dispatch ceiling. Injected so tests drive the levels without a
+   * cgroup; production reads the process's own cgroup through the default below.
+   */
+  governor?: AdmissionGovernor;
+  /**
+   * Whether this instance registers as the telemetry readout's admission provider. Defaults to
+   * true for the shared workspace semaphore; a per-manager FALLBACK (`RunManager` constructed
+   * without an injected semaphore) passes false. The registration slot is last-writer-wins, so a
+   * fallback with no ceiling configured would otherwise blank the readout of the real semaphore
+   * that is actively reducing the ceiling (review minor M4).
+   */
+  registersAdmissionStatus?: boolean;
 }
+
+const defaultHost: NonNullable<WorkspaceSemaphoreOptions['host']> = {
+  current: currentHostUsage,
+  subscribe: (listener) => onHostUsage(() => listener()),
+  agentUsage: allUsage,
+  subscribeAgents: (listener) => onUsage(() => listener()),
+  now: () => Date.now(),
+};
 
 export class WorkspaceSemaphore {
   private readonly participants = new Set<SemaphoreParticipant>();
   private readonly load: () => Promise<WorkspaceResourceLimits>;
+  private readonly governor: AdmissionGovernor;
   private limits: WorkspaceResourceLimits;
   /** A `release()` sweep is in flight — see `pendingRelease`. */
   private broadcasting = false;
   /** A slot freed DURING a sweep. The in-flight sweep may already have pumped
    *  the manager that should get it, so re-run rather than drop the wakeup. */
   private pendingRelease = false;
+  private readonly host: NonNullable<WorkspaceSemaphoreOptions['host']>;
+  private offHost: (() => void) | null = null;
+  private offAgents: (() => void) | null = null;
+  /** Telemetry ticks seen, and the tick of the last gated start: one gated start per tick, so a
+   *  burst of queued runs cannot all pass the same stale reading (spec 2026-10-21). */
+  private ticks = 0;
+  private startTick = -1;
+  private lastTickAt = Number.NEGATIVE_INFINITY;
+  private lastStartAt = Number.NEGATIVE_INFINITY;
+  /** The gate turned a start away; the next tick re-pumps. */
+  private hostDeferred = false;
 
   constructor(options: WorkspaceSemaphoreOptions = {}) {
     this.load = options.load ?? loadResourceLimits;
+    this.host = options.host ?? defaultHost;
     this.limits = { ...DEFAULT_LIMITS, ...options.initial };
+    this.governor = options.governor ?? createAdmissionGovernor({ sample: createCgroupPressureSource() });
+    if (options.registersAdmissionStatus !== false) {
+      // The telemetry side reads the governor's snapshot from HERE (spec A7): the semaphore owns
+      // the governor and registers the one provider, the sampler only reports. The arrow never
+      // points back - a display-side value must not be able to decide admission.
+      setAdmissionStatusProvider(() => this.admissionStatus());
+    }
+    this.syncHostGate();
+  }
+
+  agentCpuPriority(): AgentCpuPriority {
+    return this.limits.agentCpuPriority ?? 'normal';
+  }
+
+  private reserve(): HostReserve | null {
+    const r = this.limits.hostReserve;
+    return r && ((r.memoryMb ?? 0) > 0 || (r.cpuPct ?? 0) > 0) ? r : null;
+  }
+
+  private totalAgentMemoryMb(): number | null {
+    const mb = this.limits.totalAgentMemoryMb;
+    return mb && mb > 0 ? mb : null;
+  }
+
+  /** Sample the host only while a guard is configured (zero cost by default). */
+  private syncHostGate(): void {
+    const onTick = () => {
+      // Host and agent samplers both fire every ~2 s: count ONE tick per sample period so the
+      // one-start-per-tick brake does not run at double rate with both guards on.
+      const at = this.host.now();
+      if (at - this.lastTickAt >= HOST_SAMPLE_INTERVAL_MS / 2) {
+        this.ticks += 1;
+        this.lastTickAt = at;
+      }
+      if (!this.hostDeferred) return;
+      this.hostDeferred = false;
+      void this.release(); // pressure may have cleared
+    };
+    if (this.reserve() && !this.offHost) this.offHost = this.host.subscribe(onTick);
+    else if (!this.reserve() && this.offHost) {
+      this.offHost();
+      this.offHost = null;
+    }
+    if (this.totalAgentMemoryMb() !== null && !this.offAgents) this.offAgents = this.host.subscribeAgents(onTick);
+    else if (this.totalAgentMemoryMb() === null && this.offAgents) {
+      this.offAgents();
+      this.offAgents = null;
+    }
+    if (!this.reserve() && this.totalAgentMemoryMb() === null) {
+      this.hostDeferred = false;
+      this.ticks = 0;
+      this.startTick = -1;
+      this.lastTickAt = Number.NEGATIVE_INFINITY;
+    }
+  }
+
+  /** Stop sampling and forget gate state — teardown and tests. */
+  dispose(): void {
+    this.offHost?.();
+    this.offAgents?.();
+    this.offHost = null;
+    this.offAgents = null;
+    this.hostDeferred = false;
+    this.ticks = 0;
+    this.startTick = -1;
+    this.lastTickAt = Number.NEGATIVE_INFINITY;
+  }
+
+  /** Why a NEW run must wait for the host, or null (spec 2026-10-21-host-resource-limits).
+   *  Fails open on a missing/stale sample; an idle workspace always admits one run, so a queue
+   *  can never dead-end behind a machine that is busy with something else. */
+  hostBlock(): string | null {
+    const reserve = this.reserve();
+    const totalMb = this.totalAgentMemoryMb();
+    if (!reserve && totalMb === null) return null;
+    if (this.busy() === 0) return null;
+    // One start per sample period — including before the first sample exists, so a startup burst
+    // cannot all pass the fail-open. A sampler silent for a stale window lifts the brake (fail open).
+    if (this.ticks === this.startTick && this.host.now() - this.lastStartAt <= HOST_SAMPLE_STALE_MS) {
+      return 'waiting for a fresh reading after the last start';
+    }
+    let usage = this.host.current();
+    if (usage && this.host.now() - Date.parse(usage.sampledAt) > HOST_SAMPLE_STALE_MS) usage = undefined;
+    return (
+      (reserve ? hostReserveBlock(reserve, usage) : null) ?? agentMemoryBlock(totalMb, this.host.agentUsage())
+    );
+  }
+
+  /** Pure capacity predicate for `pump()`. */
+  hostAdmits(): boolean {
+    return this.hostBlock() === null;
+  }
+
+  /** `pump()` stopped with runs still queued: if the host is why, the next tick re-pumps. */
+  noteHostDeferral(): void {
+    if (this.hostBlock() !== null) this.hostDeferred = true;
+  }
+
+  /** `pump()` just dequeued a run through the gate. */
+  noteGatedStart(): void {
+    if (!this.reserve() && this.totalAgentMemoryMb() === null) return;
+    this.startTick = this.ticks;
+    this.lastStartAt = this.host.now();
   }
 
   /** Join the shared counter. Returns the unregister handle — the manager's
@@ -197,6 +381,19 @@ export class WorkspaceSemaphore {
     return total;
   }
 
+  /**
+   * Dispatch children holding a compute slot across EVERY registered manager — the number the
+   * per-run admission predicate compares against `dispatchMaxConcurrent()`. Summed here for the
+   * same reason `busy()` is: the cap protects the host, so a fan-out in one project must not be
+   * able to spend another project's dispatch budget. Participants that predate the key (or test
+   * stubs) simply contribute nothing.
+   */
+  dispatchBusy(): number {
+    let total = 0;
+    for (const participant of this.participants) total += participant.dispatchBusy?.() ?? 0;
+    return total;
+  }
+
   /** Runs a restart would interrupt, across every registered project — not just the boot one. */
   activeRuns(): number {
     let total = 0;
@@ -216,6 +413,60 @@ export class WorkspaceSemaphore {
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;
+  }
+
+  /**
+   * Cached ADMISSION ceiling on dispatch children, or null for "no cap" — what the queue gate
+   * compares `dispatchBusy()` against; a resume never consults it (#347). Answered from the
+   * in-memory snapshot like `maxParallel()`, refreshed by `refresh()` (boot and every
+   * `PUT /workspace/config`), never re-read per pump. Like `maxMonitoringSessions()` and
+   * `autoResumeOnUsageLimit()`, this accessor reads an OPTIONAL field and collapses absent to a
+   * usable default — `null` here, where absent and `null` mean the same thing ("no cap"), unlike
+   * #810's `monitoringWakeIntervalMinutes` where collapsing them was the bug.
+   */
+  dispatchMaxConcurrent(): number | null {
+    return this.limits.dispatchMaxConcurrent ?? null;
+  }
+
+  /**
+   * The ceiling the dispatch admission gate enforces RIGHT NOW: the configured ceiling reduced by
+   * the governor's current level (`ceil(configured * 1)`, `* 1/2`, `* 1/4`, floor 1), or `null`
+   * when there is nothing to reduce.
+   *
+   * `null` covers both spellings of "no ceiling" the rest of the workspace already honors: an
+   * absent/null key AND the explicit `0` the operator can write (see `dispatchMaxConcurrent()`,
+   * whose tests pin `0` as a real value). Handing `0` to the governor would answer `1` - a ceiling
+   * the operator never set - so the "no cap" case never reaches it.
+   *
+   * `dispatchMaxConcurrent()` itself keeps answering the CONFIGURED value: the settings API and its
+   * tests read the user's number back, while the admission gate reads this one. Splitting the two
+   * is what lets the readout say "2 of 4" honestly (spec 2026-09-20-adaptive-admission-governor).
+   */
+  dispatchAdmissionCeiling(): number | null {
+    const configured = this.dispatchMaxConcurrent();
+    if (configured === null || configured <= 0) return null;
+    return this.governor.effectiveCeiling(configured);
+  }
+
+  /**
+   * The governor's state for the telemetry readout (spec A7/A8), or `undefined` when no ceiling is
+   * configured - there is nothing to reduce, so the payload carries no `admission` key at all.
+   * `since` is the ISO-8601 instant the current non-normal level began, and is absent while the
+   * machine is `normal`.
+   */
+  admissionStatus(): AdmissionStatus | undefined {
+    const configured = this.dispatchMaxConcurrent();
+    if (configured === null || configured <= 0) return undefined;
+    // `level()` first: it advances the lazily-evaluated governor, so `since()` and
+    // `effectiveCeiling()` describe the same level the status reports.
+    const state = this.governor.level();
+    const since = this.governor.since();
+    return {
+      state,
+      configured,
+      effective: this.governor.effectiveCeiling(configured),
+      ...(since === undefined ? {} : { since: new Date(since).toISOString() }),
+    };
   }
 
   maxMonitoringSessions(): number {
@@ -339,6 +590,7 @@ export class WorkspaceSemaphore {
   async refresh(): Promise<void> {
     try {
       this.limits = await this.load();
+      this.syncHostGate();
     } catch {
       // keep the last good snapshot
     }

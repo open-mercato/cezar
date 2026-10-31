@@ -27,7 +27,7 @@ import {
   supportsPrivateMcp,
   type PrivateMcpServer,
 } from '../core/private-mcp.ts';
-import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { applyCpuPriority, onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { describeReaped, reapTaskProcesses, taskProcessReapEnabled } from '../core/task-processes.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { diskFullAgentErrorText } from '../disk-space.ts';
@@ -1459,9 +1459,13 @@ export class RunManager {
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.projectId = options.projectId;
     this.secrets = options.secrets ?? new SecretStore();
-    this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
+    // A fallback for headless/tests only; boot always injects the shared workspace semaphore. It
+    // must not register as the telemetry readout's provider: the slot is last-writer-wins, and a
+    // per-manager fallback with no ceiling would blank the real semaphore's `admission` key.
+    this.semaphore = options.semaphore ?? new WorkspaceSemaphore({ registersAdmissionStatus: false });
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
+      dispatchBusy: () => this.dispatchBusy(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
@@ -1989,6 +1993,30 @@ export class RunManager {
   }
 
   /**
+   * Dispatch children THIS manager holds that actually occupy a compute slot — the local
+   * contribution to `WorkspaceSemaphore.dispatchBusy()` (spec
+   * 2026-09-20-dispatch-admission-scheduler). The per-run rule is the `busySlots()` rule applied
+   * to one run: a `starting` run holds a slot, and so does an `active` run that is not `waiting`
+   * (#347 — a parked child consumes no agent turn). The monitoring/watcher exemptions above are
+   * deliberately NOT mirrored here: they widen the HOST's parallel budget for parents parked on
+   * their own children, while this counter answers a different question — how many children are
+   * running right now.
+   */
+  private dispatchBusy(): number {
+    // `starting` and `active` overlap only inside the synchronous hand-off in `execute`
+    // (`active.set` immediately followed by `starting.delete`), so collapse both into one set
+    // rather than risking a double count of a child that is mid-hand-off.
+    const slotHolders = new Set<string>([...this.starting, ...this.active.keys()]);
+    let count = 0;
+    for (const runId of slotHolders) {
+      if (this.waiting.has(runId)) continue;
+      if (this.store.getRun(runId)?.dispatch?.parentRunId === undefined) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
@@ -2072,6 +2100,12 @@ export class RunManager {
         this.pumpAgain = false;
         const repo = await getRepoInfo(this.repoRoot);
         const maxParallel = this.semaphore.maxParallel();
+        // Cached dispatch-admission ceiling (null/0 = no cap) — read once per sweep, like the
+        // workspace cap above; `startable()` is the only consumer. The GOVERNED ceiling: the
+        // configured one reduced by the adaptive admission governor while the machine is under
+        // pressure (spec 2026-09-20-adaptive-admission-governor). `dispatchMaxConcurrent()` still
+        // answers the configured value for the settings API.
+        const dispatchCap = this.semaphore.dispatchAdmissionCeiling();
         // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
         // project never runs more than its own configured `maxParallel`; absent
         // an override it equals the workspace cap, so behavior is unchanged.
@@ -2082,7 +2116,10 @@ export class RunManager {
         const capacity = () =>
           this.semaphore.busy() < maxParallel &&
           this.busySlots() < projectMax &&
-          (repo !== null || this.busySlots() < 1);
+          (repo !== null || this.busySlots() < 1) &&
+          // Host headroom (spec 2026-10-21-host-resource-limits): last, so a refusal means the
+          // run was otherwise startable and the next telemetry tick re-pumps it.
+          this.semaphore.hostAdmits();
         // The usage-limit hold (spec 2026-08-03-auto-resume-after-usage-limit).
         //
         // A limit closes an ACCOUNT, not a run — so starting the next queued task walks it into
@@ -2111,6 +2148,23 @@ export class RunManager {
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude', this.askingAccounts())) return false;
           // "Start now" goes over `maxParallel` on purpose, but a non-git root still runs one at a time.
           if (this.startNowRequested.has(id)) return repo !== null || this.busySlots() < 1;
+          // Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): a dispatch
+          // child waits in the queue while the workspace already RUNS `dispatchMaxConcurrent`
+          // children. Deliberately per-candidate rather than inside `capacity()` — ordinary runs
+          // must keep starting while a fan-out is capped, which is the whole point of a
+          // dispatch-specific ceiling. `dispatchBusy()` reads the live slot sets, so a child this
+          // sweep already moved into `starting` is counted on the next candidate, and the sweep
+          // can therefore never overshoot the cap. `findIndex(startable)` leaves the blocked child
+          // in place and considers the next queued run, exactly like the usage-limit hold above.
+          if (
+            queued &&
+            dispatchCap !== null &&
+            dispatchCap > 0 &&
+            queued.dispatch?.parentRunId !== undefined &&
+            this.semaphore.dispatchBusy() >= dispatchCap
+          ) {
+            return false;
+          }
           return capacity();
         };
         // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
@@ -2122,9 +2176,13 @@ export class RunManager {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
           const next = this.queue.findIndex(startable);
-          if (next === -1) break; // nothing queued can start right now
+          if (next === -1) {
+            this.semaphore.noteHostDeferral();
+            break; // nothing queued can start right now
+          }
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          this.semaphore.noteGatedStart();
           // Retired here: a run `requeueWhileHeld` sends back waits its turn again, Start now dropped.
           this.startNowRequested.delete(runId);
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
@@ -5320,7 +5378,7 @@ export class RunManager {
       state.sessionEverOpened = true;
       this.flushDeferred(runId);
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     let session = launch(spawnSessionId, sessionId !== undefined, portableContext);
@@ -7502,7 +7560,7 @@ export class RunManager {
       this.flushDeferred(runId);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
-      if (started.pid !== undefined) registerRunProcess(runId, started.pid);
+      if (started.pid !== undefined) registerRunProcess(runId, started.pid, this.semaphore.agentCpuPriority());
       return started;
     };
     try {
@@ -9006,6 +9064,7 @@ export class RunManager {
     return new Promise((resolve) => {
       // Check steps run in the same cwd as the agent steps — the worktree.
       const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env });
+      if (child.pid !== undefined) applyCpuPriority(child.pid, this.semaphore.agentCpuPriority());
       state.interrupt = () => child.kill('SIGTERM');
 
       let output = '';

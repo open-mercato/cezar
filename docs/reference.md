@@ -46,7 +46,18 @@ Five moves that make the cockpit worth the browser tab:
   holds the rest in a FIFO queue with visible positions (`#1`, `#2`, …). Cancel a
   queued task before it starts; the queue even survives a cockpit restart —
   everything still `queued` is re-enqueued in order. It's the orchestration layer
-  that turns "one agent at a time" into a backlog that drains itself.
+  that turns "one agent at a time" into a backlog that drains itself. Tasks that
+  dispatch other tasks can be bounded separately: **Settings → Resources → Max
+  dispatched tasks started at once** (`dispatchMaxConcurrent`, default *no limit*) admits a
+  dispatched child **from the queue** only while fewer than N dispatch children
+  hold a slot workspace-wide. It is an admission ceiling rather than a running
+  one: a parked child woken back into its own session (a delivered child report,
+  the monitoring wake) is never re-gated — the same #347 exemption `maxParallel`
+  carries — so the running count may transiently exceed N. An auto-resume after a
+  usage limit is the exception: it goes through the ordinary queued-continuation
+  path, so it obeys the cap like any other queued work. Ordinary tasks keep their
+  normal share of `maxParallel` and a capped child simply waits in the queue, and lowering
+  the value never stops a child that is already running.
 - 🧠 **Memory-aware runs.** Each run's whole process tree is sampled (~2 s) for CPU
   and RSS, and its **peak memory** is recorded and shown in the task table. Set an
   optional per-task **memory ceiling** (`memoryLimitMb`) and a run that crosses it
@@ -824,6 +835,18 @@ root — live once in `~/.cezar/config.json`, alongside the
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
 first time cezar boots there, and ignored afterwards.
 
+**Keep this computer responsive** (Settings → Resources; all off by default).
+`resources.agentCpuPriority` (`normal`/`low`/`idle`) lowers the OS priority of
+every agent process tree, so your own apps win a contended CPU.
+`resources.hostReserve` (`{memoryMb, cpuPct}`) holds NEW tasks in the queue while
+the machine has less than `memoryMb` free (the container limit when cezar runs in
+one) or is above `cpuPct` busy; `resources.totalAgentMemoryMb` does the same
+while all agent trees together hold that much RAM. Running tasks are never
+interrupted, one task always runs when nothing else does (the queue cannot
+stall), unreadable telemetry never blocks, and at most one task starts per 2 s
+sample so a burst cannot all pass one stale reading. Queued tasks start when the
+pressure eases. Design: `.ai/specs/2026-10-21-host-resource-limits.md`.
+
 **Settings → Resources** opens on a live **Machine** card, and the sidebar carries
 the same numbers as a one-row **glance** (CPU, its 60 s sparkline, compact RAM)
 that links here. Samples arrive every ~2 s: a local cockpit gets them pushed over
@@ -841,7 +864,11 @@ value. The 60 s sparkline is **local-only**: a remote cockpit's route answers ar
 sparse, so it shows the instantaneous bar and no chart rather than plotting
 minutes as if they were seconds. A remount always re-reads the route (the host
 query overrides the workspace's five-minute `staleTime`), so a cached sample can
-never be stamped as fresh.
+never be stamped as fresh. While a dispatch ceiling is configured (**Max dispatched tasks started at
+once**), that same payload also reports the dispatch admission state and the
+ceiling the gate was enforcing when the sample was taken (a cached route read
+can be up to the sampler's freshness window behind), which the card prints as
+`Dispatch admission: elevated · 2 of 4`.
 
 **Which numbers are effective.** The plain process reads **host totals**. When
 cezar runs inside a cgroup with a real limit - a Docker `--cpus`/`--cpuset-cpus`,

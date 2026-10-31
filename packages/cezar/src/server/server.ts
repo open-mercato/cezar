@@ -3671,6 +3671,10 @@ export function createApp(deps: ServerDeps) {
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
+      agentCpuPriority: config.resources.agentCpuPriority,
+      hostReserve: config.resources.hostReserve,
+      totalAgentMemoryMb: config.resources.totalAgentMemoryMb,
+      dispatchMaxConcurrent: config.resources.dispatchMaxConcurrent,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
@@ -3779,6 +3783,13 @@ export function createApp(deps: ServerDeps) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
+          if (resources?.agentCpuPriority !== undefined) config.resources.agentCpuPriority = resources.agentCpuPriority;
+          if (resources?.hostReserve?.memoryMb !== undefined) config.resources.hostReserve.memoryMb = resources.hostReserve.memoryMb;
+          if (resources?.hostReserve?.cpuPct !== undefined) config.resources.hostReserve.cpuPct = resources.hostReserve.cpuPct;
+          if (resources?.totalAgentMemoryMb !== undefined) config.resources.totalAgentMemoryMb = resources.totalAgentMemoryMb;
+          if (resources?.dispatchMaxConcurrent !== undefined) {
+            config.resources.dispatchMaxConcurrent = resources.dispatchMaxConcurrent;
+          }
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
           }

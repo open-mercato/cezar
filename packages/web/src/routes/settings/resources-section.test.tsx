@@ -47,6 +47,10 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       monitoringWakeIntervalMinutes: null,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      agentCpuPriority: 'normal',
+      hostReserve: { memoryMb: null, cpuPct: null },
+      totalAgentMemoryMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 10,
       ...resources,
     },
@@ -105,6 +109,10 @@ const saveMemory = () =>
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
 const monitoringSelect = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-monitoring"]')
 const idleTimeout = () => document.querySelector<HTMLInputElement>('[data-slot="resources-idle-timeout"]')
+const dispatchInput = () =>
+  document.querySelector<HTMLInputElement>('[data-slot="resources-dispatch-max-concurrent"]')
+const saveDispatch = () =>
+  document.querySelector<HTMLButtonElement>('[data-action="resources-save-dispatch"]')
 const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
 const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
@@ -125,6 +133,50 @@ describe('Global settings → Resources', () => {
     expect(memoryInput()!.value).toBe('4096')
     // The per-repo config is not even read by this pane.
     expect(requests.some((r) => r.url === '/api/v1/config')).toBe(false)
+  })
+
+  it('the responsiveness preset writes low priority plus a host reserve in one PUT', async () => {
+    serve({})
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'low', hostReserve: { memoryMb: 2048, cpuPct: 90 } },
+    })
+  })
+
+  it('the preset keeps a custom reserve and priority already set', async () => {
+    serve({ agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: null } })
+    renderResources()
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-responsive-preset"]')).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="resources-responsive-preset"]')!, { target: { value: 'on' } })
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { agentCpuPriority: 'idle', hostReserve: { memoryMb: 4096, cpuPct: 90 } },
+    })
+  })
+
+  it('saves the host headroom fields and rejects a value below the floor', async () => {
+    serve({})
+    renderResources()
+    const mem = () => document.querySelector<HTMLInputElement>('[data-slot="resources-reserve-memory"]')!
+    const save = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-host-headroom"]')!
+    await waitFor(() => expect(document.querySelector('[data-slot="resources-reserve-memory"]')).not.toBeNull())
+
+    fireEvent.change(mem(), { target: { value: '12' } })
+    expect(save().disabled).toBe(true)
+    expect(document.querySelector('[data-slot="resources-host-invalid"]')).not.toBeNull()
+
+    fireEvent.change(mem(), { target: { value: '3072' } })
+    fireEvent.change(document.querySelector('[data-slot="resources-total-agent-memory"]')!, { target: { value: '8192' } })
+    fireEvent.click(save())
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({
+      resources: { hostReserve: { memoryMb: 3072, cpuPct: null }, totalAgentMemoryMb: 8192 },
+    })
   })
 
   it('saves maxParallel to the WORKSPACE config, never the per-repo one', async () => {
@@ -158,6 +210,40 @@ describe('Global settings → Resources', () => {
     fireEvent.blur(monitoringSelect()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxMonitoringSessions: 3 } })
+  })
+
+  /**
+   * Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): one field, no dead
+   * knob. Empty means "no limit" (the shipped default is `null`), 1..16 is a real ceiling, and a
+   * value outside the window is refused locally instead of being sent to a route that would 400.
+   */
+  it('saves the dispatch admission cap, and an empty field clears it back to "no limit"', async () => {
+    serve({ dispatchMaxConcurrent: null })
+    renderResources()
+    await waitFor(() => expect(dispatchInput()).not.toBeNull())
+    expect(dispatchInput()!.value).toBe('') // null renders as empty, i.e. no cap
+
+    fireEvent.change(dispatchInput()!, { target: { value: '3' } })
+    fireEvent.click(saveDispatch()!)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { dispatchMaxConcurrent: 3 } })
+
+    fireEvent.change(dispatchInput()!, { target: { value: '' } })
+    fireEvent.click(saveDispatch()!)
+    await waitFor(() => expect(puts()).toHaveLength(2))
+    expect(puts()[1]?.body).toEqual({ resources: { dispatchMaxConcurrent: null } })
+  })
+
+  it('refuses a dispatch cap outside 1..16 without calling the route', async () => {
+    serve({ dispatchMaxConcurrent: 2 })
+    renderResources()
+    await waitFor(() => expect(dispatchInput()).not.toBeNull())
+    expect(dispatchInput()!.value).toBe('2')
+
+    fireEvent.change(dispatchInput()!, { target: { value: '99' } })
+    expect(saveDispatch()!.disabled).toBe(true)
+    expect(document.querySelector('[data-slot="resources-dispatch-invalid"]')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
   })
 
   it('saves the waiting-session idle timeout and allows disabling it', async () => {

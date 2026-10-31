@@ -125,6 +125,35 @@ const resourcesSchema = z
     /** Per-task memory ceiling in MiB; null = no limit (matches the file's
      *  literal `"memoryLimitMb": null` in the spec's Data Model). */
     memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+    /** OS scheduling priority for agent process trees (spec 2026-10-21-host-resource-limits).
+     *  `normal` = untouched. */
+    agentCpuPriority: z.enum(['normal', 'low', 'idle']).default('normal').catch('normal'),
+    /** Keep this much of the host free: no NEW run starts below `memoryMb` available RAM or
+     *  above `cpuPct` host CPU. null = that guard is off. */
+    hostReserve: z
+      .object({
+        memoryMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+        cpuPct: z.number().int().min(1).max(100).nullable().default(null).catch(null),
+      })
+      .default({ memoryMb: null, cpuPct: null })
+      .catch({ memoryMb: null, cpuPct: null }),
+    /** Ceiling on the summed RSS of every agent process tree; no NEW run starts at or above it. */
+    totalAgentMemoryMb: z.number().int().min(0).max(1_048_576).nullable().default(null).catch(null),
+    /**
+     * ADMISSION ceiling on dispatch children (`dispatch.parentRunId` present), workspace-wide like
+     * `maxParallel` (spec 2026-09-20-dispatch-admission-scheduler): at most this many are STARTED
+     * from the queue at a time. A parked child woken back into its own session — a delivered child
+     * report, the monitoring wake — is never re-gated: it re-enters the counted set with no cap
+     * check (the #347 exemption `maxParallel` carries), so the instantaneous running count may
+     * exceed it. An auto-resume after a usage limit is NOT in that list: `fireAutoResume` hands it
+     * to the ordinary queued-continuation path, so it obeys the cap like any other queued work.
+     * `null` and `0` both mean "no cap" — the shipped
+     * default, i.e. today's behavior byte-for-byte. Ordinary tasks are unaffected: the predicate
+     * lives per queued run, not in the shared capacity check, so a capped child waits in the queue
+     * while ordinary work keeps starting. Lowering it below the running count never preempts
+     * anything — it gates new admissions only.
+     */
+    dispatchMaxConcurrent: z.number().int().min(0).max(16).nullable().default(null).catch(null),
     /** Default worktree retention for projects that don't override it. */
     worktreeRetentionDefault: z.number().int().min(0).max(1000).default(10).catch(10),
   })

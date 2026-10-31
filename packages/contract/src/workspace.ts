@@ -59,6 +59,18 @@ export const workspaceConfigResponseSchema = z.object({
     /** Resume a run a provider usage limit stopped, once the limit resets. Default `true`. */
     autoResumeOnUsageLimit: z.boolean(),
     memoryLimitMb: z.number().nullable(),
+    /** OS priority of agent process trees (spec 2026-10-21-host-resource-limits). */
+    agentCpuPriority: z.enum(['normal', 'low', 'idle']),
+    /** No new run starts while the host has less than `memoryMb` free or more than `cpuPct` busy.
+     *  The server accepts `memoryMb` 0 as off; the cockpit's floor is 256 MiB. */
+    hostReserve: z.object({ memoryMb: z.number().nullable(), cpuPct: z.number().nullable() }),
+    /** No new run starts while all agent trees together hold this much RAM. */
+    totalAgentMemoryMb: z.number().nullable(),
+    /** ADMISSION ceiling on dispatch children: at most this many are started from the queue at a
+     *  time, workspace-wide like `maxParallel`; null = no cap (spec
+     *  2026-09-20-dispatch-admission-scheduler). A parked child returning to work is never
+     *  re-gated (#347), so the running count may exceed it. */
+    dispatchMaxConcurrent: z.number().nullable(),
     worktreeRetentionDefault: z.number(),
   }),
   /**
@@ -140,6 +152,16 @@ export const setWorkspaceConfigInputSchema = z.object({
       monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
       autoResumeOnUsageLimit: z.boolean().optional(),
       memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+      agentCpuPriority: z.enum(['normal', 'low', 'idle']).optional(),
+      hostReserve: z
+        .object({
+          memoryMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+          cpuPct: z.number().int().min(1).max(100).nullable().optional(),
+        })
+        .optional(),
+      totalAgentMemoryMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+      /** `null`/`0` clears the ceiling back to "no cap". */
+      dispatchMaxConcurrent: z.number().int().min(0).max(16).nullable().optional(),
       worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
     })
     .optional(),
