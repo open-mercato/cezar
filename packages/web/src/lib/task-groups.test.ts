@@ -6,12 +6,15 @@ import {
   bucketOf,
   capBuckets,
   groupRuns,
+  compareIsoDesc,
   groupTitle,
+  lastActivityAt,
   listCounts,
   queuePositions,
   refPrefixMatches,
   runTitle,
   sortRuns,
+  sortTableRuns,
   splitRefPrefix,
   type QuickListBucket,
 } from '@/lib/task-groups'
@@ -164,19 +167,24 @@ describe('sortRuns', () => {
     expect(sorted.map((r) => positions.get(r.id))).toEqual([1, 2, 3])
   })
 
-  it('ranks the outcomes done → failed → cancelled, recency within each', () => {
+  it('orders outcomes purely by recency, never split by done/failed/cancelled', () => {
     const runs = [
       run({ id: 'cancelled', status: 'cancelled', createdAt: '2026-07-14T09:00:00.000Z' }),
       run({ id: 'failed', status: 'failed', createdAt: '2026-07-14T10:00:00.000Z' }),
       run({ id: 'done', status: 'done', createdAt: '2026-07-14T08:00:00.000Z' }),
       run({ id: 'done-newer', status: 'done', createdAt: '2026-07-14T11:00:00.000Z' }),
     ]
-    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual([
-      'done-newer',
-      'done',
-      'failed',
-      'cancelled',
-    ])
+    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['done-newer', 'failed', 'cancelled', 'done'])
+  })
+
+  it('orders outcomes by when they finished — the age the row prints — not when they were created', () => {
+    // An old task continued and finished minutes ago belongs at the top of Recent.
+    const runs = [
+      run({ id: 'new-done', status: 'done', createdAt: '2026-07-14T11:00:00.000Z', finishedAt: '2026-07-14T11:30:00.000Z' }),
+      run({ id: 'old-failed', status: 'failed', createdAt: '2026-07-10T09:00:00.000Z', finishedAt: '2026-07-14T12:00:00.000Z' }),
+      run({ id: 'no-finish', status: 'done', createdAt: '2026-07-14T11:45:00.000Z' }),
+    ]
+    expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['old-failed', 'no-finish', 'new-done'])
   })
 
   it('puts a scheduled run between running and queued — the pipeline in the order it happens', () => {
@@ -620,5 +628,71 @@ describe('pinned tasks (#935)', () => {
   it('does not change the tab counts — those count by status, never by bucket', () => {
     const runs = [pinned({ status: 'waiting' }), run({ status: 'done' }), run({ archived: true })]
     expect(listCounts(runs)).toEqual({ active: 2, archived: 1, waiting: 1 })
+  })
+})
+
+describe('lastActivityAt', () => {
+  it('counts the newest step, because a Continue never moves the run’s own startedAt (#2h-ago)', () => {
+    const continued = run({
+      status: 'waiting',
+      createdAt: '2026-10-13T17:54:44.000Z',
+      startedAt: '2026-10-13T17:54:44.000Z',
+      steps: [
+        { id: 'task', name: 'task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, startedAt: '2026-10-13T17:54:46.000Z', finishedAt: '2026-10-13T18:12:50.000Z' },
+        { id: 'continue-1', name: 'continue', kind: 'agent', status: 'waiting', iterations: 1, tokensUsed: 0, startedAt: '2026-10-13T20:48:02.000Z' },
+      ],
+    })
+    expect(lastActivityAt(continued)).toBe('2026-10-13T20:48:02.000Z')
+  })
+
+  it('prefers the server’s precomputed value on a slim index row', () => {
+    expect(lastActivityAt({ createdAt: '2026-01-01T00:00:00.000Z', lastActivityAt: '2026-10-13T20:00:00.000Z' })).toBe(
+      '2026-10-13T20:00:00.000Z',
+    )
+  })
+
+  it('sorts a long-lived task continued just now above a fresher one that went quiet', () => {
+    const quiet = run({ id: 'quiet', status: 'waiting', createdAt: '2026-10-13T20:00:00.000Z' })
+    const continued = run({
+      id: 'continued',
+      status: 'waiting',
+      createdAt: '2026-10-13T10:00:00.000Z',
+      steps: [{ id: 's', name: 's', kind: 'agent', status: 'waiting', iterations: 1, tokensUsed: 0, startedAt: '2026-10-13T20:30:00.000Z' }],
+    })
+    expect(sortRuns([quiet, continued], 'active').map((r) => r.id)).toEqual(['continued', 'quiet'])
+  })
+})
+
+describe('sortTableRuns', () => {
+  it('keeps pins on top, then orders strictly by the chosen time', () => {
+    const runs = [
+      run({ id: 'running', status: 'running', createdAt: '2026-07-14T09:00:00.000Z', startedAt: '2026-07-14T09:00:00.000Z' }),
+      run({ id: 'done-new', status: 'done', createdAt: '2026-07-14T08:00:00.000Z', finishedAt: '2026-07-14T11:00:00.000Z' }),
+      run({ id: 'pinned', pinned: true, status: 'done', createdAt: '2026-07-01T08:00:00.000Z', finishedAt: '2026-07-02T08:00:00.000Z' }),
+    ]
+    expect(sortTableRuns(runs, 'active', 'recent').map((r) => r.id)).toEqual(['pinned', 'done-new', 'running'])
+    expect(sortTableRuns(runs, 'active', 'created').map((r) => r.id)).toEqual(['pinned', 'running', 'done-new'])
+  })
+
+  it('ignores pins in the archived view, like sortRuns', () => {
+    const runs = [
+      run({ id: 'older-pinned', archived: true, pinned: true, createdAt: '2026-07-01T08:00:00.000Z' }),
+      run({ id: 'newer', archived: true, createdAt: '2026-07-14T08:00:00.000Z' }),
+    ]
+    expect(sortTableRuns(runs, 'archived', 'created').map((r) => r.id)).toEqual(['newer', 'older-pinned'])
+  })
+})
+
+describe('compareIsoDesc', () => {
+  it('orders instants, not text — mixed precision within one second', () => {
+    // As text, '…00Z' sorts above '…00.500Z' although it is half a second EARLIER.
+    expect(['2026-07-14T10:00:00Z', '2026-07-14T10:00:00.500Z'].sort(compareIsoDesc)).toEqual([
+      '2026-07-14T10:00:00.500Z',
+      '2026-07-14T10:00:00Z',
+    ])
+  })
+
+  it('falls back to text for an unparseable value rather than returning NaN', () => {
+    expect(Number.isNaN(compareIsoDesc('not-a-date', '2026-07-14T10:00:00Z'))).toBe(false)
   })
 })

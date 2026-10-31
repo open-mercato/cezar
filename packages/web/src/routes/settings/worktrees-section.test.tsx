@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ConfigResponse } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Project settings → Worktrees: the "Keep last N worktrees" field (#483). Renders the
@@ -28,6 +29,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
     baseBranch: null,
     defaultRunner: 'claude',
     systemPrompt: null,
+    branchNaming: null,
     defaultModels: {},
     modelsLocked: false,
     maxParallel: 2,
@@ -35,6 +37,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
     worktreeRetention: 10,
     liveTitleUpdates: null,
     reviewGate: null,
+    profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
     ...config,
   }
   const json = (payload: unknown, status = 200) =>
@@ -75,10 +78,12 @@ function gateSeededClient() {
 function renderAt(entry: string) {
   render(
     <QueryClientProvider client={gateSeededClient()}>
-      <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
-        <Toaster />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppRoutes />
+          <Toaster />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }

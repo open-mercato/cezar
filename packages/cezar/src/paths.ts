@@ -123,6 +123,11 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** Per-project automatic agent fallback policy. Kept separate from account credentials. */
+export function agentFallbackPolicyPath(): string {
+  return join(cezarHomeDir(), 'agent-fallback.json');
+}
+
 /**
  * Expand a leading `~` to the user's home. Lives here with the other homedir
  * logic (see the module note above — one place owns `homedir()`): the
@@ -184,6 +189,8 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
     copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
     junie: join(home, '.junie'),
+    antigravity: join(home, '.gemini', 'antigravity-cli'),
+    pi: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.pi', 'agent'),
   };
 }
 

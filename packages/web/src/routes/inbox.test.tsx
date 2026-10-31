@@ -86,7 +86,7 @@ const health = (backends: readonly string[] = ['claude']) => ({
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   forge: null,
-  capabilities: { localHandoff: true, followups: true },
+  capabilities: { localHandoff: true, terminal: false, followups: true },
   defaultRunner: backends[0] ?? 'claude',
   checks: backends.map((name) => ({ name, available: true })),
 })
@@ -904,7 +904,7 @@ const healthResponse = (followups: boolean) =>
     repo: null,
     checks: [],
     forge: null,
-    capabilities: { localHandoff: true, followups },
+    capabilities: { localHandoff: true, terminal: false, followups },
   })
 
 describe('the inbox gate (#471)', () => {

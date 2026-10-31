@@ -14,8 +14,9 @@ import { onWorkspaceEvent } from '@/api/global-events'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useHealth } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
-import { cliOf } from '@/lib/automation-cli'
+import { cliOf, trackerCliNeedsReview, TRACKER_CLI_REVIEW_NOTE } from '@/lib/automation-cli'
 import { useActiveProjectId } from '@/lib/project-router'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The Automations page's data and the row actions every screen shares (spec
@@ -101,7 +102,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         ...(automation.description ? { description: automation.description } : {}),
         kind: automation.kind,
         ...(automation.kind === 'schedule'
-          ? { schedule: automation.schedule }
+          ? { schedule: automation.schedule, ...(automation.schedules ? { schedules: automation.schedules } : {}) }
           : automation.kind === 'tracker'
             ? { trackerTrigger: automation.trackerTrigger, intervalSeconds: automation.intervalSeconds, filters: automation.filters }
             : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
@@ -133,12 +134,13 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         kind: automation.kind,
         trackerTrigger: automation.trackerTrigger,
         schedule: automation.schedule,
+        schedules: automation.schedules,
         events: automation.events,
         intervalSeconds: automation.intervalSeconds,
         filters: automation.filters,
         task: automation.task,
       })
-      await copyText(line)
+      await copyText(line, trackerCliNeedsReview(automation) ? TRACKER_CLI_REVIEW_NOTE : undefined)
     },
     busy: preview.isPending || run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
   }
@@ -147,10 +149,10 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
 }
 
 /** Clipboard write with the honest failure the spec asks for (non-secure contexts have none). */
-export async function copyText(text: string): Promise<void> {
+export async function copyText(text: string, note?: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
-    toast('Copied to the clipboard.')
+    await writeClipboard(text)
+    toast(note ? `Copied to the clipboard. ${note}` : 'Copied to the clipboard.')
   } catch {
     toast('Copy failed — select the text to copy it.', { tone: 'danger' })
   }

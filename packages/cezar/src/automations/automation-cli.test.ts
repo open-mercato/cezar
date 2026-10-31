@@ -48,6 +48,22 @@ describe('cez automation', () => {
     return { calls, out, err, io };
   };
 
+  it('partial updates preserve the union unless a timing replacement is explicit (#1818)', async () => {
+    const schedule = { type: 'daily', hour: 4 };
+    const schedules = [schedule, { type: 'weekly', day: 5, hour: 16 }];
+    for (const patch of [{ name: 'Renamed' }, { schedule: { type: 'daily', hour: 7 } }, { schedules: [{ type: 'daily', hour: 8 }] }]) {
+      const h = harness([
+        { status: 200, body: { automation: { ...definition, id: 'a1', revision: 1, kind: 'schedule', enabled: false, schedule, schedules } } },
+        { status: 200, body: { automation: { id: 'a1', name: 'Renamed', revision: 2, enabled: false } } },
+      ]);
+      expect(await runAutomationCommand(['update', 'a1', '--json', JSON.stringify(patch)], env, h.io)).toBe(0);
+      const sent = JSON.parse(String(h.calls[1]?.init?.body));
+      if ('schedule' in patch) expect(sent.schedules).toBeUndefined();
+      else if ('schedules' in patch) { expect(sent.schedule).toBeUndefined(); expect(sent.schedules).toEqual(patch.schedules); }
+      else expect(sent.schedules).toEqual(schedules);
+    }
+  });
+
   it('create posts the definition from --file to the project-scoped route, paused, and prints the cockpit link', async () => {
     const h = harness([{ status: 201, body: { automation: { id: 'auto-1', name: 'Review new PRs', enabled: false } } }], { '/tmp/def.json': JSON.stringify(definition) });
     const code = await runAutomationCommand(['create', '--file', '/tmp/def.json'], env, h.io);
@@ -302,6 +318,16 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(() => parseEvery('soon')).toThrow('--every');
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
+
+  it('maps --at to a one-time schedule and refuses what is not a date and time (#771)', () => {
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'once', date: '2026-10-05', hour: 23, minute: 0 } });
+    expect(bodyFromAddFlags({ name: 'later', at: '2026-10-05T07:30', kind: 'schedule' }, 'p')).toMatchObject({ schedule: { type: 'once', date: '2026-10-05', hour: 7, minute: 30 } });
+    for (const bad of ['2026-02-30 10:00', '2026-10-05 24:00', 'tonight']) {
+      expect(() => bodyFromAddFlags({ name: 'later', at: bad }, 'p'), bad).toThrow('--at');
+    }
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', cron: '0 4 * * *' }, 'p')).toThrow('not both');
+    expect(() => bodyFromAddFlags({ name: 'later', at: '2026-10-05 23:00', on: 'issue.opened' }, 'p')).toThrow('not both');
+  });
 });
 
 it('tracker flags build a provider event trigger with a 30 minute default', () => {
@@ -334,4 +360,39 @@ it('tracker add resolves the project association before posting the trigger', as
 
 it('rejects required tracker labels on other automation kinds', () => {
   expect(() => bodyFromAddFlags({ name: 'work', on: 'issue.opened', 'require-label': ['bug'] }, 'Implement')).toThrow(/tracker/);
+});
+
+describe('cez automation tracker write grants', () => {
+  const env = { CEZ_API_URL: 'http://127.0.0.1:4321/', CEZ_PROJECT_ID: 'proj' };
+  const trigger = { events: ['issue.opened'], association: { kind: 'linear', source: { id: 's', webUrl: 'https://linear.app/a' }, externalId: 't', externalName: 'T' } };
+  const tracker = { name: 'Linear work', kind: 'tracker', intervalSeconds: 1800, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'Do {{tracker.key}}', worktree: true }, trackerTrigger: trigger };
+  const run = async (args: string[], current?: Record<string, unknown>) => {
+    const bodies: unknown[] = [];
+    const err: string[] = [];
+    const io: AutomationCliIo = {
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        if (init?.body) bodies.push(JSON.parse(String(init.body)));
+        const body = init?.method ? { automation: { id: 'a', name: 'n', revision: 2, enabled: false } } : { automation: current };
+        return new Response(JSON.stringify(body), { status: init?.method === 'POST' ? 201 : 200, headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch,
+      log: () => {}, error: (line) => err.push(line),
+    };
+    return { code: await runAutomationCommand(args, env, io), bodies, err };
+  };
+  it('creates tracker automations read-only and refuses a write grant', async () => {
+    const created = await run(['create', '--json', JSON.stringify(tracker)]);
+    expect(created.bodies[0]).toMatchObject({ trackerTrigger: { access: { version: 1, writes: [] } } });
+    const widened = await run(['create', '--json', JSON.stringify({ ...tracker, trackerTrigger: { ...trigger, access: { version: 1, writes: ['comment'] } } })]);
+    expect(widened.code).not.toBe(0);
+    expect(widened.bodies).toEqual([]);
+    expect(widened.err.join(' ')).toContain('automation editor');
+  });
+  it('keeps existing grants on update and refuses to add one', async () => {
+    const current = { ...tracker, enabled: true, revision: 1, trackerTrigger: { ...trigger, access: { version: 1, writes: ['comment'] } } };
+    const kept = await run(['update', 'a', '--json', JSON.stringify({ trackerTrigger: trigger })], current);
+    expect(kept.bodies[0]).toMatchObject({ trackerTrigger: { access: { writes: ['comment'] } } });
+    const widened = await run(['update', 'a', '--json', JSON.stringify({ trackerTrigger: { ...trigger, access: { version: 1, writes: ['comment', 'transition'] } } })], current);
+    expect(widened.code).not.toBe(0);
+    expect(widened.bodies).toEqual([]);
+  });
 });

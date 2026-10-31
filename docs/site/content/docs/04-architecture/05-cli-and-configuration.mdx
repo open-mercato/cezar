@@ -1,0 +1,102 @@
+---
+title: "CLI, configuration, and files"
+description: "Commands for starting Cezar and selecting a project, plus the files that store settings, limits, and task history."
+sources:
+  - label: "CLI help and flags"
+    path: packages/cezar/src/index.ts
+    line: 56
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Command names and Node.js requirement"
+    path: packages/cezar/package.json
+    line: 6
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Configuration schema and reviewGate"
+    path: packages/cezar/src/config.ts
+    line: 34
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Global resources and defaults"
+    path: packages/cezar/src/workspace/config.ts
+    line: 88
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "CEZ_HOME and file paths"
+    path: packages/cezar/src/paths.ts
+    line: 16
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "CLI connection to the server"
+    path: docs/reference.md
+    line: 550
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Environment variables and manual .env setup"
+    path: .env.example
+    line: 1
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## Starting Cezar from a terminal
+
+Cezar requires Node.js 20 or later. Start it in your project directory. The package includes a built browser interface. Agent tools must be installed and signed in on the same machine. Cezar uses gh for GitHub integrations.
+
+The default command is serve. The server listens on 127.0.0.1, normally on port 4321. If that port is busy, read the actual address from the cockpit → message. Use --repo to select another directory and --no-open to prevent the browser from opening automatically.
+
+```bash
+cd /path/to/project
+npx cezar-run --no-open
+
+# Show help without starting a task
+npx cezar-run --help
+
+# Specify a directory and port
+npx cezar-run serve --repo /path/to/project --port 4321 --no-open
+```
+
+## Local commands and server commands
+
+| Command | What it does |
+| --- | --- |
+| `cezar run` "&lt;task>" --workflow quick-task | Runs a workflow without a server or browser. It executes agent work, which can change files and consume provider quota. |
+| cezar projects / projects add &lt;directory> | Reads or changes the local project registry. No server is required. |
+| cezar runs list --json | Reads tasks from the running server specified by `CEZ_API_URL`. |
+| `cezar task` / `cezar automation` | Controls dispatch and automations on the running server. |
+| `cezar init` | Adds an example workflow and skill without overwriting existing files. |
+| cezar install / update / versions | Installs or updates the managed launcher, or lists installed versions. |
+
+> **Good to know**: cezar, cez, cezar-cli, and cezar-run are names for the same program in the package. Examples using cezar alone assume it is installed in PATH. Otherwise, use `npx cezar-run`.
+
+## Connecting the CLI to a specific project
+
+Commands that connect to the server require `CEZ_API_URL`. Without it, the CLI exits with code 2. Set `CEZ_PROJECT_ID` to select a project. If it is unset, the command applies to the directory where the server started. Use projects to read project IDs.
+
+```bash
+export CEZ_API_URL=http://127.0.0.1:4321
+export CEZ_PROJECT_ID=project-id
+npx cezar-run runs list --status running,review --json
+```
+
+## Where configuration is stored
+
+Use `CEZ_HOME` to select a directory other than `~/.cezar`. This does not move repositories or their `.ai/cezar/` directories. Cezar does not automatically load a repository `.env` file. Required variables must be present in the process environment when it starts.
+
+| Path | Contents |
+| --- | --- |
+| &lt;repo>/`.ai/cezar/config.json` | Optional project settings: runner, models, branch, worktree retention count, and instructions. |
+| `~/.cezar/`config.json | Project registry and resources: concurrency limit, memory limits, and monitoring settings. |
+| &lt;repo>/`.ai/cezar/workflows/` and skills/ | YAML workflows and local instructions. These can be tracked in Git. |
+| &lt;repo>/`.ai/cezar/runs.json` and runs/\*.ndjson | Task index and event records. This working data is excluded from Git. |
+| `~/.cezar/`agent-`accounts.json` | Additional agent accounts and the selected account for each project. |
+| `~/.cezar/`tracker-connections/ | Managed tracker connection data. |
+
+## Limits and default settings
+
+Global `maxParallel` defaults to 2 and accepts values from 1 to 16. `memoryLimitMb` limits the memory of the entire task process tree; null disables that limit. Both fields belong to resources in the global `config.json`. Change them in Settings → Resources without replacing the whole file, which also contains the project registry.
+
+The example below is part of an optional project configuration. `reviewGate` is disabled by default. Setting it to true makes non-autonomous tasks wait for a review of their changes, but does not block Git commands run by the agent. Working in the current directory (in-place) with landing: auto is a separate mode.
+
+```json
+{
+  "defaultRunner": "codex",
+  "baseBranch": "main",
+  "worktreeRetention": 10,
+  "reviewGate": true
+}
+```
+
+> **Good to know**: Set `baseBranch` to the correct branch for the repository. Missing or invalid configuration usually falls back to defaults. Configured lifecycle transitions have separate, strict validation.

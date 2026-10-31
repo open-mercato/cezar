@@ -14,6 +14,7 @@ import { RepoChangesSection } from './repo-changes'
 import { RepoCommitsSection } from './repo-commits'
 import { RepoFilesSection } from './repo-files'
 import { RepoGitLoading } from './repo-git-loading'
+import { RepoSyncBar } from './repo-sync-bar'
 
 /**
  * `/git` — the repo view rebuilt on the task git view's own components (spec §"Session git
@@ -78,10 +79,13 @@ function RepoView({ repo, info, tab }: { repo: RepoResponse; info: RepoInfo; tab
           <h1 className="text-lg font-semibold">Git</h1>
           <BranchChip branch={info.branch} />
           {info.remote ? (
-            <span data-slot="repo-remote" className="hidden min-w-0 truncate text-[11px] text-soft-foreground md:inline">
+            <span data-slot="repo-remote" className="hidden min-w-0 truncate text-meta text-soft-foreground md:inline">
               {info.remote}
             </span>
           ) : null}
+        </div>
+        <div className="mt-1.5">
+          <RepoSyncBar />
         </div>
 
         <div data-slot="repo-tabs" className="mt-2.5 flex items-end gap-1">

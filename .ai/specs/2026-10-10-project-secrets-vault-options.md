@@ -259,3 +259,18 @@ features without touching the agents' subscription login.
    Audiences shipped: `checks` and `cezar` (the latter reserved: no consumer reads it yet; the
    first one resolves through `SecretStore.resolve(project, 'cezar')`). `tracker` is deferred with
    the tracker-store migration. Backend E (`op://`, `env://` references) is a follow-up.
+
+## Update (2026-10-27): key lifecycle
+
+- **Scoped identities for newly created keychain keys.** A home reuses a readable legacy
+  shared-account key, including on first use. If no usable key exists and initialization uses
+  the keychain, it writes `secrets/.keychain-account` and stores the new key under that account. Older binaries cannot read the new identity, so a downgrade
+  needs a separate home (BACKWARD_COMPATIBILITY.md).
+- **No in-process key cache.** The key is read from `.key` or the keychain on each use, so a
+  reset or restored key is never shadowed by a stale copy.
+- **Locked is not lost.** An unavailable keychain reports a retryable error; only a missing key
+  is "lost". `list` still returns names (with `skipped` explaining why values are unreadable) so
+  they can be removed.
+- **A replacement key is created only when no ciphertext remains** — no non-empty
+  `secrets/*.json` and no `tracker-connections/*.vault`. `secrets/.backend` is a hint, not a lock.
+  Recovery steps: docs/reference.md § Secret storage and recovery.

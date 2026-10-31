@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 
 /**
  * The desktop Tasks table's foldable columns (#743), in a real browser (#822).
@@ -241,11 +241,10 @@ beforeAll(async () => {
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 }, 90_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
   // The whole workspace home lived inside dataRoot, so this is the ui-state cleanup too.
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('foldable Tasks-table columns against a live cezar (#822)', () => {

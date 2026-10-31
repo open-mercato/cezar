@@ -1,7 +1,7 @@
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
 
 import { allProjectTags } from '@/lib/project-tags'
-import { runTitle } from '@/lib/task-groups'
+import { compareIsoDesc, runTitle, sortTimestamp, type SortBy } from '@/lib/task-groups'
 import { automationIdOf, matchesOrigin, type TaskOrigin } from '@/lib/task-origin'
 
 /**
@@ -34,6 +34,10 @@ import { automationIdOf, matchesOrigin, type TaskOrigin } from '@/lib/task-origi
 
 /** The Active/Archived split, shared with the per-project table via `lib/task-groups`. */
 export type { ListView } from '@/lib/task-groups'
+
+/** Every untagged row shares this array: `toGlobalTasks` runs on each index refetch, and a fresh
+ *  `[]` per call would break the row memo's `tags` identity for the common untagged project. */
+const NO_TAGS: readonly string[] = []
 
 /** One row of the global table: an index entry plus everything the registry knows about the
  *  project it came from. Resolved once, so no cell has to look a project up again. */
@@ -77,6 +81,14 @@ export const GROUP_BY_OPTIONS: readonly { value: Exclude<GroupBy, 'none'>; label
  *  one in force — back off. The whole "no None option" rule, in one place. */
 export function toggleGroupBy(current: GroupBy, picked: Exclude<GroupBy, 'none'>): GroupBy {
   return current === picked ? 'none' : picked
+}
+
+// Shared with the per-project table, which offers the same Recent/Created choice.
+export { SORT_OPTIONS, lastActivityAt, sortTimestamp, type SortBy } from '@/lib/task-groups'
+
+/** Order the list for `sortBy`, newest first. Stable, and a copy — never the caller's array. */
+export function sortGlobalTasks(tasks: readonly GlobalTask[], sortBy: SortBy): GlobalTask[] {
+  return [...tasks].sort((a, b) => compareIsoDesc(sortTimestamp(a.run, sortBy), sortTimestamp(b.run, sortBy)))
 }
 
 /** Which facets exist. Named as a type so the filter bar can render them from one list and the
@@ -149,8 +161,8 @@ export function canReset(state: Pick<GlobalTasksUrlState, 'filters' | 'groupBy'>
 }
 
 /**
- * Join the index to the registry. Order is preserved — the server already sorts newest-first
- * across every project, and re-sorting here would only invent a second opinion about "recent".
+ * Join the index to the registry. Order is preserved — the server already sorts by last activity
+ * across every project; `sortGlobalTasks` applies the toolbar's choice on top.
  */
 export function toGlobalTasks(
   runs: readonly RunIndexEntry[],
@@ -163,7 +175,7 @@ export function toGlobalTasks(
       run,
       project,
       projectName: project?.name || run.projectId,
-      tags: project?.tags ?? [],
+      tags: project?.tags ?? NO_TAGS,
     }
   })
 }
@@ -383,6 +395,7 @@ export const SEARCH_PARAMS = {
   status: 'status',
   workflow: 'workflow',
   groupBy: 'group',
+  sort: 'sort',
   archived: 'archived',
 } as const
 
@@ -393,6 +406,8 @@ const GROUP_BY_VALUES = new Set<string>(GROUP_BY_OPTIONS.map((option) => option.
 export interface GlobalTasksUrlState {
   filters: GlobalTaskFilters
   groupBy: GroupBy
+  /** Like the view, not counted or cleared by "Clear": it orders the list, it does not narrow it. */
+  sortBy: SortBy
   /** Active/Archived. Also mirrored into the shared `useListView()` context by the route, so the
    *  rest of the cockpit keeps answering the same question. */
   view: ListViewValue
@@ -406,6 +421,7 @@ type ListViewValue = 'active' | 'archived'
 export const DEFAULT_URL_STATE: GlobalTasksUrlState = {
   filters: NO_FILTERS,
   groupBy: 'none',
+  sortBy: 'recent',
   view: 'active',
 }
 
@@ -428,6 +444,7 @@ export function urlStateToSearchParams(state: GlobalTasksUrlState): URLSearchPar
   for (const status of state.filters.statuses) params.append(SEARCH_PARAMS.status, status)
   for (const workflow of state.filters.workflows) params.append(SEARCH_PARAMS.workflow, workflow)
   if (state.groupBy !== 'none') params.set(SEARCH_PARAMS.groupBy, state.groupBy)
+  if (state.sortBy !== 'recent') params.set(SEARCH_PARAMS.sort, state.sortBy)
   if (state.view === 'archived') params.set(SEARCH_PARAMS.archived, '1')
   return params
 }
@@ -451,6 +468,7 @@ export function urlStateFromSearchParams(params: URLSearchParams): GlobalTasksUr
       workflows: params.getAll(SEARCH_PARAMS.workflow).filter((workflow) => workflow !== ''),
     },
     groupBy: GROUP_BY_VALUES.has(group) ? (group as GroupBy) : 'none',
+    sortBy: params.get(SEARCH_PARAMS.sort) === 'created' ? 'created' : 'recent',
     view: params.get(SEARCH_PARAMS.archived) === '1' ? 'archived' : 'active',
   }
 }

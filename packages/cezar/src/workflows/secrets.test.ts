@@ -1,15 +1,29 @@
-import { execFile } from 'node:child_process';
+import { execFile, type SpawnOptions } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildChildEnv } from '../core/agent-env.ts';
 import { RunStore } from '../runs/store.ts';
 import { SecretStore } from '../workspace/secrets.ts';
 import { CHECK_CONTEXT_VARS, RunManager } from './run.ts';
 import { workflowStepSchema, type WorkflowDef } from './types.ts';
+
+// Secret fixtures assert exact check output; developer login profiles must not
+// add stderr or alter cwd. Keep real Bash/stdio/env and production -lc behavior.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (file: string, args: readonly string[], options?: SpawnOptions) => actual.spawn(
+      file,
+      file === 'bash' && args[0] === '-lc' ? ['--noprofile', '--norc', ...args] : args,
+      options ?? {},
+    ),
+  };
+});
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -280,6 +294,30 @@ describe('run context for check steps', () => {
     (manager as unknown as {
       checkStepEnv(runId: string, state: { cwd: string }, step: { id: string }, emit: () => void): Promise<NodeJS.ProcessEnv>;
     }).checkStepEnv(runId, { cwd }, { id: stepId }, () => undefined);
+
+  it.each([false, true])('strips inherited tracker capability from checks (untrustedHead=%s)', async untrustedHead => {
+    const names = ['CEZ_TRACKER_CAPABILITY', 'cez_tracker_capability', 'NORMAL_HOST_SETTING'];
+    const previous = names.map(name => process.env[name]);
+    try {
+      process.env.CEZ_TRACKER_CAPABILITY = 'parent-task-grant';
+      process.env.cez_tracker_capability = 'mixed-case-parent-grant';
+      process.env.NORMAL_HOST_SETTING = 'preserve-check-env';
+      const record = store.createRun({ title: 't', workflow: 'w', task: 'x', steps: [{ id: 'verify', name: 'Verify', kind: 'check' }] });
+      store.updateRun(record.id, { untrustedHead });
+      const env = await contextOf(record.id, 'verify', repoRoot);
+      expect(env).not.toHaveProperty('CEZ_TRACKER_CAPABILITY');
+      expect(env).not.toHaveProperty('cez_tracker_capability');
+      expect(env.PATH).toBe(process.env.PATH);
+      expect(env.NORMAL_HOST_SETTING).toBe('preserve-check-env');
+      expect(env.CEZ_RUN_ID).toBe(record.id);
+      expect(process.env.CEZ_TRACKER_CAPABILITY).toBe('parent-task-grant');
+    } finally {
+      names.forEach((name, index) => {
+        if (previous[index] === undefined) delete process.env[name];
+        else process.env[name] = previous[index];
+      });
+    }
+  });
 
   it('sets every run variable on a worktree run, and nothing GitHub- or PR-only', async () => {
     const record = manager.startRun(

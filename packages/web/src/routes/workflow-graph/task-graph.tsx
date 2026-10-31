@@ -96,7 +96,7 @@ export function TaskGraphRoute() {
   )
 }
 
-function TaskGraphView({ run }: { run: ApiRun }) {
+export function TaskGraphView({ run, embedded = false }: { run: ApiRun; embedded?: boolean }) {
   const def = run.workflowDef
   const graph = useMemo(() => (def ? graphForWorkflow(def) : null), [def])
   const overlay = useMemo(() => (graph ? runOverlay(graph, run) : null), [graph, run])
@@ -159,7 +159,7 @@ function TaskGraphView({ run }: { run: ApiRun }) {
 
   return (
     <div data-route="task-graph" className="flex h-full min-h-0 flex-col">
-      <RunHeader run={run} tab="graph" />
+      {embedded ? null : <RunHeader run={run} tab="graph" />}
       {!graph ? (
         <CenteredState
           icon={<WorkflowIcon />}
@@ -228,7 +228,7 @@ function NodeDetails({
   if (state.loopCount !== undefined) rows.push(['iterations', `${state.loopCount}${loopMax ? ` / ${loopMax}` : ''}`])
   const fields = Object.entries(outputs ?? {}).filter(([, v]) => v !== '')
   return (
-    <div className="space-y-4 p-4 text-[12px]">
+    <div className="space-y-4 p-4 text-label">
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         {rows.map(([k, v]) => (
           <div key={k} className="contents">
@@ -243,14 +243,14 @@ function NodeDetails({
         </Link>
       ) : null}
       <div>
-        <div className="mb-1 text-[11px] text-muted-foreground uppercase">Outputs</div>
+        <div className="mb-1 eyebrow text-muted-foreground">Outputs</div>
         {fields.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">Nothing yet — outputs appear once the node has run.</p>
+          <p className="text-meta text-muted-foreground">Nothing yet — outputs appear once the node has run.</p>
         ) : (
           fields.map(([k, v]) => (
             <div key={k} className="mb-2">
-              <code className="text-[11px] text-muted-foreground">{k}</code>
-              <pre className="mt-0.5 max-h-48 overflow-auto rounded-md bg-muted/40 p-2 text-[11px] whitespace-pre-wrap">{String(v)}</pre>
+              <code className="text-meta text-muted-foreground">{k}</code>
+              <pre className="mt-0.5 max-h-48 overflow-auto rounded-md bg-muted/40 p-2 text-meta whitespace-pre-wrap">{String(v)}</pre>
             </div>
           ))
         )}

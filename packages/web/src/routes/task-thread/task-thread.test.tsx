@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
+import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { queryKeys } from '@/api/queries'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { createQueryClient } from '@/api/query-client'
@@ -278,6 +279,22 @@ describe('ThreadView', () => {
     )
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
     expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+  })
+
+  it('failed by a transient provider error → the dock says it retries, not that a limit was hit', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: API Error: 529 Overloaded',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+          autoResumeReason: 'transient',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Temporary provider failure — this task retries automatically at')
+    expect(hint?.textContent).not.toContain('Usage limit')
   })
 
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
@@ -564,6 +581,108 @@ describe('ThreadView', () => {
       return el!
     })
     expect(button.title.length).toBeGreaterThan(0)
+  })
+
+  it('any failure with a session to continue offers Continue after its message', async () => {
+    const MISSING = 'continue failed: claude CLI exited with code 1 — No conversation found with session ID: s-1'
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: MISSING,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      `Session failed — ${MISSING} · Continue`,
+    )
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          ([input, init]) => String(input) === '/api/v1/runs/r1/continue' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('telemetry 77117b95: a footer Continue on a record that has drifted live refetches instead of toasting', async () => {
+    const sent: { path: string; method: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const method = init.method ?? 'GET'
+        sent.push({ path, method })
+        const json = (body: unknown, status = 200) =>
+          Promise.resolve(
+            new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
+          )
+        if (path === '/api/v1/providers/status')
+          return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        // The record said `failed`; the server has the run active — a resume it never saw.
+        if (path === '/api/v1/runs/r1/continue' && method === 'POST') return json({ error: 'run is still active' }, 409)
+        if (path === '/api/v1/runs/r1' && method === 'GET') return json(run('running'))
+        return json([])
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ThreadView
+            run={run('failed', {
+              error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+              steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' }],
+            })}
+            thread={reduceThread(EVENTS)}
+          />
+        </MemoryRouter>
+        <Toaster />
+      </QueryClientProvider>,
+    )
+
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    fireEvent.click(button)
+
+    // The refusal is answered by one authoritative refetch, not a red toast naming it...
+    await waitFor(() => expect(sent.some((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toBe(true))
+    // ...and nothing went out: an empty one-click Continue has no message to deliver.
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/messages')).toBe(false)
+    const toastEl = document.querySelector('[data-slot="toast"]')
+    expect(toastEl?.textContent ?? '').not.toContain('run is still active')
+  })
+
+  it('a failure already scheduled to resume itself offers no extra Continue', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'Claude AI usage limit reached',
+          autoResumeAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      'Session failed — Claude AI usage limit reached',
+    )
+    expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
   })
 
   it('the same advice stays plain text when there is no session to continue', () => {
@@ -1413,6 +1532,26 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="thread-empty"]')).toBeNull()
   })
 
+  it('the queued placeholder\'s Start now posts start-now; a usage-limit hold hides it', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(urlOf(input).endsWith('/start-now') ? '{"started":true}' : '[]', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { unmount } = renderView(<ThreadView run={run('queued')} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock) // after renderView, which stubs its own
+    fireEvent.click(document.querySelector('[data-slot="start-now"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/start-now'))).toBe(true))
+    unmount()
+
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
+  })
+
   it('the first real event replaces the queued placeholder', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([line(1, 'lifecycle', { message: 'cezar restarted — task re-queued' })])} />)
     expect(document.querySelector('[data-slot="queued-state"]')).toBeNull()
@@ -1823,4 +1962,19 @@ describe('liveTurnStart — where the Working… counter starts', () => {
     expect(liveTurnStart(run, { turns: [] })).toBe(run.startedAt)
     expect(liveTurnStart(run, { turns: [turn({})] })).toBe(run.startedAt)
   })
+})
+
+
+it('shows lifecycle recovery before agent activity and prevents misleading reply controls', async () => {
+  const operationId = '11111111-1111-4111-8111-111111111111'
+  const queryClient = createQueryClient()
+  queryClient.setQueryData(lifecycleQueryKeys.operation(operationId), {operation:{id:operationId,worktreeId:operationId,generation:1,phase:'setup',intent:'create',state:'needs_attention',revision:1,createdAt:'now',updatedAt:'now',history:[],entries:[],allowedActions:['retry','start-anyway','cancel-task']}})
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('[]', {status:200,headers:{'content-type':'application/json'}}))))
+  const fixture = run('waiting', {worktreeLifecycle:{worktreeId:operationId,generation:1,activeOperationId:operationId,phase:'setup',state:'needs_attention',needsAttention:true}})
+  render(<QueryClientProvider client={queryClient}><MemoryRouter><ThreadView run={fixture} thread={reduceThread([])} /></MemoryRouter></QueryClientProvider>)
+  expect(await screen.findByText('Setup needs attention')).toBeTruthy()
+  expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
+  expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
+  expect(screen.getByText('Resolve the worktree operation above before continuing this task.')).toBeTruthy()
+  expect(screen.queryByRole('textbox')).toBeNull()
 })

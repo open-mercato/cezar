@@ -1,0 +1,261 @@
+---
+title: "Common questions"
+description: "Short answers to the questions people ask most often, with links to the full feature pages."
+related:
+  links:
+    - getting-started/first-task
+    - features
+---
+Each answer gives the shortest path to a result. Follow the links for the full feature description and its limits.
+
+## How do I change a page with Design Mode?
+
+Select an element in Preview and describe the change. Design Mode sends its selector, HTML, styles, and dimensions to the agent.
+
+1. Run the task application and open its local URL in Preview.
+2. Enable Design Mode and click an element.
+3. Write your note and send it to the agent.
+
+> **Good to know**: Design Mode works in the local Cezar cockpit with HTTP addresses on the same computer (loopback). It sends a text description of the DOM element and does not take screenshots automatically.
+
+Learn more: [Design Mode: select an element to change](/docs/features/tasks-and-sessions/design-mode), [Notes attached to page elements](/docs/features/tasks-and-sessions/design-notes), [Application preview inside a task](/docs/features/tasks-and-sessions/app-preview).
+
+## How do I run and preview an application?
+
+Open Preview in a task. Start app runs the application using the saved project configuration, called a recipe. Preview displays the application at its URL.
+
+1. Choose Start app in the task, or enter the startup command in Terminal.
+2. Open Preview and enter or select the application URL.
+3. You can open several preview tabs.
+
+> **Good to know**: Save a project recipe before using Start app. Opening Preview alone does not start the application server.
+
+Learn more: [Start an application from the preview](/docs/features/tasks-and-sessions/start-app), [Shared and personal Start app recipes](/docs/features/settings-and-projects/start-app-recipes), [Application preview inside a task](/docs/features/tasks-and-sessions/app-preview), [Terminal in the task worktree](/docs/features/tasks-and-sessions/task-terminal).
+
+## How do I assign a Jira or Linear issue to an agent?
+
+Connect Jira or Linear to your Cezar project. Then open an issue and create a task for your chosen agent.
+
+1. In project Settings, open Issue tracker and configure Jira or Linear.
+2. Find and open the issue in the project panel.
+3. Add instructions, choose an agent, and start the task.
+
+> **Good to know**: The connection is saved for one project. Creating a task from an issue does not automatically edit the issue in Jira or Linear.
+
+Learn more: [Connect a project to Jira](/docs/features/setup-and-integrations/jira-connection), [Connect a project to Linear](/docs/features/setup-and-integrations/linear-connection), [Create an agent task from Jira or Linear](/docs/features/setup-and-integrations/tracker-task), [Automate Jira and Linear events](/docs/features/setup-and-integrations/tracker-automations).
+
+## How do I schedule a task for later?
+
+Click the clock button in New task. Choose a date and time, or schedule the task after a Claude or Codex usage limit resets, if Cezar knows the reset time.
+
+1. Describe the task and choose a workflow, account, and model.
+2. Click the clock and set a time or choose the usage reset.
+3. Confirm with Schedule task. You can change the time later in Scheduled.
+
+> **Good to know**: The Cezar server must be running. The selected time is the earliest possible start; the task may still wait in the queue. This option is unavailable for tasks with attachments.
+
+Learn more: [Schedule a task to start later](/docs/features/tasks-and-sessions/schedule-task), [Start a new task after a quota reset](/docs/features/tasks-and-sessions/schedule-after-reset), [Change or cancel a scheduled start](/docs/features/tasks-and-sessions/manage-scheduled-task).
+
+## Can I use a terminal inside a task?
+
+Yes. Open Terminal to run your own commands in the task working directory (worktree).
+
+1. Open the task and select Terminal.
+2. Enter a command or choose a project command from Commands.
+3. Open a detected local URL in Preview.
+
+> **Good to know**: Processes keep running when you hide the panel. Terminal availability depends on support from the machine running Cezar.
+
+Learn more: [Terminal in the task worktree](/docs/features/tasks-and-sessions/task-terminal), [Project commands and detected addresses](/docs/features/tasks-and-sessions/terminal-discovery), [Task views side by side](/docs/features/tasks-and-sessions/task-split-view).
+
+## Where can I see costs and progress across projects?
+
+Dashboard shows task status across projects and usage reported by agent providers.
+
+1. Open Dashboard → Overview to check task status.
+2. Open Usage & cost to see costs and trends over time.
+3. Use Customize to change the view or Export to download a CSV.
+
+> **Good to know**: Cezar calculates costs from provider data. If a provider supplies only partial data, the view will not include all account costs.
+
+Learn more: [Workspace dashboard](/docs/features/settings-and-projects/dashboard-overview), [Costs and trends across projects](/docs/features/settings-and-projects/dashboard-costs), [Export the dashboard to CSV or print](/docs/features/settings-and-projects/dashboard-export).
+
+## How do I pass a secret to tests?
+
+Save the secret in project or workspace settings. Choose check steps as a recipient to make it available to steps that run checks such as tests.
+
+1. Open Settings → project or Global → Secrets.
+2. Add the value and choose its recipients.
+3. Use the secret in a check step according to its configuration.
+
+> **Good to know**: Values stored in Secrets are not passed to agent sessions.
+
+Learn more: [Project secrets](/docs/features/setup-and-integrations/project-secrets), [Secrets shared across projects](/docs/features/setup-and-integrations/workspace-secrets), [Set up TesterArmy e2e](/docs/features/workflows-and-skills/e2e-setup).
+
+## Can I leave a task running overnight?
+
+Yes. Run the task in Autonomous mode and leave the computer or server on. If the task reaches a provider usage limit, Cezar can resume it when the reset time is known.
+
+1. Choose a task, skill, or workflow and enable Autonomous.
+2. Make sure the computer or VPS stays running.
+3. Check Auto-resume after a usage limit in Settings → Resources.
+
+> **Good to know**: Autonomous mode skips the review gate. Resuming after a usage limit requires a reset time from the provider. Other errors do not trigger this mechanism.
+
+Learn more: [Resume after a usage limit resets](/docs/features/tasks-and-sessions/auto-resume), [Run Cezar on a server](/docs/features/settings-and-projects/remote), [Visual workflow editor](/docs/features/workflows-and-skills/workflows).
+
+## How do I use a second Claude account?
+
+Add a profile in Agent accounts. It uses a separate configuration directory and login for the same CLI.
+
+1. Open Settings → Agent accounts.
+2. Add the account and authenticate it in the CLI.
+3. Set it as the default account for the relevant project.
+
+> **Good to know**: Cezar does not create provider accounts. The second account must already be signed in.
+
+Learn more: [Switch agent accounts](/docs/features/agents-and-models/profiles), [Edit agent configuration](/docs/features/agents-and-models/agent-settings).
+
+## Will a task resume after a usage limit?
+
+Yes, if the provider gives a reset time. Cezar schedules a resume 30 seconds after that time. The task still waits for its turn in the queue.
+
+1. Check Settings → Resources → Auto-resume after a usage limit.
+2. Open the task to see its resume time.
+3. Choose Don’t resume if you do not want this task to restart.
+
+> **Good to know**: If Cezar cannot recognize the reset time, the task stays failed. It can resume automatically up to 12 consecutive times.
+
+Learn more: [Resume after a usage limit resets](/docs/features/tasks-and-sessions/auto-resume), [Cancel automatic resume](/docs/features/tasks-and-sessions/cancel-resume).
+
+## How do I react to new GitHub issues automatically?
+
+Create a GitHub Automations rule to start a task when Cezar detects a matching GitHub event.
+
+1. Open Automations → New automation → When GitHub changes.
+2. Create a rule, filter, and task template in Automations.
+3. Test the filter and enable the rule. Check its executions in the execution log.
+
+> **Good to know**: Cezar polls GitHub while the server is running. Enabling a rule does not automatically process older events.
+
+Learn more: [GitHub automations](/docs/features/git-and-github/automations), [GitHub issues and pull requests](/docs/features/git-and-github/github), [Save an instruction template](/docs/features/workflows-and-skills/prompt-templates).
+
+## Can I merge pull requests automatically?
+
+Cezar supports auto-land: in the relevant mode, it creates a commit and can push the branch upstream. This operation does not merge a pull request on GitHub.
+
+1. Check worktree and landing configuration, along with Autonomous mode.
+2. Read the auto-land section in the task lifecycle technical guide.
+3. Follow your repository merge rules and branch protections for pull requests.
+
+> **Good to know**: The review gate is off by default, so a task does not necessarily pause before publishing changes.
+
+Learn more: [Review changes before finishing](/docs/features/git-and-github/review), [GitHub issues and pull requests](/docs/features/git-and-github/github).
+
+## How do I compare two solutions to the same task?
+
+Choose Parallel variants and select ×2 or ×3. Cezar runs two or three variants in separate working directories (worktrees).
+
+1. Set the number of variants in the task composer.
+2. Wait for the results and open the file diff comparison.
+3. Choose the variant you want to keep.
+
+> **Good to know**: Each variant runs a separate agent session. Cezar archives rejected variants and removes their working directories.
+
+Learn more: [Compare several solutions](/docs/features/tasks-and-sessions/variants), [Compare changes side by side](/docs/features/git-and-github/split-diff), [Keep task changes separate](/docs/features/git-and-github/worktrees).
+
+## How do I limit RAM usage?
+
+Set a memory limit per task and the number of tasks that can run at the same time.
+
+1. Open Settings → Resources.
+2. Set Per-task memory limit and Max parallel tasks.
+3. If needed, also limit concurrency for a specific project.
+
+> **Good to know**: Exceeding the memory limit pauses the task. Reducing concurrency alone does not limit memory used by a single process.
+
+Learn more: [Limit memory use per task](/docs/features/settings-and-projects/memory-limit), [Run several tasks at once](/docs/features/tasks-and-sessions/parallel-tasks), [Limit parallel tasks in a project](/docs/features/settings-and-projects/project-concurrency).
+
+## Can I get a notification when an agent needs me?
+
+Yes. Enable browser notifications for tasks waiting for input, review, or help with an error.
+
+1. Open Settings → Notifications.
+2. Enable Notify when an agent needs you.
+3. Allow notifications in the browser. They work when the tab is in the background.
+
+> **Good to know**: This guide covers browser notifications. It does not confirm native app push support. Notifications are not sent for every successful task completion.
+
+Learn more: [Enable browser notifications](/docs/features/settings-and-projects/browser-notifications).
+
+## How do I save a prompt for reuse?
+
+Save a Prompt template and optionally assign it to a skill.
+
+1. Open Settings → project → Instructions → Prompt templates.
+2. Add a name and the instruction text.
+3. Choose the template in the task composer or assign it to a skill.
+
+> **Good to know**: A template assigned to a skill automatically fills only an empty prompt.
+
+Learn more: [Save an instruction template](/docs/features/workflows-and-skills/prompt-templates), [Link a template to a skill](/docs/features/workflows-and-skills/skill-template), [Set shared project instructions](/docs/features/agents-and-models/system-prompt).
+
+## Can an agent wait for CI?
+
+Yes. Cezar supports monitoring sessions that can check CI status periodically.
+
+1. Set Extra monitoring sessions in Resources.
+2. Choose Monitoring wake-up: Park or Re-check.
+3. For Re-check, set an interval and check the next wake-up time.
+
+> **Good to know**: Re-check uses additional model turns. Park waits without checking status periodically.
+
+Learn more: [Make room for tasks waiting on CI](/docs/features/settings-and-projects/monitor-capacity), [Set how often to check CI](/docs/features/settings-and-projects/monitor-wake).
+
+## Can I embed Cezar in my React application?
+
+The React component library is described in a specification. It has not been implemented in the reviewed code version.
+
+1. Read the Composable React components specification.
+2. Review the proposed provider, client, and component APIs.
+3. Wait for implementation and package publication before integrating it.
+
+> **Good to know**: The reviewed repository version has no `packages/react` directory. The Cezar cockpit uses React, but it is not a published npm library for embedding in another application.
+
+Learn more: [React component library](/docs/features/setup-and-integrations/react-components).
+
+## How do I change instructions for a queued task?
+
+Open a task that is waiting in the queue. You can edit its pending messages before it starts.
+
+1. In Tasks, open a task with queued status.
+2. Add, edit, or remove a pending message.
+3. Review the text before Cezar starts the queued task.
+
+> **Good to know**: Once execution starts, send messages to the active session instead.
+
+Learn more: [Edit instructions before a task starts](/docs/features/tasks-and-sessions/queued-prompts), [Run several tasks at once](/docs/features/tasks-and-sessions/parallel-tasks).
+
+## How do I work with multiple repositories?
+
+Add repositories to the workspace, then use All tasks and project tags.
+
+1. Add a local folder or clone a GitHub repository.
+2. Tag related projects.
+3. Open All tasks and filter by project, tag, or status.
+
+> **Good to know**: All tasks appears after you add a second project. It shows tasks from projects registered in Cezar.
+
+Learn more: [See tasks across projects](/docs/features/settings-and-projects/projects), [Clone a GitHub repository](/docs/features/settings-and-projects/clone-project), [Add a project from disk](/docs/features/settings-and-projects/local-project), [Limit parallel tasks in a project](/docs/features/settings-and-projects/project-concurrency).
+
+## How do I run Cezar without a browser?
+
+Use the run command with a task description.
+
+1. Open a terminal in the repository.
+2. Run `npx cezar-cli run` "task description".
+3. Review the result and changed files.
+
+> **Good to know**: Install the agent CLI and sign in to its account on the same machine.
+
+Learn more: [Run a task from the terminal](/docs/features/setup-and-integrations/headless), [Visual workflow editor](/docs/features/workflows-and-skills/workflows).

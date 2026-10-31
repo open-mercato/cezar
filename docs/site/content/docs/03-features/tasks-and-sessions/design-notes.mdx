@@ -1,0 +1,27 @@
+---
+title: "Notes attached to page elements"
+description: "Keep several preview notes and send them separately."
+related:
+  links:
+    - guides/design-mode
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-preview/design-notes.ts
+    line: 273
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+A note stores your feedback together with the selected page element. Unsent drafts survive a refresh. Once sent, a note receives a number and a status derived from the task state. Sending feedback can also reopen a closed session.
+
+## Where to find it
+
+Task → Preview → Design Mode
+
+## How to use it
+
+1. Select an element and write a note.
+2. Add more notes or return to a draft later.
+3. Send the selected note. For a closed session, choose Reopen & send.
+
+> **Good to know**: You can have up to 12 open drafts. Done reflects the session state and does not confirm that the change is correct. Markers for sent notes do not form a persistent history after a page reload.

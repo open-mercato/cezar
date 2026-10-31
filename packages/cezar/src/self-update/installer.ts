@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 
+import { cezarHomeDir } from '../paths.ts';
 import { assertSafeId, installId, PACKAGE_NAME, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
 
 const packageJsonSchema = z.object({ name: z.string(), version: z.string().min(1) }).passthrough();
@@ -95,11 +96,20 @@ async function installSpec(
   mkdirSync(staging, { recursive: true });
   try {
     opts.onLog?.(`npm install --prefix ${staging} ${spec}`);
-    await (opts.runNpm ?? runNpm)(
-      ['install', '--prefix', staging, '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=notice', spec],
-      staging,
-      opts.onLog,
-    );
+    const args = ['install', '--prefix', staging, '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=notice'];
+    const output: string[] = [];
+    try {
+      await (opts.runNpm ?? runNpm)([...args, spec], staging, (line) => {
+        output.push(line);
+        opts.onLog?.(line);
+      });
+    } catch (error) {
+      // A root-owned ~/.npm (an old `sudo npm`) must not block the install (telemetry 7a3f659a).
+      if (!npmCacheUnwritable(output)) throw error;
+      const cache = npmFallbackCache(env);
+      opts.onLog?.(`npm's cache is not writable; retrying with ${cache}`);
+      await (opts.runNpm ?? runNpm)([...args, '--cache', cache, spec], staging, opts.onLog);
+    }
     const entry = join(staging, 'node_modules', ...PACKAGE_NAME.split('/'), 'dist', 'index.js');
     if (!existsSync(entry)) throw new Error('install finished but the entry file is missing');
     // A stale complete install of the same id (registry re-install after a manual delete of
@@ -112,6 +122,31 @@ async function installSpec(
     rmSync(staging, { recursive: true, force: true });
     throw error;
   }
+}
+
+/** The value of npm's `npm error <field> <value>` line (`npm ERR!` before npm 10). */
+function npmErrorField(output: readonly string[], field: string): string | undefined {
+  for (const line of output) {
+    const match = /^npm (?:error|ERR!) (\S+) (.+)$/.exec(line.trim());
+    if (match?.[1] === field) return match[2]?.trim();
+  }
+  return undefined;
+}
+
+/**
+ * npm failed because it may not write its cache folder (root-owned files left by `sudo npm`),
+ * not because of the package. Mirrors the desktop shell's `npm_cache_unwritable`.
+ */
+export function npmCacheUnwritable(output: readonly string[]): boolean {
+  const code = npmErrorField(output, 'code');
+  if (code !== 'EACCES' && code !== 'EPERM') return false;
+  const path = npmErrorField(output, 'path') ?? '';
+  return ['_cacache', '_logs', '_npx'].some((dir) => path.includes(dir)) || output.some((line) => line.includes('cache folder contains root-owned files'));
+}
+
+/** A cache folder cezar owns, for when npm's own is not writable. */
+export function npmFallbackCache(env: NodeJS.ProcessEnv = process.env): string {
+  return join(cezarHomeDir(env), 'npm-cache');
 }
 
 /**

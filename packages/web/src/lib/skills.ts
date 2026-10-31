@@ -307,3 +307,26 @@ export function filterSkills<T extends SkillSummary>(
 ): T[] {
   return rankByQuery(orderSkillsByUsage(skills, usage), query, usage)
 }
+
+/** Group key for skills that don't come from a team repo (project, global, agents…). */
+export const LOCAL_SKILL_GROUP = ''
+
+export interface SkillGroup<T> {
+  /** The team repo (`owner/name`), or `LOCAL_SKILL_GROUP`. */
+  key: string
+  label: string
+  skills: T[]
+}
+
+/** Group a catalog by the repo it came from: local skills first, then each team repo in
+ *  first-seen order. Order within a group is preserved. */
+export function groupSkillsByRepo<T extends Pick<Skill, 'source' | 'team'>>(skills: readonly T[]): SkillGroup<T>[] {
+  const groups = new Map<string, SkillGroup<T>>()
+  for (const skill of skills) {
+    const key = skill.team?.repo ?? LOCAL_SKILL_GROUP
+    const group = groups.get(key) ?? { key, label: key === LOCAL_SKILL_GROUP ? 'This project & machine' : key, skills: [] }
+    group.skills.push(skill)
+    groups.set(key, group)
+  }
+  return [...groups.values()].sort((a, b) => Number(a.key !== LOCAL_SKILL_GROUP) - Number(b.key !== LOCAL_SKILL_GROUP))
+}

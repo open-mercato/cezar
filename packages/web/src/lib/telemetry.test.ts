@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
+import { attachmentCountBucket, telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
 
-import { clientSurface, isBenignError, isCanonicalRoute, routeShape } from './telemetry'
+import {
+  apiRouteShape,
+  clientSurface,
+  errorToastReport,
+  isBenignError,
+  isForeignError,
+  isCanonicalRoute,
+  routeShape,
+  scrubToastMessage,
+  transportCauseContext,
+} from './telemetry'
+import { noteFailedRequest, recentFailedRequest, resetFailedRequest } from './failed-request'
 
 describe('routeShape', () => {
   it('keeps the route and drops every user value', () => {
@@ -23,6 +34,8 @@ describe('isCanonicalRoute', () => {
     expect(isCanonicalRoute('/settings/global/appearance')).toBe(true)
     expect(isCanonicalRoute('/')).toBe(false)
     expect(isCanonicalRoute('/settings/agents')).toBe(false)
+    // A redirect to the first global section, not a page — counting it double-counts every visit.
+    expect(isCanonicalRoute('/settings/global')).toBe(false)
     expect(isCanonicalRoute('/inbox')).toBe(false)
   })
 })
@@ -48,6 +61,34 @@ describe('isBenignError', () => {
   })
 })
 
+describe('isForeignError', () => {
+  const plain = document.createElement('html')
+  const translated = document.createElement('html')
+  translated.className = 'translated-ltr'
+  const removeChild = Object.assign(
+    new Error("Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node."),
+    { name: 'NotFoundError' },
+  )
+
+  it('drops a cross-origin "Script error." and a wallet extension, by signature only (e3f14c69, 62a6f399)', () => {
+    expect(isForeignError({ message: 'Script error.', filename: '' }, plain)).toBe(true)
+    expect(isForeignError({
+      message: "TypeError: undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')",
+      error: new TypeError("undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')"),
+    }, plain)).toBe(true)
+    // A "Script error." that names our own bundle, or carries an error, is ours.
+    expect(isForeignError({ message: 'Script error.', filename: 'http://127.0.0.1:4321/assets/index-abc.js' }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Script error.', error: new Error('Script error.') }, plain)).toBe(false)
+    expect(isForeignError({ message: "TypeError: undefined is not an object (evaluating 'run.ethereumish')" }, plain)).toBe(false)
+  })
+
+  it('drops React losing a node only while the page is machine-translated (f09eb833, 07d1d922)', () => {
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, translated)).toBe(true)
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Uncaught TypeError: x is undefined', error: new TypeError('x is undefined') }, translated)).toBe(false)
+  })
+})
+
 describe('clientSurface', () => {
   it('reads the desktop shell stamp', () => {
     expect(clientSurface()).toBe('browser')
@@ -65,5 +106,141 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
+  })
+
+  it('carries scheduling events with closed option labels only', () => {
+    expect(telemetryEventInputSchema.safeParse({ event: 'schedule_menu_opened', label: 'new_task' }).success).toBe(true)
+    for (const label of ['now', 'at', 'usage_reset']) expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'usage_reset' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'now' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label: '2099-01-01 09:00' }).success).toBe(false)
+  })
+})
+
+describe('attachment count buckets (telemetry 7054e5f2)', () => {
+  it('buckets every count into the closed label set', () => {
+    expect([1, 2, 4, 5, 10, 11, 20, 25].map(attachmentCountBucket)).toEqual(['1', '2-4', '2-4', '5-10', '5-10', '11-20', '11-20', '11-20'])
+  })
+})
+
+describe('error toast reports', () => {
+  it('names the API call that failed, never its ids or names', () => {
+    expect(apiRouteShape('/api/v1/p/acme-shop/runs/22f53332-5ba7/messages')).toBe('/api/v1/p/:param/runs/:param/messages')
+    // A project slug that happens to be a route word is still a project slug.
+    expect(apiRouteShape('/api/v1/p/runs/runs/abc')).toBe('/api/v1/p/:param/runs/:param')
+    expect(apiRouteShape('/api/v1/workflows/client-secret-flow')).toBe('/api/v1/workflows/:param')
+  })
+
+  it('reports a toast after a failed request as that request', () => {
+    const report = errorToastReport({ method: 'POST', path: '/api/v1/p/acme/runs/abc/messages', status: 409, at: 1000 }, 1250)
+    expect(report).toEqual({
+      type: 'ApiError',
+      context: {
+        'request.method': 'POST',
+        'request.route': '/api/v1/p/:param/runs/:param/messages',
+        'request.status': 409,
+        'request.age_ms': 250,
+      },
+    })
+  })
+
+  it('names the transport failure behind a request that got no answer (#1437)', () => {
+    resetFailedRequest()
+    noteFailedRequest('/api/v1/p/acme/runs/abc/continue', 'post', 0, undefined, new TypeError('Load failed'))
+    const failure = recentFailedRequest()
+    expect(errorToastReport(failure, failure!.at).context).toEqual({
+      'request.method': 'POST',
+      'request.route': '/api/v1/p/:param/runs/:param/continue',
+      'request.status': 0,
+      'request.age_ms': 0,
+      'request.cause_name': 'TypeError',
+      'request.cause_message': 'Load failed',
+    })
+    resetFailedRequest()
+  })
+
+  it('scrubs and bounds the transport cause, and adds nothing without one', () => {
+    expect(transportCauseContext(new TypeError('Fetch API cannot load http://127.0.0.1:4000/api/v1/p/acme/runs/x due to access control checks.')))
+      .toEqual({
+        'request.cause_name': 'TypeError',
+        'request.cause_message': 'Fetch API cannot load /api/v1/p/:param/runs/:param due to access control checks.',
+      })
+    const odd = transportCauseContext({ name: 'not a name!', message: 'x'.repeat(5000) })
+    expect(odd['request.cause_name']).toBe('other')
+    expect(odd['request.cause_message']).toHaveLength(256)
+    expect(transportCauseContext(undefined)).toEqual({})
+    expect(errorToastReport({ method: 'GET', path: '/api/v1/health', status: 0, at: 0 }, 0).context).not.toHaveProperty('request.cause_name')
+  })
+
+  it('reports a toast with no failed request as a client-side error toast', () => {
+    expect(errorToastReport(null)).toEqual({ type: 'ErrorToast', context: {} })
+    expect(errorToastReport({ method: 'POST', path: '/api/v1/providers/connect', status: 409, at: 1000, provider: 'claude' }, 1000).context)
+      .toMatchObject({ 'request.route': '/api/v1/providers/connect', 'request.provider': 'claude' })
+  })
+})
+
+describe('scrubToastMessage', () => {
+  it('reduces an API URL to its route shape, slug and query included', () => {
+    expect(scrubToastMessage('cannot reach the cezar server (/api/v1/p/acme-shop/runs/abc/messages?x=1)', [])).toBe(
+      'cannot reach the cezar server (/api/v1/p/:param/runs/:param/messages)',
+    )
+    expect(scrubToastMessage('http://127.0.0.1:4000/api/v1/workflows/secret-flow failed', [])).toBe(
+      '/api/v1/workflows/:param failed',
+    )
+  })
+
+  it('masks quoted values, branches, repositories and paths', () => {
+    expect(scrubToastMessage('No workflow named “client-deploy” — starting a new one.', [])).toBe(
+      'No workflow named <value> — starting a new one.',
+    )
+    expect(scrubToastMessage("branch 'feature/login' already exists", [])).toBe('branch <value> already exists')
+    expect(scrubToastMessage('cannot push cez/1a2b3c4d to acme/shop', [])).toBe('cannot push <path> to <path>')
+    expect(scrubToastMessage("can't open /Users/me/code/shop/README.md", [])).toBe("can't open <path>")
+  })
+
+  /** Telemetry 0f1255b6: a refused attachment's name split one error into a group per file. */
+  it('masks file names, so every refusal of one kind is one error group', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    expect(scrub('“Screenshot 2026-10-15 at 00.29.50.png” skipped — max 20 attachments per message')).toBe(
+      '<value> skipped — max 20 attachments per message',
+    )
+    expect(scrub('“image.png” skipped — max 20 attachments per message')).toBe(
+      '<value> skipped — max 20 attachments per message',
+    )
+    expect(scrub('image.png skipped — max 4 attachments per message')).toBe('<file> skipped — max 4 attachments per message')
+    expect(scrub('notes.v2.MD is too large (max 5 MB)')).toBe('<file> is too large (max 5 MB)')
+    expect(scrub('cezar 0.15.2 is out')).toBe('cezar 0.15.2 is out')
+  })
+
+  /** Telemetry 5fc3ffbb, d77d0047: any file is attachable since #1510, not just images and text. */
+  it('masks document, archive and media file names too', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    for (const name of ['offer_1.docx', 'budget.xlsx', 'backup.tar.gz', 'clip.mp4', 'deck.pptx', 'lista-opcje.jpg']) {
+      expect(scrub(`${name} skipped — max 4 attachments per message`)).toBe('<file> skipped — max 4 attachments per message')
+    }
+    expect(scrub('node.js and example.com stay')).toBe('node.js and example.com stay')
+  })
+
+  it('masks the names and ids of known projects, longest first and whole words only', () => {
+    expect(scrubToastMessage('Acme Shop already has the maximum of 8 tags', ['Acme Shop', 'acme-shop'])).toBe(
+      '<project> already has the maximum of 8 tags',
+    )
+    expect(scrubToastMessage('project acme-shop not found', ['acme', 'acme-shop'])).toBe('project <project> not found')
+    expect(scrubToastMessage('session closed', ['ses', 'x'])).toBe('session closed')
+  })
+
+  it('masks label: value tails, emails, curly single quotes and any-case project names', () => {
+    expect(scrubToastMessage('invalid branch name: feature-login', [])).toBe('invalid branch name: <detail>')
+    expect(scrubToastMessage('unknown account: work-account', [])).toBe('unknown account: <detail>')
+    expect(scrubToastMessage('push rejected for jane@acme.com', [])).toBe('push rejected for <email>')
+    expect(scrubToastMessage('plan ‘secret-plan’ is missing', [])).toBe('plan <value> is missing')
+    expect(scrubToastMessage('ACME-SHOP is busy', ['acme-shop'])).toBe('<project> is busy')
+    expect(scrubToastMessage('cannot reach the cezar server (/api/v1/health)', [])).toBe(
+      'cannot reach the cezar server (/api/v1/health)',
+    )
+  })
+
+  it('leaves a message without user data alone', () => {
+    expect(scrubToastMessage('session closed', [])).toBe('session closed')
   })
 })

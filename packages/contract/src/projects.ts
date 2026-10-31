@@ -52,11 +52,14 @@ export const projectListEntrySchema = z.object({
    *  workspace `resources.maxParallel`; a number pins this project. */
   maxParallel: z.number().optional(),
   /** Set ONLY on the synthetic entry for the folder this server was started in when that folder
-   *  is not in the registry — the ordinary state since boot registration became seed-once. The
+   *  is not in the registry — possible for guarded roots, registry failures and non-serve hosts. The
    *  server serves it like any project (it owns the boot context), so the cockpit must be able to
    *  reach it; but it is not persisted, so the rows that edit the registry (Remove, Max parallel)
    *  do not apply and Settings offers "Add project" instead. Never present on a registry entry. */
   unregistered: z.literal(true).optional(),
+  /** Set with `unregistered` when the server would refuse to register this folder (`$HOME`, a
+   *  task worktree) — the cockpit disables "Add project" instead of offering a click that 400s. */
+  notAddable: z.literal(true).optional(),
   /**
    * Free-form labels grouping CONNECTED repositories — a `storefront` tag on the API, the web
    * app and the design system says those three are one piece of work spread over three repos.
@@ -82,6 +85,12 @@ export const projectsResponseSchema = z.object({
 });
 export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
 
+/** `POST /api/v1/projects` request. Shared with the CLI singleton handoff. */
+export const registerProjectInputSchema = z.object({
+  root: z.string().trim().min(1).max(4096),
+});
+export type RegisterProjectInput = z.infer<typeof registerProjectInputSchema>;
+
 /**
  * `POST /api/v1/projects` (multi-project spec, step 4.2) — what the folder-browser dialog gets
  * back. `error` is present ONLY on the 409 (already registered), where `project` is the EXISTING
@@ -103,6 +112,7 @@ export type RegisterProjectResponse = z.infer<typeof registerProjectResponseSche
 export const removeProjectResponseSchema = z.object({
   removed: z.literal(true),
   id: z.string(),
+  warning: z.string().optional(),
 });
 export type RemoveProjectResponse = z.infer<typeof removeProjectResponseSchema>;
 
@@ -167,6 +177,50 @@ export const checkoutProjectInputSchema = z.object({
 });
 export type CheckoutProjectInput = z.infer<typeof checkoutProjectInputSchema>;
 
+/**
+ * A GitHub repository name, as GitHub itself accepts it: letters, digits, `.`, `-` and `_`, at
+ * most 100 characters, and never `.` or `..`. The new-project name must be one — it is both the
+ * folder name and (with `github`) the repository name, so a name GitHub would rewrite is refused.
+ */
+export const GITHUB_REPO_NAME_PATTERN = /^(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * `POST /api/v1/projects/create` (spec 2026-09-29-create-new-project) — a fresh git repo at
+ * `<projectsDir>/<name>`. `github` present ⇒ also a new GitHub repository under `owner`, which is
+ * ALWAYS private: there is deliberately no visibility field, and one must never be added.
+ * `template` (`owner/repo` or a GitHub URL) generates the repo from a template instead of starting
+ * empty. Progress arrives as `checkout-progress`, keyed by `checkoutId`, like the clone flow.
+ */
+export const createProjectInputSchema = z.object({
+  name: z.string().trim().regex(GITHUB_REPO_NAME_PATTERN),
+  github: z
+    .object({
+      owner: z.string().trim().min(1).max(64),
+      template: z.string().trim().max(512).optional(),
+    })
+    .optional(),
+  checkoutId: z.string().trim().max(128).optional(),
+});
+export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
+
+/** One account a new repository may belong to: the signed-in user first (`personal: true`), then
+ *  their organisations. `avatarUrl`/`description` are absent when GitHub gives none. */
+export const githubOwnerSchema = z.object({
+  login: z.string(),
+  personal: z.boolean(),
+  avatarUrl: z.string().optional(),
+  description: z.string().optional(),
+});
+export type GithubOwner = z.infer<typeof githubOwnerSchema>;
+
+/** `GET /api/v1/projects/github-owners` — the accounts a new repo may belong to. Never an error:
+ *  no `gh`, or an unauthenticated one, answers `available: false` with the reason. */
+export const githubOwnersResponseSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), owners: z.array(githubOwnerSchema) }),
+  z.object({ available: z.literal(false), reason: z.string() }),
+]);
+export type GithubOwnersResponse = z.infer<typeof githubOwnersResponseSchema>;
+
 /** One directory in a `GET /api/v1/fs/browse` listing (multi-project spec, step 4.1). `path` is
  *  absolute — same-origin route, like `ProjectListEntry.root`. */
 export const fsBrowseDirSchema = z.object({
@@ -192,6 +246,59 @@ export const fsBrowseResponseSchema = z.object({
   truncated: z.boolean(),
 });
 export type FsBrowseResponse = z.infer<typeof fsBrowseResponseSchema>;
+
+/** One entry of `GET /api/v1/fs/repos` (spec 2026-10-26-first-run-onboarding): a git repository
+ *  the first-run "Pick a project" list offers. `projectId` is set when it is already registered. */
+export const repoSuggestionSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  projectId: z.string().optional(),
+});
+export type RepoSuggestion = z.infer<typeof repoSuggestionSchema>;
+
+/** `GET /api/v1/fs/repos` — registered projects, then folders the user's agent CLIs have worked
+ *  in, then a shallow scan of the browse root. Never an error: nothing found is `repos: []`. */
+export const repoSuggestionsResponseSchema = z.object({
+  repos: z.array(repoSuggestionSchema),
+  truncated: z.boolean(),
+});
+export type RepoSuggestionsResponse = z.infer<typeof repoSuggestionsResponseSchema>;
+
+/** `POST /api/v1/projects/:projectId/git-init` — turn a `not-git` project into a repository with
+ *  its current files committed, so task worktrees branch from what is on disk. */
+export const initProjectGitResponseSchema = z.object({
+  root: z.string(),
+  branch: z.string(),
+});
+export type InitProjectGitResponse = z.infer<typeof initProjectGitResponseSchema>;
+
+/** `POST /api/v1/projects/:projectId/publish-github` — a local repository with no remote becomes a
+ *  new GitHub repository under `owner`. ALWAYS private, like `projects/create`: there is no
+ *  visibility field, and one must never be added. */
+export const publishProjectGithubInputSchema = z.object({
+  owner: z.string().trim().min(1).max(64),
+  name: z.string().trim().regex(GITHUB_REPO_NAME_PATTERN),
+});
+export type PublishProjectGithubInput = z.infer<typeof publishProjectGithubInputSchema>;
+
+export const publishProjectGithubResponseSchema = z.object({
+  slug: z.string(),
+  url: z.string(),
+});
+export type PublishProjectGithubResponse = z.infer<typeof publishProjectGithubResponseSchema>;
+
+/** `POST/GET/DELETE /api/v1/github/login` — the GitHub device flow run by cezar. `pending` carries
+ *  the one-time code `gh` printed and the page it is entered on; `done` means `gh` is signed in;
+ *  `failed` carries `gh`'s last line, with `notFound` when the CLI is not installed at all. */
+export const githubLoginStateSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('idle') }),
+  z.object({ status: z.literal('starting') }),
+  z.object({ status: z.literal('pending'), code: z.string(), url: z.string() }),
+  /** `login` is the GitHub account `gh` reported, when it printed one. */
+  z.object({ status: z.literal('done'), login: z.string().optional() }),
+  z.object({ status: z.literal('failed'), error: z.string(), notFound: z.boolean().optional() }),
+]);
+export type GithubLoginState = z.infer<typeof githubLoginStateSchema>;
 
 /** `GET /api/v1/launch-key` — the bookmarklet auto-start secret (spec 011). Fetched to COMPARE
  *  against the `?key=` query param and to bake into the `javascript:` links the Settings → Skills

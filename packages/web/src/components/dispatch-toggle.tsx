@@ -299,7 +299,7 @@ function DispatchSettings({
           <SplitIcon className="size-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] font-semibold leading-tight text-foreground">Dispatch</div>
+          <div className="text-ui font-semibold leading-tight text-foreground">Dispatch</div>
           <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
             Split this task into subtasks run as separate tasks
           </p>

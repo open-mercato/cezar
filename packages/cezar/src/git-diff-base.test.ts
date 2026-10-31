@@ -19,7 +19,12 @@ function stubGit(answers: Record<string, { ok: boolean; stdout: string }>): {
   const calls: string[][] = [];
   const run: GitRunner = async (args) => {
     calls.push(args);
-    return answers[args.join(' ')] ?? { ok: false, stdout: '' };
+    const key = args.join(' ');
+    // A clone with one remote, `origin` — the base remote unless a case says otherwise.
+    if (key === 'config --get-regexp ^remote\\.' && !(key in answers)) {
+      return { ok: true, stdout: 'remote.origin.url https://github.com/acme/shop.git\n' };
+    }
+    return answers[key] ?? { ok: false, stdout: '' };
   };
   return { run, calls };
 }
@@ -39,6 +44,7 @@ function realGitFixture() {
   git('add', '.');
   git('commit', '-q', '-m', 'upstream');
   const upstream = git('rev-parse', 'HEAD');
+  git('remote', 'add', 'origin', dir);
   git('update-ref', 'refs/remotes/origin/main', upstream);
   git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
   git('checkout', '-q', '-b', 'cez/task', 'origin/main');
@@ -143,7 +149,10 @@ describe('resolveTaskDiffBase — the freshest base ref', () => {
 
     expect(await resolveTaskDiffBase(run, 'origin/develop')).toEqual({ base: 'abc123abc123' });
     // No `origin/origin/develop` probe — the ref is already the remote's answer.
-    expect(calls).toEqual([['merge-base', 'origin/develop', 'HEAD']]);
+    // (Remote discovery — one `git config` read — is the only other traffic.)
+    expect(calls.filter(([cmd]) => cmd !== 'config')).toEqual([
+      ['merge-base', 'origin/develop', 'HEAD'],
+    ]);
   });
 
   it('refreshes a SHA-pinned base through origin/HEAD when the SHA is upstream', async () => {

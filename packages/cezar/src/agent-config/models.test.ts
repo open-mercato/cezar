@@ -36,6 +36,31 @@ describe('readAgentModelDefaults', () => {
     });
   });
 
+  it('reads Antigravity\'s /model choice from ~/.gemini/antigravity-cli/settings.json', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(home, '.gemini', 'antigravity-cli'), { recursive: true });
+    // agy 1.4.0 persists the display name, which `--model` also accepts.
+    writeFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), '{"model":"Gemini 3.8 Flash (High)"}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home, USERPROFILE: home })).resolves.toEqual({
+      antigravity: 'Gemini 3.8 Flash (High)',
+    });
+  });
+
+  it('reads Pi defaultModel from project settings before the global settings', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
+    const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));
+    roots.push(repo, home);
+    mkdirSync(join(repo, '.pi'), { recursive: true });
+    mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+    writeFileSync(join(home, '.pi', 'agent', 'settings.json'), '{ "defaultModel": "anthropic/global" }\n');
+    writeFileSync(join(repo, '.pi', 'settings.json'), '{\n  // project wins\n  "defaultModel": "openai/project",\n}\n');
+
+    await expect(readAgentModelDefaults(repo, { HOME: home })).resolves.toEqual({ pi: 'openai/project' });
+  });
+
   it('falls back when a higher-precedence file is missing or malformed', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'cez-native-models-repo-'));
     const home = mkdtempSync(join(tmpdir(), 'cez-native-models-home-'));

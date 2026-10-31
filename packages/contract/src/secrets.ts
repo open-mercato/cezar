@@ -117,6 +117,8 @@ export type SecretEntry = z.infer<typeof secretEntrySchema>;
 export const secretsListSchema = z.object({
   secrets: z.array(secretEntrySchema),
   keyBackend: secretKeyBackendSchema,
+  /** Why stored values cannot be read right now (e.g. the data key is unavailable); names still list. */
+  skipped: z.string().optional(),
 });
 export type SecretsList = z.infer<typeof secretsListSchema>;
 

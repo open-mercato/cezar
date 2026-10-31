@@ -37,15 +37,17 @@ import { cn } from '@/lib/utils'
  *
  * Zero-config: an untouched repo shows `DEFAULT_PROMPT_TEMPLATES` with nothing persisted yet.
  * The first Save writes the full (possibly edited-in-place) list to `ui-state.json`'s additive
- * `promptTemplates` key — same "edit locally, explicit Save" shape as Settings → Agents' system
+ * `promptTemplates` key — same "edit locally, explicit Save" shape as Settings → Instructions' system
  * prompt, because a PUT on every keystroke would be a worse control, not a simpler one.
  */
-export function PromptTemplatesSection() {
+/** `embedded`: rendered inside Settings → Instructions, which already provides the page chassis
+ *  (padding, width), so the form draws no outer wrapper of its own. */
+export function PromptTemplatesSection({ embedded = false }: { embedded?: boolean } = {}) {
   const uiState = useUiState()
 
   if (uiState.isPending) {
     return (
-      <p data-slot="prompt-templates-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="prompt-templates-loading" className={embedded ? 'text-ui text-soft-foreground' : 'p-4 text-ui text-soft-foreground md:p-6'}>
         Loading prompt templates…
       </p>
     )
@@ -64,10 +66,10 @@ export function PromptTemplatesSection() {
   // Keyed on whether the server has ever written this key: an untouched repo (undefined) and an
   // explicitly-cleared one ([]) both come through `normalizePromptTemplates` correctly already,
   // so the form below never has to know the difference.
-  return <PromptTemplatesForm initial={normalizePromptTemplates(uiState.data.promptTemplates)} />
+  return <PromptTemplatesForm initial={normalizePromptTemplates(uiState.data.promptTemplates)} embedded={embedded} />
 }
 
-function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
+function PromptTemplatesForm({ initial, embedded }: { initial: PromptTemplate[]; embedded: boolean }) {
   const queryClient = useQueryClient()
   const skills = useSkills()
   // Already cached by the section gate above; read again here for the picker's #519 tiers.
@@ -124,7 +126,11 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
   return (
     <div
       data-slot="prompt-templates-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      className={
+        embedded
+          ? 'flex w-full flex-col gap-7'
+          : 'mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+      }
     >
       <Field
         title="Prompt templates"
@@ -132,7 +138,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
       >
         <div data-slot="prompt-template-list" className="flex flex-col gap-3">
           {templates.length === 0 ? (
-            <p data-slot="prompt-templates-empty" className="text-[13px] text-soft-foreground">
+            <p data-slot="prompt-templates-empty" className="text-ui text-soft-foreground">
               No templates. Add one below, or reset to the built-ins.
             </p>
           ) : (
@@ -169,7 +175,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                   value={template.text}
                   maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
                   onChange={(event) => updateTemplate(template.id, { text: event.target.value })}
-                  className="min-h-14 text-[13px]"
+                  className="min-h-14 text-ui"
                 />
                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                   <TemplateSkillsPicker
@@ -189,7 +195,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
                       data-skill={name}
                       title={`Stop applying “${template.label}” automatically with ${name}`}
                       onClick={() => toggleTemplateSkill(template.id, name)}
-                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                      className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
                     >
                       {name}
                       <XIcon aria-hidden="true" className="size-3" />
@@ -220,7 +226,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
             value={newText}
             maxLength={PROMPT_TEMPLATE_TEXT_LIMIT}
             onChange={(event) => setNewText(event.target.value)}
-            className="min-h-14 text-[13px]"
+            className="min-h-14 text-ui"
           />
           <Button
             type="button"
@@ -258,7 +264,7 @@ function PromptTemplatesForm({ initial }: { initial: PromptTemplate[] }) {
             Reset to defaults
           </Button>
           {invalid ? (
-            <p data-slot="prompt-templates-invalid" className="text-[11px] text-danger">
+            <p data-slot="prompt-templates-invalid" className="text-meta text-danger">
               Every template needs both a label and text.
             </p>
           ) : null}
@@ -394,7 +400,7 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     <section className="flex flex-col gap-2">
       <div>
         <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-        <p className="text-[13px] text-muted-foreground">{hint}</p>
+        <p className="text-ui text-muted-foreground">{hint}</p>
       </div>
       {children}
     </section>

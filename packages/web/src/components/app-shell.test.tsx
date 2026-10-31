@@ -466,6 +466,22 @@ describe('AppShell', () => {
       expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
     })
 
+    it('dots a nav item whose feature shipped since the user started (spec 2026-10-26, "Coming back")', () => {
+      renderShell('/', { newNavItems: new Set(['/workflows', '/settings']) })
+      const markers = [...document.querySelectorAll('[data-slot="nav-new-marker"]')]
+      expect(markers).toHaveLength(2)
+      expect(markers.map((marker) => marker.closest('a')?.getAttribute('href'))).toEqual(['/workflows', '/settings'])
+      expect(screen.getByRole('link', { name: /Workflows\s*New/ })).toBeDefined()
+    })
+
+    it('puts the "What\u2019s new" row in the sidebar footer, above the host widget', () => {
+      renderShell('/', { whatsNew: <button type="button" data-slot="whats-new">What’s new</button>, hostWidget: <div data-slot="host-widget" /> })
+      const footer = document.querySelector('[data-slot="sidebar-footer"]')
+      const row = footer?.querySelector('[data-slot="whats-new"]')
+      expect(row).not.toBeNull()
+      expect(row?.compareDocumentPosition(footer!.querySelector('[data-slot="host-widget"]')!) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+
     it('renders no Skills marker without an actionable update', () => {
       renderShell()
       expect(document.querySelector('[data-slot="nav-update-marker"]')).toBeNull()
@@ -597,6 +613,38 @@ describe('AppShell', () => {
 
   /** jsdom cannot evaluate `md:` — so assert the structure and the responsive classes that
    *  encode it, and leave "does it actually reflow at 390px" to the e2e iPhone screenshot. */
+  /** Settings is full-screen (spec 2026-10-13-unified-settings): the shell renders none of its
+   *  chrome on a settings URL — the settings frame brings its own header, nav and way back. */
+  describe('chromeless settings', () => {
+    for (const entry of ['/p/boot/settings/agents', '/p/boot/settings', '/settings/global/appearance', '/settings/global']) {
+      it(`${entry} renders no sidebar, no drawer trigger and no mobile top bar`, () => {
+        renderShell(entry)
+        const shell = document.querySelector('[data-slot="app-shell"]') as HTMLElement
+        expect(shell.hasAttribute('data-chromeless')).toBe(true)
+        expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+        expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Open menu' })).toBeNull()
+        // The routed view still renders in the one scrolling region.
+        expect(within(document.querySelector('[data-slot="main"]') as HTMLElement).getByText('route content')).toBeTruthy()
+      })
+    }
+
+    it('keeps the banner row — provider failures link INTO settings, so the fix stays visible', () => {
+      renderShell('/p/boot/settings/agents', { banner: <div data-testid="banner">auth failed</div> })
+      expect(screen.getByTestId('banner')).toBeTruthy()
+      expect(document.querySelector('[data-slot="banner-slot"]')?.className).toContain('row-start-2')
+    })
+
+    it('is NOT chromeless on a look-alike path, or on the Skills page that /settings/skills redirects to', () => {
+      renderShell('/p/boot/settingsfoo')
+      expect(document.querySelector('[data-slot="app-shell"]')?.hasAttribute('data-chromeless')).toBe(false)
+      expect(sidebar()).not.toBeNull()
+      cleanup()
+      renderShell('/p/boot/skills')
+      expect(sidebar()).not.toBeNull()
+    })
+  })
+
   describe('responsive skeleton', () => {
     it('hides the sidebar below md and shows it from md up', () => {
       renderShell()
@@ -620,6 +668,64 @@ describe('AppShell', () => {
       expect(within(bar).getByText('Skills')).toBeTruthy()
     })
 
+  })
+
+  describe('foldable sidebar', () => {
+    it('folds into a rail, remembers it, and unfolds with focus on the fold button', () => {
+      renderShell()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      const unfold = screen.getByRole('button', { name: 'Show sidebar' })
+      expect(document.activeElement).toBe(unfold)
+      expect(localStorage.getItem('cez-sidebar-folded')).toBe('1')
+
+      fireEvent.click(unfold)
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    })
+
+    it('toggles with Mod+B', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+    })
+
+    it('Mod+B from a focused textarea keeps focus there', () => {
+      renderShell('/', {}, <textarea aria-label="composer" />)
+      const composer = screen.getByRole('textbox', { name: 'composer' })
+      composer.focus()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).toBe(composer)
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(composer)
+    })
+
+    it('ignores a held Mod+B and one pressed behind a dialog', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', repeat: true, ...mod })
+      expect(sidebar()).toBeTruthy()
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      document.body.append(dialog)
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      dialog.remove()
+    })
+
+    it('loads folded without stealing focus', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell()
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Show sidebar' }))
+    })
   })
 
   /** The resizable desktop column (#788, option C). jsdom has no layout engine, so these assert

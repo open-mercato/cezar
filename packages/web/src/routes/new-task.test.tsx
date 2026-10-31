@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -54,6 +54,7 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -64,7 +65,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -139,15 +140,17 @@ const REPO: RepoResponse = {
   status: [],
   log: [],
   branches: ['main', 'develop'],
+  checkedOutElsewhere: {},
   baseBranch: null,
 }
 
-const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], baseBranch: null }
+const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], checkedOutElsewhere: {}, baseBranch: null }
 
 const CONFIG: ConfigResponse = {
   baseBranch: null,
   defaultRunner: 'claude',
   systemPrompt: null,
+  branchNaming: null,
   defaultModels: {},
   modelsLocked: false,
   maxParallel: 2,
@@ -155,6 +158,7 @@ const CONFIG: ConfigResponse = {
   worktreeRetention: 10,
   liveTitleUpdates: null,
   reviewGate: null,
+  profile: null, taskWorkspace: null, landing: null, landingBlocked: null, requiredChecks: [], defaultSkill: null, askSkill: null, teamSkills: true,
 }
 
 const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
@@ -164,6 +168,8 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   projectsDir: '~/cezar/projects',
   skillsAutoUpdate: null,
   effectiveSkillsAutoUpdate: true,
+  orgSkillsRepos: [],
+  systemPrompt: null,
   composerDefaults: {
     autonomous: null,
     worktree: null,
@@ -214,6 +220,10 @@ function serve(overrides: {
   uiState?: Record<string, unknown>
   /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
+  /** Non-2xx catalog answers, or a request that never settles (`'pending'`). */
+  skillsStatus?: number | 'pending'
+  workflowsStatus?: number | 'pending'
+  deferredPreview?: () => Promise<Response>
   createRun?: unknown
   /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
   createRunStatus?: number
@@ -222,6 +232,8 @@ function serve(overrides: {
   /** Agent accounts (spec 2026-07-29-agent-profiles). Omitted answers a 404, which is how every
    *  pre-existing test here keeps a composer with no account pill at all. */
   agentProfiles?: AgentProfilesResponse
+  /** What `GET …/agent-profiles/:id/status` probes, per account id — read per request. */
+  accountStatus?: Record<string, 'connected' | 'disconnected'>
 } = {}) {
   const data = {
     health: HEALTH,
@@ -234,6 +246,8 @@ function serve(overrides: {
     repo: REPO,
     uiState: {},
     uiStateStatus: 200,
+    skillsStatus: 200 as number | 'pending',
+    workflowsStatus: 200 as number | 'pending',
     createRun: { id: 'r1' },
     createRunStatus: 201,
     launchKey: 'k-real',
@@ -249,6 +263,9 @@ function serve(overrides: {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
+      if (url.endsWith('/deferred-start/options')) return json({ timeZone: 'UTC', usageReset: { available: true, provider: 'claude' } })
+      if (url.endsWith('/deferred-start/preview') && data.deferredPreview) return data.deferredPreview()
+      if (url.endsWith('/deferred-start') && method === 'POST') return json({ scheduled: { id: 'd1', requestDigest: 'x', outcome: 'pending', runIds: [] } }, 201)
       if (url === '/api/v1/health') {
         return typeof data.health === 'function' ? data.health() : json(data.health)
       }
@@ -262,8 +279,14 @@ function serve(overrides: {
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
-      if (url === '/api/v1/skills') return json(data.skills)
-      if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
+      if (url === '/api/v1/skills') {
+        if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.skills, data.skillsStatus)
+      }
+      if (url === '/api/v1/workflows' && method === 'GET') {
+        if (data.workflowsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.workflows, data.workflowsStatus)
+      }
       if (url === '/api/v1/repo') return json(data.repo)
       if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
@@ -278,6 +301,10 @@ function serve(overrides: {
       if (url === '/api/v1/workspace/config' && method === 'GET') return json(data.workspaceConfig)
       if (url === '/api/v1/workspace/agent-profiles' && method === 'GET' && data.agentProfiles) {
         return json(data.agentProfiles)
+      }
+      const accountStatus = url.match(/^\/api\/v1\/workspace\/agent-profiles\/([^/?]+)\/status/)
+      if (accountStatus && data.accountStatus?.[accountStatus[1]!]) {
+        return json({ status: { provider: 'claude', status: data.accountStatus[accountStatus[1]!], profileId: accountStatus[1] } })
       }
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
@@ -357,12 +384,15 @@ describe('the hero surface', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Run mode' })).toBeNull()
   })
 
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the hero in the onboarding grammar: title, subtitle, a plain violet surface, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // Spec 2026-10-26-first-run-onboarding § Composer: the page wears the onboarding palette and
+    // no background texture — the twinkles and the ghost code are gone.
+    expect(document.querySelector('[data-route="new"]')?.hasAttribute('data-onboarding')).toBe(true)
+    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
     // per-state cases live in "the run-mode note" below.
@@ -382,6 +412,20 @@ describe('the hero surface', () => {
     expect(textarea().value).toContain('failing or flaky test')
     expect(requests.some((r) => r.method === 'POST')).toBe(false)
     expect(location()).toBe('/new')
+  })
+
+  it('starts an attachment-only task: empty task text, the attachment in images (telemetry 18c930de)', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    paste(textarea(), [pngFile()])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    await startTask()
+
+    const body = postedBody() as { task: string; images?: unknown[] }
+    expect(body.task).toBe('')
+    expect(body.images).toHaveLength(1)
   })
 })
 
@@ -1026,6 +1070,42 @@ describe('submit', () => {
     expect(put?.body).not.toHaveProperty('skillUsage')
   })
 
+  // Telemetry 31eda062: a failed catalog fetch left `sourcesReady` false forever, so every
+  // Start answered "Still loading workflows and skills". 404s land errored at once (no retry).
+  it('a FAILED skills fetch still starts the drafted workflow — never "Still loading"', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve({ skillsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'fix-and-verify' })
+    expect(screen.queryByText(/Still loading workflows and skills/)).toBeNull()
+  })
+
+  it('a FAILED catalog keeps the drafted skill instead of swapping in quick-task', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ skillsStatus: 404, workflowsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Fix it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ task: 'Fix it', steps: [expect.objectContaining({ skill: 'om-fix' })] })
+  })
+
+  it('Start stays disabled while the catalog is still loading', async () => {
+    serve({ workflowsStatus: 'pending' })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+
+    expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(true)
+  })
+
   it('a WORKFLOW source posts { workflow, task }', async () => {
     draftSource({ source: 'workflow', ref: 'fix-and-verify' })
     serve()
@@ -1309,7 +1389,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -1969,6 +2049,65 @@ describe('the composer runner pill carries the account', () => {
     expect(postedBody()).toMatchObject({ agentProfile: 'default' })
   })
 
+  // Telemetry ac53a6ef (0.15.2): `GET /providers/status` describes the discovered login only, so a
+  // project on a signed-out named account looked startable and every Start came back a 409 that
+  // pointed at a Providers card showing Claude connected.
+  describe('a signed-out selected account', () => {
+    const SIGNED_OUT_MESSAGE =
+      'Claude Code account "Klaudiusz" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.'
+    const signedOut = (): AgentProfilesResponse => ({
+      ...ACCOUNTS,
+      selections: { '/repo': { claude: 'klaudiusz' } },
+      profiles: ACCOUNTS.profiles.map((profile: (typeof ACCOUNTS)['profiles'][number]) =>
+        profile.isDefault ? profile : { ...profile, status: { provider: 'claude', status: 'disconnected', profileId: 'klaudiusz' } }),
+    })
+
+    it('says so before Start, and does not post a run the server would refuse', async () => {
+      serve({ agentProfiles: signedOut(), accountStatus: { klaudiusz: 'disconnected' } })
+      renderNewTask()
+      await pillReady()
+      const alert = await waitFor(() => {
+        const node = document.querySelector('[data-slot="account-signed-out"]')
+        expect(node).not.toBeNull()
+        return node as HTMLElement
+      })
+      expect(alert.textContent).toContain(SIGNED_OUT_MESSAGE)
+      expect(within(alert).getByRole('link', { name: 'Agent accounts' }).getAttribute('href')).toBe('/settings/global/accounts')
+
+      fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
+      // Verified fresh before refusing, exactly like the server gate.
+      await waitFor(() => expect(requests.some((r) => r.url.endsWith('/klaudiusz/status?refresh=1'))).toBe(true))
+      await screen.findAllByText(SIGNED_OUT_MESSAGE) // the toast; the alert also carries its link
+      expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
+      expect(textarea().value).toBe('do the thing')
+    })
+
+    it('starts once the fresh probe finds the account signed in — a terminal login is honoured', async () => {
+      const accountStatus: Record<string, 'connected' | 'disconnected'> = { klaudiusz: 'disconnected' }
+      serve({ agentProfiles: signedOut(), accountStatus })
+      renderNewTask()
+      await pillReady()
+      await waitFor(() => expect(document.querySelector('[data-slot="account-signed-out"]')).not.toBeNull())
+
+      accountStatus.klaudiusz = 'connected'
+      fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+      await startTask()
+      expect(postedBody()).not.toHaveProperty('agentProfile')
+    })
+
+    it('never blocks on the listing alone — its cached status can be arbitrarily old', async () => {
+      serve({ agentProfiles: signedOut(), accountStatus: { klaudiusz: 'connected' } })
+      renderNewTask()
+      await pillReady()
+      await waitFor(() => expect(requests.some((r) => r.url.endsWith('/klaudiusz/status'))).toBe(true))
+
+      fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+      await startTask()
+      expect(document.querySelector('[data-slot="account-signed-out"]')).toBeNull()
+    })
+  })
+
   it('drops an account belonging to another runner when the runner switches', async () => {
     // A Claude account must not ride along into a codex run: the id means nothing there, and
     // sending it would assert a choice the user never made for that engine.
@@ -2216,4 +2355,322 @@ describe('the Dispatch toggle', () => {
     await startTask()
     expect(postedBody()).not.toHaveProperty('dispatch')
   })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const TRUNK_SKILLS: Skill[] = [
+    ...SKILLS,
+    { name: 'ingest', description: 'File a note', body: '', path: '/p/ingest.md', source: 'ai' },
+    { name: 'ask', description: 'Answer from the notes', body: '', path: '/p/ask.md', source: 'ai' },
+  ]
+  const TRUNK_CONFIG: Partial<ConfigResponse> = {
+    profile: 'trunk',
+    taskWorkspace: 'in-place',
+    landing: 'auto',
+    defaultSkill: 'ingest',
+    askSkill: 'ask',
+  }
+  const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
+
+  it('files a note in place with the default skill', async () => {
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    expect(note()).toContain('review the changes, then Commit lands them on the base branch')
+    fireEvent.change(textarea(), { target: { value: '1on1 with Bjorn, I owe him the deck by Friday' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({
+      worktree: false,
+      steps: [{ skill: 'ingest' }],
+    })
+    expect(postedBody()).not.toHaveProperty('readOnly')
+    // The default skill must not make the task autonomous: that would land it unreviewed.
+    expect(postedBody()).not.toHaveProperty('autonomous')
+  })
+
+  it('asks a question read-only with the Ask skill', async () => {
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    fireEvent.change(textarea(), { target: { value: "what's open with Daniel?" } })
+    await waitFor(() => expect(document.querySelector('[data-slot="ask-toggle"]')?.getAttribute('aria-checked')).toBe('true'))
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).toBeNull()
+    await startTask()
+    expect(postedBody()).toMatchObject({ readOnly: true, steps: [{ skill: 'ask' }] })
+    expect(postedBody()).not.toHaveProperty('worktree')
+  })
+
+  it('lets the project default win over a Worktree choice remembered from before it changed', async () => {
+    localStorage.setItem('cez-new-task-draft', JSON.stringify({ worktree: true }))
+    serve({ config: TRUNK_CONFIG, skills: TRUNK_SKILLS })
+    renderNewTask()
+    await pillReady('ingest')
+    const chip = () => document.querySelector('[data-slot="worktree-toggle"]')
+    expect(chip()?.getAttribute('aria-checked')).toBe('false')
+    // Ticking it now is a choice made under this setting, so it sticks.
+    fireEvent.click(chip() as HTMLButtonElement)
+    await waitFor(() => expect(chip()?.getAttribute('aria-checked')).toBe('true'))
+  })
+
+  it('leaves a branch-per-task project without the Ask chip', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(document.querySelector('[data-slot="ask-toggle"]')).toBeNull()
+  })
+})
+
+it.each([['trailing space', 'Later '], ['trailing newline', 'Later\n']])('schedules a checked prompt with a %s', async (_, text) => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  renderNewTask()
+  await pillReady()
+  fireEvent.change(textarea(), { target: { value: text } })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
+  await waitFor(() => expect(send().disabled).toBe(false), { timeout: 3000 })
+  fireEvent.click(send())
+  await waitFor(() => expect(requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))).toBeTruthy())
+  const created = requests.find(r => r.method === 'POST' && r.url.endsWith('/deferred-start'))!
+  expect((created.body as { task: { task: string } }).task.task).toBe('Later')
+  const preview = requests.find(r => r.url.endsWith('/deferred-start/preview'))!
+  expect((preview.body as { task: { task: string } }).task.task).toBe('Later')
+})
+
+it('puts the start-time menu beside Send, not on the pill row, and summarizes a chosen start', async () => {
+  serve({
+    health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  })
+  renderNewTask()
+  await pillReady()
+  const menu = screen.getByRole('button', { name: 'Choose task start time' })
+  expect(menu.closest('[data-slot="composer-footer-start"]')).toBeNull()
+  expect(menu.closest('[data-slot="composer-send"]')?.contains(screen.getByRole('button', { name: 'Start task' }))).toBe(true)
+  expect(document.querySelector('[data-slot="schedule-summary"]')).toBeNull()
+  // The submit chord lives in Send's tooltip, not on the button.
+  expect(screen.getByRole('button', { name: 'Start task' }).textContent).toBe('')
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  fireEvent.click(menu)
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  await waitFor(() => expect(document.querySelector('[data-slot="schedule-summary"]')?.textContent).toContain('After reset'), { timeout: 3000 })
+})
+
+it('gates scheduling while unchecked, checking, unavailable and changed, including keyboard submit', async () => {
+  const delayed = deferredJson<unknown>()
+  serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } }, deferredPreview: delayed.fetch })
+  renderNewTask()
+  await pillReady()
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('After usage limit resets'))
+  const send = () => screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement
+  expect(send().disabled).toBe(true)
+  expect(textarea().disabled).toBe(false)
+  const why = () => document.querySelector('[data-slot="schedule-blocked"]')?.textContent
+  expect(why()).toBe('Finding when your usage limit resets…')
+  fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+  expect(textarea().value).toBe('Later')
+  expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/options'))).toBe(false)
+  const previews = () => requests.filter(r => r.url.endsWith('/deferred-start/preview')).length
+  await waitFor(() => expect(previews()).toBe(1), { timeout: 3000 })
+  expect(send().disabled).toBe(true)
+  await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r' }))
+  await waitFor(() => expect(send().disabled).toBe(false))
+  expect(why()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  expect(send().disabled).toBe(true)
+  await act(async () => delayed.release({ available: false, reason: 'account-unverifiable', message: 'No reset available' }))
+  await screen.findByRole('alert')
+  expect(send().disabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await act(async () => delayed.release({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r2' }))
+  await waitFor(() => expect(send().disabled).toBe(false))
+  // Rewording the prompt keeps the check: the preview binds execution settings, not wording.
+  fireEvent.change(textarea(), { target: { value: 'Later, reworded' } })
+  expect(send().disabled).toBe(false)
+  expect(why()).toBeUndefined()
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 700)) })
+  expect(previews()).toBe(3)
+  fireEvent.change(textarea(), { target: { value: 'Later' } })
+  expect(send().disabled).toBe(false)
+  const toggle = document.querySelector('[data-slot="autonomous-toggle"]')!
+  fireEvent.click(toggle)
+  expect(send().disabled).toBe(true)
+  fireEvent.click(toggle)
+  expect(send().disabled).toBe(true)
+  fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+  expect(textarea().value).toBe('Later')
+  expect(requests.some(r => r.method === 'POST' && !r.url.endsWith('/preview') && !r.url.endsWith('/options'))).toBe(false)
+  fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
+  expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
+})
+
+
+describe('lost schedule response recovery', () => {
+  it.each(['preview', 'settings', 'now', 'remount', 'retry-error', 'server-error', 'disabled-replay'])('replays only the frozen creation after changing %s', async (change) => {
+    let revision = 'r1'
+    serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+      deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: revision }), { status: 200 }),
+    })
+    const originalFetch = globalThis.fetch
+    const accepted = new Map<string, unknown>()
+    let loseResponse = true
+    let disabledReplay = change === 'disabled-replay'
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await originalFetch(input, init)
+      if (String(input).endsWith('/deferred-start')) {
+        if (!loseResponse && disabledReplay) {
+          disabledReplay = false
+          return new Response(JSON.stringify({ error: 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0' }), { status: 409 })
+        }
+        const body = JSON.parse(String(init?.body))
+        accepted.set(body.idempotencyKey, body)
+        if (loseResponse) {
+          loseResponse = false
+          await new Promise(resolve => setTimeout(resolve, 20))
+          if (change === 'server-error') return new Response(JSON.stringify({ error: 'Failed after persistence' }), { status: 409 })
+          throw new Error('Accepted, but response lost')
+        }
+      }
+      return response
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.change(textarea(), { target: { value: 'Original task' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+    await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+    fireEvent.click(screen.getByLabelText('After usage limit resets'))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 })
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule task' }))
+    await screen.findByRole('button', { name: 'Recover original schedule' })
+    await waitFor(() => expect(textarea().value).toBe('Original task'))
+    revision = 'r2'
+    if (change === 'remount') {
+      cleanup()
+      renderNewTask()
+      await pillReady()
+      await screen.findByRole('button', { name: 'Recover original schedule' })
+      fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+      await waitFor(() => expect((screen.getByLabelText('After usage limit resets') as HTMLInputElement).disabled).toBe(false))
+      fireEvent.click(screen.getByLabelText('After usage limit resets'))
+    }
+    if (change === 'settings') {
+      fireEvent.change(textarea(), { target: { value: 'Changed task' } })
+      fireEvent.click(document.querySelector('[data-slot="autonomous-toggle"]')!)
+    }
+    if (change === 'now') fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
+    else {
+      // Changed settings (or a fresh mount) re-check by themselves; otherwise the user refreshes.
+      if (change !== 'settings' && change !== 'remount') fireEvent.click(await screen.findByRole('button', { name: 'Refresh' }))
+      await waitFor(() => expect(requests.filter(r => r.url.endsWith('/preview')).length).toBe(2), { timeout: 3000 })
+    }
+    expect((screen.getByRole('button', { name: change === 'now' ? 'Start task' : 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+    expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
+    if (change === 'retry-error' || change === 'disabled-replay') {
+      loseResponse = change === 'retry-error'
+      fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+      await screen.findByRole('button', { name: 'Recover original schedule' })
+      expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+    await waitFor(() => expect(location()).toBe('/'))
+    const bodies = requests.filter(r => r.url.endsWith('/deferred-start')).map(r => r.body)
+    expect(bodies).toHaveLength(change === 'retry-error' || change === 'disabled-replay' ? 3 : 2)
+    for (const body of bodies) expect(body).toEqual(bodies[0])
+    if (change === 'settings') expect(readDraft().text).toBe('Changed task')
+    expect(accepted.size).toBe(1)
+    expect(postedBody()).toBeUndefined()
+  })
+})
+
+it.each([
+  [400, 'Choose a future date and time in the server time zone.'],
+  [409, 'Settings or reset time changed. Check the preview again.'],
+  [409, 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0'],
+])('preserves deferred intent after definite %s rejection: %s', async (status, error) => {
+  serve({ health: { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } },
+    deferredPreview: async () => new Response(JSON.stringify({ available: true, notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', previewRevision: 'r1' }), { status: 200 }),
+  })
+  const originalFetch = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await originalFetch(input, init)
+    return String(input).endsWith('/deferred-start')
+      ? new Response(JSON.stringify({ error }), { status })
+      : response
+  })
+  renderNewTask()
+  await pillReady()
+  fireEvent.change(textarea(), { target: { value: 'Rejected task' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose task start time' }))
+  fireEvent.click(screen.getByLabelText('Pick date & time'))
+  fireEvent.change(screen.getByLabelText('Date'), { target: { value: '2099-01-01' } })
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole('button', { name: 'Schedule task' }))
+  await waitFor(() => expect(textarea().value).toBe('Rejected task'))
+  expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(true)
+  expect(screen.queryByText(/Earliest start:/)).toBeNull()
+  expect((screen.getByLabelText('Date') as HTMLInputElement).value).toBe('2099-01-01')
+  expect(screen.queryByRole('button', { name: 'Recover original schedule' })).toBeNull()
+  expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
+  fireEvent.keyDown(textarea(), { key: 'Enter', ctrlKey: true })
+  expect(postedBody()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Schedule task' }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByLabelText('Now', { selector: 'input' }))
+  fireEvent.change(textarea(), { target: { value: 'Corrected task' } })
+  await startTask()
+  expect(postedBody()).toMatchObject({ task: 'Corrected task' })
+})
+
+it('restores a frozen schedule from tab storage before a bookmarklet can start another task', async () => {
+  const frozen = {
+    task: { task: 'Original task', workflow: 'quick-task', runner: 'claude', variants: 3 },
+    start: { kind: 'usage-reset' },
+    previewRevision: 'original-revision',
+    idempotencyKey: 'b76aee2a-0067-4410-bfd1-67096e0e6a14',
+  }
+  sessionStorage.setItem('cez-pending-schedule:default', JSON.stringify(frozen))
+  serve()
+  renderNewTask('/new?skill=om-fix&ref=123&auto=1&key=k-real')
+  await screen.findByRole('button', { name: 'Recover original schedule' })
+  await pillReady('om-fix')
+  expect(postedBody()).toBeUndefined()
+  fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+  await waitFor(() => expect(location()).toBe('/'))
+  expect(requests.find(r => r.url.endsWith('/deferred-start'))?.body).toEqual(frozen)
+  expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
+  expect(postedBody()).toBeUndefined()
+})
+
+it.each(['launched', 'cancelled'] as const)('recovers a terminal %s result without creating another task', async outcome => {
+  const frozen = {
+    task: { task: 'Original task', workflow: 'quick-task', runner: 'claude' },
+    start: { kind: 'usage-reset' }, previewRevision: 'original-revision',
+    idempotencyKey: 'b76aee2a-0067-4410-bfd1-67096e0e6a14',
+  }
+  sessionStorage.setItem('cez-pending-schedule:default', JSON.stringify(frozen))
+  serve()
+  const originalFetch = globalThis.fetch
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await originalFetch(input, init)
+    if (String(input).endsWith('/deferred-start')) return new Response(JSON.stringify({ scheduled: {
+      id: 'original', requestDigest: 'x', outcome, runIds: outcome === 'launched' ? ['started-run'] : [],
+    } }), { status: 201 })
+    return response
+  })
+  renderNewTask()
+  await screen.findByRole('button', { name: 'Recover original schedule' })
+  fireEvent.click(screen.getByRole('button', { name: 'Recover original schedule' }))
+  await waitFor(() => expect(location()).toBe(outcome === 'launched' ? '/tasks/started-run' : '/'))
+  expect(sessionStorage.getItem('cez-pending-schedule:default')).toBeNull()
+  expect(requests.filter(r => r.url.endsWith('/deferred-start'))).toHaveLength(1)
+  expect(postedBody()).toBeUndefined()
 })

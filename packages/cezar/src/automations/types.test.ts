@@ -36,6 +36,14 @@ describe('automation schemas', () => {
     ).toBe(false);
   });
 
+  it('accepts the closed and merged events, but not with a pr-head checkout', () => {
+    const events = ['pull_request.closed', 'pull_request.merged'];
+    expect(automationDefinitionSchema.safeParse({ ...definition, events }).success).toBe(true);
+    expect(automationDefinitionSchema.safeParse({
+      ...definition, events, task: { ...definition.task, checkout: 'pr-head' },
+    }).success).toBe(false);
+  });
+
   it('accepts the review events and an optional reviewers filter', () => {
     const parsed = automationDefinitionSchema.safeParse({
       ...definition,

@@ -10,7 +10,8 @@ import { cn } from '@/lib/utils'
  *
  * Three states beyond the base, each a data attribute so a test or a stylesheet can address it:
  *  - `active` — a selected option in a chip row (the automation editor's schedule/event chips);
- *  - `skill` — the composer's picked-skill chip: violet border, mono, semibold;
+ *  - `skill` — the composer's picked-skill chip: violet border (one face and weight for the whole
+ *    pill row — a mono, semibold chip beside plain ones read as a second typeface);
  *  - `dashed` — an affordance that leads somewhere rather than selecting ("Manage…").
  */
 export const chipClass =
@@ -48,7 +49,7 @@ export function Chip({
       className={cn(
         chipClass,
         active && 'border-foreground font-semibold text-foreground',
-        skill && 'border-violet font-mono font-semibold text-foreground',
+        skill && 'border-violet text-foreground',
         dashed && 'border-dashed',
         className,
       )}
