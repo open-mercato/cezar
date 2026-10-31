@@ -310,3 +310,32 @@ describe('the dictation overlay (paseo pattern)', () => {
     expect(document.querySelector('[data-slot="dictation-overlay"]')).toBeNull()
   })
 })
+
+describe('dictation language (#1807)', () => {
+  afterEach(() => localStorage.clear())
+
+  it('defaults to the browser language, remembers a pick, and applies it at the next start', () => {
+    stubSpeech()
+    vi.stubGlobal('navigator', { ...navigator, language: 'de-AT' })
+    renderComposer()
+    const picker = screen.getByLabelText('Dictation language') as HTMLSelectElement
+    expect(picker.value).toBe('de-AT') // the browser's own is always offered
+    expect(startDictation().lang).toBe('de-AT')
+    fireEvent.click(screen.getByLabelText('Cancel dictation'))
+
+    fireEvent.change(screen.getByLabelText('Dictation language'), { target: { value: 'pl-PL' } })
+    expect(localStorage.getItem('cez-dictation-language')).toBe('pl-PL')
+    expect(startDictation().lang).toBe('pl-PL')
+  })
+
+  it('keeps the pick across a remount and is absent where dictation is unsupported', () => {
+    stubSpeech()
+    localStorage.setItem('cez-dictation-language', 'pl-PL')
+    renderComposer()
+    expect(startDictation().lang).toBe('pl-PL')
+    cleanup()
+    vi.unstubAllGlobals()
+    renderComposer()
+    expect(screen.queryByLabelText('Dictation language')).toBeNull()
+  })
+})
