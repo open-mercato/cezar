@@ -135,7 +135,7 @@ export function ensureManagerShim(): string {
     chmodSync(path, 0o755);
   };
   write('cez-manager', `#!/bin/sh\nexec ${[process.execPath, ...flags].map(shellQuote).join(' ')} "$CEZ_BIN" manager "$@"\n`);
-  if (process.platform === 'win32') write('cez-manager.cmd', `@"${process.execPath}" %CEZ_BIN% manager %*\r\n`);
+  if (process.platform === 'win32') write('cez-manager.cmd', `@"${process.execPath}" "%CEZ_BIN%" manager %*\r\n`);
   return dir;
 }
 
@@ -158,6 +158,11 @@ const IMPORTANT_LINE = new RegExp(`^\\s*${MANAGER_IMPORTANT}\\b[ \\t:]*(.*)(?:\\
 const HEADLINE_LIMIT = 140;
 /** Long enough for an open tab to mark the message read, so nobody is told what they are reading. */
 const SYSTEM_NOTIFY_DELAY_MS = 3_000;
+
+/** A hand-edited date reads as long past: one early check, then a real stamp. Never `NaN`. */
+const msOf = (iso: string): number => Date.parse(iso) || 0;
+
+const turnFailure = (cause: unknown): DriveResult => ({ text: '', commands: [], costUsd: 0, error: cause instanceof Error ? cause.message : String(cause) });
 
 function judged(raw: string): { text: string; important: boolean; headline?: string } {
   const match = IMPORTANT_LINE.exec(raw);
@@ -352,8 +357,7 @@ export class ManagerEngine {
   }
 
   private checkDueAt(manager: Manager, state: { lastCheckAt?: string; watchFailures: number }): number {
-    const last = Date.parse(state.lastCheckAt ?? manager.createdAt);
-    return last + manager.cronMinutes * 60_000 * 2 ** Math.min(state.watchFailures, MAX_WATCH_BACKOFF);
+    return msOf(state.lastCheckAt ?? manager.createdAt) + manager.cronMinutes * 60_000 * 2 ** Math.min(state.watchFailures, MAX_WATCH_BACKOFF);
   }
 
   private async summarize(manager: Manager): Promise<ManagerSummary> {
@@ -492,8 +496,8 @@ export class ManagerEngine {
         ? {
             jobs: input.jobs.map((job): ManagerJob => {
               const jobId = job.id ?? randomUUID();
-              const lastRunAt = previousJobs.get(jobId)?.lastRunAt;
-              return { ...job, id: jobId, ...(lastRunAt ? { lastRunAt } : {}) };
+              // Counted from the save, as an approved job is: a new one must not fire on the next tick.
+              return { ...job, id: jobId, lastRunAt: previousJobs.get(jobId)?.lastRunAt ?? this.iso() };
             }),
           }
         : {}),
@@ -642,7 +646,8 @@ export class ManagerEngine {
       const snapshot = await this.snapshot(id);
       if (!snapshot) return;
       const { fresh, kept } = gateAttention(snapshot, store.state(id).reported);
-      store.updateState(id, (state) => ({ ...state, reported: kept }));
+      // Keys a failed turn could not report stay fresh, so none left means the failure is over.
+      store.updateState(id, (state) => ({ ...state, reported: kept, ...(fresh.length === 0 ? { watchFailures: 0 } : {}) }));
       // The brake that makes a 15-minute default affordable: a quiet repository costs nothing.
       if (fresh.length === 0 && !item.forced) {
         this.emitChange(id);
@@ -696,13 +701,16 @@ export class ManagerEngine {
         throttle = setTimeout(flush, STREAM_THROTTLE_MS);
         throttle.unref?.();
       }
-    });
+    }).catch(turnFailure);
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     const { text, important, headline } = judged(result.text.replace(QUIET_LINE, '').trim());
+    // Read mid-turn (an approval card landed): at its old seq this reply would never count as new.
+    const seq = store.state(id).readSeq >= base.seq ? store.nextSeq(id) : base.seq;
     this.publish(id, {
       ...base,
+      seq,
       text,
       ...(important ? { important } : {}),
       ...(headline ? { headline } : {}),
@@ -712,7 +720,7 @@ export class ManagerEngine {
       ...(result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
-    if (important) this.alert(id, base.seq, headline ?? onePlainLine(text));
+    if (important) this.alert(id, seq, headline ?? onePlainLine(text));
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -738,7 +746,7 @@ export class ManagerEngine {
     turn: ActiveTurn,
   ): Promise<void> {
     const { store } = this.deps;
-    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.takeNotes(id)), turn, () => undefined);
+    const result = await this.drive(id, manager, watchPrompt(snapshot, fresh, this.takeNotes(id)), turn, () => undefined).catch(turnFailure);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
     if (turn.stopped) return;
@@ -941,7 +949,7 @@ export class ManagerEngine {
   // ---- the timer ---------------------------------------------------------------------------
 
   private nextDue(manager: Manager, now: number): number | undefined {
-    const dues = manager.jobs.filter((job) => job.enabled).map((job) => Date.parse(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000);
+    const dues = manager.jobs.filter((job) => job.enabled).map((job) => msOf(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000);
     if (manager.cronMinutes > 0) dues.push(this.checkDueAt(manager, this.deps.store.state(manager.id)));
     return dues.length > 0 ? Math.max(Math.min(...dues), now) : undefined;
   }
@@ -973,7 +981,7 @@ export class ManagerEngine {
         this.enqueue(manager.id, { kind: 'watch', forced: false });
       }
       for (const job of manager.jobs) {
-        if (!job.enabled || Date.parse(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000 > now) continue;
+        if (!job.enabled || msOf(job.lastRunAt ?? manager.createdAt) + job.everyMinutes * 60_000 > now) continue;
         this.enqueue(manager.id, { kind: 'job', jobId: job.id });
       }
     }
@@ -1064,7 +1072,7 @@ export class ManagerEngine {
       if (!body.available || !body.mergeState) return { error: body.reason ?? 'GitHub merge is unavailable', status: 409 };
       if (body.mergeState.state !== 'open') return { error: `#${action.number} is already ${body.mergeState.state}`, status: 409 };
       // The forge's title, never the agent's: the card is what the user decides on.
-      return { ...action, title: body.mergeState.title, headSha: body.mergeState.headSha };
+      return { ...action, title: body.mergeState.title.slice(0, 1000), headSha: body.mergeState.headSha };
     }
     const response = await this.forward(`${prefix}/automations/${encodeURIComponent(action.automationId)}`);
     if (!response.ok) return ManagerEngine.refusalOf(response);
@@ -1072,7 +1080,7 @@ export class ManagerEngine {
     if (!automation) return { error: 'automation not found', status: 404 };
     if (automation.enabled) return { error: 'that automation is already enabled', status: 409 };
     const { id: _id, revision: _revision, enabled: _enabled, createdAt: _createdAt, updatedAt: _updatedAt, ...definition } = automation;
-    return { ...action, name: automation.name, revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
+    return { ...action, name: automation.name.slice(0, 1000), revision: automation.revision, summary: clipSummary(JSON.stringify(definition)) };
   }
 
   async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus } | ManagerRefusal> {
@@ -1117,10 +1125,16 @@ export class ManagerEngine {
     }
     this.publish(id, { ...message, status: 'running' }, true);
     const projectId = actionProject(message.action);
-    const connected = projectId === undefined || (await this.sources(manager)).some((source) => source.id === projectId);
-    const outcome = connected
-      ? await this.perform(id, message.action)
-      : { ok: false as const, result: `This manager is no longer connected to ${projectId}.` };
+    let outcome: { ok: boolean; result: string };
+    try {
+      const connected = projectId === undefined || (await this.sources(manager)).some((source) => source.id === projectId);
+      outcome = connected
+        ? await this.perform(id, message.action)
+        : { ok: false, result: `This manager is no longer connected to ${projectId}.` };
+    } catch (cause) {
+      // `running` has no other exit but a restart.
+      outcome = { ok: false, result: cause instanceof Error ? cause.message : String(cause) };
+    }
     settle(outcome.ok ? 'done' : 'failed', outcome.result);
     return { ok: true as const };
   }

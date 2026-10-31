@@ -241,6 +241,15 @@ describe('ManagerEngine', () => {
       expect(backend.specs[1]?.resume).toBeUndefined();
     });
 
+    it('a turn that throws before its agent starts closes its message', async () => {
+      const engine = makeEngine({ defaultRunner: async () => { throw new Error('no config'); } });
+      const id = await create(engine);
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(assistants(id)[0]).toMatchObject({ streaming: false, error: 'no config' });
+      expect((await engine.summary(id))?.status).toBe('error');
+    });
+
     it('an agent failure lands on the message and the row', async () => {
       const engine = makeEngine();
       const id = await create(engine);
@@ -358,6 +367,49 @@ describe('ManagerEngine', () => {
       expect(backend.specs).toHaveLength(1);
       expect(assistants(id)).toHaveLength(1);
       expect(assistants(id)[0]).toMatchObject({ turn: 'watch', text: 'PR 7 is ready' });
+    });
+
+    it('a quiet check ends the backoff a failure left behind', async () => {
+      let now = Date.parse('2026-10-31T12:00:00.000Z');
+      let github = readyPrGithub;
+      const engine = makeEngine({ now: () => now, github: { list: (root) => github.list(root), refStatus: (root, prs) => github.refStatus(root, prs) } });
+      const id = await create(engine);
+      backend.scripts.push({ fail: 'logged out' });
+      now += 16 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(store.state(id).watchFailures).toBe(1);
+      github = quietGithub;
+      now += 31 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(store.state(id).watchFailures).toBe(0);
+    });
+
+    it('caps what one check carries, newest first, and says how much it cut', async () => {
+      const failures = Array.from({ length: 150 }, (_, index) => ({ id: `a${index}`, name: `Nightly ${index}`, at: new Date(Date.UTC(2026, 9, 1, 0, index)).toISOString() }));
+      const engine = makeEngine({ projects: async () => [{ ...connected, automationFailures: () => failures }] });
+      const id = await create(engine);
+      backend.scripts.push(say(MANAGER_QUIET));
+      due(id);
+      engine.tick();
+      await settled(engine);
+      const prompt = backend.specs[0]?.userPrompt ?? '';
+      expect(prompt).toContain('New attention items: 150');
+      expect(prompt).toContain('"newItemsNotShown":50');
+      expect(prompt).toContain('Nightly 149');
+      expect(prompt).not.toContain('Nightly 10"');
+      expect(Object.keys(store.state(id).reported)).toHaveLength(150);
+    });
+
+    it('a corrupt timestamp reads as due, never NaN', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      store.updateState(id, (state) => ({ ...state, lastCheckAt: 'not a date' }));
+      expect((await engine.summary(id))?.nextCheckAt).toBeDefined();
+      engine.tick();
+      await settled(engine);
+      expect(store.state(id).lastCheckAt).not.toBe('not a date');
     });
 
     it('fences the snapshot as untrusted data', async () => {
@@ -529,6 +581,23 @@ describe('ManagerEngine', () => {
       expect(raised).toEqual([]);
     });
 
+    it('a reply that outlives a read of its turn still counts as new', async () => {
+      const engine = noisy();
+      const id = await create(engine, 0);
+      backend.scripts.push({ hold: true, play: (emit) => emit({ type: 'text', text: 'MANAGER:IMPORTANT Finished' }) });
+      engine.send(id, 'hi');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      engine.read(id);
+      backend.open[0]?.finish();
+      await settled(engine);
+      const reply = assistants(id)[0];
+      expect(reply?.seq).toBeGreaterThan(actions(id)[0]?.seq ?? Infinity);
+      expect((await engine.summary(id))?.unread).toBe(1);
+      vi.advanceTimersByTime(3_000);
+      expect(raised.map(([, body]) => body)).toContain('Finished');
+    });
+
     it('always raises an approval', async () => {
       const engine = noisy();
       const id = await create(engine);
@@ -554,6 +623,21 @@ describe('ManagerEngine', () => {
       expect(backend.specs[0]?.userPrompt).toContain('Summarize the week');
       expect(assistants(id)[0]).toMatchObject({ turn: 'job', jobName: 'Digest', text: 'Digest done' });
       expect(store.get(id)?.jobs[0]?.lastRunAt).toBeDefined();
+    });
+
+    it('a job saved in the cockpit waits out its interval', async () => {
+      let now = Date.parse('2026-10-31T12:00:00.000Z');
+      const engine = makeEngine({ now: () => now });
+      const id = await create(engine, 0);
+      now += 24 * 60 * 60_000;
+      await engine.update(id, { jobs: [{ name: 'Digest', prompt: 'x', everyMinutes: 60, enabled: true }] });
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(0);
+      now += 61 * 60_000;
+      engine.tick();
+      await settled(engine);
+      expect(backend.specs).toHaveLength(1);
     });
 
     it('skips a disabled job', async () => {
@@ -710,6 +794,22 @@ describe('ManagerEngine', () => {
       if ('error' in proposed) throw proposed;
       await engine.decide(id, proposed.actionId, 'approve');
       expect(actions(id)[0]).toMatchObject({ status: 'failed', result: 'Required checks are failing.' });
+    });
+
+    it('a decision that throws fails the card instead of leaving it running', async () => {
+      let broken = false;
+      const engine = makeEngine({
+        request: async () => {
+          if (broken) throw new Error('the cockpit is not ready');
+          return Response.json({ available: true, mergeState: { title: 'Ship', state: 'open', headSha: 'sha', defaultMethod: 'squash', methods: ['squash'] } });
+        },
+      });
+      const id = await create(engine);
+      const proposed = await engine.propose(id, { action: merge });
+      if ('error' in proposed) throw proposed;
+      broken = true;
+      expect(await engine.decide(id, proposed.actionId, 'approve')).toEqual({ ok: true });
+      expect(actions(id)[0]).toMatchObject({ status: 'failed', result: 'the cockpit is not ready' });
     });
 
     it('a project disconnected after the proposal cannot be merged', async () => {

@@ -438,7 +438,6 @@ export function Composer({
   }
 
   const onDrop = (event: DragEvent) => {
-    if (!attachments) return
     const files = [...(event.dataTransfer?.files ?? [])]
     if (files.length === 0) return
     event.preventDefault()

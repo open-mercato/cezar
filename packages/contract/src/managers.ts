@@ -12,6 +12,10 @@ export const managerIdParamSchema = z.object({ id: managerIdSchema });
 export const managerActionParamSchema = z.object({ id: managerIdSchema, actionId: z.string().min(1).max(64) });
 export const managerJobParamSchema = z.object({ id: managerIdSchema, jobId: z.string().min(1).max(64) });
 
+const boundedId = z.string().min(1).max(200);
+const runnerInput = z.string().max(64);
+const modelInput = z.string().max(200);
+
 /** `all` follows the registry: a project added later is connected without touching the manager. */
 export const managerProjectsSchema = z.union([z.literal('all'), z.array(z.string().min(1).max(200)).min(1).max(200)]);
 export type ManagerProjects = z.infer<typeof managerProjectsSchema>;
@@ -94,8 +98,8 @@ export const createManagerInputSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   instructions: z.string().max(20_000),
   projects: managerProjectsSchema,
-  runner: z.string().optional(),
-  model: z.string().optional(),
+  runner: runnerInput.optional(),
+  model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
   agentProfile: z.string().max(64).optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
@@ -108,8 +112,8 @@ export const updateManagerInputSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   instructions: z.string().max(20_000).optional(),
   projects: managerProjectsSchema.optional(),
-  runner: z.string().nullable().optional(),
-  model: z.string().nullable().optional(),
+  runner: runnerInput.nullable().optional(),
+  model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),
   agentProfile: z.string().max(64).nullable().optional(),
   cronMinutes: managerCronMinutesSchema.optional(),
@@ -143,21 +147,21 @@ export type ManagerCommand = z.infer<typeof managerCommandSchema>;
 export const managerActionRequestSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('merge-pr'),
-    projectId: z.string(),
+    projectId: boundedId,
     number: z.number().int().positive(),
-    title: z.string().optional(),
+    title: z.string().max(1000).optional(),
     method: z.enum(['merge', 'squash', 'rebase']).optional(),
     /** Stamped by the server at proposal: a push after it makes the approval refuse, not merge. */
-    headSha: z.string().optional(),
+    headSha: z.string().max(200).optional(),
   }),
   z.object({
     type: z.literal('enable-automation'),
-    projectId: z.string(),
-    automationId: z.string(),
-    name: z.string().optional(),
+    projectId: boundedId,
+    automationId: boundedId,
+    name: z.string().max(1000).optional(),
     /** Stamped by the server at proposal, with what the card shows: an edit after it refuses. */
     revision: z.number().int().optional(),
-    summary: z.string().optional(),
+    summary: z.string().max(20_000).optional(),
   }),
   /** A job runs unattended, so one the agent asks for waits for the user too. */
   z.object({
@@ -305,12 +309,12 @@ export type ManagerSnapshot = z.infer<typeof managerSnapshotSchema>;
 // ---- the tools a manager's agent calls (`cez manager …`) -----------------------
 
 export const managerCreateTaskInputSchema = z.object({
-  projectId: z.string().min(1),
+  projectId: boundedId,
   task: z.string().trim().min(1).max(100_000),
   title: z.string().trim().min(1).max(200).optional(),
-  workflow: z.string().min(1).optional(),
-  runner: z.string().optional(),
-  model: z.string().optional(),
+  workflow: boundedId.optional(),
+  runner: runnerInput.optional(),
+  model: modelInput.optional(),
   dispatch: z.boolean().optional(),
 });
 export type ManagerCreateTaskInput = z.infer<typeof managerCreateTaskInputSchema>;
@@ -318,8 +322,8 @@ export type ManagerCreateTaskInput = z.infer<typeof managerCreateTaskInputSchema
 export const managerCreateTaskResponseSchema = z.object({ projectId: z.string(), runId: z.string() });
 
 export const managerTaskMessageInputSchema = z.object({
-  projectId: z.string().min(1),
-  runId: z.string().min(1),
+  projectId: boundedId,
+  runId: boundedId,
   text: z.string().trim().min(1).max(100_000),
 });
 export type ManagerTaskMessageInput = z.infer<typeof managerTaskMessageInputSchema>;
@@ -333,8 +337,8 @@ export type ManagerProposeActionInput = z.infer<typeof managerProposeActionInput
 export const managerProposeActionResponseSchema = z.object({ actionId: z.string(), status: managerActionStatusSchema });
 
 export const managerTaskDetailQuerySchema = z.object({
-  projectId: z.string().min(1),
-  runId: z.string().min(1),
+  projectId: boundedId,
+  runId: boundedId,
 });
 export const managerTaskDetailSchema = z.object({
   task: managerSnapshotTaskSchema,

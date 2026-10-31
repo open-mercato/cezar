@@ -81,6 +81,7 @@ describe('the managers routes', () => {
   it('validates as middleware and 404s an unknown manager', async () => {
     expect((await request(BASE, { method: 'POST', body: { totalNonsense: 1 } })).status).toBe(400);
     expect((await request(`${BASE}/NOT VALID`)).status).toBe(400);
+    expect((await request(BASE, { method: 'POST', body: { instructions: 'x', projects: 'all', model: 'm'.repeat(201) } })).status).toBe(400);
     expect((await request(`${BASE}/missing`)).status).toBe(404);
     expect((await request(`${BASE}/missing/messages`)).status).toBe(404);
     expect((await request(`${BASE}/missing/check`, { method: 'POST' })).status).toBe(404);

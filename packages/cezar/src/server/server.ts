@@ -733,8 +733,10 @@ export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
   return manifest;
 }
 
-/** 409 body for the inbox mutators while the follow-up inbox is off (#471). */
+/** 409 body for every managers route under `CEZ_MANAGERS=0`. */
 const MANAGERS_OFF = 'managers are disabled — unset CEZ_MANAGERS (or remove CEZ_MANAGERS=0) to enable them';
+
+/** 409 body for the inbox mutators while the follow-up inbox is off (#471). */
 const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 to enable it';
 
 /** 409 body for every automations route while GitHub automations are off (#801). */

@@ -124,11 +124,6 @@ function expandIpv4(value: string): [string, string] | null {
  *  legal shapes returns `''`, which no allowlist matches. Being lax here is a
  *  security bug, not a convenience — a parser that merely *finds* a loopback
  *  name inside the header would accept `[::1]@evil.com` or `127.0.0.1:evil.com`. */
-/** On the user's own machine only: a hosted cockpit's OS has nobody in front of it. */
-export function managerSystemNotificationsEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
-  return env.CEZ_MANAGERS !== '0' && env.CEZ_DRY_RUN !== '1' && localHandoffEnabled(env, bindHost) && systemNotificationsAvailable(process.platform, env);
-}
-
 export function normalizeHostname(host: string): string {
   // 1. Bracketed IPv6, optionally with a port: `[::1]`, `[::1%25eth0]:4321`.
   //    The end anchor is load-bearing — without it `[::1]@evil.com` → `::1`.
@@ -236,6 +231,11 @@ function terminalEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
   if (env.CEZ_TERMINAL === '1') return true;
   if (env.CEZ_TERMINAL === '0') return false;
   return localHandoffEnabled(env, bindHost);
+}
+
+/** On the user's own machine only: a hosted cockpit's OS has nobody in front of it. */
+export function managerSystemNotificationsEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_MANAGERS !== '0' && env.CEZ_DRY_RUN !== '1' && localHandoffEnabled(env, bindHost) && systemNotificationsAvailable(process.platform, env);
 }
 
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {

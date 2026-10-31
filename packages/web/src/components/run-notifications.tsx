@@ -1,9 +1,8 @@
 import { hashKey, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 
-import { queryKeys, useWorkspaceUiState } from '@/api/queries'
+import { queryKeys, useHealth, useWorkspaceUiState } from '@/api/queries'
 import { managerKeys } from '@/api/managers'
-import { useHealth } from '@/api/queries'
 import type { ApiRun, ManagerListResponse, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   describeManagerNotification,

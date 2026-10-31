@@ -86,10 +86,6 @@ const WorkflowGraphRoute = lazyRoute('workflow-graph', () =>
  *  bundle as a static Settings section). */
 const SkillsRoute = lazyRoute('skills', () => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
 
-/** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
- *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
- *  imports, and now that automations are on by default, every visitor would otherwise pay for
- *  it before ever opening `/automations`. */
 /** Lazy for the transcript's markdown stack; the sidebar list rides the main bundle on its own. */
 const ManagerIndexRoute = lazyRoute('manager', () =>
   import('./routes/manager/manager-index').then((m) => ({ default: m.ManagerIndexRoute })),
@@ -101,6 +97,10 @@ const ManagerChatRoute = lazyRoute('manager', () =>
   import('./routes/manager/manager-chat').then((m) => ({ default: m.ManagerChatRoute })),
 )
 
+/** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
+ *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
+ *  imports, and now that automations are on by default, every visitor would otherwise pay for
+ *  it before ever opening `/automations`. */
 const AutomationsRoute = lazyRoute('automations', () =>
   import('./routes/automations/automations-route').then((m) => ({ default: m.AutomationsRoute })),
 )
@@ -331,16 +331,6 @@ export function pageTitleContext(pathname: string): PageTitleContext {
   return { pageLabel: route?.pageLabel ?? null, taskId: null }
 }
 
-/** The route map from the spec's "Routing — every surface is a URL" section.
- *
- *  Real URLs, not hash routes: the Hono server serves the built index.html for
- *  every non-/api GET (src/server/static-ui.ts `resolveGetRequest`), so each of
- *  these cold-loads and survives a refresh — `/p/…` paths included.
- *
- *  Every path lives under `/p/:projectId/` (multi-project spec, step 3.2) via the one
- *  `ProjectScopeRoute` layout above; the flat spellings below are relative to that prefix and
- *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
- */
 /** `CEZ_MANAGERS=0`: a pasted `/manager` link lands on the cockpit instead of a page of 409s. */
 function ManagersGate({ children }: { children: ReactNode }) {
   const health = useHealth()
@@ -352,6 +342,16 @@ function ManagersGate({ children }: { children: ReactNode }) {
   )
 }
 
+/** The route map from the spec's "Routing — every surface is a URL" section.
+ *
+ *  Real URLs, not hash routes: the Hono server serves the built index.html for
+ *  every non-/api GET (src/server/static-ui.ts `resolveGetRequest`), so each of
+ *  these cold-loads and survives a refresh — `/p/…` paths included.
+ *
+ *  Every path lives under `/p/:projectId/` (multi-project spec, step 3.2) via the one
+ *  `ProjectScopeRoute` layout above; the flat spellings below are relative to that prefix and
+ *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
+ */
 export const AppRoutes = memo(function AppRoutes() {
   const capabilities = useHealth().data?.capabilities
   return (
