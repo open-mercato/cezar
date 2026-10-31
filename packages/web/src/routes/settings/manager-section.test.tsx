@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
@@ -48,6 +48,18 @@ describe('Settings → Manager', () => {
     expect(puts[0]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false } })
     expect(box('Merges').getAttribute('aria-checked')).toBe('false')
     expect(client.getQueryData(workspaceQueryKeys.uiState)).toMatchObject({ appearance: { accent: 'blue' } })
+  })
+
+  it('keeps the first of two switches tapped before a re-render', async () => {
+    renderSection({})
+    const merges = box('Merges')
+    const jobs = box('Jobs')
+    act(() => {
+      merges.click()
+      jobs.click()
+    })
+    await waitFor(() => expect(puts).toHaveLength(2))
+    expect(puts[1]).toEqual({ managerConfirm: { 'merge-pr': false, 'enable-automation': true, 'add-job': false } })
   })
 
   it('never offers autonomy: the copy keeps the tap', () => {
