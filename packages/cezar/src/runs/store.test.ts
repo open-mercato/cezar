@@ -100,6 +100,28 @@ describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
     expect(readFileSync(eventsFile, 'utf8')).toContain('"text":"three"');
   });
 
+  // #1579: the issue's own repro — the whole `runs/` folder turns read-only after `open`.
+  it.skipIf(!canDenyWrites)('degrades to live-only, and says so, when runs/ stops being writable mid-session', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const dataDir = join(parent, 'cezar');
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    expect(store.historyUnsaved()).toBe(false);
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+    chmodSync(join(dataDir, 'runs'), 0o555);
+    try {
+      expect(() => store.appendEvent(run.id, { type: 'user-message', text: 'hi' })).not.toThrow();
+      expect(live).toHaveLength(1);
+      expect(store.historyUnsaved()).toBe(true);
+      expect(error).toHaveBeenCalledTimes(1);
+    } finally {
+      chmodSync(join(dataDir, 'runs'), 0o755);
+    }
+    store.appendEvent(run.id, { type: 'note', text: 'back' });
+    expect(store.historyUnsaved()).toBe(false);
+  });
+
   it('still throws when the project itself is gone — only a refused write degrades (#1105)', () => {
     const dataDir = join(parent, 'cezar');
     const store = RunStore.open(dataDir);

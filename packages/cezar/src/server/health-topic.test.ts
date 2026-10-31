@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -289,5 +289,25 @@ describe('health topic + cache (live-server path)', () => {
     expect(await runner()).toBe('claude');
     setRunner('codex');
     expect(await runner()).toBe('codex'); // no cache in the way
+  }, TEST_BUDGET_MS);
+
+  // #1579: the cockpit learns that history is not being saved from health, only while it is true.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('flags unsaved task history once the run store loses write access', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    setRunner('claude');
+    const app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+    currentApp = app;
+    const read = async () => (await (await apiRequest(app, '/api/v1/health')).json()) as { historyUnsaved?: boolean };
+    expect((await read()).historyUnsaved).toBeUndefined();
+
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    chmodSync(join(repoRoot, '.ai/cezar/runs'), 0o555);
+    try {
+      store.appendEvent(run.id, { type: 'note', text: 'x' });
+      expect((await read()).historyUnsaved).toBe(true);
+    } finally {
+      chmodSync(join(repoRoot, '.ai/cezar/runs'), 0o755);
+      spy.mockRestore();
+    }
   }, TEST_BUDGET_MS);
 });
