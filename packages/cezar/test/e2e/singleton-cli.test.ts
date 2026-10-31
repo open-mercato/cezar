@@ -28,7 +28,8 @@ const freePort = (): Promise<number> => new Promise((resolvePort, reject) => {
 });
 
 const waitForHealth = async (origin: string): Promise<Record<string, unknown>> => {
-  const deadline = Date.now() + 20_000;
+  // A cold Windows runner can take well over 20s to boot the packaged CLI.
+  const deadline = Date.now() + 60_000;
   let last: unknown;
   while (Date.now() < deadline) {
     try {
@@ -49,7 +50,7 @@ const stop = async (child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): Pr
   await closed;
 };
 
-test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers a crash', { timeout: 90_000 }, async () => {
+test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers a crash', { timeout: 240_000 }, async () => {
   // macOS exposes /var as a symlink to /private/var. Runtime ownership deliberately rejects
   // symlink ancestors, so exercise the singleton with the canonical temporary root a real
   // CEZ_HOME installation would use rather than silently taking the degraded fallback path.
@@ -94,7 +95,7 @@ test('the packaged CLI reuses one cockpit, registers a second CWD, and recovers 
     const secondary = await execFile(
       process.execPath,
       [cliPath, '--repo', repoB, '--port', String(secondPort), '--no-open'],
-      { cwd: root, env, timeout: 20_000, maxBuffer: 10 * 1024 * 1024 },
+      { cwd: root, env, timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
     );
     assert.match(secondary.stdout, /cockpit already running/);
     assert.match(secondary.stdout, new RegExp(`127\\.0\\.0\\.1:${firstPort}/p/[^/]+/`));
