@@ -113,6 +113,34 @@ describe('terminals stop on every archive / worktree-removal path', () => {
     expect(ptys[1]!.killed).toBe(0);
   });
 
+  it('archiving a task stops the terminals of the finished subtasks it takes along (#1752)', async () => {
+    const app = makeApp();
+    const parent = seedRun(store, { worktreePath: worktree, status: 'done' });
+    const dispatch = { rootRunId: parent, parentRunId: parent };
+    const finished = seedRun(store, { worktreePath: worktree, status: 'done', dispatch });
+    const running = seedRun(store, { worktreePath: worktree, status: 'running', dispatch });
+    await open(app, `/api/v1/runs/${finished}/terminal`);
+    await open(app, `/api/v1/runs/${running}/terminal`);
+
+    const res = await apiRequest(app, `/api/v1/runs/${parent}/archive`, { method: 'POST' });
+    expect(res.status).toBe(200);
+
+    expect(store.getRun(finished)?.archived).toBe(true);
+    expect(sessions.listFor(finished)).toEqual([]);
+    expect(ptys[0]!.killed).toBeGreaterThan(0);
+    // A live subtask stays active — and keeps its shell.
+    expect(store.getRun(running)?.archived).toBe(false);
+    expect(sessions.listFor(running)).toHaveLength(1);
+    expect(ptys[1]!.killed).toBe(0);
+
+    await apiRequest(app, `/api/v1/runs/${parent}/archive`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ archived: false }),
+    });
+    expect(store.getRun(finished)?.archived).toBe(false);
+  });
+
   it('"Remove worktree" stops the terminals running inside it', async () => {
     const app = makeApp();
     const runId = seedRun(store, { worktreePath: worktree, status: 'done' });

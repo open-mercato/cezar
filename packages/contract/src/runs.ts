@@ -368,6 +368,9 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean(),
   archivedAt: z.string().optional(),
+  /** The run whose archive took this finished subtask along (#1752); restoring that run restores
+   *  this one. Absent on a run archived directly. */
+  archivedWith: z.string().optional(),
   /** Pinned to the top of this project's task list (#935) — the `Pinned` group above
    *  `Needs you`. Optional, unlike `archived`: absent IS "not pinned", which is what every
    *  record written before this carries, and the store never writes `false`. Archiving
