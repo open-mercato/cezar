@@ -23,7 +23,7 @@ into the product with a single next action.
 
 | State | Shown when | Primary action | Secondary |
 | --- | --- | --- | --- |
-| Sign in to an agent | `providers/status` answered, nothing is `connected` and enabled, and the user has not skipped it | Sign in (opens the CLI's own login in a terminal through `POST /providers/connect`, then re-probes every 3 s until it lands); install command to copy when the CLI is missing | Check again, Other agents, Continue anyway |
+| Pick your agent / Sign in to an agent | `providers/status` answered, nothing is `connected` and enabled, and the user has not skipped it | Install or Sign in, in a terminal on the page (see "Set up an agent here"); where no terminal can open, the older page: the CLI's login in an external terminal through `POST /providers/connect`, and an install command to copy | Check again, Other agents, Continue anyway |
 | Pick a project | the scoped project is `not-git` | a repository from the list; with nothing on disk, three illustrated choice cards (Clone recommended when `gh` is signed in, else New project) | New project, Clone from GitHub (Connect GitHub when `gh` is not signed in), Browse…, Initialize git here |
 | Welcome | otherwise, with no runs in the Active view | describe a task (opens `/new?ref=…`) | three task suggestions, then "Or pick up an issue" (the repo's open GitHub issues, in the same card as the repo list) or "Or start with a skill" |
 | Setup pill | runs exist and setup is left (worktree scripts, Connect GitHub, Publish to GitHub) | the next setup step | × hides it |
@@ -50,7 +50,30 @@ probe the New project dialog uses); without it the link reads Connect GitHub and
 and `gh auth login`. A local repository with no remote is offered Publish to GitHub in the setup pill. A repository
 whose remote is on GitHub but `gh` is missing is offered Connect GitHub.
 
-**Sign in does the work.** An installed, signed-out agent gets a Sign in button: `POST
+**Set up an agent here.** Nobody should have to leave cezar to get an agent working. Detection
+comes first: with an agent signed in, this page never shows. Otherwise it lists the agents cezar can
+install (Claude Code, Codex, OpenCode, Cursor, GitHub Copilot CLI), installed ones first, titled
+"Pick your agent" when none is installed. Each row shows the command its button runs. Install opens
+a terminal in the row; an exit 0 goes straight on to the login, in the same place, with an "Open
+sign-in page" link when the login printed one; the login landing moves the page on by itself.
+
+| From a running terminal | What happens |
+| --- | --- |
+| Install exits 0, the status says installed | The login starts |
+| Install exits 0, the status still says missing | "cezar cannot find it", Try again (the global folder is off cezar's PATH) |
+| Install exits non-zero | "did not install", the screen stays, Try again |
+| Login lands (status connected, seen by a re-probe every 3 s for three minutes, every 12 s after that, and after the exit) | The next page; a login still running is stopped |
+| Login exits without signing in | "did not finish", Try again |
+| The session disappears (ended unseen past the server's one-minute retention, cezar restarted) | The status decides: an installed agent goes on to the login, a connected one moves on; otherwise "closed before it finished", Try again |
+| Cancel | The process tree stops, back to the list |
+| Reload | Rejoins the session the server still has |
+| Leaving the page inside the cockpit | An install keeps going and is rejoined; a login is stopped |
+| Closing the tab | Either keeps running and is rejoined on the next open |
+
+The page falls back to the "Sign in does the work" flow below when `GET /providers/setup` answers
+`available: false`: a hosted cockpit, single-project mode, `CEZ_TERMINAL=0`, or no PTY binding.
+
+**Sign in does the work.** Where no terminal can open on the page, an installed, signed-out agent gets a Sign in button: `POST
 /providers/connect` opens that CLI's login in a terminal (the existing Agents-pane flow), and the
 page re-probes the status every 3 s for three minutes, so it moves on by itself when the login
 lands. A refused connect (hosted cockpit, no terminal) shows the server's reason and the command
@@ -160,6 +183,33 @@ cezar exits. `POST` and `DELETE` refuse with 409 in single-project mode and in a
 signing the host's `gh` in changes credentials on the server, so it follows the provider login,
 which a hosted cockpit also refuses. `CEZ_DRY_RUN=1` gets a fake code that approves itself after
 6 s and opens no browser.
+
+### `/api/v1/providers/setup`
+
+`GET` answers `{available: false, reason}` or `{available: true, agents, session}`. `POST
+/sessions` body `{provider, action: 'install'|'login', cols?, rows?}` runs one command in a PTY. The
+request never carries the command: `install` comes from `server/agent-setup.ts`, `login` from
+`loginCommand`. `output`, `input`, `resize` and `DELETE` work like a task's terminal, reach only
+setup sessions, and share its cursor-only topic.
+
+- **Which install command.** npm when its global folder is writable, then the vendor's script
+  (Claude Code, Cursor), then `sudo npm`, whose password goes in the terminal. Without npm or curl
+  the row shows the CLI's install hint instead of a button. On Windows, Claude Code's native
+  installer first, because `resolveClaudeBin` does not accept npm's `.cmd` shim; the user reads the
+  one-liner, and the PTY runs it through `-EncodedCommand`. OpenCode stays
+  pinned to `opencode-ai@1`: the runner cannot drive 2.x yet.
+- **Where.** The home folder, never the project: a repository's `.npmrc` must not get to redirect an
+  install, nor its agent config a login.
+- **One at a time.** A second start of the same action joins the running session (200); another agent
+  gets 409. The status decides what is allowed, so a stale page cannot reinstall an agent (409) or
+  sign in to a missing one (409).
+- **Who.** Refused in a hosted cockpit, even with `CEZ_TERMINAL=1`, and in single-project mode:
+  installing changes the host, and signing in changes its credentials. Nothing runs before a click,
+  so it needs no flag; `CEZ_TERMINAL=0` turns it off.
+- **Telemetry.** The existing `provider_login_opened` and `provider_connected`; installs send nothing.
+- **Dry run.** `CEZ_DRY_RUN=1` shows the real command and runs an `echo`.
+- **Not here.** pi and Junie (no install recipe this repo vouches for), and named agent accounts:
+  setup signs in the default account, and Settings → Agents keeps the rest.
 
 ### `POST /api/v1/projects/:projectId/publish-github`
 

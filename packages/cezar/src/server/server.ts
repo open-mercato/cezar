@@ -9,12 +9,15 @@ import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
+  trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
+import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
+import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -316,6 +319,8 @@ import { isGithubHost } from '../github-hosts.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
+import { agentSetupRoutes } from './agent-setup-routes.ts';
+import type { InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
   detectOpenTargets,
@@ -475,6 +480,8 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** The task terminal's session registry. Injectable so route tests drive a fake PTY. */
   terminalSessions?: TerminalSessions;
+  /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
+  agentSetupProbeEnv?: () => Promise<InstallEnv>;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
@@ -4239,6 +4246,9 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /** The run a `cez tracker` session capability belongs to; never another project's. */
+  const trackerTaskRun = (project: ProjectContext, authorization: string | undefined) =>
+    project.manager.trackerTaskForCapability(authorization?.match(/^Bearer (\S+)$/)?.[1]);
   /**
    * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
    * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
@@ -4246,6 +4256,7 @@ export function createApp(deps: ServerDeps) {
    */
   const trackerTriggerIssue = async (project: ProjectContext, trigger: AutomationEditableBody['trackerTrigger']): Promise<string | null> => {
     if (!trigger) return 'Choose an event to finish configuring this automation';
+    if (!trigger.access) return 'Review tracker access in the automation editor before saving or enabling this automation.';
     const driver = await trackers.driver(project.root, project.dataDir);
     if ('available' in driver) return driver.reason;
     if (JSON.stringify(driver.association) !== JSON.stringify(trigger.association)) return 'Tracker connection or scope changed; reload the event options';
@@ -4556,12 +4567,17 @@ export function createApp(deps: ServerDeps) {
         ]);
         const trackerSourceChanged = kind === 'tracker'
           && trackerScanIdentity(current.trackerTrigger) !== trackerScanIdentity(input.trackerTrigger);
+        // Confirming a pre-mediation definition's access resumes its checkpoint, unless it sat in
+        // review past its lookback: then, like rebaselineIdleAutomations, the backlog is dropped.
+        const lastSuccess = Date.parse(automationStore.state(current.id)?.lastSuccessAt ?? '');
+        const staleMigration = kind === 'tracker' && !current.trackerTrigger?.access && Boolean(input.trackerTrigger?.access)
+          && !(Date.now() - lastSuccess <= (current.filters?.lookbackDays ?? 7) * 86_400_000);
         const automation = automationStore.update(
           c.req.param('id'), expectedRevision,
           { ...input, kind, enabled: input.enabled ?? false },
           definition => {
             // Publish the new baseline and definition under the same mutation lease.
-            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged)) armAutomation(automationStore, definition);
+            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged || staleMigration)) armAutomation(automationStore, definition);
             else if (trackerSourceChanged) {
               // A paused definition still needs a compatible read-only preview. Clear source-bound
               // progress without arming a timer; Enable will establish its own current-time baseline.
@@ -6863,6 +6879,33 @@ export function createApp(deps: ServerDeps) {
     });
 
   const trackerRoutes = new Hono<ProjectApiEnv>()
+    .get('/tracker/task', async c => {
+      const project = c.get('project');
+      const run = trackerTaskRun(project, c.req.header('Authorization'));
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      try {
+        return c.json(trackerContextSchema.parse(await trackerTaskContext(project.root, run.automationTracker)));
+      } catch (error) {
+        const reason = error instanceof TrackerAgentBindingError ? error.message : 'Tracker context unavailable. Check connection and task binding.';
+        return c.json({ error: reason }, 409);
+      }
+    })
+    .post('/tracker/task', jsonZodValidator(trackerOperationInputSchema), async c => {
+      const project = c.get('project');
+      const authorization = c.req.header('Authorization');
+      const run = trackerTaskRun(project, authorization);
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      const stillBound = () => trackerTaskRun(project, authorization)?.id === run.id;
+      try {
+        const result = await executeTrackerOperation(project.root, project.dataDir, run.id, run.automationTracker, c.req.valid('json'), stillBound);
+        return c.json(trackerOperationResultSchema.parse(result));
+      } catch (error) {
+        const reason = error instanceof TrackerAgentBindingError ? error.message : 'Tracker operation unavailable.';
+        return c.json({ error: `${reason} Reuse its operation ID after checking the connection.` }, 409);
+      }
+    })
     .get('/tracker/automation-options', queryZodValidator(trackerAutomationOptionsQuerySchema), async c => {
       const project = c.get('project');
       const driver = await trackers.driver(project.root, project.dataDir);
@@ -6900,7 +6943,7 @@ export function createApp(deps: ServerDeps) {
       const project = c.get('project');
       return mutateTracker(project.dataDir, async () => {
         const result = await trackers.saveConnection(project.root, c.req.valid('json'));
-        if (!result) return c.json({ error: 'Could not save project credentials. Check local storage permissions. Demo mode cannot save credentials.' }, 409);
+        if ('saveFailure' in result) return c.json({ error: result.saveFailure ?? 'Could not save project credentials. Check local storage permissions. Demo mode cannot save credentials.' }, 409);
         await trackerChanged(project);
         return c.json(result, 200);
       });
@@ -7881,6 +7924,30 @@ export function createApp(deps: ServerDeps) {
       return c.json({ stopped: true });
     });
 
+  // Installing an agent changes the host and signing in changes its credentials, so setup follows
+  // the provider login and the GitHub sign-in: never hosted, never in a single-project workspace.
+  const agentSetupFamily = agentSetupRoutes({
+    sessions: terminalSessions,
+    loadPty,
+    refusal: () => {
+      const caps = capabilities();
+      if (caps.singleProject) return 'This workspace runs one fixed project, so agents are set up on the host.';
+      if (!caps.localHandoff) return 'Set up agents on the machine hosting cezar.';
+      return terminalPolicyRefusal(caps);
+    },
+    status: () => providerAuth.status({ refresh: true }),
+    loginCommand: (provider) => providerAuth.loginCommand(provider),
+    installHint: (provider) => providerAuth.installHint(provider),
+    registerTopic: registerTerminalTopic,
+    topic: terminalTopic,
+    onLoginOpened: (provider, status, sid) => {
+      trackLoginOpened(provider, status, sid);
+      watchOpenedLogin(provider, { id: DEFAULT_AGENT_ACCOUNT_ID, isDefault: true, path: null }, sid);
+    },
+    deviceSid,
+    ...(deps.agentSetupProbeEnv ? { probeEnv: deps.agentSetupProbeEnv } : {}),
+  });
+
   const v1 = new Hono<ProjectApiEnv>()
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
@@ -8200,6 +8267,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
     .route('/', providersRoutes)
+    .route('/', agentSetupFamily)
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
