@@ -32,6 +32,9 @@
 //                 real server, finish the turn only once `POST /question/:id/reply`
 //                 (final text echoes the answers) or `/reject` arrives.
 //   `#question-free` the same, but with a free-text question that has no options.
+//   `#limit-cost` an assistant message that spent $0.02, then one a spent free tier rejects
+//                 (429 `FreeUsageLimitError`) yet still carries a $0.0005 `cost`.
+//   `#fail-cost`  the same, but the second message fails mid-stream (500): its cost is real.
 // `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
@@ -177,6 +180,19 @@ const server = createServer((req, res) => {
       if (promptText.includes('#http-error')) {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ name: 'InternalError', data: { message: 'Provider rejected the configured model' } }));
+        return;
+      }
+
+      if (promptText.includes('#limit-cost') || promptText.includes('#fail-cost')) {
+        const limit = promptText.includes('#limit-cost');
+        const error = limit
+          ? { name: 'FreeUsageLimitError', data: { message: 'Rate limit exceeded. Please try again later.', statusCode: 429 } }
+          : { name: 'APIError', data: { message: 'upstream closed the stream', statusCode: 500 } };
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        send({ type: 'message.updated', properties: { info: info({ cost: 0.02 }) } });
+        send({ type: 'message.updated', properties: { info: info({ id: `${messageId()}_b`, cost: 0.0205, error }) } });
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 50);
         return;
       }
 

@@ -120,7 +120,9 @@ describe('the full-screen /new against a live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped('/new')}`)
     expect(browser.text('h1')).toBe('What should the agent work on?')
-    expect(browser.isVisible('[data-slot="twinkle-backdrop"]')).toBe(true)
+    // The onboarding grammar (spec 2026-10-26-first-run-onboarding § Composer): violet accent, no texture.
+    expect(browser.count('[data-route="new"][data-onboarding]')).toBe(1)
+    expect(browser.count('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBe(0)
     expect(
       browser.evaluate(
         `document.activeElement === document.querySelector('[data-slot="composer"] textarea')`,

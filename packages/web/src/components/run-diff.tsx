@@ -113,16 +113,16 @@ function DiffFileSection({ file }: { file: DiffFile }) {
           )}
         </span>
         {badge ? (
-          <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+          <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
             {badge}
           </span>
         ) : null}
         {file.binary ? (
-          <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+          <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
             binary
           </span>
         ) : null}
-        <span className="ml-auto shrink-0 font-mono text-[11px] font-semibold tabular-nums">
+        <span className="ml-auto shrink-0 font-mono text-meta font-semibold tabular-nums">
           <span className="text-success">+{file.additions}</span>{' '}
           <span className="text-danger">−{file.deletions}</span>
         </span>
@@ -199,7 +199,7 @@ function DiffFileBody({ lines }: { lines: string[] }) {
           type="button"
           data-slot="diff-file-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-meta font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines.length} lines`}
         </button>
