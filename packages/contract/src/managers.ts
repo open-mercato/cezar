@@ -86,6 +86,8 @@ export const managerSummarySchema = managerSchema.extend({
   /** The newest important message's one line, for a browser notification. */
   headline: z.string().optional(),
   pendingActions: z.number().int().min(0),
+  /** Question cards still waiting for an answer. */
+  pendingQuestions: z.number().int().min(0),
   lastCheckAt: z.string().optional(),
   /** Absent when `cronMinutes` is 0. */
   nextCheckAt: z.string().optional(),
@@ -176,6 +178,18 @@ export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;
 export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed']);
 export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
+/** The questions of a `CEZ:ASK` line, the same shape a task's ask card shows. */
+export const managerAskSchema = z.object({
+  questions: z.array(z.object({
+    id: z.string().optional(),
+    header: z.string(),
+    question: z.string(),
+    multiSelect: z.boolean().optional(),
+    options: z.array(z.object({ label: z.string(), description: z.string().optional() })),
+  })),
+});
+export type ManagerAsk = z.infer<typeof managerAskSchema>;
+
 const managerMessageBase = { id: z.string(), seq: z.number().int().min(0), at: z.string() };
 
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
@@ -192,6 +206,9 @@ export const managerMessageSchema = z.discriminatedUnion('kind', [
     /** The manager's own judgement that this should interrupt the user. */
     important: z.boolean().optional(),
     headline: z.string().optional(),
+    ask: managerAskSchema.optional(),
+    /** What the user answered; the next message they send answers an open card. */
+    askAnswer: z.string().optional(),
     commands: z.array(managerCommandSchema),
     stopped: z.boolean().optional(),
     error: z.string().optional(),

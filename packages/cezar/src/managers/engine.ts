@@ -7,6 +7,7 @@ import {
   type CreateManagerInput,
   type Manager,
   type ManagerActionRequest,
+  type ManagerAsk,
   type ManagerActionStatus,
   type ManagerCommand,
   type ManagerCreateTaskInput,
@@ -23,6 +24,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { AutomationDefinition } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
+import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
 import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -164,13 +166,38 @@ const msOf = (iso: string): number => Date.parse(iso) || 0;
 
 const turnFailure = (cause: unknown): DriveResult => ({ text: '', commands: [], costUsd: 0, error: cause instanceof Error ? cause.message : String(cause) });
 
-function judged(raw: string): { text: string; important: boolean; headline?: string } {
-  const match = IMPORTANT_LINE.exec(raw);
-  if (!match) return { text: raw, important: false };
-  const text = raw.replace(IMPORTANT_LINE, '').trim();
-  const headline = (match[1] ?? '').trim().slice(0, HEADLINE_LIMIT);
-  return { text, important: true, ...(headline ? { headline } : {}) };
+/** A half-streamed `CEZ:ASK` line is not text yet: parsing it waits for the final frame. */
+const STREAMING_ASK = /^[ \t]*CEZ:ASK\b[\s\S]*$/m;
+
+interface Judged {
+  text: string;
+  important: boolean;
+  headline?: string;
+  ask?: ManagerAsk;
 }
+
+function judged(raw: string): Judged {
+  const ask = parseAskMarker(raw) ?? undefined;
+  const body = ask ? stripAskMarker(raw) : raw;
+  const match = IMPORTANT_LINE.exec(body);
+  const headline = (match?.[1] ?? '').trim().slice(0, HEADLINE_LIMIT);
+  return {
+    text: (match ? body.replace(IMPORTANT_LINE, '') : body).trim(),
+    important: match !== null,
+    ...(headline ? { headline } : {}),
+    ...(ask ? { ask } : {}),
+  };
+}
+
+const judgedFields = ({ important, headline, ask }: Judged) => ({
+  ...(important ? { important } : {}),
+  ...(headline ? { headline } : {}),
+  ...(ask ? { ask } : {}),
+});
+
+/** A question always waits on the user, so it interrupts like an approval does. */
+const alertBody = ({ important, headline, ask, text }: Judged): string | undefined =>
+  important ? headline ?? onePlainLine(text) : ask ? 'Has a question for you' : undefined;
 
 /** The end of a task's assistant text, off its event file. Best effort: a task may have none. */
 function lastAssistantText(root: string, runId: string): string | undefined {
@@ -383,6 +410,7 @@ export class ManagerEngine {
       important: important.length,
       ...(important.at(-1)?.headline ? { headline: important.at(-1)!.headline } : {}),
       pendingActions: messages.filter((message) => message.kind === 'action' && message.status === 'pending').length,
+      pendingQuestions: messages.filter(openAsk).length,
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
       costUsd: this.deps.costVisible() ? state.costUsd : 0,
@@ -541,6 +569,10 @@ export class ManagerEngine {
 
   send(id: string, text: string): boolean {
     if (!this.deps.store.get(id)) return false;
+    // Picked on the card or typed in the composer: either way the card has its answer.
+    for (const message of this.deps.store.messages(id).filter(openAsk)) {
+      this.publish(id, { ...message, askAnswer: text }, true);
+    }
     this.publish(id, { id: randomUUID(), seq: this.deps.store.nextSeq(id), at: this.iso(), kind: 'user', text }, true);
     this.enqueue(id, { kind: 'chat', text });
     return true;
@@ -693,7 +725,8 @@ export class ManagerEngine {
         const { output: _output, ...rest } = command;
         return rest;
       });
-      this.publish(id, { ...base, text: judged(latest.text).text, commands, streaming: true }, false);
+      const text = judged(latest.text).text.replace(STREAMING_ASK, '').trim();
+      this.publish(id, { ...base, text, commands, streaming: true }, false);
     };
     const result = await this.drive(id, manager, prompt, turn, (progress) => {
       latest = progress;
@@ -705,22 +738,22 @@ export class ManagerEngine {
     if (throttle) clearTimeout(throttle);
     if (!store.get(id)) return;
     this.addCost(id, result.costUsd);
-    const { text, important, headline } = judged(result.text.replace(QUIET_LINE, '').trim());
+    const judgement = judged(result.text.replace(QUIET_LINE, '').trim());
     // Read mid-turn (an approval card landed): at its old seq this reply would never count as new.
     const seq = store.state(id).readSeq >= base.seq ? store.nextSeq(id) : base.seq;
     this.publish(id, {
       ...base,
       seq,
-      text,
-      ...(important ? { important } : {}),
-      ...(headline ? { headline } : {}),
+      text: judgement.text,
+      ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
       ...(turn.stopped ? { stopped: true } : {}),
       ...(result.error && !turn.stopped ? { error: result.error } : {}),
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
-    if (important) this.alert(id, seq, headline ?? onePlainLine(text));
+    const body = alertBody(judgement);
+    if (body) this.alert(id, seq, body);
   }
 
   /** Delayed, then skipped if the chat was read meanwhile: an open tab needs no interruption. */
@@ -779,7 +812,7 @@ export class ManagerEngine {
       if (forced) this.addNotice(id, 'Checked: nothing needs you right now.');
       return;
     }
-    const { text, important, headline } = judged(raw);
+    const judgement = judged(raw);
     const seq = store.nextSeq(id);
     this.publish(id, {
       id: randomUUID(),
@@ -787,14 +820,14 @@ export class ManagerEngine {
       at: this.iso(),
       kind: 'assistant',
       turn: 'watch',
-      text,
-      ...(important ? { important } : {}),
-      ...(headline ? { headline } : {}),
+      text: judgement.text,
+      ...judgedFields(judgement),
       streaming: false,
       commands: result.commands,
       ...(this.deps.costVisible() && result.costUsd > 0 ? { costUsd: result.costUsd } : {}),
     }, true);
-    if (important) this.alert(id, seq, headline ?? onePlainLine(text));
+    const body = alertBody(judgement);
+    if (body) this.alert(id, seq, body);
   }
 
   private addCost(id: string, usd: number): void {
@@ -1203,6 +1236,9 @@ const SUMMARY_LIMIT = 8_000;
 /** Long on purpose: the end of a definition is its prompt, and a card must not hide that. */
 const clipSummary = (text: string): string =>
   text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}… (cut, open the automation to read it all)` : text;
+
+const openAsk = (message: ManagerMessage): message is Extract<ManagerMessage, { kind: 'assistant' }> =>
+  message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined;
 
 const actionProject = (action: ManagerActionRequest): string | undefined =>
   action.type === 'add-job' ? undefined : action.projectId;

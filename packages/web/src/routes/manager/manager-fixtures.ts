@@ -17,6 +17,7 @@ export function managerFixture(overrides: Partial<ManagerSummary> = {}): Manager
     unread: 0,
     important: 0,
     pendingActions: 0,
+    pendingQuestions: 0,
     costUsd: 0,
     ...overrides,
   }

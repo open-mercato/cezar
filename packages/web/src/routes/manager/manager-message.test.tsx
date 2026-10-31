@@ -16,9 +16,9 @@ function Probe() {
   return <span data-testid="at">{`${location.pathname}|${JSON.stringify(location.state)}`}</span>
 }
 
-function renderMessage(message: ManagerMessage, onDecide = vi.fn()) {
+function renderMessage(message: ManagerMessage, onDecide = vi.fn(), projects?: ReadonlyArray<{ id: string; repoUrl?: string }>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
-  client.setQueryData(workspaceQueryKeys.projects, { projects: [], bootProject: 'alpha', projectsDir: '' })
+  client.setQueryData(workspaceQueryKeys.projects, { projects: projects ?? [], bootProject: 'alpha', projectsDir: '' })
   client.setQueryData(workspaceQueryKeys.runsIndex, {
     runs: [{ projectId: 'alpha', id: 'run-1', title: 'Session 123123', status: 'running', archived: false, createdAt: '2026-10-31T09:00:00Z', workflow: 'quick-task', lastActivityAt: '2026-10-31T09:00:00Z', diffStat: { adds: 87, dels: 12, files: 3 } }],
   })
@@ -26,7 +26,7 @@ function renderMessage(message: ManagerMessage, onDecide = vi.fn()) {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/manager/global']}>
         <Routes>
-          <Route path="*" element={<><ManagerMessageRow message={message} origin={origin} onDecide={onDecide} /><Probe /></>} />
+          <Route path="*" element={<><ManagerMessageRow message={message} origin={origin} onDecide={onDecide} {...(projects ? { projects } : {})} /><Probe /></>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -70,6 +70,31 @@ describe('ManagerMessageRow', () => {
     expect(document.querySelectorAll('[data-slot="session-card"]')).toHaveLength(1)
   })
 
+  describe('question card', () => {
+    const ask = { questions: [
+      { header: 'Shell', question: 'Which shell?', options: [{ label: 'Capacitor (recommended)' }, { label: 'Tauri' }] },
+      { header: 'Default', question: 'Open on Manager?', options: [{ label: 'No' }, { label: 'Yes' }] },
+    ] }
+
+    it('sends every answer as one message', async () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask }))
+      const fetchMock = vi.mocked(fetch)
+      fetchMock.mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }))
+      fireEvent.click(screen.getByRole('button', { name: 'Capacitor (recommended)' }))
+      fireEvent.click(screen.getByRole('button', { name: 'No' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      const init = fetchMock.mock.calls.at(-1)![1] as RequestInit
+      expect(JSON.parse(String(init.body))).toEqual({ text: 'Shell: Capacitor (recommended)\nDefault: No' })
+    })
+
+    it('collapses to the answer', () => {
+      renderMessage(assistantMessage(2, { text: 'Two decisions.', ask, askAnswer: 'Shell: Tauri' }))
+      expect(document.querySelector('[data-slot="manager-ask"]')?.getAttribute('data-resolved')).toBe('true')
+      expect(screen.queryByRole('button', { name: 'Send answer' })).toBeNull()
+    })
+  })
+
   it('marks what the manager judged important, with its headline', () => {
     renderMessage(assistantMessage(2, { text: 'It asks which shell.', important: true, headline: 'Blocked on you' }))
     expect(document.querySelector('[data-slot="manager-important"]')?.textContent).toBe('Blocked on you')
@@ -80,15 +105,18 @@ describe('ManagerMessageRow', () => {
     expect(document.querySelector('[data-slot="session-card"]')?.textContent).toContain('Task abcdef01')
   })
 
-  it('paints an inline pull request as a chip inside its sentence', async () => {
-    renderMessage(assistantMessage(2, { text: 'Merged [[pr:alpha/12]] today.' }))
+  it('paints a pull request and a bare number as the shared bubble, inside the sentence', async () => {
+    const projects = [{ id: 'alpha', repoUrl: 'https://github.com/o/alpha' }]
+    renderMessage(assistantMessage(2, { text: 'Merged [[pr:alpha/12]] for #1821 today.' }), vi.fn(), projects)
     const chip = await waitFor(() => {
-      const found = document.querySelector('[data-slot="manager-pr-chip"]')
+      const found = document.querySelector('[data-slot="pr-chip"]')
       expect(found).not.toBeNull()
       return found as HTMLAnchorElement
     })
-    expect(chip.getAttribute('href')).toBe('/p/alpha/github/prs/12')
+    expect(chip.textContent).toContain('#12')
+    expect(chip.getAttribute('href')).toBe('https://github.com/o/alpha/pull/12')
     expect(chip.closest('p')?.textContent).toContain('Merged')
+    expect(document.querySelector('[data-slot="issue-chip"]')?.getAttribute('href')).toBe('https://github.com/o/alpha/issues/1821')
   })
 
   it('says a stopped or failed turn', () => {

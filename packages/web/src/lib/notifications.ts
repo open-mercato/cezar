@@ -133,7 +133,8 @@ export function describeRunNotification(run: RunRecord): RunNotificationContent 
 
 /** What makes a manager worth interrupting for: a new approval, or what it judged important.
  *  Everything else waits behind the unread dot. */
-const managerAttentionCount = (manager: ManagerSummary) => manager.pendingActions + manager.important
+const managerAttentionCount = (manager: ManagerSummary) =>
+  manager.pendingActions + manager.pendingQuestions + manager.important
 
 /**
  * The managers whose attention count rose. `previous === null` is the first observation, which only
@@ -153,7 +154,9 @@ export function diffManagerAttention(
 export function describeManagerNotification(manager: ManagerSummary): RunNotificationContent {
   return {
     title: manager.name,
-    body: manager.pendingActions > 0 ? 'Needs your approval' : (manager.headline ?? manager.preview ?? 'New message'),
+    body: manager.pendingActions > 0
+      ? 'Needs your approval'
+      : manager.pendingQuestions > 0 ? 'Has a question for you' : (manager.headline ?? manager.preview ?? 'New message'),
     tag: `cezar-manager-${manager.id}`,
   }
 }

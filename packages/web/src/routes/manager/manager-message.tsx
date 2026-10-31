@@ -1,43 +1,61 @@
-import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon } from 'lucide-react'
-import { memo, useContext, createContext, useState, useMemo, type ComponentProps } from 'react'
+import { BellRingIcon, ChevronRightIcon, CircleAlertIcon } from 'lucide-react'
+import { memo, useContext, createContext, useEffect, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
+import { sendManagerMessage } from '@/api/managers'
+import { useProjects } from '@/api/queries'
+import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { chipClass } from '@/components/picker-pill'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import {
   actionTitle,
+  ISSUE_LINK_PREFIX,
+  managerReferences,
   parseManagerText,
   parseReferenceLink,
   PR_LINK_PREFIX,
   TASK_LINK_PREFIX,
+  UNKNOWN_PROJECT,
   type ManagerOrigin,
+  type ManagerReferenceProject,
 } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
-import type { ManagerActionStatus, ManagerCommand, ManagerMessage } from '@open-mercato/cezar-api-client'
+import { AskForm } from '@/routes/task-thread/ask-card'
+import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
+import type { ManagerActionStatus, ManagerAsk, ManagerCommand, ManagerMessage } from '@open-mercato/cezar-api-client'
 
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
+const NO_PROJECTS: readonly ManagerReferenceProject[] = []
+
 const OriginContext = createContext<ManagerOrigin>({ id: '', name: '' })
+
+/** The same bubble the task tables show. Its status comes from the reply's own provider. */
+function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; projectId: string; number: number }) {
+  const origin = useContext(OriginContext)
+  const repoUrl = useProjects().data?.projects.find((project) => project.id === projectId)?.repoUrl
+  return (
+    <ReferenceChip
+      compact
+      reference={{ kind, number, ...(repoUrl ? { url: `${repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
+      taskTitle={origin.name}
+      {...(projectId === UNKNOWN_PROJECT ? {} : { projectId })}
+      className="align-middle no-underline"
+    />
+  )
+}
 
 /** A reference inside a sentence: the markdown stays whole and only the link is swapped. */
 function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
   const origin = useContext(OriginContext)
   const pr = parseReferenceLink(href, PR_LINK_PREFIX)
-  if (pr) {
-    return (
-      <Link
-        to={`/p/${encodeURIComponent(pr.projectId)}/github/prs/${encodeURIComponent(pr.id)}`}
-        data-slot="manager-pr-chip"
-        title={`${pr.projectId} #${pr.id}`}
-        className={cn(chipClass, 'inline-flex no-underline')}
-      >
-        <GitPullRequestIcon aria-hidden="true" className="size-3 shrink-0" />#{pr.id}
-      </Link>
-    )
-  }
+  if (pr) return <ForgeReference kind="PR" projectId={pr.projectId} number={Number(pr.id)} />
+  const issue = parseReferenceLink(href, ISSUE_LINK_PREFIX)
+  if (issue) return <ForgeReference kind="Issue" projectId={issue.projectId} number={Number(issue.id)} />
   const task = parseReferenceLink(href, TASK_LINK_PREFIX)
   if (task) {
     return (
@@ -81,8 +99,72 @@ export function CommandsRow({ commands }: { commands: readonly ManagerCommand[] 
   )
 }
 
-function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage, { kind: 'assistant' }>; origin: ManagerOrigin }) {
-  const segments = useMemo(() => parseManagerText(message.text, message.commands), [message.text, message.commands])
+/** A `CEZ:ASK` card. Answering is just the user's next message, so the composer answers it too. */
+function ManagerQuestions({
+  managerId,
+  messageId,
+  ask,
+  answer,
+}: {
+  managerId: string
+  messageId: string
+  ask: ManagerAsk
+  answer: string | undefined
+}) {
+  const [isPending, setPending] = useState(false)
+  const [error, setError] = useState<string>()
+  const card = useMemo(() => ({ id: messageId, questions: ask.questions }), [messageId, ask])
+  useEffect(() => {
+    if (answer !== undefined) forgetAskSelections(managerId, card)
+  }, [answer, card, managerId])
+  if (answer !== undefined) {
+    return (
+      <div data-slot="manager-ask" data-resolved="true" className="rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground">
+        <span className="text-soft-foreground">Answered</span>
+        <span className="ml-1.5 break-words whitespace-pre-line text-foreground">{answer}</span>
+      </div>
+    )
+  }
+  const send = async (text: string) => {
+    setPending(true)
+    setError(undefined)
+    try {
+      await sendManagerMessage(managerId, text)
+      return undefined
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Your answer did not reach the manager.'
+      setError(message)
+      return message
+    } finally {
+      setPending(false)
+    }
+  }
+  return (
+    <div data-slot="manager-ask" data-resolved="false">
+      <AskForm
+        ask={card}
+        ownerId={managerId}
+        delivery={{ mode: 'live', isPending, ...(error ? { error } : {}), send }}
+        asker="Your decision"
+      />
+    </div>
+  )
+}
+
+function AssistantMessage({
+  message,
+  origin,
+  projects,
+}: {
+  message: Extract<ManagerMessage, { kind: 'assistant' }>
+  origin: ManagerOrigin
+  projects: readonly ManagerReferenceProject[]
+}) {
+  const segments = useMemo(
+    () => parseManagerText(message.text, message.commands, projects),
+    [message.text, message.commands, projects],
+  )
+  const references = useMemo(() => managerReferences(segments), [segments])
   return (
     <article data-slot="manager-assistant" className="min-w-0">
       {message.turn === 'job' && message.jobName ? (
@@ -97,14 +179,21 @@ function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage
       ) : null}
       <CommandsRow commands={message.commands} />
       <OriginContext.Provider value={origin}>
-        {segments.map((segment, index) =>
-          segment.kind === 'markdown' ? (
-            <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
-          ) : (
-            <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
-          ),
-        )}
+        <ReferenceStatusProvider requests={references}>
+          {segments.map((segment, index) =>
+            segment.kind === 'markdown' ? (
+              <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
+            ) : (
+              <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
+            ),
+          )}
+        </ReferenceStatusProvider>
       </OriginContext.Provider>
+      {message.ask ? (
+        <div className="mt-3 max-w-2xl">
+          <ManagerQuestions managerId={origin.id} messageId={message.id} ask={message.ask} answer={message.askAnswer} />
+        </div>
+      ) : null}
       {message.stopped ? <p className="mt-1 text-sm text-muted-foreground italic">Response stopped.</p> : null}
       {message.error ? (
         <p role="alert" className="mt-1 flex items-start gap-1.5 text-sm text-danger">
@@ -174,9 +263,12 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   origin,
   onDecide,
   deciding = false,
+  projects = NO_PROJECTS,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
+  projects?: readonly ManagerReferenceProject[]
   onDecide: (actionId: string, decision: 'approve' | 'reject') => void
   deciding?: boolean
 }) {
@@ -188,7 +280,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} />
     case 'action':
       return <ActionCard message={message} onDecide={onDecide} busy={deciding} />
     case 'notice':
