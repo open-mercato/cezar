@@ -7,6 +7,15 @@ import { mergeRun } from './events'
 import {
   ApiError,
   browseFs,
+  cancelAgentSetup,
+  cancelGithubLogin,
+  getAgentSetup,
+  startAgentSetup,
+  getGithubLogin,
+  getRepoSuggestions,
+  initProjectGit,
+  publishProjectGithub,
+  startGithubLogin,
   checkoutProject,
   createProject,
   getGithubOwners,
@@ -19,6 +28,8 @@ import {
   getAgentAccountDetails,
   getAgentAccountStatus,
   getAgentProfiles,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
   getConfig,
   getGithub,
   getGithubChecks,
@@ -123,10 +134,15 @@ import type {
   OpenAgentAccountFileInput,
   ProjectListEntry,
   ProjectsResponse,
+  GithubLoginState,
   GithubRefStatusData,
+  AgentSetupAction,
+  AgentSetupProvider,
+  AgentSetupState,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
+  AgentFallbackCandidate,
   SelectAgentProfileInput,
   SetAgentConfigInput,
   TaskActionSurface,
@@ -422,9 +438,14 @@ export const workspaceQueryKeys = {
   dashboard: ['workspace', 'dashboard'] as const,
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
+  agentSetup: ['workspace', 'providers', 'setup'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
   githubOwners: ['workspace', 'github-owners'] as const,
+  /** `POST/GET/DELETE /api/v1/github/login` — the device flow cezar runs for the user. */
+  githubLogin: ['workspace', 'github-login'] as const,
+  /** `GET /api/v1/fs/repos` — the first-run "Pick a project" list. */
+  repoSuggestions: ['workspace', 'repo-suggestions'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
@@ -444,6 +465,7 @@ export const workspaceQueryKeys = {
   /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
    *  Workspace-led like the registry: an account describes the machine, not a repo. */
   agentProfiles: ['workspace', 'agent-profiles'] as const,
+  agentFallbackPolicy: (projectId: string) => ['workspace', 'agent-profiles', 'fallback-policy', projectId] as const,
   /** One account's identity, keyed by its route id. A child of `agentProfiles` so removing an
    *  account drops any details cached for it in the same invalidation. */
   agentAccountDetails: (routeId: string) =>
@@ -513,7 +535,8 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot }
+  const antigravity = useRunnerModels('antigravity', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, antigravity }
 }
 
 export function useProviderStatus() {
@@ -551,6 +574,51 @@ export function useRefreshProviderStatus() {
       workspaceQueryKeys.providerStatus,
       (cached) => mergeProviderStatusResponse(requestStart, cached, result),
     ),
+  })
+}
+
+/** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
+ *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
+ *  visit: a session remembered as running would read as one that vanished. */
+export function useAgentSetup() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentSetup,
+    queryFn: ({ signal }) => getAgentSetup({ signal }),
+    retry: false,
+    gcTime: 0,
+    refetchInterval: (state) => {
+      const data = state.state.data
+      return data?.available && data.session?.exitCode === null ? AGENT_SETUP_POLL_MS : false
+    },
+    refetchIntervalInBackground: true,
+  })
+}
+
+const AGENT_SETUP_POLL_MS = 1_000
+
+/** An install changes which runners the composer can offer. */
+export function useInvalidateHealth() {
+  const queryClient = useQueryClient()
+  return useCallback(() => void queryClient.invalidateQueries({ queryKey: queryKeys.health }), [queryClient])
+}
+
+export function useStartAgentSetup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
+    retry: false,
+    // Written straight in: the polling above starts from this, even if the next read fails.
+    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
+  })
+}
+
+export function useCancelAgentSetup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (sessionId: string) => cancelAgentSetup(sessionId),
+    retry: false,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }
 
@@ -889,6 +957,114 @@ export function useCreateProject() {
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
   })
+}
+
+/** Repositories the first-run "Pick a project" list offers (spec 2026-10-26-first-run-onboarding).
+ *  Asked only while that screen is up; the list does not change while it is open. */
+export function useRepoSuggestions(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.repoSuggestions,
+    queryFn: ({ signal }) => getRepoSuggestions({ signal }),
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+
+/** "Initialize git here". A git init changes what the project IS, so every reader of its git
+ *  state — the registry status, the scoped repo info, health — is refetched. No retry: a second
+ *  attempt would only meet the 409 the first one caused. */
+export function useInitProjectGit() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (projectId: string) => initProjectGit(projectId),
+    retry: false,
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ]),
+  })
+}
+
+/** "Publish to GitHub". The project gains a GitHub remote, so the registry (forge), the scoped repo
+ *  info (remote) and health (forge availability) are refetched. No retry: a second attempt would
+ *  try to create the GitHub repository twice. */
+export function usePublishProjectGithub() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ projectId, owner, name }: { projectId: string; owner: string; name: string }) =>
+      publishProjectGithub(projectId, { owner, name }),
+    retry: false,
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+      ]),
+  })
+}
+
+/**
+ * The GitHub sign-in cezar runs (spec 2026-10-26-first-run-onboarding, "Sign in does the work").
+ * `start` resolves with the one-time code; the query then polls every two seconds while `gh`
+ * waits for GitHub, and stops on `done`, `failed` or `idle`. `done` refetches everything that
+ * reads the signed-in state — owners, the GitHub tab, the registry's forge flags, health — and
+ * is reported through `onDone` exactly once, so the dialog can close itself.
+ */
+export function useGithubLogin(onDone?: (login: string | undefined) => void) {
+  const queryClient = useQueryClient()
+  const doneRef = useRef(onDone)
+  doneRef.current = onDone
+  // A login THIS hook started. Until it starts, nothing is read: the server keeps answering the
+  // previous login's `done` or `failed`, and a dialog must not close or fail on that before its
+  // own login has even begun. The cache is reset to `starting` the moment it does.
+  const watched = useRef(false)
+  const start = useMutation({
+    mutationFn: startGithubLogin,
+    retry: false,
+    onMutate: () => {
+      watched.current = true
+      queryClient.setQueryData<GithubLoginState>(workspaceQueryKeys.githubLogin, { status: 'starting' })
+    },
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.githubLogin, state),
+  })
+  const cancel = useMutation({
+    mutationFn: cancelGithubLogin,
+    retry: false,
+    onMutate: () => {
+      watched.current = false
+    },
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.githubLogin, state),
+  })
+  const query = useQuery({
+    queryKey: workspaceQueryKeys.githubLogin,
+    queryFn: ({ signal }) => getGithubLogin({ signal }),
+    enabled: start.isSuccess,
+    refetchInterval: (state) => {
+      const status = state.state.data?.status
+      return status === 'pending' || status === 'starting' ? 2_000 : false
+    },
+    staleTime: 0,
+    retry: false,
+  })
+  const state = watched.current || start.isPending || start.isSuccess ? query.data : undefined
+  const status = state?.status
+  const login = state?.status === 'done' ? state.login : undefined
+  useEffect(() => {
+    if (status !== 'done' || !watched.current) return
+    watched.current = false
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.githubOwners }),
+      queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+      queryClient.invalidateQueries({ queryKey: [queryScope(), 'github'] }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.repo }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.health }),
+    ])
+    doneRef.current?.(login)
+  }, [status, login, queryClient])
+  return { state, start, cancel }
 }
 
 /** The GitHub accounts (login + orgs) a new repo may belong to. Cached for the session: org
@@ -1576,6 +1752,25 @@ export function useAgentProfiles() {
   })
 }
 
+export function useAgentFallbackPolicy(projectId: string | null) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'),
+    queryFn: ({ signal }) => getAgentFallbackPolicy({ projectId: projectId ?? 'default' }, { signal }),
+    enabled: projectId !== null,
+    retry: false,
+  })
+}
+
+export function useSaveAgentFallbackPolicy(projectId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { expectedRevision: number; expectedIncarnation: string | null; enabled: boolean; candidates: AgentFallbackCandidate[] }) =>
+      putAgentFallbackPolicy({ projectId: projectId ?? 'default', ...input }),
+    retry: false,
+    onSuccess: (data) => queryClient.setQueryData(workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'), data),
+  })
+}
+
 /** The chip's refresh cadence — matches the server's `STAR_CACHE_TTL_MS`, which also paces
  *  itself to GitHub's rate limit, so a poll never costs more than one cached read. */
 export const STAR_COUNT_REFRESH_MS = 10_000
@@ -2018,12 +2213,20 @@ export function useGithubInfinite(limit = 50, enabled = true) {
   return useInfiniteQuery({
     queryKey: queryKeys.githubPages(limit),
     queryFn: ({ pageParam, signal }) =>
-      getGithub({ limit, issuesCursor: pageParam.issuesCursor, prsCursor: pageParam.prsCursor }, { signal }),
-    initialPageParam: { issuesCursor: undefined as string | undefined, prsCursor: undefined as string | undefined },
+      getGithub({ limit, ...pageParam }, { signal }),
+    initialPageParam: {
+      issuesCursor: undefined as string | undefined,
+      prsCursor: undefined as string | undefined,
+      issuesDone: false,
+      prsDone: false,
+    },
+    // A side with no next cursor is marked done so the server does not restart it (#1750).
     getNextPageParam: (last) => {
       const issuesCursor = last.issuesNextCursor ?? undefined
       const prsCursor = last.prsNextCursor ?? undefined
-      return issuesCursor || prsCursor ? { issuesCursor, prsCursor } : undefined
+      return issuesCursor || prsCursor
+        ? { issuesCursor, prsCursor, issuesDone: !issuesCursor, prsDone: !prsCursor }
+        : undefined
     },
     enabled,
     staleTime: 60_000,

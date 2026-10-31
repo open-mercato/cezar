@@ -84,6 +84,7 @@ function serve({
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
     orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -239,7 +240,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     )
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     // The built-in fallback, rendered rather than thrown.
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
@@ -248,9 +249,9 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
-      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot',
+      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'antigravity',
     ])
     expect(rows()[1]?.textContent).toContain('~/.claude-klaudiusz')
   })
@@ -259,7 +260,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
 
@@ -267,7 +268,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     // Rows render before provider status answers and stay disabled until it does — wait for
     // the row to be clickable, not merely present.
     await waitFor(() => expect(rowFor('codex')!.disabled).toBe(false))
@@ -284,7 +285,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     await waitFor(() => expect(rowFor('claude', 'klaudiusz')!.disabled).toBe(false))
     fireEvent.click(await enabledRow('claude', 'klaudiusz'))
 
@@ -312,7 +313,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     await waitFor(() => expect(rowFor('claude', '')!.disabled).toBe(false))
     fireEvent.click(await enabledRow('claude', ''))
 
@@ -345,7 +346,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     const pane = defaults()
     expect(pane?.textContent).toContain('has not chosen for itself')
     expect(pane?.textContent).toContain('keeps its own')

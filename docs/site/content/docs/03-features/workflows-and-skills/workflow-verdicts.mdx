@@ -1,0 +1,25 @@
+---
+title: "Agent verdicts that control the workflow"
+description: "Follow different paths after approval and review feedback."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/graph.ts
+    line: 63
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Name the possible verdicts and connect their corresponding outputs. Explain in the prompt when the agent should choose each result. The workflow can then take different steps after approval or review feedback.
+
+## Where to find it
+
+Workflows → Agent node → verdicts
+
+## How to use it
+
+1. Name the possible verdicts.
+2. Connect outputs with those names.
+3. Explain in the prompt when to choose each verdict.
+
+> **Good to know**: The agent returns a verdict through CEZ:VERDICT. If it omits the verdict, it gets one reminder. Another missing verdict causes the node to fail.

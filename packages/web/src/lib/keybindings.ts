@@ -115,6 +115,10 @@ const RESERVED = new Set([
   'Mod+B', // fold the sidebar
   'Alt+D', // Design Mode in the Preview
   'Mod+Shift+`', // new terminal tab
+  'Alt+Up', // previous / next task (use-task-switch-shortcut.ts)
+  'Alt+Down',
+  'Alt+Shift+Up', // previous / next task that needs you
+  'Alt+Shift+Down',
   'Mod+A',
   'Mod+C',
   'Mod+V',

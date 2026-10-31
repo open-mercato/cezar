@@ -1,3 +1,4 @@
+import type { TrackerContext, TrackerAction } from '@open-mercato/cezar-contract';
 import type { EventPollInput } from './event-scan.ts';
 import type { TrackerAutomationEvent } from '@open-mercato/cezar-contract';
 import type { TrackerEventCandidate, PollPage } from '../../automations/event-source.ts';
@@ -14,6 +15,8 @@ export interface TrackerClient {
 }
 export interface TrackerDriver {
   readonly association: TrackerAssociation;
+  context?: (id: string) => Promise<TrackerContext>;
+  act?: (id: string, action: TrackerAction, beforeWrite?: () => Promise<void>) => Promise<void>;
   automationOptions?: (query?: { search?: string; cursor?: string }) => Promise<{ events: TrackerAutomationEvent[]; limitations: string[]; statuses: { id: string; name: string }[]; labels: { id: string; name: string }[] }>;
   pollEvents?: (input: EventPollInput) => Promise<PollPage<TrackerEventCandidate>>;
   listIssues(query: TrackerListQuery): Promise<TrackerItemsResult>;

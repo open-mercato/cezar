@@ -664,7 +664,7 @@ function HistoryBoundary({
   }
   if (!hasOlder && !error) {
     return (
-      <div data-slot="history-start" className="flex items-center gap-3 text-[11px] text-soft-foreground">
+      <div data-slot="history-start" className="flex items-center gap-3 text-meta text-soft-foreground">
         <span aria-hidden className="h-px flex-1 bg-border" />
         Start of session
         <span aria-hidden className="h-px flex-1 bg-border" />
@@ -717,7 +717,7 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
   return (
     <div data-slot="queued-state" className="flex flex-col items-center gap-1.5 py-10 text-center">
       <StatusDot tone="pending" pulse />
-      <p className="text-[13px] font-medium">
+      <p className="text-ui font-medium">
         {queueWaitLabel(run.queueWaitReason) ?? `Waiting for a free agent slot${position !== undefined ? ` — #${position} in queue` : ''}`}
       </p>
       <p className="text-xs text-soft-foreground">

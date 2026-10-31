@@ -765,3 +765,58 @@ time in the server's zone like every other shape.
   ignores a `once` definition as invalid (`loadDefinitions` per-entry salvage, one warning) and
   drops it from `automations.json` on its next definition write — the cost of downgrading across
   a new enum value; the other definitions are untouched.
+
+## Amendment — multiple schedules for one task (2026-10-30, #1818)
+
+### TLDR
+
+Proposed: keep one prompt/task and attach up to 16 timed schedules. Existing single-schedule definitions remain readable and writable. This increment applies only to `kind: schedule`.
+
+### Resolved assumptions (autonomous defaults)
+
+| Question | Default, open to owner override |
+| --- | --- |
+| Mix polls and timed schedules? | No; retain separate kinds. |
+| Coincident instants? | One run per automation per instant. |
+| Catch-up? | One newest missed occurrence across the union, within the existing 24-hour window. |
+| Once alongside recurrence? | Reject lists longer than one containing once; preserve composer deferred single-once. |
+
+### Data Model and compatibility
+
+Add optional `schedules: AutomationSchedule[]` (1–16 entries) to definitions, request bodies and templates. When present it is authoritative; the writer always mirrors its first entry into legacy `schedule`. If both are supplied inconsistently, refuse the write rather than silently choosing. Legacy definitions with only `schedule` remain unchanged on read; no migration or per-trigger state is required. Single-once is valid in either spelling; every once requires a date. Non-schedule kinds refuse `schedules`.
+
+POST accepts `schedule`, `schedules`, or both agreeing. PUT is replacement of the timing selection: an explicit legacy `schedule` without `schedules` replaces the whole list with that one schedule. A new client sends the entire list, so removal cannot leave stale triggers. A CLI partial update that changes no timing retains the list; one that explicitly changes `schedule` removes inherited `schedules`. Unknown storage keys still survive. A downgraded scheduler executes only the mirrored first schedule: extra times require the new version; an older writer may retain an unknown list while changing its mirror, so the new loader refuses inconsistent pairs rather than firing hidden times. There is no state authored or repaired by the user.
+
+### Lifecycle and receipts
+
+Treat the schedules as a sorted set union of UTC instants evaluated with the existing server-zone/DST math. Keep ONE `nextRunAt` for the automation, and ONE `schedule:<instant>` receipt identity. Existing receipts therefore still deduplicate, including coincident schedules; adding a trigger id would violate this cost-safe guarantee. Per-trigger due state is unnecessary because there is no independent pause/receipt/retirement lifecycle for a member of this union.
+
+On create/enable, arm the earliest union occurrence strictly after now. Under the existing mutation lease, ANY timing edit clears the stored due time (including secondary edits/removals); the scheduler recomputes from now. Existing queued tasks stay unchanged. On restart or sleep retain persisted due state, select only the newest missed union occurrence in a bounded recent window, apply the existing grace/catch-up rules, and advance the whole union from max(now, occurrence). Never walk an arbitrarily long downtime or retain an unbounded backlog. Logs disclose when older misses were omitted from the bounded scan. Existing launch/poll lease, durable receipt reservation, retry floor on contention, failures and manual-run semantics remain unchanged. Single-once retirement pauses the whole definition as before; rejecting mixed lists makes that safe.
+
+### API Contracts and CLI
+
+All existing endpoints and scope aliases remain. The chained route validators accept the bounded list; responses and zod contract reflect the optional key exactly. Template responses, duplicate, JSON create/update, schema reference and Copy as CLI preserve the whole list. Flag `add --cron` remains single-schedule; multi-schedule Copy CLI uses JSON. Existing partial CLI updates retain untouched schedules, while explicit legacy schedule updates replace them.
+
+### UI/UX
+
+The existing When editor renders a numbered group per schedule using the existing controls. Add schedule appends a daily default (maximum 16); Remove schedule is available per group only while more than one exists. Once cannot be combined with another entry; the existing single-once editor and composer flows continue to work. Preview lists the next five distinct instants. Trigger labels describe every schedule; list next time remains the earliest union instant. Calendar and Next runs rail show one block per automation/instant and keep automation identity/actions. One shared task, runner and prompt remain below the timing groups. All controls keep accessible labels and fit the existing responsive sheet.
+
+### Edge Cases and verification
+
+Pin weekday 09:00 plus Friday 16:00; duplicate/coincident instants; spring gap/fall fold; first-entry and secondary edit/removal; empty/17-entry/once+recurring refusal; old storage; old HTTP and CLI writers; restart/sleep far beyond the former 1,000 occurrence cap; competing leases and receipts; paused/manual behavior; deferred starts and template/duplicate/Copy CLI round trips. Prove a focused feature regression red without the source fix, then green with it. Keep existing scheduler and contract parity tests.
+
+### Alternatives and research
+
+[Temporal schedule documentation](https://github.com/temporalio/documentation/blob/main/docs/encyclopedia/workflow/schedule.mdx) separates multiple calendar/interval expressions from overlap and catch-up policy. Reuse that separation, but retain cezar's bounded shapes, one newest catch-up and existing overlap behavior (#1801 remains separate). Arbitrary cron expressions, independent trigger state, new overlap policy, polling-kind combinations and multiple once dates are out of scope.
+
+### Implementation Plan
+
+1. Add bounded list/union helpers and compatible storage normalization; test schemas, legacy replacement and due invalidation.
+2. Evaluate and advance union scheduling with bounded newest catch-up and unchanged receipt/lease guarantees; test DST/restart/contention.
+3. Extend chained HTTP validators and template projection; test contract parity and old-client PUT. Parent task owns shared server boundary and compatibility note.
+4. Add/edit/remove schedule groups; carry lists through draft, templates, duplicate and JSON CLI; show union preview/calendar/rail/labels.
+5. Run focused red/green, all five configured gates, complete code review/autofix and real browser QA. Publish independent implementation PR with Closes #1818 and reference this design PR.
+
+### Risks & review
+
+High-risk additive API/storage/launch change. No new dependency, env flag, network access or default enabling. Downgrade reduces execution to the mirrored first schedule; re-upgrade refuses conflicting mirrors. Explicit legacy schedule replacement is intentional to avoid hidden extra times. Browser evidence and supported-platform CI must be reported separately from local Windows gate failures. Design-only PR contains this amendment; implementation does not copy it into its branch.

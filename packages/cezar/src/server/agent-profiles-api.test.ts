@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agentFallbackPolicySchema } from '@open-mercato/cezar-contract';
 import type { AgentAccountStatusResponse, AgentProfilesResponse, AgentProfileResponse } from '@open-mercato/cezar-contract';
 import { agentAccountsPath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
@@ -64,7 +65,8 @@ describe('agent profiles API', () => {
 
   afterEach(() => {
     store.flush();
-    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
+    // Boot warming can still be writing into `home` as the test ends; retry instead of ENOTEMPTY.
+    for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     for (const [key, value] of [
       ['CEZ_HOME', saved.home],
       ['CEZ_REMOTE', saved.remote],
@@ -104,12 +106,58 @@ describe('agent profiles API', () => {
     return dir;
   };
 
+  describe('fallback policy project availability', () => {
+    const path = '/api/v1/workspace/agent-profiles/fallback-policy';
+    const request = (app: ReturnType<typeof makeApp>, method: 'GET' | 'PUT', projectId: string, revision = 0, incarnation: string | null = null) =>
+      apiRequest(app, method === 'GET' ? `${path}?projectId=${projectId}` : path, {
+        method,
+        ...(method === 'PUT' ? {
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ projectId, expectedRevision: revision, expectedIncarnation: incarnation,
+            enabled: false, candidates: [] }),
+        } : {}),
+      });
+
+    it.each([['missing', 'GET'], ['missing', 'PUT'], ['file', 'GET'], ['file', 'PUT']] as const)('rejects a %s root on %s without changing policy', async (state, method) => {
+      const project = await registerProject(repoRoot);
+      const app = makeApp();
+      const saved = await request(app, 'PUT', project.id);
+      expect(saved.status).toBe(200);
+      const policy = agentFallbackPolicySchema.parse(await saved.json());
+      const before = readFileSync(join(home, 'agent-fallback.json'), 'utf8');
+      rmSync(repoRoot, { recursive: true, force: true });
+      if (state === 'file') writeFileSync(repoRoot, 'not a directory');
+
+      const response = await request(app, method, project.id, policy.revision, policy.incarnation);
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({ error: `project folder not found: ${project.id}` });
+      expect(readFileSync(join(home, 'agent-fallback.json'), 'utf8')).toBe(before);
+
+      // The gate checks current disk state: restoring the directory restores access.
+      rmSync(repoRoot, { force: true });
+      mkdirSync(repoRoot);
+      expect((await request(app, 'GET', project.id)).status).toBe(200);
+      expect((await request(app, 'PUT', project.id, policy.revision, policy.incarnation)).status).toBe(200);
+    });
+
+    it.each(['GET', 'PUT'] as const)('preserves unknown-project 404 and hosted 409 for %s', async (method) => {
+      const app = makeApp();
+      const unknown = await request(app, method, 'unknown-project');
+      expect(unknown.status).toBe(404);
+      expect(await unknown.json()).toEqual({ error: 'unknown project: unknown-project' });
+      process.env.CEZ_REMOTE = '1';
+      const hosted = await request(makeApp(), method, 'unknown-project');
+      expect(hosted.status).toBe(409);
+      expect(await hosted.json()).toEqual({ error: 'agent fallback is local-only' });
+    });
+  });
+
   describe('GET', () => {
     it('lists only the discovered defaults out of the box — the zero-config state', async () => {
       const body = await list();
       expect(body.editable).toBe(true);
       expect(body.profiles.every((p) => p.isDefault)).toBe(true);
-      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot']);
+      expect(body.profiles.map((p) => p.provider)).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity']);
       expect(body.profiles.every((p) => p.id === 'default')).toBe(true);
     });
 

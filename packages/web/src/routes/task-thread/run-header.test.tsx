@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
@@ -940,6 +941,84 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
       }),
     )
     await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+  })
+
+  // #1410: health's forge is the BOOT folder's. A task in a cloned GitHub project, served from a
+  // non-repo boot (`forge: null`), must still be offered Create PR — the gate is its project's.
+  it('offers Create PR in a non-boot GitHub project even when the boot folder has no forge', async () => {
+    const status = () => jsonResponse({ uncommitted: 2, unpushed: null })
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({ bootProject: 'home', forge: null, checks: [{ name: 'gh', available: true }] }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          bootProject: 'home',
+          projectsDir: '/repos',
+          projects: [{ id: 'shop', name: 'shop', root: '/repos/shop', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok', forge: 'github' }],
+        }),
+      '/api/v1/repo': () => jsonResponse({ info: { root: '/repos/shop', branch: 'main', remote: 'origin' } }),
+      '/api/v1/p/shop/repo': () => jsonResponse({ info: { root: '/repos/shop', branch: 'main', remote: 'origin' } }),
+      '/api/v1/runs/r1/git/status': status,
+      '/api/v1/p/shop/runs/r1/git/status': status,
+      '/api/v1/p/shop/runs': () => jsonResponse([]),
+    })
+    const record = run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1' })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
+          <ProjectScopeProvider projectId="shop">
+            <Routes>
+              <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+            </Routes>
+          </ProjectScopeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+  })
+
+  // #1410 for trunk-based projects (#1597): the Commit-to-base step's Create PR alternative names
+  // a missing forge, so it too must ask the task's project, not the boot folder.
+  it('a trunk task in a non-boot GitHub project offers Create PR under Commit to main', async () => {
+    const status = () => jsonResponse({ uncommitted: 2, unpushed: 0, behind: 0 })
+    const config = () => jsonResponse({ landing: 'auto', landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' })
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({ bootProject: 'home', forge: null, checks: [{ name: 'gh', available: true }] }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          bootProject: 'home',
+          projectsDir: '/repos',
+          projects: [{ id: 'shop', name: 'shop', root: '/repos/shop', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok', forge: 'github' }],
+        }),
+      '/api/v1/p/shop/repo': () => jsonResponse({ info: { root: '/repos/shop', branch: 'main', remote: 'origin' } }),
+      '/api/v1/p/shop/config': config,
+      '/api/v1/p/shop/runs/r1/git/status': status,
+      '/api/v1/p/shop/runs': () => jsonResponse([]),
+    })
+    const record = run('done', { worktree: false })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
+          <ProjectScopeProvider projectId="shop">
+            <Routes>
+              <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+            </Routes>
+          </ProjectScopeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const chevron = await waitFor(() => {
+      const el = document.querySelector('[data-slot="git-button"] [aria-label="More ways to commit to main"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    fireEvent.pointerDown(chevron)
+    const menu = await screen.findByRole('menu')
+    const createPr = menu.querySelector('[data-action="create-pr"]')
+    expect(createPr).not.toBeNull()
+    expect(createPr!.getAttribute('aria-disabled')).not.toBe('true')
+    expect(menu.textContent).not.toContain('no supported forge remote')
   })
 
   it('the title row reserves the git button’s height, so the header does not jump without it', () => {
@@ -2363,5 +2442,74 @@ describe('lifecycle-aware task deletion', () => {
     for (const name of ['Finish','Cancel','Continue']) expect(actionBar().queryByRole('button',{name})).toBeNull()
     // Delete stays in place, greyed out like a live run's (Pin · Archive · Delete, always in place).
     expect(itemActions().getByRole('button',{name:'Delete'}).getAttribute('aria-disabled')).toBe('true')
+  })
+})
+
+describe('task worktree removal (#1600)', () => {
+  const operation = { id: '11111111-1111-4111-8111-111111111111', worktreeId: '22222222-2222-4222-8222-222222222222', generation: 1, phase: 'teardown', intent: 'reclaim', state: 'queued', revision: 0, createdAt: 'now', updatedAt: 'now', history: [], entries: [], allowedActions: ['stop'] }
+  const record = () => run('done', { worktreePath: '/project/.ai/cezar/worktrees/r1', branch: 'cez/r1' })
+  const clean = { uncommitted: 0, unpushed: null, behind: 0, ahead: 1 }
+  const endpoint = '/api/v1/worktree-lifecycle/operations'
+  async function openRemoval(mobile = false) {
+    fireEvent.pointerDown(mobile ? screen.getByRole('button', { name: 'Run actions' }) : itemActions().getByRole('button', { name: 'More actions' }))
+    fireEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Remove worktree…' }))
+    return within(await screen.findByRole('alertdialog'))
+  }
+  it.each([{ mobile: false, managed: false }, { mobile: true, managed: false }, { mobile: false, managed: true }, { mobile: true, managed: true }])('confirms reclaim from the mobile=$mobile managed=$managed menu without deleting or navigating', async ({ mobile, managed }) => {
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean), [endpoint]: () => jsonResponse({ operation }, 202) })
+    renderHeader({ ...record(), ...(managed ? { worktreeLifecycle: { worktreeId: operation.worktreeId, generation: 1, needsAttention: false } } : {}) })
+    const dialog = await openRemoval(mobile)
+    expect(dialog.getByText(/including unpushed commits/)).not.toBeNull()
+    expect(dialog.getByText(/Ignored local files/)).not.toBeNull()
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
+    expect(sent.filter(request => request.path === endpoint)).toHaveLength(0)
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    await screen.findByText('Worktree removal requested. Follow cleanup progress on this task.')
+    expect(sent.find(request => request.path === endpoint)?.body).toEqual({ requestId: expect.any(String), runId: 'r1', intent: 'reclaim' })
+    expect(sent.some(request => request.method === 'DELETE' || request.path.includes('remove-worktree'))).toBe(false)
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
+  })
+  it('Cancel retains everything and launches no operation', async () => {
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean) })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    fireEvent.click(dialog.getByRole('button', { name: 'Keep worktree' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(sent.some(request => request.method !== 'GET')).toBe(false)
+  })
+  it.each([
+    { name: 'dirty', response: () => jsonResponse({ ...clean, uncommitted: 2 }), message: /This worktree has uncommitted/ },
+    { name: 'missing', response: () => jsonResponse({ error: 'Worktree missing' }, 409), message: /Could not check/ },
+    { name: 'unknown', response: () => jsonResponse({}), message: /Could not check/ },
+  ])('refuses a $name checkout before removal', async ({ response, message }) => {
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': response })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    await dialog.findByText(message)
+    expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(true)
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    expect(sent.some(request => request.path === endpoint)).toBe(false)
+  })
+  it('rechecks dirty status on submit and never requests removal when it changed', async () => {
+    let dirty = false
+    const sent = stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse({ ...clean, uncommitted: dirty ? 1 : 0 }) })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
+    dirty = true
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    await screen.findByText('Commit or stash uncommitted changes before removing the worktree.')
+    expect(sent.some(request => request.path === endpoint)).toBe(false)
+    expect(screen.queryByRole('alertdialog')).not.toBeNull()
+  })
+  it('surfaces a lifecycle conflict and retains the page/dialog', async () => {
+    stubFetch({ '/api/v1/runs/r1/git/status': () => jsonResponse(clean), [endpoint]: () => jsonResponse({ error: 'Task is active; cancel it before removing its worktree' }, 409) })
+    renderHeader(record())
+    const dialog = await openRemoval()
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Remove worktree' }).hasAttribute('disabled')).toBe(false))
+    fireEvent.click(dialog.getByRole('button', { name: 'Remove worktree' }))
+    await screen.findByText('Task is active; cancel it before removing its worktree')
+    expect(screen.queryByRole('alertdialog')).not.toBeNull()
+    expect(document.querySelector('[data-slot="home-probe"]')).toBeNull()
   })
 })

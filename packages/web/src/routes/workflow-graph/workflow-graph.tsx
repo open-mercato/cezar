@@ -96,6 +96,7 @@ import {
 
 import { WorkflowsLoading } from '../workflows/workflows-loading'
 import { backLanes, CATEGORY_ORDER, edgeStyle, edgeTypes, GraphNodeView, ICONS, type InnerStep, TILE, TONE, WIDE_WIDTH } from './graph-node'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The workflow node editor (spec 2026-09-30-workflow-node-editor), at
@@ -227,7 +228,7 @@ export function FloatingPanel({
         side === 'left' ? 'left-3 w-60' : 'right-3 w-80',
       )}
     >
-      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border pr-1 pl-3 text-[12px] font-medium">
+      <div className="flex h-10 shrink-0 items-center justify-between border-b border-border pr-1 pl-3 text-label font-medium">
         <span className="min-w-0 truncate">{title}</span>
         <Button size="sm" variant="ghost" onClick={onClose} aria-label={`Close ${label.toLowerCase()}`}>
           <XIcon />
@@ -664,7 +665,7 @@ function WorkflowGraphEditor() {
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
         <select
           aria-label="Open workflow"
-          className="h-8 max-w-44 rounded-md border border-transparent bg-transparent px-1.5 text-[13px] font-medium outline-none hover:border-border focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="h-8 max-w-44 rounded-md border border-transparent bg-transparent px-1.5 text-ui font-medium outline-none hover:border-border focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           value={routeName ?? ''}
           onChange={(e) => {
             const to = e.target.value ? `/workflows/${encodeURIComponent(e.target.value)}` : '/workflows'
@@ -702,12 +703,12 @@ function WorkflowGraphEditor() {
             setName(e.target.value)
             setDirty(true)
           }}
-          className="h-8 w-52 border-transparent bg-transparent text-[13px] shadow-none hover:border-border"
+          className="h-8 w-52 border-transparent bg-transparent text-ui shadow-none hover:border-border"
         />
         {dirty && <span className="size-1.5 rounded-full bg-primary" title="Unsaved changes" aria-label="Unsaved changes" />}
         <button
           type="button"
-          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] hover:bg-accent"
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-label hover:bg-accent"
           style={{ color: issues.length ? TONE.failure : 'var(--muted-foreground)' }}
           title={issues.join('\n') || 'The server validated this workflow'}
           onClick={() => {
@@ -822,7 +823,7 @@ function WorkflowGraphEditor() {
                 if (!entries.length) return null
                 return (
                   <section key={cat.id} className="mb-3">
-                    <h2 className="px-1.5 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+                    <h2 className="px-1.5 pb-1 eyebrow text-muted-foreground">
                       {cat.label}
                     </h2>
                     {entries.map((entry) => {
@@ -844,8 +845,8 @@ function WorkflowGraphEditor() {
                             <Icon className="size-4" style={{ color: cat.color }} strokeWidth={1.75} />
                           </span>
                           <span className="min-w-0">
-                            <span className="block text-[12px] leading-tight font-medium">{entry.label}</span>
-                            <span className="block truncate text-[10px] text-muted-foreground">{entry.description}</span>
+                            <span className="block text-label leading-tight font-medium">{entry.label}</span>
+                            <span className="block truncate text-micro text-muted-foreground">{entry.description}</span>
                           </span>
                         </button>
                       )
@@ -854,16 +855,16 @@ function WorkflowGraphEditor() {
                 )
               })}
               <section className="mb-1">
-                <h2 className="px-1.5 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">Skills</h2>
+                <h2 className="px-1.5 pb-1 eyebrow text-muted-foreground">Skills</h2>
                 <Input
                   aria-label="Search skills"
                   placeholder="search skills…"
                   value={skillQuery}
                   onChange={(e) => setSkillQuery(e.target.value)}
-                  className="mb-1 h-7 text-[12px]"
+                  className="mb-1 h-7 text-label"
                 />
                 {skills.isPending ? (
-                  <p className="px-1.5 text-[11px] text-muted-foreground">Loading skills…</p>
+                  <p className="px-1.5 text-meta text-muted-foreground">Loading skills…</p>
                 ) : (
                   (skills.data ?? [])
                     .filter((sk) => {
@@ -879,13 +880,13 @@ function WorkflowGraphEditor() {
                         className="flex w-full items-center gap-2.5 rounded-lg px-1.5 py-1 text-left hover:bg-accent"
                         title={sk.description ?? sk.name}
                       >
-                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-[11px] text-muted-foreground">
+                        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-meta text-muted-foreground">
                           /
                         </span>
                         <span className="min-w-0">
-                          <span className="block truncate text-[12px] leading-tight">{sk.name}</span>
+                          <span className="block truncate text-label leading-tight">{sk.name}</span>
                           {sk.description ? (
-                            <span className="block truncate text-[10px] text-muted-foreground">{sk.description}</span>
+                            <span className="block truncate text-micro text-muted-foreground">{sk.description}</span>
                           ) : null}
                         </span>
                       </button>
@@ -920,7 +921,7 @@ function WorkflowGraphEditor() {
           </FloatingPanel>
         ) : workflowPanel ? (
           <FloatingPanel side="right" label="Workflow settings" title="Workflow" onClose={() => setWorkflowPanel(false)}>
-            <div className="space-y-4 p-4 text-[12px]">
+            <div className="space-y-4 p-4 text-label">
               <Field label="description">
                 <Textarea
                   value={description}
@@ -934,28 +935,32 @@ function WorkflowGraphEditor() {
               {(issues.length > 0 || unwired.length > 0) && (
                 <div className="space-y-1.5">
                   {issues.map((i) => (
-                    <div key={i} className="flex gap-1.5 text-[11px]" style={{ color: TONE.failure }}>
+                    <div key={i} className="flex gap-1.5 text-meta" style={{ color: TONE.failure }}>
                       <AlertTriangleIcon className="mt-0.5 size-3 shrink-0" />
                       {i}
                     </div>
                   ))}
                   {unwired.length > 0 && (
-                    <div className="text-[11px] text-muted-foreground">Unwired — end the run: {unwired.join(', ')}</div>
+                    <div className="text-meta text-muted-foreground">Unwired — end the run: {unwired.join(', ')}</div>
                   )}
                 </div>
               )}
               <div>
-                <div className="mb-1 flex items-center justify-between text-[11px] text-muted-foreground">
+                <div className="mb-1 flex items-center justify-between text-meta text-muted-foreground">
                   <span>YAML</span>
                   <button
                     type="button"
                     className="hover:text-foreground"
-                    onClick={() => void navigator.clipboard?.writeText(graphYaml(name, description, graph))}
+                    onClick={() =>
+                      void writeClipboard(graphYaml(name, description, graph)).catch(() =>
+                        toast('Copy failed — select the YAML to copy it.', { tone: 'danger' }),
+                      )
+                    }
                   >
                     Copy
                   </button>
                 </div>
-                <pre className="max-h-64 overflow-auto rounded-md bg-muted/40 p-2 text-[10.5px] leading-relaxed">
+                <pre className="max-h-64 overflow-auto rounded-md bg-muted/40 p-2 text-micro leading-relaxed">
                   {graphYaml(name, description, graph)}
                 </pre>
               </div>
@@ -964,7 +969,7 @@ function WorkflowGraphEditor() {
                   value={importText}
                   onChange={(e) => setImportText(e.target.value)}
                   rows={4}
-                  className="font-mono text-[11px]"
+                  className="font-mono text-meta"
                   placeholder="paste a workflow file…"
                 />
               </Field>
@@ -1006,7 +1011,7 @@ function WorkflowGraphEditor() {
         {sim && (
           <div className="absolute bottom-4 left-1/2 z-20 w-[min(520px,90%)] -translate-x-1/2 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur">
             {sim.finished || !cursorNode ? (
-              <div className="flex items-center gap-2 text-[13px]">
+              <div className="flex items-center gap-2 text-ui">
                 <CheckCircle2Icon className="size-4" style={{ color: sim.finished === 'failed' ? TONE.failure : TONE.success }} />
                 Run ends <b>{sim.finished}</b> after {sim.taken.length} steps.
                 <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSim(startSim(graph))}>
@@ -1015,7 +1020,7 @@ function WorkflowGraphEditor() {
               </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-[12px] text-muted-foreground">
+                <span className="text-label text-muted-foreground">
                   <b className="text-foreground">{cursorNode.name ?? cursorNode.id}</b> ends with
                 </span>
                 {(cursorNode.type === 'fork' ? ['done', 'failed'] : portsOf(cursorNode)).map((p) => (
@@ -1096,7 +1101,7 @@ function SkillField({ value, onChange }: { value: string | undefined; onChange: 
   return (
     <Field label="skill">
       <select
-        className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
         value={value ?? ''}
         onChange={(e) => onChange(e.target.value || undefined)}
       >
@@ -1145,7 +1150,7 @@ function WorkflowSelect({
   return (
     <select
       aria-label={label}
-      className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value || undefined)}
     >
@@ -1182,7 +1187,7 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
   return (
     <>
       <Field label="look at">
-        <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={condition.kind} onChange={(e) => switchKind(e.target.value as ConditionValue['kind'])}>
+        <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={condition.kind} onChange={(e) => switchKind(e.target.value as ConditionValue['kind'])}>
           <option value="diff-lines">the task's diff — changed lines</option>
           <option value="diff-files">the task's diff — changed files</option>
           <option value="paths-changed">which paths changed (glob)</option>
@@ -1192,7 +1197,7 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
       </Field>
       {(condition.kind === 'diff-lines' || condition.kind === 'diff-files') && (
         <div className="grid grid-cols-[5rem_1fr] gap-2">
-          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof numericOps)[number] })}>
+          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof numericOps)[number] })}>
             {numericOps.map((o) => (
               <option key={o} value={o}>
                 {o}
@@ -1204,16 +1209,16 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
       )}
       {condition.kind === 'paths-changed' && (
         <Field label="glob — * within a folder, ** across folders">
-          <Input value={condition.glob} onChange={(e) => onChange({ ...condition, glob: e.target.value })} className="h-8 font-mono text-[11px]" />
+          <Input value={condition.glob} onChange={(e) => onChange({ ...condition, glob: e.target.value })} className="h-8 font-mono text-meta" />
         </Field>
       )}
       {condition.kind === 'output' && (
         <>
           <Field label="output — <node>.<field>">
-            <Input value={condition.ref} onChange={(e) => onChange({ ...condition, ref: e.target.value.trim() })} className="h-8 font-mono text-[11px]" />
+            <Input value={condition.ref} onChange={(e) => onChange({ ...condition, ref: e.target.value.trim() })} className="h-8 font-mono text-meta" />
           </Field>
           <div className="grid grid-cols-[7rem_1fr] gap-2">
-            <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof outputOps)[number] })}>
+            <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as (typeof outputOps)[number] })}>
               {outputOps.map((o) => (
                 <option key={o} value={o}>
                   {o}
@@ -1226,14 +1231,14 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
       )}
       {condition.kind === 'branch' && (
         <div className="grid grid-cols-[7rem_1fr] gap-2">
-          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as 'equals' | 'matches' })}>
+          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" aria-label="operator" value={condition.op} onChange={(e) => onChange({ ...condition, op: e.target.value as 'equals' | 'matches' })}>
             <option value="equals">equals</option>
             <option value="matches">matches glob</option>
           </select>
-          <Input aria-label="branch" value={condition.value} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="h-8 font-mono text-[11px]" />
+          <Input aria-label="branch" value={condition.value} onChange={(e) => onChange({ ...condition, value: e.target.value })} className="h-8 font-mono text-meta" />
         </div>
       )}
-      <p className="text-[11px] text-muted-foreground">Leaves by true or false. Diff and paths are this task's own changes vs its base.</p>
+      <p className="text-meta text-muted-foreground">Leaves by true or false. Diff and paths are this task's own changes vs its base.</p>
     </>
   )
 }
@@ -1241,7 +1246,7 @@ function ConditionEditor({ condition, onChange }: { condition: ConditionValue; o
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[11px] text-muted-foreground">{label}</span>
+      <span className="mb-1 block text-meta text-muted-foreground">{label}</span>
       {children}
     </label>
   )
@@ -1331,9 +1336,9 @@ function Inspector({
   }
 
   return (
-    <div className="space-y-3 p-4 text-[12px]">
+    <div className="space-y-3 p-4 text-label">
       <div className="flex items-center justify-between">
-        <span className="text-[11px] uppercase text-muted-foreground">{node.type} node</span>
+        <span className="eyebrow text-muted-foreground">{node.type} node</span>
         <Button size="sm" variant="danger-ghost" onClick={onDelete} aria-label="Delete node">
           <Trash2Icon />
         </Button>
@@ -1361,12 +1366,12 @@ function Inspector({
       {node.type === 'agent' && (
         <>
           <Field label="prompt — {{task}}, {{nodes.<id>.<field>}}">
-            <Textarea value={node.prompt ?? ''} rows={5} className="font-mono text-[11px]" onChange={(e) => set({ prompt: e.target.value })} />
+            <Textarea value={node.prompt ?? ''} rows={5} className="font-mono text-meta" onChange={(e) => set({ prompt: e.target.value })} />
           </Field>
           <SkillField value={node.skill} onChange={(skill) => set({ skill })} />
           <div className="grid grid-cols-2 gap-2">
             <Field label="runner">
-              <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.runner ?? ''} onChange={(e) => set({ runner: e.target.value || undefined })}>
+              <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.runner ?? ''} onChange={(e) => set({ runner: e.target.value || undefined })}>
                 <option value="">task default</option>
                 {RUNNERS.map((r) => (
                   <option key={r} value={r}>
@@ -1400,7 +1405,7 @@ function Inspector({
                   className="h-8"
                 />
               </Field>
-              <p className="rounded-md bg-accent/50 p-2 text-[11px] text-muted-foreground">
+              <p className="rounded-md bg-accent/50 p-2 text-meta text-muted-foreground">
                 A fork branch: runs as its own subtask at the same time as the other branches — a fresh session in its
                 own worktree, starting from the task's work so far.
               </p>
@@ -1420,7 +1425,7 @@ function Inspector({
               </Field>
               <Field label="session">
                 <select
-                  className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                   value={node.session?.continue ?? ''}
                   onChange={(e) => set({ session: e.target.value ? { continue: e.target.value } : undefined })}
                 >
@@ -1437,7 +1442,7 @@ function Inspector({
             </>
           )}
           {node.verdicts?.length ? (
-            <p className="rounded-md bg-accent/50 p-2 text-[11px] text-muted-foreground">
+            <p className="rounded-md bg-accent/50 p-2 text-meta text-muted-foreground">
               The agent ends its turn with {node.verdicts.map((v) => `CEZ:VERDICT ${v}`).join(' or ')}. No verdict → one
               reminder, then <span style={{ color: TONE.failure }}>failed</span>.
             </p>
@@ -1447,7 +1452,7 @@ function Inspector({
 
       {node.type === 'check' && (
         <Field label="command — runs in the worktree; exit 0 passes">
-          <Textarea value={node.command} rows={3} className="font-mono text-[11px]" onChange={(e) => set({ command: e.target.value })} />
+          <Textarea value={node.command} rows={3} className="font-mono text-meta" onChange={(e) => set({ command: e.target.value })} />
         </Field>
       )}
 
@@ -1469,7 +1474,7 @@ function Inspector({
             <Textarea value={node.message} rows={3} onChange={(e) => set({ message: e.target.value })} />
           </Field>
           <MinutesField label="timeout (minutes, optional) — adds a timeout port" value={node.timeoutMs} optional onChange={(ms) => set({ timeoutMs: ms })} />
-          <p className="rounded-md bg-accent/50 p-2 text-[11px] text-muted-foreground">
+          <p className="rounded-md bg-accent/50 p-2 text-meta text-muted-foreground">
             The run waits without holding a slot. A reply starting with “approve” takes approve; anything else takes
             reject and becomes <code>{`{{nodes.${node.id}.comment}}`}</code>.
           </p>
@@ -1498,12 +1503,12 @@ function Inspector({
       {node.type === 'dispatch' && (
         <>
           <Field label="objective — {{task}}, {{nodes.<id>.<field>}}">
-            <Textarea value={node.prompt} rows={4} className="font-mono text-[11px]" onChange={(e) => set({ prompt: e.target.value })} />
+            <Textarea value={node.prompt} rows={4} className="font-mono text-meta" onChange={(e) => set({ prompt: e.target.value })} />
           </Field>
           <div className="grid grid-cols-2 gap-2">
             <Field label="runner">
               <select
-                className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 value={node.runner ?? ''}
                 onChange={(e) => set({ runner: e.target.value || undefined })}
               >
@@ -1566,7 +1571,7 @@ function Inspector({
         <>
           <Field label="branches — one agent each, all at once">
             <select
-              className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               value={node.branches}
               onChange={(e) => onGraphEdit((g) => setForkBranches(g, node.id, Number(e.target.value)))}
             >
@@ -1577,7 +1582,7 @@ function Inspector({
               ))}
             </select>
           </Field>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-meta text-muted-foreground">
             Each branch is the agent it is wired to: set its prompt, runner and budget there. They run as subtasks in
             their own worktrees (at most 4 at once) and meet at the join.
           </p>
@@ -1587,7 +1592,7 @@ function Inspector({
       {node.type === 'join' && (
         <Field label="wait for">
           <select
-            className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             value={node.wait}
             onChange={(e) => set({ wait: e.target.value })}
           >
@@ -1601,18 +1606,18 @@ function Inspector({
         <>
           <WorkflowSelect label="workflow to run" value={node.workflow} onChange={(workflow) => set({ workflow: workflow ?? 'quick-task' })} />
           <Field label="task for it — {{task}}, {{nodes.<id>.<field>}}">
-            <Textarea value={node.prompt ?? ''} placeholder="{{task}}" rows={3} className="font-mono text-[11px]" onChange={(e) => set({ prompt: e.target.value })} />
+            <Textarea value={node.prompt ?? ''} placeholder="{{task}}" rows={3} className="font-mono text-meta" onChange={(e) => set({ prompt: e.target.value })} />
           </Field>
-          <p className="text-[11px] text-muted-foreground">Runs as a subtask in its own worktree; this node waits for it.</p>
+          <p className="text-meta text-muted-foreground">Runs as a subtask in its own worktree; this node waits for it.</p>
         </>
       )}
 
       {node.type === 'git.push' && (
-        <p className="text-[11px] text-muted-foreground">Commits anything pending, then pushes the task branch to origin.</p>
+        <p className="text-meta text-muted-foreground">Commits anything pending, then pushes the task branch to origin.</p>
       )}
 
       {node.type === 'git.sync-base' && (
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-meta text-muted-foreground">
           Merges the latest base branch into the task. On a conflict the merge is left in progress and the node leaves by{' '}
           <span style={{ color: TONE.failure }}>conflict</span> — wire it to an agent to resolve it;{' '}
           <code>{`{{nodes.${node.id}.conflicts}}`}</code> lists the files.
@@ -1650,12 +1655,12 @@ function Inspector({
       {node.type === 'notify.webhook' && (
         <>
           <Field label="URL (http/https)">
-            <Input value={node.url} onChange={(e) => set({ url: e.target.value })} className="h-8 font-mono text-[11px]" />
+            <Input value={node.url} onChange={(e) => set({ url: e.target.value })} className="h-8 font-mono text-meta" />
           </Field>
           <Field label="message — sent as JSON text">
             <Textarea value={node.body ?? ''} rows={3} onChange={(e) => set({ body: e.target.value })} />
           </Field>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-meta text-muted-foreground">
             Only runs when the server has <code>CEZ_WORKFLOW_WEBHOOKS=1</code>; otherwise it leaves by failed.
           </p>
         </>
@@ -1665,7 +1670,7 @@ function Inspector({
 
       {node.type === 'end' && (
         <Field label="run status">
-          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-[12px] shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.status} onChange={(e) => set({ status: e.target.value })}>
+          <select className="w-full rounded-md border border-input bg-card px-2 py-1 text-label shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={node.status} onChange={(e) => set({ status: e.target.value })}>
             <option value="success">success</option>
             <option value="failed">failed</option>
           </select>
@@ -1673,7 +1678,7 @@ function Inspector({
       )}
 
       <div>
-        <div className="mb-1 text-[11px] uppercase text-muted-foreground">Output ports</div>
+        <div className="mb-1 eyebrow text-muted-foreground">Output ports</div>
         {portsOf(node).map((p) => (
           <div key={p} className="flex justify-between py-0.5">
             <span style={{ color: TONE[portTone(node, p)] }}>{p}</span>
@@ -1683,9 +1688,9 @@ function Inspector({
       </div>
       {outputsOf(node, branches).length > 0 && (
         <div>
-          <div className="mb-1 text-[11px] uppercase text-muted-foreground">Outputs for templates</div>
+          <div className="mb-1 eyebrow text-muted-foreground">Outputs for templates</div>
           {outputsOf(node, branches).map((o) => (
-            <code key={o} className="block text-[11px]">{`{{nodes.${node.id}.${o}}}`}</code>
+            <code key={o} className="block text-meta">{`{{nodes.${node.id}.${o}}}`}</code>
           ))}
         </div>
       )}

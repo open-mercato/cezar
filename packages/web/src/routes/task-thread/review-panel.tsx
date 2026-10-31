@@ -30,6 +30,7 @@ import { useDeliverPrompt } from './deliver-prompt'
 import { MESSAGE_TEXT_MAX, messageWithReview, type DiffComments } from './diff-comments'
 import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The review gate (spec 009, §"Task thread" review bullet) on the new surface — cezar's core
@@ -52,7 +53,7 @@ export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?:
         className="flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5"
       >
         <EyeIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
-        <p className="min-w-0 text-[13px]">
+        <p className="min-w-0 text-ui">
           <span className="font-semibold">Review the changes before anything lands.</span>{' '}
           <span className="text-muted-foreground">
             Read the diff, send notes back, draft a PR — or accept. Nothing merges on its own.
@@ -85,7 +86,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
   // recovery) sends the notes to a dead session, and only the recovery — refetch, then deliver on
   // the live path — keeps them from bouncing back as a `run is still active` toast (77117b95).
   const continueWith = useCallback(
-    (text: string) => continueRun(run.id, { text, runner: continuation.runnerOverride }),
+    (text: string, _images: unknown, idempotencyKey?: string) =>
+      continueRun(run.id, { text, runner: continuation.runnerOverride, idempotencyKey }),
     [run.id, continuation.runnerOverride],
   )
   const deliverPrompt = useDeliverPrompt(run, continueWith, { surface: 'review' })
@@ -177,7 +179,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
             submitNotes()
           }
         }}
-        className="min-h-[52px] text-[13px]"
+        className="min-h-[52px] text-ui"
       />
       {commentCount > 0 ? (
         <p data-slot="review-diff-comments" className="text-xs text-muted-foreground">
@@ -275,12 +277,11 @@ function ManualMergeLine({ command }: { command: string }) {
       data-slot="review-manual"
       title="Copy the command"
       onClick={() => {
-        void navigator.clipboard
-          .writeText(command)
+        void writeClipboard(command)
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-meta text-soft-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">manual path: {command}</span>
@@ -332,7 +333,7 @@ export function AcceptCelebration({ status }: { status: RunStatus }) {
     >
       <TwinkleBackdrop />
       <div className="flex justify-center pt-24">
-        <span className="rounded-full border border-violet/30 bg-violet/15 px-4 py-1.5 text-[13px] font-medium text-violet shadow-modal">
+        <span className="rounded-full border border-violet/30 bg-violet/15 px-4 py-1.5 text-ui font-medium text-violet shadow-modal">
           ✓ Changes accepted
         </span>
       </div>

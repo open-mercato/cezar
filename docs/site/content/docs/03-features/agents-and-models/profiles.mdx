@@ -1,0 +1,29 @@
+---
+title: "Switch agent accounts"
+description: "Create separate sign-in profiles for the same CLI."
+related:
+  links:
+    - guides/common-questions
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/accounts-section.tsx
+    line: 164
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-29-agent-profiles.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each profile has its own agent configuration directory. This lets you use several signed-in accounts from the same provider.
+
+## Where to find it
+
+Settings → Global → Agent accounts
+
+## How to use it
+
+1. Open Settings → Agent accounts and add an account.
+2. Set up a separate profile directory and sign in through the agent's CLI using that directory.
+3. Select the account for the project that should use it.
+
+> **Good to know**: Each account has a separate provider configuration directory. Account editing is disabled by default in remote mode. A trusted self-hosted installation can enable it with `CEZ_REMOTE_AGENT_ACCOUNTS=1`.

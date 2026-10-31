@@ -84,6 +84,8 @@ function seededClient({
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
+    repoRoot: BOOT_ROOT,
+    repo: { root: BOOT_ROOT, branch: 'main' },
     capabilities: { localHandoff: true, terminal: false, followups: true, singleProject },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
@@ -225,6 +227,23 @@ describe('the General page', () => {
     )
     expect(document.querySelector('[data-action="project-general-remove"]')).toBeNull()
     expect(document.querySelector('[data-slot="project-max-parallel"]')).toBeNull()
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Add cezar to your projects/ }))
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === 'POST')).toEqual([
+        { method: 'POST', url: '/api/v1/projects', body: { root: BOOT_ROOT } },
+      ]),
+    )
+  })
+
+  it('offers to add the launch folder even when the registry does not list it (#1432)', async () => {
+    // Once the user has projects the server leaves the launch folder out of the list (#1057),
+    // but `serve` still opens the cockpit on it — its Settings must not render blank.
+    renderAt('/p/boot/settings', { registry: [project('demo')] })
+
+    await waitFor(() => expect(general()).not.toBeNull())
+    expect(document.querySelector('[data-slot="project-general-unregistered"]')).not.toBeNull()
+    expect(general()?.querySelector('[data-slot="project-location-path"]')?.textContent).toBe(BOOT_ROOT)
 
     fireEvent.click(await screen.findByRole('button', { name: /^Add cezar to your projects/ }))
     await waitFor(() =>

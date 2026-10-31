@@ -66,6 +66,8 @@ export type AppShellProps = {
   unreadCount?: number | null
   /** A quiet, accessible marker on Skills when a checked update remains actionable. */
   skillsUpdateAvailable?: boolean
+  /** Nav items (`to`) whose feature shipped since the user started and is not opened yet. */
+  newNavItems?: ReadonlySet<string>
   /** cezar version for the footer chip. Null until Step 3.1 reads it from `/api/health`. */
   version?: string | null
   /** The npm registry's newer version, when the server's update check found one (#368). The
@@ -82,6 +84,8 @@ export type AppShellProps = {
    *  SLOT because `AppShell` stays presentational and QueryClient-free - the container supplies a
    *  node whose own viewport/transport gate decides whether anything mounts at all. */
   hostWidget?: ReactNode
+  /** The footer's "What's new" row (spec 2026-10-26-first-run-onboarding, "Coming back"). */
+  whatsNew?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
@@ -148,6 +152,8 @@ export function useSidebarNavigate(): (() => void) | undefined {
 }
 
 /** The main transcript owns cached/tail arrival; every other routed surface uses shell-top. */
+const NO_NEW_NAV_ITEMS: ReadonlySet<string> = new Set()
+
 export function routeOwnsScrollArrival(pathname: string): boolean {
   return matchPath({ path: '/tasks/:id', end: true }, stripProjectPrefix(pathname)) !== null
 }
@@ -179,11 +185,13 @@ export const AppShell = React.memo(function AppShell({
   inboxCount = null,
   unreadCount = null,
   skillsUpdateAvailable = false,
+  newNavItems = NO_NEW_NAV_ITEMS,
   version = null,
   latestVersion = null,
   starCount = null,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
@@ -263,11 +271,13 @@ export const AppShell = React.memo(function AppShell({
     inboxCount: inboxAvailable ? inboxCount : null,
     unreadCount,
     skillsUpdateAvailable,
+    newNavItems,
     version,
     latestVersion,
     starCount,
     taskQuickList,
     hostWidget,
+    whatsNew,
     toolsMenu,
     projectGroups,
     singleProject,
@@ -361,7 +371,7 @@ function TitlebarUpdateButton({ latestVersion, brandName }: { latestVersion: str
         data-slot="titlebar-update"
         onClick={() => setOpen(true)}
         title={`Update ${brandName} to v${latestVersion} and restart`}
-        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-[11px] font-semibold text-foreground transition-colors hover:bg-primary/30"
+        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-meta font-semibold text-foreground transition-colors hover:bg-primary/30"
       >
         <StatusDot tone="pending" pulse className="size-[5px] shrink-0" />
         Update {brandName}
@@ -379,11 +389,13 @@ type NavProps = {
   inboxCount: number | null
   unreadCount: number | null
   skillsUpdateAvailable: boolean
+  newNavItems: ReadonlySet<string>
   version: string | null
   latestVersion: string | null
   starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
+  whatsNew?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   brandName: string
@@ -460,11 +472,13 @@ function SidebarContent({
   inboxCount,
   unreadCount,
   skillsUpdateAvailable,
+  newNavItems,
   version,
   latestVersion,
   starCount,
   taskQuickList,
   hostWidget,
+  whatsNew,
   toolsMenu,
   projectGroups,
   singleProject,
@@ -503,8 +517,7 @@ function SidebarContent({
         {repo && !projectGroups ? (
           <span
             data-slot="repo-chip"
-            // basis-0 + flex-1: a long repo name truncates itself, never the brand beside it.
-            className="min-w-0 flex-1 basis-0 truncate text-right font-mono text-[11px] font-medium text-soft-foreground"
+            className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
           >
             {repo.name} / {repo.branch}
           </span>
@@ -528,7 +541,7 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-micro font-medium text-contrast-foreground/60"
             >
               C
             </kbd>
@@ -583,7 +596,7 @@ function SidebarContent({
                   className={cn(
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
                     isActive && 'bg-muted font-semibold text-foreground'
                   )}
                 >
@@ -592,7 +605,7 @@ function SidebarContent({
                   {item.badge === 'inbox-count' && inboxCount ? (
                     <span
                       data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {inboxCount}
                     </span>
@@ -603,7 +616,7 @@ function SidebarContent({
                     <span
                       data-slot="nav-unread-badge"
                       title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-micro font-semibold text-violet-foreground"
                     >
                       {unreadCount}
                     </span>
@@ -615,6 +628,12 @@ function SidebarContent({
                     >
                       <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
                       <span className="sr-only">Skills update available</span>
+                    </span>
+                  ) : null}
+                  {newNavItems.has(item.to) ? (
+                    <span data-slot="nav-new-marker" className="ml-auto flex items-center">
+                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                      <span className="sr-only">New</span>
                     </span>
                   ) : null}
                 </Link>
@@ -642,6 +661,7 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        {whatsNew}
         {hostWidget}
         <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
@@ -673,7 +693,7 @@ function SidebarContent({
  * only when active, `md:h-[34px]`) and are deliberately NOT peers of these two.
  */
 const SIDEBAR_SECTION_LINK_CLASS =
-  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
+  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-ui font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
 
 /**
  * The accent icon of a top-level door — violet, the same hue the tag chips and the Tasks page's
@@ -886,7 +906,7 @@ export function VersionChip({ version, latestVersion, brandName }: { version: st
         title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
         aria-label={updateAvailable ? `${brandName} v${version}, update to v${latestVersion} available — open updater` : `${brandName} v${version} — open updater`}
         onClick={() => setOpen(true)}
-        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-micro font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
         <span className="truncate">v{version}</span>
@@ -922,7 +942,7 @@ export function StarChip({ count }: { count: number }) {
       rel="noopener noreferrer"
       title={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
       aria-label={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
-      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-micro font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
     >
       <span aria-hidden="true">⭐</span>
       <span>{formatted}</span>
@@ -953,7 +973,7 @@ function MobileTopBar({ title }: { title: string }) {
             <MenuIcon className="size-[17px]" aria-hidden="true" />
           </Button>
         </SheetTrigger>
-        <span className="truncate text-[14.5px] font-semibold">{title}</span>
+        <span className="truncate text-body font-semibold">{title}</span>
         {/* SLOT — the run status dot / kebab land with the thread view (Step R3). */}
         <div data-slot="mobile-status" className="ml-auto flex items-center gap-2" />
       </div>

@@ -277,6 +277,18 @@ of them is the one case where the shell must ship BEFORE the cezar version that 
   pops the Versions list up as a native menu at the pointer. A registry cockpit without the
   update dialog therefore still has a visible, in-window way to any installed version,
   local builds included.
+- **New task from anywhere**: a system-wide **Cmd/Ctrl+Alt+N** (`tauri-plugin-global-shortcut`,
+  registered at launch) brings the main window forward, un-minimized and un-hidden, and moves
+  the cockpit client-side to the active project's `/new` (`history.pushState` + `popstate`, so
+  the page keeps its state and the composer focuses itself). Before the cockpit is up it only
+  shows the window. A combination another app already owns is logged and skipped; the shell
+  starts without it. A separate always-on-top quick-entry window was tried first and dropped
+  for this: it showed a second, partial cockpit and stayed over the main one.
+- **Global task switch** (`tauri-plugin-global-shortcut`): ⌃⌥↑ / ⌃⌥↓ from any application raise
+  the window and send the cockpit `cezar:switch-task` (`previous` / `next`), which steps to the
+  previous / next task that needs you (spec 2026-10-17-task-palette § Switching by arrow). The
+  stepping is the cockpit's; the shell only owns the OS-level chord. A chord another app holds
+  is logged and skipped at startup, never fatal.
 - **Port**: 4321 first (so `http://localhost:4321` works in a browser beside the app), the
   next few when busy, then any free port; the actual URL is on the app menu's
   "Open … in browser" item.

@@ -56,6 +56,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
 ]
 
 export interface ModelPreset {
@@ -108,6 +109,11 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // stays free text for anything the account is entitled to.
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // Antigravity's slugs (`gemini-3.8-flash-high`, …) come from `agy models` for the signed-in
+  // account; nothing dated is listed here, and the field stays free text for any slug it prints.
+  antigravity: [
+    { id: '', label: 'auto', desc: 'Use your Antigravity default model' },
   ],
 }
 
@@ -208,6 +214,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   opencode: 'OpenCode',
   junie: 'Junie',
   cursor: 'Cursor',
+  antigravity: 'Antigravity',
 }
 
 export function modelCatalogStatus(
@@ -420,15 +427,16 @@ export function buildCreateRunBody(opts: {
 
 /**
  * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
- * read-only task, else its default skill — only when that skill exists in the catalog.
+ * read-only task, else its default skill — only when that skill exists in the catalog. `null`
+ * skills means the catalog failed to load: keep the configured name and let the server judge it.
  */
 export function projectDefaultSource(
   config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
   readOnly: boolean,
-  skills: readonly Skill[],
+  skills: readonly Skill[] | null,
 ): TaskSource | null {
   const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
-  return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
+  return name && (skills === null || skills.some((skill) => skill.name === name)) ? { source: 'skill', ref: name } : null
 }
 
 /** A trunk-based project asks by default when the message reads as a question. */
