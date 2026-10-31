@@ -105,9 +105,7 @@ expect(responder().onChallenge(basic(method: NSURLAuthenticationMethodServerTrus
 expect(responder().onChallenge(basic(failures: 1)) == .cancelRejected, "no retry")
 let once = responder()
 _ = once.onChallenge(basic())
-expect(once.onChallenge(basic()) == .cancelRejected, "second challenge is a rejection")
-once.onPageLoaded()
-expect(once.onChallenge(basic()) != .cancelRejected, "a loaded page earns one more")
+expect(once.onChallenge(basic()) == .answer(username: "me", password: "secret"), "one load can raise several challenges")
 expect(responder(password: nil).onChallenge(basic()) == .cancelRejected, "missing password")
 expect(responder(ServerRecord(id: "id", label: "x", url: saved.url, username: nil, realm: nil, noteShown: nil)).onChallenge(basic()) == .cancelForeign, "no saved realm")
 

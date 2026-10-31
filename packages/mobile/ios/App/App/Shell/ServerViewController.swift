@@ -133,7 +133,6 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         provisional = false
-        responder?.onPageLoaded()
         if pendingLogin, origin.sameOrigin(webView.url?.absoluteString) { confirmPendingLogin() }
     }
 
@@ -148,7 +147,6 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     /// Spec M2 item 2. A reload raises a fresh challenge if WebKit dropped the session.
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        responder?.onPageLoaded()
         webView.load(URLRequest(url: webView.url ?? startUrl))
     }
 

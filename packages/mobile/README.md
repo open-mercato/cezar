@@ -35,7 +35,8 @@ cd android
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The app needs an `https://` cezar in hosted mode. Debug builds also trust user-installed CAs, so a
+The app needs an `https://` cezar in hosted mode. A Cloudflare quick tunnel is not enough: in the
+M2 spike it passed the Basic challenge but delivered no live events. Debug builds also trust user-installed CAs, so a
 local test gate with its own CA works on an emulator once that CA is installed there. Release
 builds do not.
 
