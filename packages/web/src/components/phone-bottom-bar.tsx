@@ -1,9 +1,9 @@
 import { BotIcon, EllipsisIcon, ListChecksIcon } from 'lucide-react'
-import { Link } from 'react-router'
+import { Link, useLocation } from 'react-router'
 
 import { useHealth, useProjects } from '@/api/queries'
 import { useKeyboardOpen } from '@/lib/keyboard-inset'
-import { readStoredLastLocation } from '@/lib/last-location'
+import { locationToSave, readStoredLastLocation } from '@/lib/last-location'
 import { lastProjectIndex } from '@/lib/phone-app'
 import { cn } from '@/lib/utils'
 
@@ -30,6 +30,7 @@ export function PhoneBottomBar({
   const keyboardOpen = useKeyboardOpen()
   const health = useHealth()
   const projects = useProjects()
+  const location = useLocation()
   if (keyboardOpen) return null
   const bootProject = projects.data?.bootProject ?? health.data?.bootProject
   return (
@@ -45,7 +46,8 @@ export function PhoneBottomBar({
         ) : null}
       </Link>
       <Link
-        to={lastProjectIndex(readStoredLastLocation(), projects.data, bootProject)}
+        // The current page first: the store is written in an effect, after this render.
+        to={lastProjectIndex(locationToSave(location, projects.data) ?? readStoredLastLocation(), projects.data, bootProject)}
         aria-current={manager ? undefined : 'page'}
         className={cn(ITEM, !manager && CURRENT)}
       >

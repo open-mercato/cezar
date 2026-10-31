@@ -73,6 +73,6 @@ export function lastProjectIndex(
   const restored = locationToRestore(remembered, registry, bootProject)
   const project = restored === null
     ? (bootProject === undefined ? null : bareRootLanding(registry, bootProject))
-    : pathnameProjectId(restored)
+    : pathnameProjectId(restored.replace(/[?#].*$/, ''))
   return project === null ? '/' : `/p/${encodeURIComponent(project)}/`
 }
