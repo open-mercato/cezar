@@ -46,7 +46,7 @@ export function RecentRunsCard({ automationId, onRunNow, onLog, busy = false, no
 
   return (
     <Card flush data-slot="recent-runs-card" className="min-w-0 px-3.5 py-3">
-      <h2 className="m-0 mb-2 text-[11px] font-semibold tracking-[.05em] uppercase text-soft-foreground">Recent runs</h2>
+      <h2 className="m-0 mb-2 text-meta font-semibold tracking-[.05em] uppercase text-soft-foreground">Recent runs</h2>
       {query.isPending ? <p role="status" className="m-0 text-xs text-muted-foreground">Loading recent runs…</p> : null}
       {query.isError ? (
         <div role="alert" className="text-xs text-muted-foreground">
@@ -62,10 +62,10 @@ export function RecentRunsCard({ automationId, onRunNow, onLog, busy = false, no
             const title = run?.title || `Task ${record.runId.slice(0, 8)}`
             return (
               <li key={record.runId} className="min-w-0 py-2 first:pt-0 last:pb-0">
-                <Link to={`/tasks/${encodeURIComponent(record.runId)}`} title={title} className="block truncate rounded-sm text-[13px] font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2">
+                <Link to={`/tasks/${encodeURIComponent(record.runId)}`} title={title} className="block truncate rounded-sm text-ui font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2">
                   {title}
                 </Link>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
                   <StatusDot aria-hidden="true" tone={run ? statusTone(run.status) : 'neutral'} />
                   <span>{run ? statusLabel(run.status) : 'Status unavailable'}</span>
                   <time dateTime={record.ts} title={record.ts}>{shortAge(record.ts, now)}</time>
