@@ -28,6 +28,7 @@ import { AppearanceSection } from './appearance'
 import { GlobalInstructionsSection } from './global-instructions-section'
 import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
+import { ManagerSection } from './manager-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { PrivacySection } from './privacy-section'
@@ -70,6 +71,7 @@ export type SettingsSectionId =
   | 'worktrees'
   | 'projects'
   | 'notifications'
+  | 'manager'
   | 'keyboard'
   | 'skills'
   | 'tracker'
@@ -195,6 +197,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'manager',
+    title: 'Manager',
+    description: 'Which approvals ask you to confirm first.',
+    icon: BotIcon,
+    component: ManagerSection,
+    scope: 'global',
+  },
+  {
     id: 'keyboard',
     title: 'Keyboard',
     description: 'Shortcuts for task commands.',
@@ -267,23 +277,27 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'managers'>>,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      // Routed until health answers: a reload here must not fall into the legacy redirect.
+      !(capabilities !== undefined && capabilities.managers !== true && section.id === 'manager'),
   )
 }
 
 /** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
  *  global sections as flat rows, the project sections under every project in the tree. */
 export function settingsSectionsByScope(
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'managers'>>,
 ): Record<SettingsScope, SettingsSection[]> {
   return {
-    global: visibleSettingsSections('global', capabilities),
+    // The nav never lists Manager on a guess, unlike the route table above.
+    global: visibleSettingsSections('global', capabilities)
+      .filter((section) => section.id !== 'manager' || capabilities?.managers === true),
     project: visibleSettingsSections('project', capabilities),
   }
 }

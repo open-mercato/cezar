@@ -1,13 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { workspaceQueryKeys } from '@/api/queries'
 import type { ManagerMessage } from '@open-mercato/cezar-api-client'
 
-import { actionMessage, assistantMessage, userMessage } from './manager-fixtures'
-import { ActionCard, CommandsRow, ManagerMessageRow } from './manager-message'
+import { assistantMessage, userMessage } from './manager-fixtures'
+import { CommandsRow, ManagerMessageRow } from './manager-message'
 
 const origin = { id: 'global', name: 'Global Manager' }
 
@@ -159,35 +159,5 @@ describe('CommandsRow', () => {
     expect(screen.getByRole('button', { name: 'Ran 1 command' })).toBeTruthy()
     rerender(<CommandsRow commands={[]} />)
     expect(container.textContent).toBe('')
-  })
-})
-
-describe('ActionCard', () => {
-  it('offers Approve and Reject while pending', () => {
-    const onDecide = vi.fn()
-    render(<ActionCard message={actionMessage(1)} onDecide={onDecide} />)
-    const card = screen.getByRole('region', { name: 'Merge #12 — Fix the thing' })
-    expect(card.textContent).toContain('Checks are green.')
-    expect(card.textContent).toContain('squash')
-    fireEvent.click(within(card).getByRole('button', { name: 'Approve' }))
-    expect(onDecide).toHaveBeenCalledWith('a1', 'approve')
-    fireEvent.click(within(card).getByRole('button', { name: 'Reject' }))
-    expect(onDecide).toHaveBeenCalledWith('a1', 'reject')
-  })
-
-  it('locks the buttons while a decision is in flight', () => {
-    render(<ActionCard message={actionMessage(1)} onDecide={vi.fn()} busy />)
-    expect((screen.getByRole('button', { name: 'Approve' }) as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('replaces the buttons with the outcome once decided', () => {
-    render(<ActionCard message={actionMessage(1, { status: 'done', result: 'Merged #12' })} onDecide={vi.fn()} />)
-    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
-    expect(screen.getByText('Merged #12')).toBeTruthy()
-  })
-
-  it('falls back to the status when no result was written', () => {
-    render(<ActionCard message={actionMessage(1, { status: 'rejected' })} onDecide={vi.fn()} />)
-    expect(screen.getByText('Rejected')).toBeTruthy()
   })
 })

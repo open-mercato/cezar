@@ -51,13 +51,31 @@ export const MANAGER_PAGE_SIZE = 50
 export async function getManagerMessages(
   id: string,
   before: number | undefined,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; pending?: boolean },
 ): Promise<ManagerMessagesResponse> {
-  const query = { limit: String(MANAGER_PAGE_SIZE), ...(before === undefined ? {} : { before: String(before) }) }
+  const query = {
+    limit: String(MANAGER_PAGE_SIZE),
+    ...(before === undefined ? {} : { before: String(before) }),
+    ...(opts?.pending ? { pending: '1' as const } : {}),
+  }
   return unwrap(
     await managers()[':id'].messages.$get({ param: managerParam(id), query }, { init: { signal: opts?.signal } }),
     managerPath(id, '/messages'),
   )
+}
+
+/** The card the approvals pill jumps to. Older pending cards can sit beyond one page. */
+export async function getOldestPendingAction(id: string): Promise<ManagerMessage | undefined> {
+  let before: number | undefined
+  let oldest: ManagerMessage | undefined
+  for (;;) {
+    const page = await getManagerMessages(id, before, { pending: true })
+    const first = page.messages[0]
+    if (!first) return oldest
+    oldest = first
+    if (!page.hasMore) return oldest
+    before = first.seq
+  }
 }
 
 export async function sendManagerMessage(id: string, text: string) {

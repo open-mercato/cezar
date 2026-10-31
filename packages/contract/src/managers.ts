@@ -175,6 +175,18 @@ export const managerActionRequestSchema = z.discriminatedUnion('type', [
 ]);
 export type ManagerActionRequest = z.infer<typeof managerActionRequestSchema>;
 
+/**
+ * Settings → Manager (mobile spec, Confirmation setting): `false` drops the cockpit's confirmation
+ * step for that action type. Absent means confirm. Never an autonomy setting: the card and its tap
+ * remain, and the `decision` route is unchanged.
+ */
+export const managerConfirmSchema = z.looseObject({
+  'merge-pr': z.boolean().optional(),
+  'enable-automation': z.boolean().optional(),
+  'add-job': z.boolean().optional(),
+});
+export type ManagerConfirm = z.infer<typeof managerConfirmSchema>;
+
 export const managerActionStatusSchema = z.enum(['pending', 'running', 'done', 'rejected', 'failed']);
 export type ManagerActionStatus = z.infer<typeof managerActionStatusSchema>;
 
@@ -233,6 +245,8 @@ export const managerMessagesQuerySchema = z.object({
   /** Page older history: only messages with a lower `seq`. */
   before: z.coerce.number().int().min(0).optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
+  /** `1` keeps only `action` messages still waiting for the user; `before` and `limit` still apply. */
+  pending: z.literal('1').optional(),
 });
 export const managerMessagesResponseSchema = z.object({
   messages: z.array(managerMessageSchema),

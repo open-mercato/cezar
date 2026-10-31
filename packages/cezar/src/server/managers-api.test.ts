@@ -163,6 +163,51 @@ describe('the managers routes', () => {
     expect(older.messages.map((message) => message.seq)).toEqual([0, 1, 2]);
     expect(older.hasMore).toBe(false);
   });
+
+  describe('pending=1', () => {
+    const page = async (query: string) =>
+      (await (await request(`${query}`)).json()) as { messages: Array<{ id: string; seq: number }>; hasMore: boolean };
+    const action = { type: 'add-job', name: 'Nightly', prompt: 'p', everyMinutes: 60 } as const;
+
+    it('answers an empty page when nothing is waiting, with or without messages', async () => {
+      const { id } = await createManager();
+      expect(await page(`${BASE}/${id}/messages?pending=1`)).toEqual({ messages: [], hasMore: false });
+      const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+      log.persistMessage(id, { id: 'n', seq: 0, at: 't', kind: 'notice', text: 'x' });
+      log.persistMessage(id, { id: 'done', seq: 1, at: 't', kind: 'action', action, status: 'done' });
+      expect(await page(`${BASE}/${id}/messages?pending=1`)).toEqual({ messages: [], hasMore: false });
+    });
+
+    it('returns only waiting actions, honours before and limit, and leaves the plain read alone', async () => {
+      const { id } = await createManager();
+      const log = await import('../managers/store.ts').then(({ ManagerStore }) => new ManagerStore(() => undefined));
+      log.persistMessage(id, { id: 'a0', seq: 0, at: 't', kind: 'action', action, status: 'pending' });
+      log.persistMessage(id, { id: 'n', seq: 1, at: 't', kind: 'notice', text: 'x' });
+      log.persistMessage(id, { id: 'a2', seq: 2, at: 't', kind: 'action', action, status: 'rejected' });
+      log.persistMessage(id, { id: 'a3', seq: 3, at: 't', kind: 'action', action, status: 'pending' });
+      log.persistMessage(id, { id: 'a4', seq: 4, at: 't', kind: 'action', action, status: 'pending' });
+      const newest = await page(`${BASE}/${id}/messages?pending=1&limit=2`);
+      expect(newest.messages.map((message) => message.id)).toEqual(['a3', 'a4']);
+      expect(newest.hasMore).toBe(true);
+      const oldest = await page(`${BASE}/${id}/messages?pending=1&limit=2&before=3`);
+      expect(oldest.messages.map((message) => message.id)).toEqual(['a0']);
+      expect(oldest.hasMore).toBe(false);
+      expect((await page(`${BASE}/${id}/messages`)).messages).toHaveLength(5);
+    });
+
+    it('refuses any other value', async () => {
+      const { id } = await createManager();
+      expect((await request(`${BASE}/${id}/messages?pending=0`)).status).toBe(400);
+    });
+  });
+
+  it('keeps managerConfirm in the workspace ui-state and bounds what it accepts', async () => {
+    const put = (managerConfirm: object) => request('/api/v1/workspace/ui-state', { method: 'PUT', body: { managerConfirm } });
+    expect((await put({ 'merge-pr': false, 'enable-automation': true, 'add-job': true })).status).toBe(200);
+    expect(await (await request('/api/v1/workspace/ui-state')).json()).toMatchObject({ managerConfirm: { 'merge-pr': false } });
+    expect((await put({ 'merge-pr': 'no' })).status).toBe(400);
+    expect((await put({ other: false })).status).toBe(400);
+  });
 });
 
 describe('the dry-run manager turn', () => {

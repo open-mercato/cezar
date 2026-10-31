@@ -137,7 +137,13 @@ Replies from a job carry a *Job:* label with its name in the chat. Jobs ignore t
 
 A watch check reads text that anyone can write in a pull request, so Cezar keeps it read-only. It can ask you to act, and you then ask for the action in chat.
 
-Merging, enabling an automation and adding a job happen only when you approve. The manager puts a card in the chat with its reason. Select **Approve** or **Reject**, and the manager learns the outcome on its next turn.
+Merging, enabling an automation and adding a job happen only when you approve. The manager puts a card in the chat with its reason. **Reject** acts at once. **Approve** opens a summary of what will happen, as a sheet on a phone and a dialog on a desktop, and you confirm there. The manager learns the outcome on its next turn.
+
+The summary shows the project, pull request, title, method, head commit and a link for a merge, the name, revision and definition for an automation, and the name, interval and full prompt for a job. On the card, a job's prompt and an automation's definition stop at three lines. Select **Show all** to read the rest. If Cezar refuses a decision, the reason appears on the card.
+
+When a card is out of view, an **N approvals waiting** pill sits above the composer. Select it to jump to the oldest one, even if it is further back than the loaded messages.
+
+To skip the summary, open **Settings → Manager** and turn off **Merges**, **Automations** or **Jobs**. All three are on by default, and the choice applies to every device on that server. With a switch off, **Approve** sends the decision straight away. The card still appears and still needs your tap, so a manager never acts on its own.
 
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
 

@@ -410,7 +410,7 @@ export class ManagerEngine {
       unread: messages.filter((message) => message.seq > state.readSeq && message.kind !== 'user' && !(message.kind === 'assistant' && message.streaming)).length,
       important: important.length,
       ...(important.at(-1)?.headline ? { headline: important.at(-1)!.headline } : {}),
-      pendingActions: messages.filter((message) => message.kind === 'action' && message.status === 'pending').length,
+      pendingActions: messages.filter(pendingAction).length,
       pendingQuestions: messages.filter(openAsk).length,
       ...(state.lastCheckAt ? { lastCheckAt: state.lastCheckAt } : {}),
       ...(manager.cronMinutes > 0 ? { nextCheckAt: new Date(Math.max(dueAt, this.now())).toISOString() } : {}),
@@ -429,9 +429,10 @@ export class ManagerEngine {
     return manager ? this.summarize(manager) : undefined;
   }
 
-  messages(id: string, query: { before?: number; limit?: number }): ManagerMessagesResponse {
+  messages(id: string, query: { before?: number; limit?: number; pending?: '1' }): ManagerMessagesResponse {
     const limit = query.limit ?? 100;
-    const all = this.deps.store.messages(id).filter((message) => query.before === undefined || message.seq < query.before);
+    const all = this.deps.store.messages(id).filter((message) =>
+      (query.before === undefined || message.seq < query.before) && (query.pending === undefined || pendingAction(message)));
     return { messages: all.slice(-limit), hasMore: all.length > limit };
   }
 
@@ -1241,6 +1242,8 @@ const SUMMARY_LIMIT = 8_000;
 /** Long on purpose: the end of a definition is its prompt, and a card must not hide that. */
 const clipSummary = (text: string): string =>
   text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}… (cut, open the automation to read it all)` : text;
+
+const pendingAction = (message: ManagerMessage): boolean => message.kind === 'action' && message.status === 'pending';
 
 const openAsk = (message: ManagerMessage): message is Extract<ManagerMessage, { kind: 'assistant' }> =>
   message.kind === 'assistant' && message.ask !== undefined && message.askAnswer === undefined;

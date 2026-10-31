@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema } from './health.ts';
+import { managerConfirmSchema } from './managers.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
@@ -340,6 +341,8 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** Which approval types ask for confirmation; one value per server (mobile spec, Q13). */
+  managerConfirm: managerConfirmSchema.optional(),
   /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
    *  person sets up every project. */
   onboarding: z
@@ -409,6 +412,7 @@ export const setWorkspaceUiStateInputSchema = z
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
     savedLayouts: z.array(savedWorkspaceLayoutSchema).max(MAX_SAVED_WORKSPACE_LAYOUTS).optional(),
+    managerConfirm: managerConfirmSchema.strict().optional(),
     keybindings: z
       .record(z.string().min(1).max(120), z.string().min(1).max(40).nullable())
       .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {

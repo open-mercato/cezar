@@ -7,6 +7,8 @@ import {
   applyManagerChange,
   checkManager,
   decideManagerAction,
+  getOldestPendingAction,
+  managerChat,
   managerKeys,
   markManagerRead,
   sendManagerMessage,
@@ -17,6 +19,7 @@ import {
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
+import { StatusDot } from '@/components/status-dot'
 import { Composer } from '@/components/composer/composer'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
@@ -43,6 +46,16 @@ const CHIP_COMMANDS = MANAGER_COMMANDS.filter(({ name }) => ['status', 'attentio
 /** Per-manager drafts for the session: switching chats must not eat what was typed. */
 const drafts = new Map<string, string>()
 
+const PENDING_CARD = '[data-slot="manager-action"][data-status="pending"]'
+
+function pendingCardsInView(box: HTMLElement): number {
+  const { top, bottom } = box.getBoundingClientRect()
+  return [...box.querySelectorAll(PENDING_CARD)].filter((card) => {
+    const rect = card.getBoundingClientRect()
+    return rect.bottom > top && rect.top < bottom
+  }).length
+}
+
 /**
  * The transcript's scrolling: follow the tail while pinned, keep the reader's place when older
  * pages land above it, and report whether the jump button should show.
@@ -52,6 +65,11 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   const pinned = useRef(true)
   const previous = useRef<{ first: string | undefined; height: number }>({ first: undefined, height: 0 })
   const [away, setAway] = useState(false)
+  const [pendingInView, setPendingInView] = useState(0)
+
+  const measure = useCallback(() => {
+    if (ref.current) setPendingInView(pendingCardsInView(ref.current))
+  }, [])
 
   useLayoutEffect(() => {
     const box = ref.current
@@ -61,7 +79,8 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (pinned.current) box.scrollTop = box.scrollHeight
     else if (lastFirst !== undefined && first !== lastFirst) box.scrollTop += box.scrollHeight - height
     previous.current = { first, height: box.scrollHeight }
-  }, [messages])
+    measure()
+  }, [messages, measure])
 
   // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the tail.
   useEffect(() => {
@@ -70,20 +89,22 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     if (!box || !content) return undefined
     const observer = new ResizeObserver(() => {
       if (pinned.current) box.scrollTop = box.scrollHeight
+      measure()
     })
     observer.observe(content)
     // The box shrinks too, when the chips come back for an empty draft.
     observer.observe(box)
     return () => observer.disconnect()
-  }, [])
+  }, [measure])
 
   const onScroll = useCallback(() => {
     const box = ref.current
     if (!box) return
     pinned.current = isNearBottom(box, 80)
     setAway(!pinned.current)
+    measure()
     if (box.scrollTop < HISTORY_SLACK_PX) onNearTop()
-  }, [onNearTop])
+  }, [measure, onNearTop])
 
   const jump = useCallback(() => {
     const box = ref.current
@@ -97,9 +118,21 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
   const restick = useCallback(() => {
     const box = ref.current
     if (box && pinned.current) box.scrollTop = box.scrollHeight
+    measure()
+  }, [measure])
+
+  /** Bring one approval card to the reader. False until its page has rendered. */
+  const reveal = useCallback((actionId: string) => {
+    const box = ref.current
+    const card = box && [...box.querySelectorAll<HTMLElement>(PENDING_CARD)].find((entry) => entry.dataset.actionId === actionId)
+    if (!card) return false
+    pinned.current = false
+    card.scrollIntoView({ block: 'center' })
+    card.focus({ preventScroll: true })
+    return true
   }, [])
 
-  return { ref, onScroll, jump, restick, away }
+  return { ref, onScroll, jump, restick, reveal, away, pendingInView }
 }
 
 /** The chat's header is the phone's one row (mobile spec, Header); the shell's bar stays mounted. */
@@ -133,6 +166,50 @@ function useMarkRead(manager: ManagerSummary) {
   }, [id, queryClient, unread])
 }
 
+/**
+ * The approvals pill (mobile spec, Approval cards): it shows while any waiting card is out of view
+ * and jumps to the oldest, paging back with `before` until that card is loaded.
+ */
+function usePendingJump(
+  manager: ManagerSummary,
+  chat: ReturnType<typeof useManagerChat>,
+  scroll: ReturnType<typeof useChatScroll>,
+) {
+  const { id, pendingActions } = manager
+  const { reveal, ref } = scroll
+  const [target, setTarget] = useState<string>()
+  const [jumping, setJumping] = useState(false)
+  const busy = useRef(false)
+
+  // After the commit that rendered the page: a fetch resolves before its rows exist.
+  useEffect(() => {
+    if (target && reveal(target)) setTarget(undefined)
+  }, [chat.messages, reveal, target])
+
+  const jump = async () => {
+    if (busy.current) return
+    busy.current = true
+    setJumping(true)
+    try {
+      const oldest = await getOldestPendingAction(id)
+      if (!oldest) return
+      let loaded: Pick<typeof chat, 'data' | 'hasNextPage'> = chat
+      while (ref.current && loaded.hasNextPage && !managerChat(loaded.data).some((message) => message.id === oldest.id)) {
+        loaded = await chat.fetchNextPage({ throwOnError: true })
+      }
+      setTarget(oldest.id)
+    } catch (error) {
+      toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
+    } finally {
+      busy.current = false
+      setJumping(false)
+    }
+  }
+
+  // Waits for the first page: with none loaded there is no `before` to page back from.
+  return { show: chat.data !== undefined && pendingActions > scroll.pendingInView, count: pendingActions, jump, jumping }
+}
+
 function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const { id } = manager
   const chat = useManagerChat(id)
@@ -146,7 +223,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
   useHideShellTopBar()
   const keyboardOpen = useKeyboardOpen()
   const [draft, setDraft] = useState(() => drafts.get(id) ?? '')
-  const [deciding, setDeciding] = useState(false)
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = chat
   const loadOlder = useCallback(() => {
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage()
@@ -160,12 +236,8 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     update.mutate(patch, { onError: (error) => toast(error.message, { tone: 'danger' }) })
   }, [update])
 
-  const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => {
-    setDeciding(true)
-    void decideManagerAction(id, actionId, decision)
-      .catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
-      .finally(() => setDeciding(false))
-  }, [id])
+  const onDecide = useCallback((actionId: string, decision: 'approve' | 'reject') => decideManagerAction(id, actionId, decision), [id])
+  const pending = usePendingJump(manager, chat, scroll)
 
   const lastSent = useRef(0)
   const stop = useCallback(() => {
@@ -224,23 +296,37 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </p>
           ) : null}
           {chat.messages.map((message) => (
-            <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} deciding={deciding} projects={connected} />
+            <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} projects={connected} />
           ))}
         </div>
       </div>
 
       <div className="relative mx-auto w-full max-w-[860px] px-3 pb-2 md:px-6">
-        {scroll.away ? (
-          <button
-            type="button"
-            aria-label="Scroll to bottom"
-            data-slot="manager-scroll-bottom"
-            onClick={scroll.jump}
-            className="absolute -top-12 left-1/2 flex size-9 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background shadow-modal outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          >
-            <ArrowDownIcon aria-hidden="true" className="size-4" />
-          </button>
-        ) : null}
+        <div className="pointer-events-none absolute inset-x-0 -top-12 flex justify-center gap-2 *:pointer-events-auto">
+          {pending.show ? (
+            <button
+              type="button"
+              data-slot="manager-approvals-pill"
+              disabled={pending.jumping}
+              onClick={() => void pending.jump()}
+              className="flex h-9 items-center gap-2 rounded-full border border-border bg-background px-3.5 text-sm shadow-modal outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:h-11"
+            >
+              <StatusDot tone="pending" />
+              {pending.count} {pending.count === 1 ? 'approval' : 'approvals'} waiting
+            </button>
+          ) : null}
+          {scroll.away ? (
+            <button
+              type="button"
+              aria-label="Scroll to bottom"
+              data-slot="manager-scroll-bottom"
+              onClick={scroll.jump}
+              className="flex size-9 items-center justify-center rounded-full border border-border bg-background shadow-modal outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 pointer-coarse:size-11"
+            >
+              <ArrowDownIcon aria-hidden="true" className="size-4" />
+            </button>
+          ) : null}
+        </div>
         {draft.trim() === '' ? (
           <div data-slot="manager-chips" className="mb-2 flex gap-1.5 md:hidden">
             {CHIP_COMMANDS.map(({ name, description }) => (

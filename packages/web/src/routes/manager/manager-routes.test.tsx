@@ -12,7 +12,8 @@ import { actionMessage, assistantMessage, managerFixture, userMessage } from './
 import { ManagerIndexRoute } from './manager-index'
 import { ManagerNewRoute, applySetupPatch, MANAGER_PRESETS, managerNameFrom } from './manager-new'
 
-let server: { managers: ManagerSummary[]; messages: ManagerMessage[]; hasMore: boolean }
+interface Page { messages: ManagerMessage[]; hasMore: boolean }
+let server: { managers: ManagerSummary[]; messages: ManagerMessage[]; hasMore: boolean; pending: Page; pages?: (path: string) => Page }
 const calls: Array<{ method: string; path: string; body?: unknown }> = []
 
 const json = (body: unknown, status = 200) =>
@@ -25,7 +26,8 @@ function route(path: string, method: string, body: unknown): Response {
     server.managers = [created]
     return json(created)
   }
-  if (/\/messages\?/.test(path)) return json({ messages: server.messages, hasMore: server.hasMore })
+  if (/\/messages\?.*pending=1/.test(path)) return json(server.pending)
+  if (/\/messages\?/.test(path)) return json(server.pages?.(path) ?? { messages: server.messages, hasMore: server.hasMore })
   if (method === 'PATCH') return json({ ...server.managers[0], ...(body as object) })
   return json({ ok: true })
 }
@@ -79,7 +81,7 @@ function send(text: string) {
 }
 
 beforeEach(() => {
-  server = { managers: [managerFixture()], messages: [], hasMore: false }
+  server = { managers: [managerFixture()], messages: [], hasMore: false, pending: { messages: [], hasMore: false } }
   calls.length = 0
   stubServer()
   // jsdom has neither; the chat scrolls and the popovers measure.
@@ -400,10 +402,125 @@ describe('/manager/:id', () => {
     server.messages = [actionMessage(3)]
     renderAt('/manager/global')
     fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+    expect(posted('/global/actions/a3/decision')).toEqual([])
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }))
     await waitFor(() => {
       expect(posted('/global/actions/a3/decision')[0]?.body).toEqual({ decision: 'approve' })
     })
-    expect(posted('/global/messages')).toHaveLength(0)
+    expect(posted('/global/messages')).toEqual([])
+  })
+
+  it('sends the identical decision request with the step switched off', async () => {
+    const seed = (managerConfirm?: object) => (client: QueryClient) => client.setQueryData(workspaceQueryKeys.uiState, { managerConfirm })
+    server.messages = [actionMessage(3)]
+    renderAt('/manager/global', seed())
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Merge' }))
+    await waitFor(() => expect(posted('/global/actions/a3/decision')).toHaveLength(1))
+    const confirmed = posted('/global/actions/a3/decision')[0]
+    cleanup()
+    calls.length = 0
+    renderAt('/manager/global', seed({ 'merge-pr': false }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve' }))
+    await waitFor(() => expect(posted('/global/actions/a3/decision')).toHaveLength(1))
+    expect(posted('/global/actions/a3/decision')[0]).toEqual(confirmed)
+  })
+
+  it('decides each card on its own: one in flight leaves the other live', async () => {
+    server.messages = [actionMessage(3), actionMessage(4)]
+    renderAt('/manager/global')
+    vi.mocked(fetch).mockImplementationOnce(() => new Promise(() => {}))
+    const rejects = await screen.findAllByRole('button', { name: 'Reject' }) as HTMLButtonElement[]
+    fireEvent.click(rejects[0]!)
+    expect(rejects[0]!.disabled).toBe(true)
+    expect(rejects[1]!.disabled).toBe(false)
+  })
+
+  describe('the approvals pill', () => {
+    const pill = () => document.querySelector<HTMLButtonElement>('[data-slot="manager-approvals-pill"]')
+    const near = { top: 0, bottom: 100 }
+    const place = (rects: (element: Element) => { top: number; bottom: number }) => {
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function rect(this: Element) {
+        return rects(this) as DOMRect
+      })
+    }
+    afterEach(() => vi.restoreAllMocks())
+
+    it('stays away with nothing waiting', async () => {
+      server.messages = [userMessage(1)]
+      renderAt('/manager/global')
+      await screen.findByText('jak progres prac')
+      expect(pill()).toBeNull()
+    })
+
+    it('stays away while every waiting card is on screen', async () => {
+      place(() => near)
+      server.managers = [managerFixture({ pendingActions: 1 })]
+      server.messages = [actionMessage(3)]
+      renderAt('/manager/global')
+      await screen.findByRole('button', { name: 'Approve' })
+      expect(pill()).toBeNull()
+    })
+
+    it('shows the server count while a card is off screen, and a singular', async () => {
+      place((element) => (element.getAttribute('data-slot') === 'manager-action' ? { top: 500, bottom: 600 } : near))
+      server.managers = [managerFixture({ pendingActions: 1 })]
+      server.messages = [actionMessage(3)]
+      renderAt('/manager/global')
+      await waitFor(() => expect(pill()?.textContent).toBe('1 approval waiting'))
+    })
+
+    it('jumps to the oldest waiting card, paging back with `before` until it is loaded', async () => {
+      const older = actionMessage(10)
+      server.managers = [managerFixture({ pendingActions: 3 })]
+      server.pending = { messages: [older, actionMessage(70), actionMessage(120)], hasMore: false }
+      server.pages = (path) => {
+        const before = new URL(path, 'http://x').searchParams.get('before')
+        if (before === '100') return { messages: [userMessage(60), actionMessage(70)], hasMore: true }
+        if (before === '60') return { messages: [older, userMessage(20)], hasMore: false }
+        return { messages: [userMessage(100), actionMessage(120)], hasMore: true }
+      }
+      renderAt('/manager/global')
+      await waitFor(() => expect(pill()?.textContent).toBe('3 approvals waiting'))
+      vi.mocked(Element.prototype.scrollIntoView).mockClear()
+      fireEvent.click(pill()!)
+      await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalledTimes(1))
+      const target = vi.mocked(Element.prototype.scrollIntoView).mock.contexts[0] as HTMLElement
+      expect(target.dataset.actionId).toBe('a10')
+      expect(document.activeElement).toBe(target)
+      expect(calls.some((call) => call.path.includes('pending=1'))).toBe(true)
+    })
+
+    it('waits for the first page: there is nothing to page back from before it', async () => {
+      server.managers = [managerFixture({ pendingActions: 1 })]
+      server.pages = () => new Promise<never>(() => {}) as never
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        if (String(input).includes('/messages?')) return new Promise<Response>(() => {})
+        return json({ managers: server.managers })
+      })
+      renderAt('/manager/global')
+      await screen.findByRole('textbox')
+      expect(pill()).toBeNull()
+    })
+
+    it('stops paging when a page fails', async () => {
+      server.managers = [managerFixture({ pendingActions: 1 })]
+      server.pending = { messages: [actionMessage(10)], hasMore: false }
+      server.messages = [userMessage(100)]
+      server.hasMore = true
+      renderAt('/manager/global')
+      await waitFor(() => expect(pill()).not.toBeNull())
+      const paged = vi.fn()
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        if (String(input).includes('pending=1')) return json(server.pending)
+        paged()
+        return json({ error: 'offline' }, 500)
+      })
+      fireEvent.click(pill()!)
+      await waitFor(() => expect(paged).toHaveBeenCalled())
+      await waitFor(() => expect(pill()?.disabled).toBe(false))
+      expect(paged).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('clears unread on open, and optimistically', async () => {
