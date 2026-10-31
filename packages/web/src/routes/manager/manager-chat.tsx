@@ -59,6 +59,18 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
     previous.current = { first, height: box.scrollHeight }
   }, [messages])
 
+  // Rows grow after their first paint (markdown, session cards): a pinned reader stays at the tail.
+  useEffect(() => {
+    const box = ref.current
+    const content = box?.firstElementChild
+    if (!box || !content) return undefined
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) box.scrollTop = box.scrollHeight
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [])
+
   const onScroll = useCallback(() => {
     const box = ref.current
     if (!box) return

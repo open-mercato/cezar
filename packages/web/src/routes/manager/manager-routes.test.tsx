@@ -220,6 +220,22 @@ describe('/manager/:id', () => {
     await waitFor(() => expect(calls.find((call) => call.method === 'PATCH')?.body).toEqual({ projects: ['beta'] }))
   })
 
+  it('stays at the tail when a row grows after its first paint', async () => {
+    let grow = () => {}
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { grow = callback }
+      observe() {}
+      disconnect() {}
+    })
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    const box = document.querySelector<HTMLElement>('[data-slot="manager-transcript"]')!
+    Object.defineProperty(box, 'scrollHeight', { value: 900, configurable: true })
+    grow()
+    expect(box.scrollTop).toBe(900)
+  })
+
   it('tells an empty chat what to do', async () => {
     seedChat()
     server.messages = []
