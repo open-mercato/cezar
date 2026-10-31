@@ -84,16 +84,16 @@ export function NextRunsRail({
                   onOpenChange(false)
                   navigate(`/automations/${encodeURIComponent(run.automation.id)}`)
                 }}
-                className="grid w-full cursor-pointer grid-cols-[76px_1fr_auto] items-center gap-2 px-4 py-2 text-left text-[13px] hover:bg-muted"
+                className="grid w-full cursor-pointer grid-cols-[76px_1fr_auto] items-center gap-2 px-4 py-2 text-left text-ui hover:bg-muted"
               >
                 <span className="font-mono text-xs font-medium whitespace-nowrap text-muted-foreground tabular-nums">{time}</span>
-                <span className="overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap">{run.automation.name}</span>
-                <span className="text-[11px] whitespace-nowrap text-soft-foreground">{relativeIn(run.at, now)}</span>
+                <span className="overflow-hidden text-ui font-medium text-ellipsis whitespace-nowrap">{run.automation.name}</span>
+                <span className="text-meta whitespace-nowrap text-soft-foreground">{relativeIn(run.at, now)}</span>
               </button>
             )
           })}
           {upcoming.length === 0 ? (
-            <p className="px-4 py-2 text-[12.5px] text-soft-foreground">No scheduled runs in the next two weeks.</p>
+            <p className="px-4 py-2 text-label text-soft-foreground">No scheduled runs in the next two weeks.</p>
           ) : null}
           <div
             data-slot="next-runs-footer"

@@ -71,7 +71,7 @@ export function ImagePreview({
           type="button"
           data-slot="diff-image-open"
           onClick={() => onOpenInApp(file.path)}
-          className="text-[11px] font-medium text-soft-foreground hover:text-foreground hover:underline"
+          className="text-meta font-medium text-soft-foreground hover:text-foreground hover:underline"
         >
           Open in default app
         </button>
@@ -86,7 +86,7 @@ function ImageSide({ label, src, alt, side }: { label?: string; src: string; alt
   const [failed, setFailed] = useState<string | null>(null)
   return (
     <figure data-slot="diff-image-side" data-side={side} className="flex min-w-0 flex-col items-center gap-1.5">
-      {label ? <figcaption className="text-[11px] font-medium text-soft-foreground">{label}</figcaption> : null}
+      {label ? <figcaption className="text-meta font-medium text-soft-foreground">{label}</figcaption> : null}
       {failed === src ? (
         <ImageNote>Image can’t be previewed (too large or unavailable).</ImageNote>
       ) : (

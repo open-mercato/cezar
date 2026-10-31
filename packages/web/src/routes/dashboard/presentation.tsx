@@ -6,7 +6,7 @@ import { shortAge } from '@/lib/format'
 // A pseudo-element keeps it out of textContent (tests, the export's module titles); its empty
 // alt text keeps it out of the accessible name.
 export const widgetHeading =
-  'section-mark font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground'
+  'section-mark eyebrow text-muted-foreground'
 // One header bar for every module, so the cards line up as a single system.
 export const widgetHeader =
   'flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-4 py-2.5'
@@ -69,7 +69,7 @@ export function MetricContent({
   return (
     <>
       <span className="flex w-full items-center justify-between gap-2">
-        <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+        <span className="eyebrow text-muted-foreground">
           {label}
         </span>
         <span className="text-soft-foreground" aria-hidden="true">

@@ -23,3 +23,5 @@ Workflows → Add node → Wait for CI
 3. Connect green, red, timeout, and failed.
 
 > **Good to know**: If the task has no PR, the workflow takes failed. Waiting does not occupy a `maxParallel` slot.
+
+> **Good to know**: Wait for CI judges the commit the task's worktree is on when the node starts. It waits until the PR's head is that commit, so a push that has not landed yet never yields the previous head's result. A PR with merge conflicts takes failed at once (the node's `status` is `conflict`) instead of waiting for the timeout.

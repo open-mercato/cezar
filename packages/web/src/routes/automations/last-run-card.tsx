@@ -26,11 +26,11 @@ export function LastRunCard({
 }) {
   return (
     <Card flush data-slot="last-run-card" className="px-3.5 py-3">
-      <div className="mb-2 text-[11px] font-semibold tracking-[.05em] uppercase text-soft-foreground">Last run</div>
-      <div className="flex items-center gap-2 text-[13px]">
+      <div className="mb-2 eyebrow text-soft-foreground">Last run</div>
+      <div className="flex items-center gap-2 text-ui">
         <StatusDot tone={statusTone(lastRun.status)} />
         {statusLabel(lastRun.status)}
-        <span className="text-[11.5px] text-soft-foreground">{shortAge(lastRun.ts, now)}</span>
+        <span className="text-meta text-soft-foreground">{shortAge(lastRun.ts, now)}</span>
         {AUTOMATION_COST_VISIBLE && lastRun.costUsd !== undefined ? (
           <span className="ml-auto font-mono text-xs text-muted-foreground">{usd(lastRun.costUsd)}</span>
         ) : null}
