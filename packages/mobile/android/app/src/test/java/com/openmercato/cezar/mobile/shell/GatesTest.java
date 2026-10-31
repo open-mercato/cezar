@@ -43,6 +43,15 @@ public class GatesTest {
     }
 
     @Test
+    public void aCharacterJavaUriRejectsCannotSlipPastTheGate() throws Exception {
+        assertTrue(RequestGate.blocks(origin(), "https://cezar.example.com:9999/a|b"));
+        assertFalse(RequestGate.blocks(origin(), "https://cezar.example.com/a|b"));
+        assertEquals(EXTERNAL, NavigationPolicy.decide(origin(), "https://github.com/x?q=a|b", PAGE, true, false));
+        assertEquals(ALLOW, NavigationPolicy.decide(origin(), "https://cezar.example.com/x?q=a|b", PAGE, true, false));
+        assertEquals(EXTERNAL, NavigationPolicy.decideWindow(origin(), "https://github.com/x?q={a}"));
+    }
+
+    @Test
     public void serversLinkIsMainFrameOnly() throws Exception {
         assertEquals(NavigationPolicy.Action.SERVERS, NavigationPolicy.decide(origin(), "cezar://servers", PAGE, true, false));
         assertEquals(NavigationPolicy.Action.SERVERS, NavigationPolicy.decide(origin(), "cezar://servers/", PAGE, true, false));

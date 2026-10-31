@@ -199,6 +199,17 @@ func run() async {
     let again = await connector.launch(cookiesForLast: "sso=1")
     expect(again.screen == "open" && script.sent.last?["Cookie"] == "sso=1", "launch opens last used")
 
+    let movedGate = answer(401, type: "text/html", auth: "Basic realm=\"moved\"", "<html>")
+    script.answers = [cezar, basicGate]
+    let sameRealm = await connector.open(added.serverId!, cookies: nil)
+    expect(sameRealm.screen == "open", "unchanged realm opens")
+    script.answers = [cezar, movedGate]
+    let moved = await connector.open(added.serverId!, cookies: nil)
+    expect(moved.screen == "ask-credentials", "changed realm asks again")
+    script.answers = [movedGate, cezar]
+    let readded = await connector.add(url: "https://cezar.example.com", username: "me", password: "secret", label: nil)
+    expect(readded.screen == "open" && store.get(added.serverId!)?.realm == "moved", "the new answer saves the realm")
+
     connector.forget(added.serverId!)
     expect(memory.get(added.serverId!) == nil && store.list().isEmpty && store.lastUsedId() == nil, "forget")
     let empty = await connector.launch(cookiesForLast: nil)

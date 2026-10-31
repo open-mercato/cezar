@@ -775,3 +775,4 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 - 2026-11-01: Applied the relay spec's amendments. The relay non-goal is gone, a hosted server and the URL
   form are the Advanced path, M11 narrows to the sink's relay output, M12 depends on R5 and R6, Q9 extends
   and Q12 reopens.
+- 2026-11-01: M7 (#1883) departures. Server pages run in a separate plain webview instead of a subclassed Capacitor client, and the bundled connect page sees the password during entry. Android answers one challenge per server view, for the start URL, because its callback has no port and a redirect hop skips `shouldInterceptRequest`. Forget server restarts the Android process to end its auth cache; iOS has no known way yet. Servers is reachable only from the connection-error screen until M6.

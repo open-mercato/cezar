@@ -58,6 +58,9 @@ final class ShellConnector {
         case .connectionError:
             return Outcome(screen: health.kind == .tlsFailure ? Self.tlsFailure : Self.connectionError, serverId: id, status: health.status)
         default:
+            if await realmChanged(server, origin, cookies: cookies) {
+                return Outcome(screen: Self.askCredentials, serverId: id, status: health.status)
+            }
             servers.markUsed(id)
             return Outcome(screen: Self.open, serverId: id, url: origin.url(StartDecision.path(route)), origin: origin,
                            note: oneTimeNote(server, route, health), status: health.status)
@@ -95,6 +98,13 @@ final class ShellConnector {
     func forget(_ id: String) {
         credentials.delete(id)
         servers.remove(id)
+    }
+
+    /// The responder would refuse a new realm and strand a 401 page (BACKWARD_COMPATIBILITY.md §6b).
+    private func realmChanged(_ server: ServerRecord, _ origin: ServerOrigin, cookies: String?) async -> Bool {
+        guard let realm = server.realm else { return false }
+        let bare = await probe.probe(origin, username: nil, password: nil, cookies: cookies)
+        return bare.kind == .basicGate && bare.realm != realm
     }
 
     private func afterAnswer(_ health: HealthAnswer, _ origin: ServerOrigin, username: String?, password: String?, realm: String?, label: String?) -> Outcome {
