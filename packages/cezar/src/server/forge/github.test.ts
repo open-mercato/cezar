@@ -29,6 +29,7 @@ import {
   fetchTimelinePages,
   fetchCommentCounts,
   fetchCommitChecks,
+  fetchPrHeadChecks,
   fetchPrChecks,
   fetchPrMergeState,
   fetchRefStatuses,
@@ -3508,5 +3509,48 @@ describe('fetchGithubListPages exhausted sides', () => {
   });
   it('lists every issue once when PRs outlast issues', async () => {
     expect(await walk(5, 25, 10)).toEqual({ issues: range(5), prs: range(25) });
+  });
+});
+
+describe('fetchPrHeadChecks (#1533)', () => {
+  const SHA = 'a'.repeat(40);
+  const OLD = 'b'.repeat(40);
+  const route = (pr: unknown, rollup: unknown) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '';
+      if (argv[0] === 'pr') {
+        if (pr === 'fail') return cb(new Error('offline'), null);
+        stdout = JSON.stringify(pr);
+      } else if (argv[0] === 'repo') stdout = 'o/r\n';
+      else if (argv[0] === 'api') stdout = JSON.stringify({ data: { repository: { c0: rollup } } });
+      cb(null, { stdout, stderr: '' });
+    });
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('is stale while the PR head is a previous commit, whatever that head’s checks say', async () => {
+    route({ headRefOid: OLD, mergeable: 'MERGEABLE' }, { statusCheckRollup: { state: 'FAILURE' } });
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'stale', headOid: OLD });
+  });
+
+  it('reads the rollup of the exact commit once the head matches', async () => {
+    route({ headRefOid: SHA, mergeable: 'MERGEABLE' }, { statusCheckRollup: { state: 'SUCCESS' } });
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'checks', glyph: 'passing' });
+  });
+
+  it('reports a conflicting PR at the current head at once', async () => {
+    route({ headRefOid: SHA, mergeable: 'CONFLICTING' }, null);
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'conflict' });
+  });
+
+  it('is unavailable (keep polling) when gh fails', async () => {
+    route('fail', null);
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'unavailable' });
   });
 });
