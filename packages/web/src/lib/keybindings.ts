@@ -112,6 +112,7 @@ const RESERVED = new Set([
   'Mod+P', // ⌘P palette
   'Mod+N', // new task (desktop shell)
   'Mod+Enter', // submit, everywhere
+  'Mod+B', // fold the sidebar
   'Alt+D', // Design Mode in the Preview
   'Mod+Shift+`', // new terminal tab
   'Alt+Up', // previous / next task (use-task-switch-shortcut.ts)
@@ -173,6 +174,8 @@ export function sanitizeOverrides(stored: unknown): Overrides {
   for (const [id, chord] of Object.entries(stored)) {
     if (Object.keys(result).length >= MAX_STORED_BINDINGS) break
     if (id.length < 1 || id.length > 120) continue
+    // A chord reserved after the user bound it (⌘B, the sidebar fold) is dropped, not shadowed.
+    if (typeof chord === 'string' && RESERVED.has(chord)) continue
     if (chord === null || (typeof chord === 'string' && chord.length >= 1 && chord.length <= 40)) result[id] = chord
   }
   return result
