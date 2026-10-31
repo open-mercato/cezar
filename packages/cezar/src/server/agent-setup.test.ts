@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { installCommand, type InstallEnv } from './agent-setup.ts';
+import { installCommand, shellLine, type InstallEnv } from './agent-setup.ts';
 
 const linux: InstallEnv = { platform: 'linux', npm: true, npmGlobalWritable: true, curl: true, sudo: true };
 
@@ -36,5 +36,19 @@ describe('installCommand', () => {
     expect(installCommand('claude', windows)).toContain('install.ps1');
     expect(installCommand('codex', windows)).toBe('npm install -g @openai/codex');
     expect(installCommand('cursor', windows)).toBeNull();
+  });
+});
+
+describe('shellLine', () => {
+  it('encodes a PowerShell one-liner on Windows, so no quote or pipe reaches cmd.exe', () => {
+    const line = shellLine('irm https://claude.ai/install.ps1 | iex', 'win32');
+    const encoded = line.split(' ').at(-1) ?? '';
+    expect(line).toMatch(/^powershell -NoProfile -EncodedCommand [A-Za-z0-9+/=]+$/);
+    expect(Buffer.from(encoded, 'base64').toString('utf16le')).toBe('irm https://claude.ai/install.ps1 | iex');
+  });
+
+  it('leaves everything else as the user reads it', () => {
+    expect(shellLine('npm install -g @openai/codex', 'win32')).toBe('npm install -g @openai/codex');
+    expect(shellLine('curl -fsSL https://claude.ai/install.sh | bash', 'linux')).toBe('curl -fsSL https://claude.ai/install.sh | bash');
   });
 });

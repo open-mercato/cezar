@@ -6,7 +6,7 @@ import { useCancelAgentSetup, useInvalidateHealth, useRefreshProviderStatus, use
 import { Button } from '@/components/ui/button'
 import { agentSetupListRows, signInUrl, type AgentSetupListRow } from '@/lib/agent-setup'
 import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
-import { TerminalPane, type TerminalIo } from '@/routes/task-workspace/terminal-pane'
+import type { TerminalIo } from '@/routes/task-workspace/terminal-pane'
 import type { AgentSetupAction, AgentSetupProvider, AgentSetupSession, AgentSetupState, ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 
 /**
@@ -16,8 +16,13 @@ import type { AgentSetupAction, AgentSetupProvider, AgentSetupSession, AgentSetu
  * sentence and Try again.
  */
 
+// Most people never see this screen, and every task page already loads the pane on its own.
+const TerminalPane = React.lazy(() => import('@/routes/task-workspace/terminal-pane').then((module) => ({ default: module.TerminalPane })))
+
 const LOGIN_POLL_MS = 3_000
 const LOGIN_POLL_TICKS = 60
+/** Past the first three minutes, a login still waiting is asked about every 12 s. */
+const LOGIN_SLOW_EVERY = 4
 const IDLE_POLL_MS = 10_000
 /** Enough for the end of a login's output: a sign-in link is printed near where the login waits. */
 const OUTPUT_KEPT = 16_384
@@ -52,16 +57,10 @@ export function AgentSetupList({
   const [stopped, setStopped] = React.useState<Stopped | null>(null)
   const session = setup.session
   React.useEffect(() => {
-    if (session) setShown(session)
+    if (!session) return
+    setShown(session)
+    if (session.exitCode === null) setStopped(null)
   }, [session])
-  // Seen on the server and now gone while still running: killed elsewhere, or cezar restarted.
-  const seen = React.useRef<string | null>(null)
-  if (session) seen.current = session.id
-  React.useEffect(() => {
-    if (session || !shown || shown.exitCode !== null || seen.current !== shown.id) return
-    setStopped({ provider: shown.provider, action: shown.action, message: 'The terminal closed before it finished.' })
-    setShown(null)
-  }, [session, shown])
 
   const startMutate = start.mutate
   const begin = React.useCallback(
@@ -83,32 +82,49 @@ export function AgentSetupList({
 
   // What a finished session means is decided once per session, against a status that is true now.
   const settled = React.useRef<string | null>(null)
+  const settle = React.useCallback(
+    (ended: AgentSetupSession, failure: string) => {
+      if (settled.current === ended.id) return
+      settled.current = ended.id
+      const { provider, action } = ended
+      const label = PROVIDER_LABELS[provider]
+      if (action === 'install') onHealthChanged()
+      void refreshAsync().then(
+        (next) => {
+          const row = next.providers.find((candidate) => candidate.provider === provider)
+          if (row?.status === 'connected') return
+          const installed = row !== undefined && row.status !== 'not-installed'
+          if (action === 'install' && installed) begin(provider, 'login')
+          else if (action === 'login' || failure) setStopped({ provider, action, message: failure || `The sign-in to ${label} did not finish.` })
+          else setStopped({ provider, action, message: `${label} installed, but cezar cannot find it. Restart cezar from a new terminal, or check that npm’s global folder is on your PATH.` })
+        },
+        () => setStopped({ provider, action, message: 'cezar could not check the agent. Try again.' }),
+      )
+    },
+    [begin, onHealthChanged, refreshAsync],
+  )
   const exitCode = session?.exitCode ?? null
   React.useEffect(() => {
-    if (!session || exitCode === null || settled.current === session.id) return
-    settled.current = session.id
-    const { provider, action } = session
-    const label = PROVIDER_LABELS[provider]
-    if (action === 'install') onHealthChanged()
-    if (action === 'install' && exitCode !== 0) {
-      setStopped({ provider, action, message: `${label} did not install. The terminal says why.` })
+    if (!session || exitCode === null) return
+    if (session.action === 'install' && exitCode !== 0) {
+      if (settled.current === session.id) return
+      settled.current = session.id
+      onHealthChanged()
+      setStopped({ provider: session.provider, action: session.action, message: `${PROVIDER_LABELS[session.provider]} did not install. The terminal says why.` })
       return
     }
-    void refreshAsync().then(
-      (next) => {
-        const row = next.providers.find((candidate) => candidate.provider === provider)
-        if (row?.status === 'connected') return
-        if (action === 'login') {
-          setStopped({ provider, action, message: `The sign-in to ${label} did not finish.` })
-        } else if (!row || row.status === 'not-installed') {
-          setStopped({ provider, action, message: `${label} installed, but cezar cannot find it. Restart cezar from a new terminal, or check that npm’s global folder is on your PATH.` })
-        } else {
-          begin(provider, 'login')
-        }
-      },
-      () => setStopped({ provider, action, message: 'cezar could not check the agent. Try again.' }),
-    )
-  }, [begin, exitCode, onHealthChanged, refreshAsync, session])
+    settle(session, '')
+  }, [exitCode, onHealthChanged, session, settle])
+
+  // Seen on the server, gone while still running here: it ended unseen (a laptop asleep past the
+  // server's minute), or cezar restarted. The status says how far it got.
+  const seen = React.useRef<string | null>(null)
+  if (session) seen.current = session.id
+  React.useEffect(() => {
+    if (session || !shown || shown.exitCode !== null || seen.current !== shown.id) return
+    setShown(null)
+    settle(shown, 'The terminal closed before it finished.')
+  }, [session, settle, shown])
 
   const running = shown !== null && shown.exitCode === null
   const installing = running && shown?.action === 'install'
@@ -121,8 +137,7 @@ export function AgentSetupList({
     let ticks = 0
     const timer = window.setInterval(() => {
       ticks += 1
-      if (ticks > LOGIN_POLL_TICKS) window.clearInterval(timer)
-      else refreshMutate()
+      if (ticks <= LOGIN_POLL_TICKS || ticks % LOGIN_SLOW_EVERY === 0) refreshMutate()
     }, LOGIN_POLL_MS)
     return () => window.clearInterval(timer)
   }, [refreshMutate, signingIn])
@@ -149,10 +164,13 @@ export function AgentSetupList({
     }
   }, [])
 
-  const close = () => {
-    setStopped(null)
-    if (shown && running) cancel.mutate(shown.id)
+  const cancelRunning = () => {
+    if (shown) cancel.mutate(shown.id)
     setShown(null)
+  }
+  const dismiss = () => {
+    setStopped(null)
+    if (!running) setShown(null)
   }
 
   return (
@@ -173,13 +191,14 @@ export function AgentSetupList({
             {!open && !rowStopped && row.state === 'missing' && row.installCommand === null ? <p className="mt-3 text-ui text-soft-foreground">{row.installHint}</p> : null}
             {!open && !rowStopped && row.state === 'missing' && row.installCommand ? <CommandLine command={row.installCommand} /> : null}
             {open && shown ? <SetupTerminal key={shown.id} session={shown} running={running} installing={installing} /> : null}
+            {rowStopped && !open ? <CommandLine command={(rowStopped.action === 'install' ? row.installCommand : row.loginCommand) ?? ''} /> : null}
             {rowStopped ? (
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                 <p role="alert" className="min-w-0 flex-1 text-ui text-danger">
                   {rowStopped.message}
                 </p>
                 <div className="flex gap-2">
-                  <Button size="sm" variant="outline" className="font-normal" onClick={close}>
+                  <Button size="sm" variant="outline" className="font-normal" onClick={dismiss}>
                     Close
                   </Button>
                   <Button size="sm" className="font-normal" disabled={start.isPending} onClick={() => begin(rowStopped.provider, rowStopped.action)}>
@@ -191,7 +210,7 @@ export function AgentSetupList({
             {open && running ? (
               <div className="mt-3 flex items-center justify-between gap-3">
                 <p className="text-ui text-soft-foreground">{installing ? 'Sign-in comes next.' : 'This page continues by itself.'}</p>
-                <Button size="sm" variant="outline" className="font-normal" onClick={close}>
+                <Button size="sm" variant="outline" className="font-normal" onClick={cancelRunning}>
                   Cancel
                 </Button>
               </div>
@@ -280,7 +299,9 @@ function SetupTerminal({ session, running, installing }: { session: AgentSetupSe
       ) : null}
       <CommandLine command={session.command} />
       <div className="relative h-72 overflow-hidden rounded-lg border border-border bg-card-2">
-        <TerminalPane runId={session.runId} session={paneSession} active io={io} />
+        <React.Suspense fallback={null}>
+          <TerminalPane runId={session.runId} session={paneSession} active io={io} />
+        </React.Suspense>
       </div>
       {login && link && running ? (
         <Button asChild size="sm" variant="outline" className="self-start font-normal">

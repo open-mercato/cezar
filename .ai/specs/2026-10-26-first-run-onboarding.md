@@ -62,12 +62,13 @@ sign-in page" link when the login printed one; the login landing moves the page 
 | Install exits 0, the status says installed | The login starts |
 | Install exits 0, the status still says missing | "cezar cannot find it", Try again (the global folder is off cezar's PATH) |
 | Install exits non-zero | "did not install", the screen stays, Try again |
-| Login lands (status connected, seen by a 3 s re-probe for three minutes and after the exit) | The next page; a login still running is stopped |
+| Login lands (status connected, seen by a re-probe every 3 s for three minutes, every 12 s after that, and after the exit) | The next page; a login still running is stopped |
 | Login exits without signing in | "did not finish", Try again |
-| The session disappears (cezar restarted, killed elsewhere) | "closed before it finished", Try again |
+| The session disappears (ended unseen past the server's one-minute retention, cezar restarted) | The status decides: an installed agent goes on to the login, a connected one moves on; otherwise "closed before it finished", Try again |
 | Cancel | The process tree stops, back to the list |
 | Reload | Rejoins the session the server still has |
-| Leaving the page | An install keeps going and is rejoined; a login is stopped |
+| Leaving the page inside the cockpit | An install keeps going and is rejoined; a login is stopped |
+| Closing the tab | Either keeps running and is rejoined on the next open |
 
 The page falls back to the "Sign in does the work" flow below when `GET /providers/setup` answers
 `available: false`: a hosted cockpit, single-project mode, `CEZ_TERMINAL=0`, or no PTY binding.
@@ -194,7 +195,8 @@ setup sessions, and share its cursor-only topic.
 - **Which install command.** npm when its global folder is writable, then the vendor's script
   (Claude Code, Cursor), then `sudo npm`, whose password goes in the terminal. Without npm or curl
   the row shows the CLI's install hint instead of a button. On Windows, Claude Code's native
-  installer first, because `resolveClaudeBin` does not accept npm's `.cmd` shim. OpenCode stays
+  installer first, because `resolveClaudeBin` does not accept npm's `.cmd` shim; the user reads the
+  one-liner, and the PTY runs it through `-EncodedCommand`. OpenCode stays
   pinned to `opencode-ai@1`: the runner cannot drive 2.x yet.
 - **Where.** The home folder, never the project: a repository's `.npmrc` must not get to redirect an
   install, nor its agent config a login.

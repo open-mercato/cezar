@@ -15,7 +15,7 @@ import {
 } from '@open-mercato/cezar-contract';
 import { Hono } from 'hono';
 
-import { AGENT_SETUP_PROVIDERS, installCommand, probeInstallEnv, type InstallEnv } from './agent-setup.ts';
+import { AGENT_SETUP_PROVIDERS, installCommand, probeInstallEnv, shellLine, type InstallEnv } from './agent-setup.ts';
 import type { PtyBinding } from './terminal/pty-module.ts';
 import type { TerminalSessionInfo, TerminalSessions } from './terminal/sessions.ts';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
@@ -124,7 +124,7 @@ export function agentSetupRoutes(deps: AgentSetupDeps) {
         const created = await deps.sessions.create({
           runId: AGENT_SETUP_OWNER,
           cwd: homedir(),
-          command: dryRun ? DRY_RUN_COMMAND : command,
+          command: dryRun ? DRY_RUN_COMMAND : shellLine(command, process.platform),
           label: `${provider} ${action}`,
           ...(cols !== undefined ? { cols } : {}),
           ...(rows !== undefined ? { rows } : {}),

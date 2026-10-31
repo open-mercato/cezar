@@ -186,6 +186,38 @@ describe('the first-run agent step', () => {
     expect(screen.queryByText('Installing Claude Code…')).toBeNull()
   })
 
+  it('an install that ended unseen still goes on to the sign-in', async () => {
+    statuses = { claude: 'not-installed', codex: 'not-installed' }
+    renderStep()
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Install' }))[0]!)
+    await screen.findByText('Installing Claude Code…')
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/providers/setup')).length).toBeGreaterThan(1), WAIT)
+    statuses = { claude: 'disconnected', codex: 'not-installed' }
+    session = null
+    await waitFor(() => expect(started[1]).toEqual({ provider: 'claude', action: 'login' }), WAIT)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('a refused start keeps the command in reach', async () => {
+    statuses = { claude: 'not-installed', codex: 'not-installed' }
+    startError = 'Too many running services (24). Stop one and retry.'
+    renderStep()
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Install' }))[0]!)
+    await screen.findByRole('alert')
+    expect(screen.getByText('npm install -g claude')).toBeTruthy()
+  })
+
+  it('a session that arrives clears an earlier refusal, and Close then leaves it running', async () => {
+    statuses = { claude: 'not-installed', codex: 'not-installed' }
+    startError = 'Another agent is being set up. Finish or cancel it first.'
+    renderStep()
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Install' }))[0]!)
+    await screen.findByRole('alert')
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(stoppedIds).toEqual([])
+  })
+
   it('Cancel stops the process and goes back to the list', async () => {
     statuses = { claude: 'not-installed', codex: 'not-installed' }
     renderStep()

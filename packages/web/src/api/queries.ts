@@ -136,6 +136,7 @@ import type {
   GithubRefStatusData,
   AgentSetupAction,
   AgentSetupProvider,
+  AgentSetupState,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
@@ -571,16 +572,20 @@ export function useRefreshProviderStatus() {
   })
 }
 
-/** While a setup terminal runs, its exit code is the page's only signal: read it often, then stop. */
+/** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
+ *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
+ *  visit: a session remembered as running would read as one that vanished. */
 export function useAgentSetup() {
   return useQuery({
     queryKey: workspaceQueryKeys.agentSetup,
     queryFn: ({ signal }) => getAgentSetup({ signal }),
     retry: false,
+    gcTime: 0,
     refetchInterval: (state) => {
       const data = state.state.data
       return data?.available && data.session?.exitCode === null ? AGENT_SETUP_POLL_MS : false
     },
+    refetchIntervalInBackground: true,
   })
 }
 
@@ -597,6 +602,8 @@ export function useStartAgentSetup() {
   return useMutation({
     mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
     retry: false,
+    // Written straight in: the polling above starts from this, even if the next read fails.
+    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
     onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }

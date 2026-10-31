@@ -23,7 +23,7 @@ const NPM_PACKAGE: Partial<Record<AgentSetupProvider, string>> = {
 const SCRIPT: Partial<Record<AgentSetupProvider, { unix: string; windows?: string }>> = {
   claude: {
     unix: 'curl -fsSL https://claude.ai/install.sh | bash',
-    windows: 'powershell -NoProfile -Command "irm https://claude.ai/install.ps1 | iex"',
+    windows: 'irm https://claude.ai/install.ps1 | iex',
   },
   cursor: { unix: 'curl https://cursor.com/install -fsS | bash' },
 };
@@ -52,6 +52,13 @@ export function installCommand(provider: AgentSetupProvider, env: InstallEnv): s
   if (script && env.curl) return script.unix;
   if (npmInstall && env.sudo) return `sudo ${npmInstall}`;
   return npmInstall;
+}
+
+/** The line the PTY's shell runs for a command the user reads. A PowerShell one-liner goes encoded,
+ *  because its quotes and pipe would otherwise have to survive `cmd.exe` and the PTY's own quoting. */
+export function shellLine(command: string, platform: NodeJS.Platform): string {
+  if (platform !== 'win32' || !command.startsWith('irm ')) return command;
+  return `powershell -NoProfile -EncodedCommand ${Buffer.from(command, 'utf16le').toString('base64')}`;
 }
 
 const PROBE_TIMEOUT_MS = 10_000;
