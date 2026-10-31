@@ -7,6 +7,7 @@ import {
   FolderGit2Icon,
   FoldersIcon,
   GaugeIcon,
+  CableIcon,
   IdCardIcon,
   PackageCheckIcon,
   KeyboardIcon,
@@ -22,6 +23,7 @@ import type { ComponentType, SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
 import { AccountsSection } from './accounts-section'
+import { AiGatewaysSection } from './ai-gateways-section'
 import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
@@ -61,6 +63,7 @@ export type SettingsSectionId =
   | 'bookmarklets'
   | 'appearance'
   | 'accounts'
+  | 'ai-gateways'
   | 'agents'
   | 'agent-config'
   | 'instructions'
@@ -232,6 +235,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Encrypted values shared by every project on this machine — never for agents.',
     icon: KeyRoundIcon,
     component: WorkspaceSecretsSection,
+    scope: 'global',
+  },
+  {
+    id: 'ai-gateways',
+    title: 'AI Gateways',
+    description: 'Connections a task can use. On means available, not selected.',
+    icon: CableIcon,
+    component: AiGatewaysSection,
     scope: 'global',
   },
   {

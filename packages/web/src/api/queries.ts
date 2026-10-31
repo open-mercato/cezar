@@ -71,6 +71,7 @@ import {
   getWorkflows,
   getWorkflowNodes,
   getWorkspaceConfig,
+  getAiGateways,
   getWorkspaceUiState,
   getSkillsUpdate,
   getSelfUpdate,
@@ -447,6 +448,8 @@ export const workspaceQueryKeys = {
   uiState: ['workspace', 'ui-state'] as const,
   /** `~/.cezar/config.json`'s workspace settings slice, including instance branding. */
   config: ['workspace', 'config'] as const,
+  /** Workspace AI gateways. One machine, one list. */
+  aiGateways: ['workspace', 'ai-gateways'] as const,
   /** Live host totals (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`). One cache for
    *  both transports: local cockpits fold pushed `host` frames into it, remote ones refetch it
    *  on mount and on the visibility/reconnect reconcile. Workspace-led because the machine is
@@ -1678,6 +1681,14 @@ export function useWorkspaceConfig() {
   return useQuery({
     queryKey: workspaceQueryKeys.config,
     queryFn: ({ signal }) => getWorkspaceConfig({ signal }),
+  })
+}
+
+/** General settings → AI Gateways. Workspace-level, like the config it edits. */
+export function useAiGateways() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.aiGateways,
+    queryFn: ({ signal }) => getAiGateways({ signal }),
   })
 }
 

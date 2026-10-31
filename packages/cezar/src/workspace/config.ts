@@ -9,6 +9,7 @@ import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-r
 import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
+import { withFileLock } from './file-lock.ts';
 
 /**
  * `~/.cezar/config.json` — the per-user workspace config + project registry
@@ -263,6 +264,16 @@ const workspaceConfigSchema = z
     disabledProviders: disabledProvidersSchema,
     /** Machine-wide agent/model defaults for repos that set none of their own. */
     agentDefaults: agentDefaultsSchema.default(() => ({})).catch(() => ({})),
+    /**
+     * AI gateway rows (spec 2026-10-28-app-spec-ai-gateways).
+     * Left unparsed so a corrupt value is not replaced with an empty list on the next save.
+     * Nothing inserts a default gateway.
+     */
+    aiGateways: z.unknown().optional(),
+    /** Ignored leftover from a removed seed marker. Listing does not read it to create a gateway. */
+    aiGatewaysSeeded: z.unknown().optional(),
+    /** Per-runner gateway choice (`native` or a gateway id). Not `agentDefaults` — that map is runner and model. */
+    aiGatewayDefaults: z.unknown().optional(),
     /** Per-entry salvage: a corrupt entry is dropped, the rest of the registry
      *  survives (a whole-array `.catch([])` would evict every project over one
      *  bad row). */
@@ -538,9 +549,11 @@ export function serializedByPath<T>(path: string, task: () => Promise<T>): Promi
  */
 export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
+  options?: { lockTimeoutMs?: number; requireBackup?: boolean },
 ): Promise<WorkspaceConfig> {
   const path = workspaceConfigPath();
-  return serializedByPath(path, async () => {
+  // Readers stay lock-free so a read-only home can still boot. Writers wait, then throw.
+  return serializedByPath(path, () => withFileLock(`${path}.lock`, async () => {
     const current = await readWorkspaceConfig(path, true);
     const next = mutator(current) ?? current;
     await atomicWriteJson(path, next);
@@ -552,10 +565,11 @@ export async function mergeWriteWorkspaceConfig(
     // registry the user intended rather than the old projects.
     try {
       await atomicWriteJson(workspaceConfigBackupPath(path), next);
-    } catch {
-      // Best-effort: the registry itself is already safely on disk, and a
-      // failed snapshot must never turn a successful write into an error.
+    } catch (error) {
+      // Ordinary saves keep the previous best-effort snapshot. A gateway secret
+      // barrier needs both copies before the vault is touched (spec §4.6.3).
+      if (options?.requireBackup) throw error;
     }
     return next;
-  });
+  }, options?.lockTimeoutMs));
 }

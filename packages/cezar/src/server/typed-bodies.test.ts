@@ -83,6 +83,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/apply', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workspace/self-update/channel', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/self-update/apply', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/ai-gateways', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/ai-gateways/:id', '$patch'>>,
   ];
 
   type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
@@ -98,6 +100,8 @@ describe('every mutating route carries a typed body into AppType', () => {
   > = Schema[Path] extends Record<Method, { input: Record<Target, unknown> }> ? true : false;
 
   type _InputChecks = [
+    Assert<HasTypedInput<'/api/v1/ai-gateways/:id', '$patch', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/ai-gateways/:id', '$delete', 'param'>>,
     Assert<HasTypedInput<'/api/v1/providers/:provider/enabled', '$put', 'param'>>,
     Assert<HasTypedInput<'/api/v1/providers/:provider/retry', '$post', 'param'>>,
     Assert<HasTypedInput<'/api/v1/github/prs/:number/merge', '$post', 'param'>>,

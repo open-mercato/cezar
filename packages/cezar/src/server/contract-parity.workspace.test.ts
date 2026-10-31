@@ -13,6 +13,11 @@ import type {
   agentProfilesResponseSchema,
   openAgentAccountFileResponseSchema,
   removeAgentProfileResponseSchema,
+  aiGatewaysResponseSchema,
+  aiGatewayViewSchema,
+  createAiGatewaySchema,
+  updateAiGatewaySchema,
+  removeAiGatewayResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type {
   fsBrowseResponseSchema,
@@ -225,6 +230,12 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     (typeof client.api.v1.workspace)['agent-profiles'][':id']['open']['$post'],
     200
   >;
+  type AiGateways200 = InferResponseType<(typeof client.api.v1)['ai-gateways']['$get'], 200>;
+  type CreateAiGateway200 = InferResponseType<(typeof client.api.v1)['ai-gateways']['$post'], 200>;
+  type CreateAiGatewayBody = InferRequestType<(typeof client.api.v1)['ai-gateways']['$post']>['json'];
+  type UpdateAiGateway200 = InferResponseType<(typeof client.api.v1)['ai-gateways'][':id']['$patch'], 200>;
+  type UpdateAiGatewayBody = InferRequestType<(typeof client.api.v1)['ai-gateways'][':id']['$patch']>['json'];
+  type RemoveAiGateway200 = InferResponseType<(typeof client.api.v1)['ai-gateways'][':id']['$delete'], 200>;
 
   type RunsIndex200 = InferResponseType<
     (typeof client.api.v1.workspace)['runs-index']['$get'],
@@ -304,6 +315,13 @@ describe('src/contract projects/workspace schemas match the routes exactly', () 
     Assert<Exact<z.infer<typeof agentAccountDetailsResponseSchema>, AgentAccountDetails200>>,
     Assert<Exact<z.infer<typeof agentAccountStatusResponseSchema>, AgentAccountStatus200>>,
     Assert<Exact<z.infer<typeof openAgentAccountFileResponseSchema>, OpenAgentAccountFile200>>,
+    // AI gateways. The record schema is passthrough, so the wire image is the JSON round trip.
+    Assert<ExactOpen<z.infer<typeof aiGatewaysResponseSchema>, AiGateways200>>,
+    Assert<ExactOpen<z.infer<typeof aiGatewayViewSchema>, CreateAiGateway200>>,
+    Assert<ExactOpen<z.infer<typeof aiGatewayViewSchema>, UpdateAiGateway200>>,
+    Assert<Exact<z.input<typeof createAiGatewaySchema>, CreateAiGatewayBody>>,
+    Assert<Exact<z.input<typeof updateAiGatewaySchema>, UpdateAiGatewayBody>>,
+    Assert<Exact<z.infer<typeof removeAiGatewayResponseSchema>, RemoveAiGateway200>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

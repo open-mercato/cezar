@@ -1,4 +1,5 @@
 import type { z } from 'zod'
+import type { AiGatewayView, AiGatewaysResponse, createAiGatewaySchema, updateAiGatewaySchema } from '@open-mercato/cezar-api-client'
 import type {
   lifecycleListResponseSchema, lifecycleDetailResponseSchema, lifecycleOperationResponseSchema,
   lifecyclePreviewInputSchema, lifecycleListQuerySchema, LifecycleOutputResponse,
@@ -2523,6 +2524,22 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
         : answer.resources.idleTimeoutMinutes,
     },
   }
+}
+
+export async function getAiGateways(opts?: ReadOptions): Promise<AiGatewaysResponse> {
+  return unwrap(await cez.api.v1['ai-gateways'].$get({}, init(opts)), '/ai-gateways')
+}
+
+export async function createAiGateway(input: z.input<typeof createAiGatewaySchema>): Promise<AiGatewayView> {
+  return unwrap(await cez.api.v1['ai-gateways'].$post({ json: input }), '/ai-gateways')
+}
+
+export async function updateAiGateway(id: string, input: z.input<typeof updateAiGatewaySchema>): Promise<AiGatewayView> {
+  return unwrap(await cez.api.v1['ai-gateways'][':id'].$patch({ param: { id }, json: input }), '/ai-gateways/:id')
+}
+
+export async function removeAiGateway(id: string): Promise<{ removed: true }> {
+  return unwrap(await cez.api.v1['ai-gateways'][':id'].$delete({ param: { id } }), '/ai-gateways/:id')
 }
 
 /** Upload the workspace logo through the shared API boundary (base URL, credentials, and errors). */

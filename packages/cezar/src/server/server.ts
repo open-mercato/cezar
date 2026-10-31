@@ -13,6 +13,13 @@ import {
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
+import { AiGatewayError, AiGateways } from '../workspace/ai-gateways.ts';
+import { FileLockTimeoutError } from '../workspace/file-lock.ts';
+import {
+  aiGatewayParamsSchema,
+  createAiGatewaySchema,
+  updateAiGatewaySchema,
+} from '@open-mercato/cezar-contract';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
 import { TrackerWatches } from './tracker/watch.ts';
@@ -8178,12 +8185,68 @@ export function createApp(deps: ServerDeps) {
       },
     );
 
+  // Workspace AI gateways (spec 2026-10-28). Single-mount: the records live in ~/.cezar, not a project.
+  // Callers strip a trailing slash before POST; the contract rejects one so a stored URL has one spelling.
+  const aiGateways = new AiGateways(deps.secrets ?? new SecretStore());
+  const failGateway = (c: Context, error: unknown) => {
+    if (error instanceof FileLockTimeoutError) return c.json({ error: error.message }, 409);
+    if (error instanceof AiGatewayError) {
+      const status = error.code === 'not_found' ? 404 : error.code === 'invalid_input' ? 400 : 409;
+      return c.json({ error: error.message }, status);
+    }
+    return c.json({ error: 'AI gateway settings could not be saved.' }, 500);
+  };
+  const aiGatewayRoutes = new Hono()
+    .get('/ai-gateways', async (c) => {
+      try {
+        return c.json(await aiGateways.list());
+      } catch (error) {
+        return failGateway(c, error);
+      }
+    })
+    .post(
+      '/ai-gateways',
+      jsonZodValidator(createAiGatewaySchema, { message: 'Gateway settings are invalid. Check the name, API base URL, protocols and key.' }),
+      async (c) => {
+        try {
+          return c.json(await aiGateways.create(c.req.valid('json')));
+        } catch (error) {
+          return failGateway(c, error);
+        }
+      },
+    )
+    .patch(
+      '/ai-gateways/:id',
+      paramZodValidator(aiGatewayParamsSchema, { message: 'That AI gateway was not found.' }),
+      jsonZodValidator(updateAiGatewaySchema, { message: 'Gateway settings are invalid. Check the name, API base URL, protocols and key.' }),
+      async (c) => {
+        try {
+          return c.json(await aiGateways.update(c.req.valid('param').id, c.req.valid('json')));
+        } catch (error) {
+          return failGateway(c, error);
+        }
+      },
+    )
+    .delete(
+      '/ai-gateways/:id',
+      paramZodValidator(aiGatewayParamsSchema, { message: 'That AI gateway was not found.' }),
+      async (c) => {
+        try {
+          await aiGateways.remove(c.req.valid('param').id);
+          return c.json({ removed: true as const });
+        } catch (error) {
+          return failGateway(c, error);
+        }
+      },
+    );
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
     .route('/', providersRoutes)
+    .route('/', aiGatewayRoutes)
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
