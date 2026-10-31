@@ -120,7 +120,8 @@ export function ModelPicker({
   onChange: (patch: ManagerPatch) => void
 }) {
   const runner = useManagerRunner(pinnedRunner)
-  const runners = usableRunners(useProviderStatus().data)
+  // Pi fails closed on `bashAllowlist`, so a Pi manager would have no `cez-manager` to act with.
+  const runners = usableRunners(useProviderStatus().data).filter((candidate) => candidate !== 'pi')
   const catalog = useRunnerModels(runner)
   const models = modelsForRunner(runner, catalog.data, [model])
   const label = models.find((entry) => entry.id === (model ?? ''))?.label ?? model ?? 'auto'

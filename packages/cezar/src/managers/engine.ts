@@ -1068,7 +1068,6 @@ export class ManagerEngine {
       ? await this.perform(id, message.action)
       : { ok: false as const, result: `This manager is no longer connected to ${projectId}.` };
     settle(outcome.ok ? 'done' : 'failed', outcome.result);
-    if (outcome.ok) this.addNotice(id, outcome.result);
     return { ok: true as const };
   }
 
