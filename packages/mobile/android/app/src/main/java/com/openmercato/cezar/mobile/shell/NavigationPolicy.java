@@ -1,7 +1,5 @@
 package com.openmercato.cezar.mobile.shell;
 
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.Locale;
 
 /** Which navigations stay in the server webview (spec "Other shell behaviour"). */
@@ -35,11 +33,7 @@ public final class NavigationPolicy {
     }
 
     private static String schemeOf(String url) {
-        try {
-            String scheme = new URI(url).getScheme();
-            return scheme == null ? "" : scheme.toLowerCase(Locale.ROOT);
-        } catch (URISyntaxException | NullPointerException e) {
-            return "";
-        }
+        UrlParts parts = UrlParts.parse(url);
+        return parts == null ? "" : parts.scheme;
     }
 }

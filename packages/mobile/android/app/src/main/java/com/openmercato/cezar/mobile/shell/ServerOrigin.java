@@ -55,24 +55,15 @@ public final class ServerOrigin {
         return origin() + path;
     }
 
-    /** False for anything that does not parse, so an odd URL can never pass as this server. */
+    /** False for anything without a readable authority, so an odd URL can never pass as this server. */
     public boolean sameOrigin(String url) {
-        if (url == null) return false;
-        try {
-            URI uri = new URI(url);
-            int urlPort = uri.getPort() == -1 ? 443 : uri.getPort();
-            return "https".equalsIgnoreCase(uri.getScheme()) && host.equalsIgnoreCase(uri.getHost()) && port == urlPort;
-        } catch (URISyntaxException e) {
-            return false;
-        }
+        UrlParts parts = UrlParts.parse(url);
+        if (parts == null || !"https".equals(parts.scheme) || !host.equalsIgnoreCase(parts.host)) return false;
+        return port == (parts.port == -1 ? 443 : parts.port);
     }
 
     public boolean sameHost(String url) {
-        if (url == null) return false;
-        try {
-            return host.equalsIgnoreCase(new URI(url).getHost());
-        } catch (URISyntaxException e) {
-            return false;
-        }
+        UrlParts parts = UrlParts.parse(url);
+        return parts != null && host.equalsIgnoreCase(parts.host);
     }
 }

@@ -144,7 +144,7 @@ public class ConnectionPlugin extends Plugin {
         if (header != null) {
             for (String pair : header.split(";")) {
                 String name = pair.split("=", 2)[0].trim();
-                cookies.setCookie(url, name + "=; Max-Age=0");
+                cookies.setCookie(url, name + "=; Max-Age=0; Path=/; Secure");
             }
             cookies.flush();
         }
