@@ -1223,7 +1223,8 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[], librar
     `also saved on disk at:\n${list}\n${library}` +
     `When the task involves saving, uploading, attaching, or transforming the pasted content ` +
     `(e.g. attaching to a GitHub issue/PR, copying into the repo), operate on these files — do ` +
-    `not attempt to reconstruct them from the conversation.`
+    `not attempt to reconstruct them from the conversation. ` +
+    `Read a path above whenever you need to SEE an attachment and no image is visible in this message.`
   );
 }
 
@@ -5666,7 +5667,7 @@ export class RunManager {
     // note that covered the initial prompt alone would hand it a task about a file it was never
     // told the path of (#950).
     const startRecord = this.store.getRun(runId);
-    let startAttachments: PersistedAttachment[] = [
+    const startAttachments: PersistedAttachment[] = [
       ...(startRecord?.taskImages ?? []),
       ...(startRecord?.queuedMessages ?? []).flatMap((m) => m.images ?? []),
     ]
@@ -5818,7 +5819,8 @@ export class RunManager {
     },
   ): Promise<string | null> {
     const { input, skills, emit, taskBackend, extraSystemPrompt } = ctx;
-    let { startImages, startAttachments } = ctx;
+    let { startImages } = ctx;
+    const { startAttachments } = ctx;
     // Resume only onto a node this graph still has; anything else starts the walk afresh.
     const resumeNode = ctx.resume?.cursor
       ? graph.nodes.find((n): n is ExecutableNode => n.id === ctx.resume?.cursor && isExecutableNode(n))
@@ -6009,7 +6011,6 @@ export class RunManager {
               : { resumeSessionId: this.graphResumeSession(runId, node, backend, emit), lastTurn },
         );
         startImages = undefined;
-        startAttachments = [];
         checkFailure = null;
         if (state.cancelled) return null;
         if (state.askPark) {
