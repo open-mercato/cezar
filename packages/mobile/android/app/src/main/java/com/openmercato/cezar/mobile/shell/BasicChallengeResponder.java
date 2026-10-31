@@ -1,13 +1,13 @@
 package com.openmercato.cezar.mobile.shell;
 
-/** Answers the webview's Basic challenge for one saved server, once (spec Decision 2). */
+/** Answers the webview's Basic challenge for one saved server (spec Decision 2). */
 public final class BasicChallengeResponder {
     /** Reads the password only when a challenge passes every check. */
     public interface Passwords {
         String password(String serverId);
     }
 
-    public enum Kind { ANSWER, CANCEL_FOREIGN, CANCEL_REJECTED }
+    public enum Kind { ANSWER, CANCEL_FOREIGN, CANCEL_REJECTED, CANCEL_VERIFY }
 
     public static final class Reply {
         public final Kind kind;
@@ -24,7 +24,7 @@ public final class BasicChallengeResponder {
     private final ServerRecord server;
     private final ServerOrigin origin;
     private final Passwords passwords;
-    private boolean answered;
+    private boolean armed = true;
 
     public BasicChallengeResponder(ServerRecord server, Passwords passwords) {
         this.server = server;
@@ -33,22 +33,26 @@ public final class BasicChallengeResponder {
     }
 
     /**
-     * Android reports only host and realm, so the page URL stands in for scheme and port
-     * (spec M2 item 10); {@link RequestGate} stops a sub-resource on another port before it asks.
+     * Android reports only host and realm, and a redirect hop never reaches
+     * {@link RequestGate}, so a same-origin 302 to another port looks exactly like this server.
+     * So the password goes out once, for the start URL: its path is `/`, which puts the whole origin
+     * in the webview's auth cache. A later challenge is cancelled, and the caller probes to tell a
+     * rotated password from a redirect.
      */
     public synchronized Reply onChallenge(String host, String realm, String pageUrl, boolean previousAttemptFailed) {
         boolean ours = server.realm != null && server.realm.equals(realm) && origin.host.equalsIgnoreCase(host)
                 && origin.sameOrigin(pageUrl);
         if (!ours) return new Reply(Kind.CANCEL_FOREIGN, null, null);
-        if (previousAttemptFailed || answered) return new Reply(Kind.CANCEL_REJECTED, null, null);
+        if (previousAttemptFailed) return new Reply(Kind.CANCEL_REJECTED, null, null);
+        if (!armed) return new Reply(Kind.CANCEL_VERIFY, null, null);
         String password = passwords.password(server.id);
         if (password == null) return new Reply(Kind.CANCEL_REJECTED, null, null);
-        answered = true;
+        armed = false;
         return new Reply(Kind.ANSWER, server.username, password);
     }
 
-    /** A page loaded, so the last answer was good and a later challenge gets one more. */
-    public synchronized void onPageLoaded() {
-        answered = false;
+    /** The start page loaded, so the origin is cached, or needed no answer at all. */
+    public synchronized void onStartPageLoaded() {
+        armed = false;
     }
 }

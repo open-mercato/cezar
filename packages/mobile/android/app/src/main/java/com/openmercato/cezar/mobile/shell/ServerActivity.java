@@ -14,6 +14,7 @@ import android.os.Looper;
 import android.os.Message;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.HttpAuthHandler;
 import android.webkit.RenderProcessGoneDetail;
@@ -47,8 +48,13 @@ public final class ServerActivity extends AppCompatActivity {
     /** The origin of an SSO add that is not saved yet. */
     public static final String EXTRA_PENDING_ORIGIN = "pendingOrigin";
     public static final String EXTRA_PENDING_LABEL = "pendingLabel";
+    private static final String STATE_URL = "lastUrl";
+
+    private static int openCount;
 
     private static final int FILE_CHOOSER = 1;
+    /** The cockpit's dark background, behind the system bars. */
+    private static final int BAR_COLOR = 0xFF0D0D0D;
 
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -61,12 +67,20 @@ public final class ServerActivity extends AppCompatActivity {
     private FrameLayout frame;
     private WebView webView;
     private String mainFrameUrl;
+    /** Where the user was, reloaded after the start URL has put the origin in the auth cache. */
+    private String restoreUrl;
     private ValueCallback<Uri[]> fileCallback;
     private boolean leaving;
+
+    /** A reloaded connect page must not stack a second server view on a live one. */
+    public static boolean isOpen() {
+        return openCount > 0;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        openCount++;
         connector = ShellServices.connector(this);
         Intent intent = getIntent();
         serverId = intent.getStringExtra(EXTRA_SERVER_ID);
@@ -90,9 +104,11 @@ public final class ServerActivity extends AppCompatActivity {
             return;
         }
         frame = new FrameLayout(this);
+        frame.setBackgroundColor(BAR_COLOR);
         setContentView(frame);
         insetForSystemBars();
-        addWebView(savedInstanceState);
+        if (savedInstanceState != null) restoreUrl = savedInstanceState.getString(STATE_URL);
+        addWebView(intent.getStringExtra(EXTRA_URL));
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
@@ -106,7 +122,7 @@ public final class ServerActivity extends AppCompatActivity {
     }
 
     @SuppressLint("SetJavaScriptEnabled")
-    private void addWebView(Bundle saved) {
+    private void addWebView(String url) {
         boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         WebView.setWebContentsDebuggingEnabled(debuggable);
         webView = new WebView(this);
@@ -123,16 +139,15 @@ public final class ServerActivity extends AppCompatActivity {
         webView.setWebViewClient(new ServerClient());
         webView.setWebChromeClient(new ServerChrome());
         frame.addView(webView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        String url = getIntent().getStringExtra(EXTRA_URL);
-        if (saved == null || webView.restoreState(saved) == null) {
-            mainFrameUrl = url;
-            webView.loadUrl(url);
-        }
+        mainFrameUrl = url;
+        webView.loadUrl(url);
     }
 
     /** Edge-to-edge is forced at this target SDK, and the page's env() does not see bars or keyboard. */
     private void insetForSystemBars() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        getWindow().getInsetsController().setSystemBarsAppearance(0,
+                WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         frame.setOnApplyWindowInsetsListener((View view, WindowInsets insets) -> {
             android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.ime() | WindowInsets.Type.displayCutout());
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
@@ -160,6 +175,17 @@ public final class ServerActivity extends AppCompatActivity {
         }
     }
 
+    /** A native probe asks the exact origin, which the challenge callback cannot. */
+    private void verifyPassword() {
+        String cookies = CookieManager.getInstance().getCookie(origin.origin());
+        String id = serverId;
+        background.execute(() -> {
+            if (ShellConnector.PASSWORD_REJECTED.equals(connector.open(id, cookies).screen)) {
+                main.post(() -> leave(ShellConnector.PASSWORD_REJECTED));
+            }
+        });
+    }
+
     private void confirmPendingLogin() {
         String label = pendingLabel;
         String cookies = CookieManager.getInstance().getCookie(origin.origin());
@@ -178,7 +204,8 @@ public final class ServerActivity extends AppCompatActivity {
     @Override
     protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        if (webView != null) webView.saveState(state);
+        // The cockpit routes with pushState, so only the webview knows the current URL.
+        if (webView != null && origin.sameOrigin(webView.getUrl())) state.putString(STATE_URL, webView.getUrl());
     }
 
     @Override
@@ -191,6 +218,7 @@ public final class ServerActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        openCount--;
         background.shutdown();
         if (webView != null) webView.destroy();
         super.onDestroy();
@@ -228,7 +256,12 @@ public final class ServerActivity extends AppCompatActivity {
 
         @Override
         public void onPageFinished(WebView view, String url) {
-            if (responder != null) responder.onPageLoaded();
+            if (responder != null) responder.onStartPageLoaded();
+            if (restoreUrl != null) {
+                String target = restoreUrl;
+                restoreUrl = null;
+                if (origin.sameOrigin(target) && !target.equals(url)) view.loadUrl(target);
+            }
             if (pendingLogin && origin.sameOrigin(url)) confirmPendingLogin();
         }
 
@@ -246,6 +279,10 @@ public final class ServerActivity extends AppCompatActivity {
                 case CANCEL_REJECTED:
                     handler.cancel();
                     leave(ShellConnector.PASSWORD_REJECTED);
+                    break;
+                case CANCEL_VERIFY:
+                    handler.cancel();
+                    verifyPassword();
                     break;
                 default:
                     handler.cancel();
@@ -266,9 +303,10 @@ public final class ServerActivity extends AppCompatActivity {
         /** Without this the whole app dies with the renderer (spec M2 item 2). */
         @Override
         public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            String url = origin.sameOrigin(view.getUrl()) ? view.getUrl() : getIntent().getStringExtra(EXTRA_URL);
             frame.removeView(view);
             view.destroy();
-            addWebView(null);
+            addWebView(url);
             return true;
         }
     }

@@ -55,16 +55,23 @@ public class BasicChallengeResponderTest {
     }
 
     @Test
-    public void aSecondChallengeWithoutALoadIsARejection() {
+    public void aSecondChallengeGetsNoPassword() {
         responder.onChallenge("cezar.example.com", "cezar", PAGE, false);
-        assertEquals(BasicChallengeResponder.Kind.CANCEL_REJECTED, responder.onChallenge("cezar.example.com", "cezar", PAGE, false).kind);
+        assertEquals(BasicChallengeResponder.Kind.CANCEL_VERIFY, responder.onChallenge("cezar.example.com", "cezar", PAGE, false).kind);
+        assertEquals(1, reads.get());
     }
 
     @Test
-    public void aLoadedPageEarnsOneMoreAnswer() {
+    public void aChallengeAfterTheStartPageGetsNoPassword() {
+        responder.onStartPageLoaded();
+        assertEquals(BasicChallengeResponder.Kind.CANCEL_VERIFY, responder.onChallenge("cezar.example.com", "cezar", PAGE, false).kind);
+        assertEquals(0, reads.get());
+    }
+
+    @Test
+    public void aFailedAttemptIsARejectionEvenWhenDisarmed() {
         responder.onChallenge("cezar.example.com", "cezar", PAGE, false);
-        responder.onPageLoaded();
-        assertEquals(BasicChallengeResponder.Kind.ANSWER, responder.onChallenge("cezar.example.com", "cezar", PAGE, false).kind);
+        assertEquals(BasicChallengeResponder.Kind.CANCEL_REJECTED, responder.onChallenge("cezar.example.com", "cezar", PAGE, true).kind);
     }
 
     @Test

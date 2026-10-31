@@ -29,7 +29,7 @@ struct Challenge {
     }
 }
 
-/// Answers the webview's Basic challenge for one saved server, once (spec Decision 2).
+/// Answers the webview's Basic challenge for one saved server (spec Decision 2).
 final class BasicChallengeResponder {
     enum Reply: Equatable {
         case answer(username: String, password: String)
@@ -42,7 +42,6 @@ final class BasicChallengeResponder {
     private let server: ServerRecord
     private let origin: ServerOrigin?
     private let password: (String) -> String?
-    private var answered = false
 
     init(server: ServerRecord, password: @escaping (String) -> String?) {
         self.server = server
@@ -50,19 +49,14 @@ final class BasicChallengeResponder {
         self.password = password
     }
 
+    /// One load can raise several challenges, one per path, so only a failed attempt means rejected.
     func onChallenge(_ challenge: Challenge) -> Reply {
         if challenge.method == NSURLAuthenticationMethodServerTrust { return .systemDefault }
         guard challenge.method == NSURLAuthenticationMethodHTTPBasic, let origin,
               challenge.scheme?.lowercased() == "https", challenge.host.lowercased() == origin.host, challenge.port == origin.port,
               let realm = server.realm, realm == (challenge.realm ?? "") else { return .cancelForeign }
-        if challenge.previousFailures > 0 || answered { return .cancelRejected }
+        if challenge.previousFailures > 0 { return .cancelRejected }
         guard let saved = password(server.id) else { return .cancelRejected }
-        answered = true
         return .answer(username: server.username ?? "", password: saved)
-    }
-
-    /// A page loaded, so the last answer was good and a later challenge gets one more.
-    func onPageLoaded() {
-        answered = false
     }
 }
