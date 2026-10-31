@@ -80,6 +80,36 @@ describe('parseManagerText', () => {
     expect(parseManagerText('Hi', [pasted, failed]).map((segment) => segment.kind)).toEqual(['markdown'])
   })
 
+  describe('bare references', () => {
+    const one = [{ id: 'alpha', repoUrl: 'https://github.com/o/alpha' }]
+    const text = (line: string, projects = one) => (parseManagerText(line, [], projects)[0] as { text: string }).text
+
+    it('bubbles #123 against the only connected project, as a PR when the sentence says so', () => {
+      expect(text('Q11, #1821: long')).toBe('Q11, [#1821](#cez-issue/alpha/1821): long')
+      expect(text('see PR #7')).toBe('see PR [#7](#cez-pr/alpha/7)')
+    })
+
+    it('takes the project a token named over guessing', () => {
+      expect(text('[[pr:beta/1]] and #2', [])).toBe('[#1](#cez-pr/beta/1) and [#2](#cez-issue/beta/2)')
+    })
+
+    it('still bubbles when it cannot tell the repository', () => {
+      expect(text('fixes #5', [])).toBe('fixes [#5](#cez-issue/_/5)')
+    })
+
+    it('turns a connected repository URL into the bubble and leaves a foreign one', () => {
+      expect(text('https://github.com/o/alpha/pull/9')).toBe('[#9](#cez-pr/alpha/9)')
+      expect(text('https://github.com/x/y/pull/9')).toBe('https://github.com/x/y/pull/9')
+    })
+
+    it('leaves code, links, headings and fragments alone', () => {
+      expect(text('run `#12` now')).toBe('run `#12` now')
+      expect(text('[#12](https://a.b/c)')).toBe('[#12](https://a.b/c)')
+      expect(text('https://a.b/c#12')).toBe('https://a.b/c#12')
+      expect(text('&#39; x')).toBe('&#39; x')
+    })
+  })
+
   it('leaves fenced code literal', () => {
     const text = '```\n[[task:a/1]]\n```'
     expect(parseManagerText(text)).toEqual([{ kind: 'markdown', text }])

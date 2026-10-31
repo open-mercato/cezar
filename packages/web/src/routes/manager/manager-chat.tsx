@@ -15,7 +15,7 @@ import {
   useManagers,
   useUpdateManager,
 } from '@/api/managers'
-import { useHealth } from '@/api/queries'
+import { useHealth, useProjects } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { Composer } from '@/components/composer/composer'
 import { Button } from '@/components/ui/button'
@@ -112,6 +112,11 @@ function useMarkRead(manager: ManagerSummary) {
 function ManagerChat({ manager }: { manager: ManagerSummary }) {
   const { id } = manager
   const chat = useManagerChat(id)
+  const registry = useProjects().data?.projects
+  const connected = useMemo(
+    () => (registry ?? []).filter((project) => manager.connectedProjectIds.includes(project.id)),
+    [registry, manager.connectedProjectIds],
+  )
   const update = useUpdateManager(id)
   useMarkRead(manager)
   const [draft, setDraft] = useState(() => drafts.get(id) ?? '')
@@ -185,7 +190,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             </p>
           ) : null}
           {chat.messages.map((message) => (
-            <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} deciding={deciding} />
+            <ManagerMessageRow key={message.id} message={message} origin={origin} onDecide={onDecide} deciding={deciding} projects={connected} />
           ))}
         </div>
       </div>

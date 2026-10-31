@@ -20,21 +20,74 @@ export type ManagerSegment =
   | { kind: 'markdown'; text: string }
   | { kind: 'task'; projectId: string; runId: string }
 
-const TOKEN = /\[\[(task|pr):([^\]/\s]+)\/([^\]\s]+)\]\]/g
+const TOKEN = /\[\[(task|pr|issue):([^\]/\s]+)\/([^\]\s]+)\]\]/g
 const CARD_LINE = /^\s*(?:[-*]\s+)?((?:\[\[task:[^\]/\s]+\/[^\]\s]+\]\]\s*)+)$/
 /** A reference the stream has only half delivered; shown raw it flickers as literal brackets. */
-const TRAILING_PARTIAL = /\[\[?(?:(?:task|pr)(?::[^\]\n]*)?\]?)?$/
+const TRAILING_PARTIAL = /\[\[?(?:(?:task|pr|issue)(?::[^\]\n]*)?\]?)?$/
 
 export const TASK_LINK_PREFIX = '#cez-task/'
 export const PR_LINK_PREFIX = '#cez-pr/'
+export const ISSUE_LINK_PREFIX = '#cez-issue/'
+/** A bare `#12` in a chat that spans repositories: still a bubble, just not a link. */
+export const UNKNOWN_PROJECT = '_'
+
+export interface ManagerReferenceProject {
+  id: string
+  repoUrl?: string
+}
+
+/** Not a fragment, an entity or a markdown link's own text. */
+const BARE_NUMBER = /(?<![\w/#&[])#(\d{1,7})\b/g
+const PR_WORD_BEFORE = /\b(?:PRs?|pull requests?)\s*$/i
+const GITHUB_URL = /(?<![("<[])(https:\/\/github\.com\/[^\s/]+\/[^\s/]+)\/(pull|issues)\/(\d+)(?![\w/])/g
+const INLINE_CODE = /(`[^`]*`)/
 
 /** An inline reference becomes a hash link, which `ManagerLink` paints as a chip: splitting the
  *  markdown around it would break the paragraph or list item it sits in. */
 function inlineReferences(line: string): string {
   return line.replace(TOKEN, (_match, kind: string, project: string, id: string) => {
     const path = `${encodeURIComponent(project)}/${encodeURIComponent(id)}`
-    return kind === 'pr' ? `[#${id}](${PR_LINK_PREFIX}${path})` : `[task](${TASK_LINK_PREFIX}${path})`
+    if (kind === 'task') return `[task](${TASK_LINK_PREFIX}${path})`
+    return `[#${id}](${kind === 'pr' ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX}${path})`
   })
+}
+
+/** The project a bare `#12` belongs to: the one this reply names, else the only one connected. */
+function replyProject(text: string, projects: readonly ManagerReferenceProject[]): string {
+  const named = [...text.matchAll(TOKEN)][0]?.[2]
+  return named ?? (projects.length === 1 ? projects[0]!.id : UNKNOWN_PROJECT)
+}
+
+/** Agents write bare numbers and GitHub URLs as often as tokens, so those become the same bubble.
+ *  An unknown kind links as an issue: GitHub redirects `/issues/N` to a pull request. */
+function bareReferences(line: string, project: string, projects: readonly ManagerReferenceProject[]): string {
+  return line.split(INLINE_CODE).map((part, index) => {
+    if (index % 2 === 1) return part
+    const linked = part.replace(GITHUB_URL, (url, repo: string, kind: string, number: string) => {
+      const owner = projects.find((candidate) => candidate.repoUrl === repo)
+      if (!owner) return url
+      return `[#${number}](${kind === 'pull' ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX}${encodeURIComponent(owner.id)}/${number})`
+    })
+    return linked.replace(BARE_NUMBER, (match, number: string, at: number, whole: string) => {
+      const prefix = PR_WORD_BEFORE.test(whole.slice(0, at)) ? PR_LINK_PREFIX : ISSUE_LINK_PREFIX
+      return `[${match}](${prefix}${encodeURIComponent(project)}/${number})`
+    })
+  }).join('')
+}
+
+/** Every reference a reply paints, for the status lookup that colours its chips. */
+export function managerReferences(segments: readonly ManagerSegment[]): Array<{ projectId: string; kind: 'PR' | 'Issue'; number: number }> {
+  const seen = new Map<string, { projectId: string; kind: 'PR' | 'Issue'; number: number }>()
+  for (const segment of segments) {
+    if (segment.kind !== 'markdown') continue
+    for (const match of segment.text.matchAll(/\(#cez-(pr|issue)\/([^/)]+)\/(\d+)\)/g)) {
+      const projectId = decodeURIComponent(match[2]!)
+      if (projectId === UNKNOWN_PROJECT) continue
+      const kind = match[1] === 'pr' ? 'PR' : 'Issue'
+      seen.set(`${projectId} ${kind} ${match[3]}`, { projectId, kind, number: Number(match[3]) })
+    }
+  }
+  return [...seen.values()]
 }
 
 const STARTED_TASK = /^\[\[task:([^\]/\s]+)\/([^\]\s]+)\]\]$/gm
@@ -52,7 +105,12 @@ function startedTasks(commands: readonly ManagerCommandRow[]): Array<{ projectId
  * the card replaces it, in a sentence the chip stays and the card follows that block, and a task
  * it started without naming closes the reply. One card per task. Fenced code is literal.
  */
-export function parseManagerText(text: string, commands: readonly ManagerCommandRow[] = []): ManagerSegment[] {
+export function parseManagerText(
+  text: string,
+  commands: readonly ManagerCommandRow[] = [],
+  projects: readonly ManagerReferenceProject[] = [],
+): ManagerSegment[] {
+  const project = replyProject(text, projects)
   const segments: ManagerSegment[] = []
   const carded = new Set<string>()
   let pending: Array<{ projectId: string; runId: string }> = []
@@ -86,7 +144,7 @@ export function parseManagerText(text: string, commands: readonly ManagerCommand
       for (const match of line.matchAll(TOKEN)) {
         if (match[1] === 'task') pending.push({ projectId: match[2]!, runId: match[3]! })
       }
-      buffer.push(inlineReferences(line))
+      buffer.push(inlineReferences(bareReferences(line, project, projects)))
       continue
     }
     flush()

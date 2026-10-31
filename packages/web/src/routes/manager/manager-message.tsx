@@ -1,19 +1,26 @@
-import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, GitPullRequestIcon } from 'lucide-react'
+import { BellRingIcon, ChevronRightIcon, CircleAlertIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
 import { sendManagerMessage } from '@/api/managers'
+import { useProjects } from '@/api/queries'
+import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { chipClass } from '@/components/picker-pill'
 import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import {
   actionTitle,
+  ISSUE_LINK_PREFIX,
+  managerReferences,
   parseManagerText,
   parseReferenceLink,
   PR_LINK_PREFIX,
   TASK_LINK_PREFIX,
+  UNKNOWN_PROJECT,
   type ManagerOrigin,
+  type ManagerReferenceProject,
 } from '@/lib/managers'
 import { cn } from '@/lib/utils'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
@@ -23,24 +30,32 @@ import type { ManagerActionStatus, ManagerAsk, ManagerCommand, ManagerMessage } 
 
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
+const NO_PROJECTS: readonly ManagerReferenceProject[] = []
+
 const OriginContext = createContext<ManagerOrigin>({ id: '', name: '' })
+
+/** The same bubble the task tables show. Its status comes from the reply's own provider. */
+function ForgeReference({ kind, projectId, number }: { kind: 'PR' | 'Issue'; projectId: string; number: number }) {
+  const origin = useContext(OriginContext)
+  const repoUrl = useProjects().data?.projects.find((project) => project.id === projectId)?.repoUrl
+  return (
+    <ReferenceChip
+      compact
+      reference={{ kind, number, ...(repoUrl ? { url: `${repoUrl}/${kind === 'PR' ? 'pull' : 'issues'}/${number}` } : {}) }}
+      taskTitle={origin.name}
+      {...(projectId === UNKNOWN_PROJECT ? {} : { projectId })}
+      className="align-middle no-underline"
+    />
+  )
+}
 
 /** A reference inside a sentence: the markdown stays whole and only the link is swapped. */
 function ManagerLink({ href, children, ...props }: ComponentProps<'a'>) {
   const origin = useContext(OriginContext)
   const pr = parseReferenceLink(href, PR_LINK_PREFIX)
-  if (pr) {
-    return (
-      <Link
-        to={`/p/${encodeURIComponent(pr.projectId)}/github/prs/${encodeURIComponent(pr.id)}`}
-        data-slot="manager-pr-chip"
-        title={`${pr.projectId} #${pr.id}`}
-        className={cn(chipClass, 'inline-flex no-underline')}
-      >
-        <GitPullRequestIcon aria-hidden="true" className="size-3 shrink-0" />#{pr.id}
-      </Link>
-    )
-  }
+  if (pr) return <ForgeReference kind="PR" projectId={pr.projectId} number={Number(pr.id)} />
+  const issue = parseReferenceLink(href, ISSUE_LINK_PREFIX)
+  if (issue) return <ForgeReference kind="Issue" projectId={issue.projectId} number={Number(issue.id)} />
   const task = parseReferenceLink(href, TASK_LINK_PREFIX)
   if (task) {
     return (
@@ -136,8 +151,20 @@ function ManagerQuestions({
   )
 }
 
-function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage, { kind: 'assistant' }>; origin: ManagerOrigin }) {
-  const segments = useMemo(() => parseManagerText(message.text, message.commands), [message.text, message.commands])
+function AssistantMessage({
+  message,
+  origin,
+  projects,
+}: {
+  message: Extract<ManagerMessage, { kind: 'assistant' }>
+  origin: ManagerOrigin
+  projects: readonly ManagerReferenceProject[]
+}) {
+  const segments = useMemo(
+    () => parseManagerText(message.text, message.commands, projects),
+    [message.text, message.commands, projects],
+  )
+  const references = useMemo(() => managerReferences(segments), [segments])
   return (
     <article data-slot="manager-assistant" className="min-w-0">
       {message.turn === 'job' && message.jobName ? (
@@ -152,13 +179,15 @@ function AssistantMessage({ message, origin }: { message: Extract<ManagerMessage
       ) : null}
       <CommandsRow commands={message.commands} />
       <OriginContext.Provider value={origin}>
-        {segments.map((segment, index) =>
-          segment.kind === 'markdown' ? (
-            <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
-          ) : (
-            <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
-          ),
-        )}
+        <ReferenceStatusProvider requests={references}>
+          {segments.map((segment, index) =>
+            segment.kind === 'markdown' ? (
+              <Markdown key={index} components={MARKDOWN_COMPONENTS}>{segment.text}</Markdown>
+            ) : (
+              <SessionCard key={index} projectId={segment.projectId} runId={segment.runId} origin={origin} />
+            ),
+          )}
+        </ReferenceStatusProvider>
       </OriginContext.Provider>
       {message.ask ? (
         <div className="mt-3 max-w-2xl">
@@ -234,9 +263,12 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   origin,
   onDecide,
   deciding = false,
+  projects = NO_PROJECTS,
 }: {
   message: ManagerMessage
   origin: ManagerOrigin
+  /** Connected projects: what a bare `#12` or a GitHub URL resolves against. */
+  projects?: readonly ManagerReferenceProject[]
   onDecide: (actionId: string, decision: 'approve' | 'reject') => void
   deciding?: boolean
 }) {
@@ -248,7 +280,7 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
         </div>
       )
     case 'assistant':
-      return <AssistantMessage message={message} origin={origin} />
+      return <AssistantMessage message={message} origin={origin} projects={projects} />
     case 'action':
       return <ActionCard message={message} onDecide={onDecide} busy={deciding} />
     case 'notice':
