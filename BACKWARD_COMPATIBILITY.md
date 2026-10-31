@@ -428,6 +428,17 @@ Additive: a new `hello` key, a new control `t`, a new optional JSON key outside 
 
 Breaking: anything a shipped client reads changing meaning or shape. Required path: the relay contract moves to a new path version, `/v2`, and `/v1` is served until a release of each client has been in the wild, then answers 426. The tunnel adds a version and each side keeps its `min` until the older one has aged out. A new QR `version` shows "Update the app" on old builds.
 
+## 6b. Mobile shell ↔ cezar contract (`packages/mobile`, spec `.ai/specs/2026-10-31-mobile-apps-manager-first.md`)
+
+The mobile shell ships on its own version through app stores and loads each server's own cockpit, so ANY shell version must work with ANY cezar version. It does not force updates and has no minimum server version. What the shell relies on, frozen:
+
+- **`GET /api/v1/health`** with `version` and an object `capabilities`, readable with no same-origin check. `capabilities.managers === true` opens `/manager`; `false` or absent opens `/`. Capability, not version number, decides. A local-mode refusal stays a `403` whose `error` names the Host header.
+- **`/manager`** as a cockpit route.
+- **The `CezarMobile/<version> (ios|android)` User-Agent token**, the only thing a page learns about the shell, and **`cezar://servers`**, which a page navigates to in the main frame to ask for the server list. No other `cezar://` URL does anything, and the scheme is not registered with either OS.
+- **Basic auth answered at the HTTP layer**, by the proxy in front of cezar: a `401` with `WWW-Authenticate: Basic` and a stable realm. The shell answers only the exact origin and realm saved with a server, so changing the realm re-asks for the password.
+
+Breaking: renaming or removing any of these. Required path: the cockpit keeps both shapes until a shell that needs only the new one has been in the stores for a full release.
+
 ## 7. Agent event protocol (`packages/cezar/src/core/agent-runner.ts`, `packages/cezar/src/core/ui-events.ts`)
 
 The normalized streams every runner emits — persisted to `runs/<id>.ndjson` and replayed by both the cockpit and `cezar run`'s console. Two layers ship together and both are contracts; `AGENT_PROTOCOL.md` is the full spec.
