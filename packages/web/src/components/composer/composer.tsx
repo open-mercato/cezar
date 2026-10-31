@@ -119,6 +119,17 @@ export interface ComposerProps {
   ariaLabel?: string
   /** `/` opens the project-first skills autocomplete (#380). */
   autocompleteSkills?: boolean
+  /** `/` lists these instead of skills: a host whose agent has fixed commands, not skills. */
+  slashCommands?: ReadonlyArray<{ name: string; description: string }>
+  /** Off: no attach button, and paste/drop leave files alone. For a host that cannot deliver them. */
+  attachments?: boolean
+  /**
+   * One row on desktop: `footerStart`, the text, then the mic and send inside at the right, send
+   * only once there is something to send (the manager frame, spec 2026-10-31-managers). On a phone
+   * the text takes its own row above round controls, with `footerEnd` beside `footerStart` and a
+   * Send pill that is always there (`composer-reference.png`).
+   */
+  compact?: boolean
   /** Alt+A → "Yes, approved." / Alt+C → "Continue." — the legacy quick replies, window-global
    *  while the composer is enabled. */
   quickReplies?: boolean
@@ -182,6 +193,9 @@ export function Composer({
   placeholder = 'Reply — / for skills, @ for files…',
   ariaLabel = 'Reply to the agent',
   autocompleteSkills = true,
+  slashCommands,
+  attachments = true,
+  compact = false,
   quickReplies = false,
   getMentionCandidates,
   ref,
@@ -233,7 +247,7 @@ export function Composer({
   const pendingCaretRef = useRef<number | null>(null)
   const menuItemRefs = useRef<Map<string, HTMLElement>>(new Map())
 
-  const skills = useSkills(autocompleteSkills && skillsWanted)
+  const skills = useSkills(autocompleteSkills && slashCommands === undefined && skillsWanted)
   // The `/` list orders most-used first (#519) and a pick bumps `skillUsage`, so this — the
   // highest-traffic skill surface — both reads and feeds the same stats as the pickers.
   const uiState = useUiState()
@@ -275,11 +289,11 @@ export function Composer({
       return
     }
     const next = detectTrigger(el.value, el.selectionStart ?? el.value.length)
-    if (next?.trigger === '/' && !autocompleteSkills) return setTrigger(null)
+    if (next?.trigger === '/' && !autocompleteSkills && slashCommands === undefined) return setTrigger(null)
     if (next?.trigger === '@' && getMentionCandidates === undefined) return setTrigger(null)
     if (next?.trigger === '/') setSkillsWanted(true)
     setTrigger(next)
-  }, [autocompleteSkills, disabled, getMentionCandidates])
+  }, [autocompleteSkills, disabled, getMentionCandidates, slashCommands])
 
   interface MenuCandidate {
     value: string
@@ -291,6 +305,17 @@ export function Composer({
 
   const candidates = useMemo((): MenuCandidate[] => {
     if (trigger === null) return []
+    if (trigger.trigger === '/' && slashCommands) {
+      return slashCommands
+        .filter((command) => fuzzyMatch(command.name, trigger.query))
+        .map((command) => ({
+          value: command.name,
+          insert: command.name,
+          label: `/${command.name}`,
+          description: command.description,
+          emphasized: false,
+        }))
+    }
     if (trigger.trigger === '/') {
       return filterSkills(skills.data ?? [], trigger.query, uiState.data?.skillUsage).map((skill) => ({
         // The path suffix keeps values unique when a project skill shadows a global one.
@@ -305,7 +330,7 @@ export function Composer({
     return paths
       .filter((path) => fuzzyMatch(path, trigger.query))
       .map((path) => ({ value: path, insert: path, label: path, emphasized: false }))
-  }, [getMentionCandidates, skills.data, trigger, uiState.data?.skillUsage])
+  }, [getMentionCandidates, skills.data, slashCommands, trigger, uiState.data?.skillUsage])
 
   const activeValue = candidates.some((c) => c.value === menuValue)
     ? menuValue
@@ -323,7 +348,7 @@ export function Composer({
     // /new's submit (#408): only bump once the CURRENT map is known. The PUT merge is shallow,
     // so bumping off an unresolved/errored ui-state query would send a one-entry map and wipe
     // every accumulated count. Fire-and-forget; a lost bump costs one count, nothing more.
-    if (trigger.trigger === '/' && uiState.data !== undefined) {
+    if (trigger.trigger === '/' && slashCommands === undefined && uiState.data !== undefined) {
       putUiState({ skillUsage: bumpSkillUsage(uiState.data.skillUsage, candidate.insert) })
         .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
         .catch(() => {})
@@ -369,7 +394,7 @@ export function Composer({
 
   const addFiles = useCallback(
     (files: readonly File[], source: 'file' | 'clipboard' = 'file') => {
-      if (disabled) return
+      if (disabled || !attachments) return
       // Side effects (screening toasts + async encode) run OUTSIDE any setState updater: React
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
@@ -395,10 +420,11 @@ export function Composer({
         })
       }
     },
-    [disabled],
+    [attachments, disabled],
   )
 
   const onPaste = (event: ClipboardEvent) => {
+    if (!attachments) return
     // `kind: 'file'` rather than an `image/` type test (#950): the clipboard carries a pasted
     // `.md` as a file item too, and `screenFiles` is what decides whether cezar takes it. The
     // text half of the clipboard is left alone so an ordinary ⌘V still types.
@@ -493,7 +519,10 @@ export function Composer({
       }
       if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
         const active = candidates.find((c) => c.value === activeValue)
-        if (active) {
+        // A fixed command typed out in full is finished: Enter runs it, not a completion of itself.
+        if (active && slashCommands && event.key === 'Enter' && trigger?.query === active.insert) {
+          closeMenu()
+        } else if (active) {
           event.preventDefault()
           pick(active)
           return
@@ -566,18 +595,24 @@ export function Composer({
   }
 
   const recording = dictation.recording
+  const hasDraft = text.trim() !== '' || images.length > 0 || allowEmptySubmit
   const sendDisabled =
-    disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+    disabled || submitDisabled || busy || !hasDraft
   const sendButtonElement = (
     <Button
       type="button"
       size={sendLabel ? "sm" : "icon-sm"}
+      variant={compact ? 'contrast' : undefined}
       aria-label={sendAriaLabel}
       disabled={sendDisabled}
-      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
+      className={cn(
+        compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
+        sendMenu && "rounded-r-none",
+      )}
       onClick={submitDraft}
     >
       <ArrowUpIcon aria-hidden="true" />{sendLabel}
+      {compact ? <span className="md:hidden">Send</span> : null}
     </Button>
   )
   // The chord goes in the tooltip, not on the button — the way GitHub and Linear show it.
@@ -595,6 +630,101 @@ export function Composer({
     </IconTooltip>
   ) : sendButtonElement
 
+  const micClass = compact
+    ? 'size-10 rounded-full bg-muted text-muted-foreground md:size-8 md:rounded-md md:bg-transparent'
+    : 'h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground'
+  const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-3.5'} />
+  const micSize = compact ? 'icon-sm' : 'sm'
+  const micControl = dictation.supported && dictation.unavailable ? (
+    // aria-disabled, not disabled: a disabled button never gets the hover/focus
+    // that opens the tooltip saying why.
+    <IconTooltip label={dictation.unavailable} side="top">
+      <Button
+        type="button"
+        variant="ghost"
+        size={micSize}
+        aria-disabled="true"
+        aria-label="Start dictation"
+        className={cn(micClass, 'cursor-not-allowed opacity-50 hover:bg-transparent')}
+      >
+        {micIcon}
+        {compact ? null : 'Dictation'}
+      </Button>
+    </IconTooltip>
+  ) : dictation.supported ? (
+    <Button
+      type="button"
+      variant="ghost"
+      size={micSize}
+      disabled={disabled}
+      aria-label="Start dictation"
+      title="Dictation"
+      className={micClass}
+      onClick={dictation.start}
+    >
+      {micIcon}
+      {compact ? null : 'Dictation'}
+    </Button>
+  ) : null
+  // Stop stays on screen for as long as the agent works — typing a message adds Send
+  // beside it rather than replacing it, so stopping never means clearing the draft.
+  const stopControl = stop ? (
+    <IconTooltip label={stop.label} side="top">
+      <Button
+        type="button"
+        size="icon-sm"
+        variant="contrast"
+        data-slot="composer-stop"
+        aria-label={stop.label}
+        disabled={stop.pending}
+        className={compact ? 'size-10 rounded-full md:size-8 md:rounded-md' : 'size-8'}
+        onClick={stop.onStop}
+      >
+        <SquareIcon aria-hidden="true" className="size-3 fill-current" />
+      </Button>
+    </IconTooltip>
+  ) : null
+  const sendControl = sendMenu ? (
+    // Its own pixel-snapped layer: the row often sits at a fractional y, and Chrome
+    // left a stale 1px strip of the previous button when the group changed shape.
+    <div data-slot="composer-send" className="flex transform-gpu items-center">
+      {sendButton}
+      {/* Stays usable while Send is disabled, but dimmed to match it. */}
+      <div data-slot="composer-send-menu" className={cn("flex", sendDisabled && "opacity-50 hover:opacity-100 focus-within:opacity-100")}>
+        {sendMenu}
+      </div>
+    </div>
+  ) : sendButton
+  const field = (
+    <textarea
+      ref={textareaRef}
+      // `rows` is the phone case's floor, not the height: it is deliberately not
+      // responsive, so the height comes from the `min-h`/`md:min-h` pair below (44px
+      // phone, 54px desktop) and from the `useLayoutEffect` autosize pass. On desktop
+      // that means one intrinsic row for the single paint before autosize runs, which
+      // `md:min-h-[54px]` already bounds. This textarea is shared with `/new`.
+      rows={1}
+      value={text}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      placeholder={disabled ? disabledReason : placeholder}
+      // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
+      className={cn(
+        'block max-h-[220px] w-full resize-none bg-transparent text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm',
+        compact
+          ? 'order-first min-h-11 min-w-0 basis-full px-2 py-1.5 md:order-none md:min-h-9 md:flex-1 md:basis-auto md:px-1.5'
+          : 'min-h-11 px-3 pt-2.5 pb-1 md:min-h-[54px] md:px-4 md:pt-3',
+      )}
+      onChange={(event) => {
+        setText(event.target.value)
+        syncTrigger()
+      }}
+      onKeyDown={onKeyDown}
+      onSelect={syncTrigger}
+      onPaste={onPaste}
+    />
+  )
+
   return (
     <Popover open={menuOpen} onOpenChange={(open) => (open ? undefined : closeMenu())}>
       <PopoverAnchor asChild>
@@ -605,7 +735,8 @@ export function Composer({
           onDrop={onDrop}
           onDragOver={(event) => event.preventDefault()}
           className={cn(
-            'rounded-xl border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
+            compact ? 'rounded-[1.75rem] md:rounded-xl' : 'rounded-xl',
+            'border border-border bg-card shadow-xs transition-[border-color,box-shadow]',
             'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/15',
             disabled && 'opacity-80',
           )}
@@ -648,28 +779,22 @@ export function Composer({
             </div>
           ) : null}
 
-          <textarea
-            ref={textareaRef}
-            // `rows` is the phone case's floor, not the height: it is deliberately not
-            // responsive, so the height comes from the `min-h`/`md:min-h` pair below (44px
-            // phone, 54px desktop) and from the `useLayoutEffect` autosize pass. On desktop
-            // that means one intrinsic row for the single paint before autosize runs, which
-            // `md:min-h-[54px]` already bounds. This textarea is shared with `/new`.
-            rows={1}
-            value={text}
-            disabled={disabled}
-            aria-label={ariaLabel}
-            placeholder={disabled ? disabledReason : placeholder}
-            // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
-            className="block max-h-[220px] min-h-11 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:min-h-[54px] md:px-4 md:pt-3 md:text-sm"
-            onChange={(event) => {
-              setText(event.target.value)
-              syncTrigger()
-            }}
-            onKeyDown={onKeyDown}
-            onSelect={syncTrigger}
-            onPaste={onPaste}
-          />
+          {compact ? (
+            <div data-slot="composer-compact-row" className="flex flex-wrap items-end gap-1.5 p-2 md:flex-nowrap md:gap-1 md:px-1.5 md:py-1">
+              {footerStart}
+              {footerEnd ? <div className="min-w-0 md:hidden">{footerEnd}</div> : null}
+              {field}
+              {recording ? null : (
+                <div className="ml-auto flex shrink-0 items-center gap-1.5 md:ml-0 md:gap-1 md:pb-0.5">
+                  {micControl}
+                  {stopControl}
+                  <div data-slot="composer-compact-send" className={hasDraft ? 'contents' : stop ? 'hidden' : 'contents md:hidden'}>
+                    {sendControl}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : field}
 
           {recording ? (
             <DictationBar
@@ -679,7 +804,7 @@ export function Composer({
               onInsert={() => insertTranscript(false)}
               onInsertAndSend={() => insertTranscript(true)}
             />
-          ) : (
+          ) : compact ? null : (
             // The footer may WRAP (the /new pill row on narrow widths), but the trailing
             // controls stay one unbreakable group so the send button never strands alone.
             <div className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
@@ -687,79 +812,20 @@ export function Composer({
                   pill group is a single flex item that wraps as a block, stranding the
                   paperclip alone on the line above it (#composer-attach-line). */}
               <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
-                <AttachButton disabled={disabled} onFiles={addFiles} />
+                {attachments ? <AttachButton disabled={disabled} onFiles={addFiles} /> : null}
                 {footerStart}
               </div>
               <div className="ml-auto flex items-center gap-1">
-                {dictation.supported && dictation.unavailable ? (
-                  // aria-disabled, not disabled: a disabled button never gets the hover/focus
-                  // that opens the tooltip saying why.
-                  <IconTooltip label={dictation.unavailable} side="top">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-disabled="true"
-                      aria-label="Start dictation"
-                      className="h-8 cursor-not-allowed gap-1.5 px-2.5 text-xs font-medium text-muted-foreground opacity-50 hover:bg-transparent"
-                    >
-                      <MicIcon aria-hidden="true" className="size-3.5" />
-                      Dictation
-                    </Button>
-                  </IconTooltip>
-                ) : dictation.supported ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={disabled}
-                    aria-label="Start dictation"
-                    title="Dictation"
-                    className="h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground"
-                    onClick={dictation.start}
-                  >
-                    <MicIcon aria-hidden="true" className="size-3.5" />
-                    Dictation
-                  </Button>
-                ) : null}
+                {micControl}
                 {footerEnd ? (
                   <div data-slot="composer-footer-end" className="flex items-center gap-1.5">
                     {footerEnd}
                   </div>
                 ) : null}
-                {stop ? (
-                  // Stop stays on screen for as long as the agent works — typing a message adds Send
-                  // beside it rather than replacing it, so stopping never means clearing the draft.
-                  <IconTooltip label={stop.label} side="top">
-                    <Button
-                      type="button"
-                      size="icon-sm"
-                      variant="contrast"
-                      data-slot="composer-stop"
-                      aria-label={stop.label}
-                      disabled={stop.pending}
-                      className="size-8"
-                      onClick={stop.onStop}
-                    >
-                      <SquareIcon aria-hidden="true" className="size-3 fill-current" />
-                    </Button>
-                  </IconTooltip>
-                ) : null}
+                {stopControl}
                 {/* With Stop showing, Send appears only once there is something to send: an empty box
                     over a working agent offers exactly one action. */}
-                {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
-                  sendMenu ? (
-                    // Its own pixel-snapped layer: the row often sits at a fractional y, and Chrome
-                    // left a stale 1px strip of the previous button when the group changed shape.
-                    <div data-slot="composer-send" className="flex transform-gpu items-center">
-                      {sendButton}
-                      {/* Stays usable while Send is disabled, but dimmed to match it. */}
-                      <div data-slot="composer-send-menu" className={cn("flex", sendDisabled && "opacity-50 hover:opacity-100 focus-within:opacity-100")}>
-                        {sendMenu}
-                      </div>
-                    </div>
-                  ) : sendButton
-                ) : null}
+                {!stop || hasDraft ? sendControl : null}
               </div>
             </div>
           )}
@@ -791,9 +857,11 @@ export function Composer({
               <p className="px-3 py-4 text-center text-xs text-muted-foreground">
                 {trigger?.trigger === '@'
                   ? 'No files seen in this session yet — full file search arrives with the Files tab.'
-                  : skills.isPending
-                    ? 'Loading skills…'
-                    : 'No matching skills.'}
+                  : slashCommands
+                    ? 'No matching commands.'
+                    : skills.isPending
+                      ? 'Loading skills…'
+                      : 'No matching skills.'}
               </p>
             ) : (
               candidates.map((candidate) => (

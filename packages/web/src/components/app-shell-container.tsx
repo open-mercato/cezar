@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, type ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
+import { managersNeedAttention, useManagers } from '@/api/managers'
 import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useStarCount, useTodos, useWorkspaceConfig } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
@@ -13,6 +14,7 @@ import { TelemetryConsentBanner } from '@/components/telemetry-consent'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
+import { ManagerSidebar } from '@/routes/manager/manager-sidebar'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
@@ -76,6 +78,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // it the nav must not offer a tab whose every request would 409.
   const automationsAvailable = health.data?.capabilities.automations === true
   const todos = useTodos(inboxAvailable)
+  // Mounted for the session: the switch's dot and the notification path read this cache in Code
+  // mode too, and the workspace stream keeps it current.
+  const managersAvailable = health.data?.capabilities.managers === true
+  const managers = useManagers(managersAvailable)
   // One query in the shell feeds every rendering of the active project's navigation (desktop,
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
@@ -147,6 +153,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // ever pays for a sample it cannot show.
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
   const whatsNew = useMemo(() => <WhatsNewNavItem />, [])
+  const managerSidebar = useMemo(() => <ManagerSidebar />, [])
   const projectGroups = useMemo(
     () =>
       projects ? (
@@ -218,6 +225,9 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         // quick-list above whenever this slot is absent.
         projectGroups={projectGroups}
         toolsMenu={toolsMenu}
+        managersAvailable={managersAvailable}
+        managerAttention={managersNeedAttention(managers.data?.managers)}
+        managerSidebar={managerSidebar}
       >
         {children}
       </AppShell>

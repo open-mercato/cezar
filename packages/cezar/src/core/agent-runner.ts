@@ -66,6 +66,8 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
+  /** Reasoning effort. Claude only (`--effort`); every other backend ignores it. */
+  effort?: 'low' | 'medium' | 'high';
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**

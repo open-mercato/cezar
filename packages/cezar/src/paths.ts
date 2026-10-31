@@ -123,6 +123,16 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** Manager definitions (spec 2026-10-31-managers). */
+export function managersPath(): string {
+  return join(cezarHomeDir(), 'managers.json');
+}
+
+/** Per-manager state: `<id>/chat.ndjson`, `state.json`, `workdir/`, and `bin/` for the shim. */
+export function managersDir(): string {
+  return join(cezarHomeDir(), 'managers');
+}
+
 /**
  * Expand a leading `~` to the user's home. Lives here with the other homedir
  * logic (see the module note above — one place owns `homedir()`): the

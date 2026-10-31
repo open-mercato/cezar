@@ -206,6 +206,12 @@ describe('failure restores the draft (nothing the user typed is ever lost)', () 
 })
 
 describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () => {
+  it('attachments off: a dropped file is swallowed, not opened by the browser', () => {
+    const { textarea } = renderComposer({ attachments: false })
+    expect(fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('shot.png')] } })).toBe(false)
+    expect(screen.queryByLabelText('Remove shot.png')).toBeNull()
+  })
+
   it('pasted screenshots become removable thumbnails and ride the submit', async () => {
     const { onSubmit, textarea } = renderComposer()
     paste(textarea, [pngFile('shot.png', [9, 9])])

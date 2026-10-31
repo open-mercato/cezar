@@ -22,9 +22,11 @@ import { trackAddProjectOpened } from '@/lib/telemetry'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { isManagerPathname } from '@/lib/managers'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
+import { ModeSwitch } from '@/components/mode-switch'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -116,6 +118,13 @@ export type AppShellProps = {
   projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
+  /** Managers gating (spec 2026-10-31-managers): the Code | Manager switch exists only when health
+   *  says so. Defaults off, unlike the nav gates: the switch is new chrome, not a nav item. */
+  managersAvailable?: boolean
+  /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
+  managerAttention?: boolean
+  /** Manager mode's sidebar body. A slot for the same reason `hostWidget` is. */
+  managerSidebar?: ReactNode
 }
 
 /**
@@ -201,6 +210,9 @@ export const AppShell = React.memo(function AppShell({
   projectGroups,
   brandName = 'cezar',
   brandLogoUrl = null,
+  managersAvailable = false,
+  managerAttention = false,
+  managerSidebar,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -217,6 +229,7 @@ export const AppShell = React.memo(function AppShell({
   // INTO settings, so hiding the banner there would hide the fix from the person about to apply
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
+  const managerMode = managersAvailable && isManagerPathname(pathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const mainRef = React.useRef<HTMLElement>(null)
@@ -281,6 +294,10 @@ export const AppShell = React.memo(function AppShell({
     singleProject,
     brandName,
     brandLogoUrl,
+    managersAvailable,
+    managerMode,
+    managerAttention,
+    managerSidebar,
   }
 
   const desktop = useDesktopShell()
@@ -325,7 +342,10 @@ export const AppShell = React.memo(function AppShell({
             keeps the scroller in row 3 either way. */}
         {chromeless ? null : (
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-            <MobileTopBar title={current?.label ?? brandName} />
+            <MobileTopBar
+              title={managerMode ? 'Manager' : (current?.label ?? brandName)}
+              attention={managersAvailable && managerAttention && !managerMode}
+            />
             {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
                 there is no second column to trade width with and no pointer to drag a border. */}
             <MobileNavDrawer {...nav} onNavigate={closeMenu} />
@@ -399,6 +419,10 @@ type NavProps = {
   brandName: string
   brandLogoUrl: string | null
   singleProject: boolean
+  managersAvailable: boolean
+  managerMode: boolean
+  managerAttention: boolean
+  managerSidebar?: ReactNode
 }
 
 /** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content. */
@@ -451,6 +475,10 @@ function SidebarContent({
   singleProject,
   brandName,
   brandLogoUrl,
+  managersAvailable,
+  managerMode,
+  managerAttention,
+  managerSidebar,
   onNavigate,
   headerAction,
   compactHeader = false,
@@ -481,7 +509,7 @@ function SidebarContent({
         <BrandLockup name={brandName} logoUrl={brandLogoUrl} />
         {/* With project groups mounted the boot repo/branch is one group header among many —
             a chip repeating it up here would just be the first group's header said twice. */}
-        {repo && !projectGroups ? (
+        {repo && !projectGroups && !managerMode ? (
           <span
             data-slot="repo-chip"
             className="ml-auto truncate font-mono text-meta font-medium text-soft-foreground"
@@ -494,6 +522,16 @@ function SidebarContent({
         ) : null}
       </div>
 
+      {managersAvailable ? (
+        <ModeSwitch manager={managerMode} attention={managerAttention} onNavigate={onNavigate} />
+      ) : null}
+
+      {managerMode ? (
+        <div data-slot="manager-sidebar" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-2">
+          <SidebarNavigateContext.Provider value={onNavigate}>{managerSidebar}</SidebarNavigateContext.Provider>
+        </div>
+      ) : (
+      <>
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
         <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
@@ -617,6 +655,8 @@ function SidebarContent({
           </div>
         </>
       )}
+      </>
+      )}
 
       {/* Deliberate rows, never a wrap (#702): the machine glance (when one is mounted), then the
        *  search bar, then the chrome controls. `flex-col` rather than `flex-wrap` on purpose — the
@@ -628,9 +668,14 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        {whatsNew}
-        {hostWidget}
-        <CommandPaletteHint />
+        {/* CPU/RAM and search are Code-mode chrome (spec 2026-10-31-managers). */}
+        {managerMode ? null : (
+          <>
+            {whatsNew}
+            {hostWidget}
+            <CommandPaletteHint />
+          </>
+        )}
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
           <div data-slot="tools-menu" className="shrink-0">
@@ -918,7 +963,7 @@ export function StarChip({ count }: { count: number }) {
 }
 
 /** Mobile chrome (<md): the sidebar's replacement. Its menu button opens `MobileNavDrawer`. */
-function MobileTopBar({ title }: { title: string }) {
+function MobileTopBar({ title, attention = false }: { title: string; attention?: boolean }) {
   return (
     <header
       data-slot="mobile-top-bar"
@@ -935,9 +980,15 @@ function MobileTopBar({ title }: { title: string }) {
             size="icon"
             aria-label="Open menu"
             // 44px: the minimum touch target, overriding the 36px desktop icon-button size.
-            className="-ml-1.5 size-11"
+            className="relative -ml-1.5 size-11"
           >
             <MenuIcon className="size-[17px]" aria-hidden="true" />
+            {attention ? (
+              <span data-slot="mobile-manager-attention" className="absolute top-2.5 right-2.5 flex">
+                <span className="size-1.5 rounded-full bg-info" aria-hidden="true" />
+                <span className="sr-only">A manager needs you</span>
+              </span>
+            ) : null}
           </Button>
         </SheetTrigger>
         <span className="truncate text-body font-semibold">{title}</span>

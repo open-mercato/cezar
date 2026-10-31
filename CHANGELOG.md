@@ -1,10 +1,11 @@
 # Unreleased
 
 ## Highlights
-New users get a guided start: first-run onboarding signs you in to an agent, helps you pick or create a project, and connects GitHub without a terminal. Agents stall less: OpenCode's native questions now reach an ask card, and a parked parent no longer takes the parallel slot its queued reviewer needs. Windows skill runs no longer fail on long system prompts, and large or slow filesystems list faster.
+New users get a guided start: first-run onboarding signs you in to an agent, helps you pick or create a project, and connects GitHub without a terminal. Agents stall less: OpenCode's native questions now reach an ask card, and a parked parent no longer takes the parallel slot its queued reviewer needs. Windows skill runs no longer fail on long system prompts, and large or slow filesystems list faster. Managers add one chat above your repositories: a long-lived agent that watches them, runs tasks, and asks before it merges.
 
 ## ✨ Features
 - ✨ First-run and returning-user onboarding: sign in to an agent, pick or create a project, connect GitHub without a terminal, and start from a welcome page. (#1725) *(@zielivia)*
+- ✨ Managers: create global agents in the new Manager mode, connect repositories, and chat with them. A manager refreshes on a cadence (a check with nothing new makes no model call), runs saved jobs, starts and steers tasks, and proposes merges and automation enables that wait for your approval. `CEZ_MANAGERS=0` turns them off. (#1880) *(@patzick)*
 
 ## ⚡ Performance
 - ⚡ Folder-picker and Files-tab listings read entry metadata through a bounded pool, so large or slow filesystems answer faster (fixes #1217). (#1369) *(@pat-lewczuk)*
@@ -57,6 +58,7 @@ New users get a guided start: first-run onboarding signs you in to an agent, hel
 - @pat-lewczuk
 - @matwiatrzyk
 - @haxiorz
+- @patzick
 
 # 0.17.0 (2026-10-29)
 
