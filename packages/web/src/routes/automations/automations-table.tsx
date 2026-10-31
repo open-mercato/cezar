@@ -195,7 +195,7 @@ function AutomationRow({
             <span
               data-slot="needs-review-badge"
               title="Tracker access changed: open this automation and review its access before it can run again"
-              className="inline-flex shrink-0 items-center rounded-full bg-warning/15 px-1.5 py-px text-[10.5px] font-medium text-warning"
+              className="inline-flex shrink-0 items-center rounded-full bg-warning/15 px-1.5 py-px text-micro font-medium text-warning"
             >
               Needs review
             </span>
