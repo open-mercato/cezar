@@ -16,6 +16,7 @@ import { useHealth } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
 import { cliOf } from '@/lib/automation-cli'
 import { useActiveProjectId } from '@/lib/project-router'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The Automations page's data and the row actions every screen shares (spec
@@ -149,7 +150,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
 /** Clipboard write with the honest failure the spec asks for (non-secure contexts have none). */
 export async function copyText(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
+    await writeClipboard(text)
     toast('Copied to the clipboard.')
   } catch {
     toast('Copy failed — select the text to copy it.', { tone: 'danger' })

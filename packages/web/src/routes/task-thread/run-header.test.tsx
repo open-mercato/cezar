@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { queryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
@@ -940,6 +941,84 @@ describe('action bar visibility per status (the legacy rules, rendered)', () => 
       }),
     )
     await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+  })
+
+  // #1410: health's forge is the BOOT folder's. A task in a cloned GitHub project, served from a
+  // non-repo boot (`forge: null`), must still be offered Create PR — the gate is its project's.
+  it('offers Create PR in a non-boot GitHub project even when the boot folder has no forge', async () => {
+    const status = () => jsonResponse({ uncommitted: 2, unpushed: null })
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({ bootProject: 'home', forge: null, checks: [{ name: 'gh', available: true }] }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          bootProject: 'home',
+          projectsDir: '/repos',
+          projects: [{ id: 'shop', name: 'shop', root: '/repos/shop', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok', forge: 'github' }],
+        }),
+      '/api/v1/repo': () => jsonResponse({ info: { root: '/repos/shop', branch: 'main', remote: 'origin' } }),
+      '/api/v1/p/shop/repo': () => jsonResponse({ info: { root: '/repos/shop', branch: 'main', remote: 'origin' } }),
+      '/api/v1/runs/r1/git/status': status,
+      '/api/v1/p/shop/runs/r1/git/status': status,
+      '/api/v1/p/shop/runs': () => jsonResponse([]),
+    })
+    const record = run('done', { worktreePath: '/tmp/wt/r1', branch: 'cez/r1' })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
+          <ProjectScopeProvider projectId="shop">
+            <Routes>
+              <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+            </Routes>
+          </ProjectScopeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')).not.toBeNull())
+  })
+
+  // #1410 for trunk-based projects (#1597): the Commit-to-base step's Create PR alternative names
+  // a missing forge, so it too must ask the task's project, not the boot folder.
+  it('a trunk task in a non-boot GitHub project offers Create PR under Commit to main', async () => {
+    const status = () => jsonResponse({ uncommitted: 2, unpushed: 0, behind: 0 })
+    const config = () => jsonResponse({ landing: 'auto', landingBlocked: null, baseBranch: 'main', defaultRunner: 'claude' })
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({ bootProject: 'home', forge: null, checks: [{ name: 'gh', available: true }] }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          bootProject: 'home',
+          projectsDir: '/repos',
+          projects: [{ id: 'shop', name: 'shop', root: '/repos/shop', addedAt: '', lastOpenedAt: '', source: 'local', status: 'ok', forge: 'github' }],
+        }),
+      '/api/v1/p/shop/repo': () => jsonResponse({ info: { root: '/repos/shop', branch: 'main', remote: 'origin' } }),
+      '/api/v1/p/shop/config': config,
+      '/api/v1/p/shop/runs/r1/git/status': status,
+      '/api/v1/p/shop/runs': () => jsonResponse([]),
+    })
+    const record = run('done', { worktree: false })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
+          <ProjectScopeProvider projectId="shop">
+            <Routes>
+              <Route path="/tasks/:id" element={<RunHeader run={record} />} />
+            </Routes>
+          </ProjectScopeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const chevron = await waitFor(() => {
+      const el = document.querySelector('[data-slot="git-button"] [aria-label="More ways to commit to main"]')
+      expect(el).not.toBeNull()
+      return el!
+    })
+    fireEvent.pointerDown(chevron)
+    const menu = await screen.findByRole('menu')
+    const createPr = menu.querySelector('[data-action="create-pr"]')
+    expect(createPr).not.toBeNull()
+    expect(createPr!.getAttribute('aria-disabled')).not.toBe('true')
+    expect(menu.textContent).not.toContain('no supported forge remote')
   })
 
   it('the title row reserves the git button’s height, so the header does not jump without it', () => {

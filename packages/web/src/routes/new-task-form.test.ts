@@ -553,6 +553,13 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     expect(projectDefaultSource(undefined, false, skills)).toBeNull()
   })
 
+  it('keeps the configured skill when the catalog failed to load, instead of dropping to quick-task', () => {
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, null)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, null)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource(undefined, false, null)).toBeNull()
+  })
+
   it('reads a trailing question mark as a question', () => {
     expect(looksLikeQuestion("what's open with Daniel? ")).toBe(true)
     expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)

@@ -261,7 +261,7 @@ const INNER_DOT: Record<string, string> = {
 
 function InnerSteps({ steps }: { steps: readonly InnerStep[] }) {
   return (
-    <div className="flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground" aria-label="steps inside">
+    <div className="flex min-w-0 items-center gap-1 text-micro text-muted-foreground" aria-label="steps inside">
       {steps.slice(0, 6).map((st, i) => (
         <span key={st.id} className="flex min-w-0 items-center gap-1" title={`${st.name}${st.status ? ` — ${st.status}` : ''}`}>
           {i > 0 && <span aria-hidden="true">→</span>}
@@ -336,8 +336,8 @@ export const GraphNodeView = memo(function GraphNodeView({
         <Icon className={cn('shrink-0', wide ? 'size-6' : 'size-7')} style={{ color }} strokeWidth={1.75} />
         {wide && (
           <div className="min-w-0">
-            <div className="truncate text-[13px] font-medium leading-tight">{title}</div>
-            {inner?.length ? <InnerSteps steps={inner} /> : <div className="truncate text-[11px] text-muted-foreground">{detail}</div>}
+            <div className="truncate text-ui font-medium leading-tight">{title}</div>
+            {inner?.length ? <InnerSteps steps={inner} /> : <div className="truncate text-meta text-muted-foreground">{detail}</div>}
           </div>
         )}
         {subtaskTo && (
@@ -382,7 +382,7 @@ export const GraphNodeView = memo(function GraphNodeView({
                 <div className="absolute left-[calc(100%+9px)] flex -translate-y-1/2 items-center" style={{ top }}>
                   {ports.length > 1 && (
                     <span
-                      className="pointer-events-none whitespace-nowrap rounded bg-background px-1 text-[10px] leading-4"
+                      className="pointer-events-none whitespace-nowrap rounded bg-background px-1 text-micro leading-4"
                       style={{ color: tone }}
                     >
                       {port}
@@ -418,12 +418,12 @@ export const GraphNodeView = memo(function GraphNodeView({
           className="pointer-events-none absolute top-full left-1/2 mt-1.5 -translate-x-1/2 text-center"
           style={{ width: CAPTION_WIDTH }}
         >
-          <div className="truncate text-[11px] leading-tight text-foreground/85">{title}</div>
-          {detail ? <div className="truncate text-[10px] text-muted-foreground">{detail}</div> : null}
+          <div className="truncate text-meta leading-tight text-foreground/85">{title}</div>
+          {detail ? <div className="truncate text-micro text-muted-foreground">{detail}</div> : null}
         </div>
       )}
       {extras ? (
-        <div className={cn('pointer-events-none absolute left-1/2 -translate-x-1/2 text-[10px] text-muted-foreground', wide ? 'top-full mt-1' : 'top-full mt-9')}>
+        <div className={cn('pointer-events-none absolute left-1/2 -translate-x-1/2 text-micro text-muted-foreground', wide ? 'top-full mt-1' : 'top-full mt-9')}>
           {extras}
         </div>
       ) : null}

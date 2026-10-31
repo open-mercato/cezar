@@ -66,7 +66,7 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
-  /** Wall-clock kill switch for the run (ms). */
+  /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**
    * Stable session id (UUID) so the user can take over interactively later:

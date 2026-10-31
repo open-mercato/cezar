@@ -1,5 +1,6 @@
 import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
+import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
@@ -35,7 +36,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -92,6 +93,8 @@ const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
+  // #1300: unreadable accounting follows the same bounded fallback as legacy records.
+  retriesUsed: z.number().int().nonnegative().optional().catch(undefined),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
@@ -271,6 +274,8 @@ export const runRecordSchema = z.object({
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
+  attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
+  completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
@@ -332,6 +337,9 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
+   *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
+  autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -496,10 +504,15 @@ export interface RunEvent {
 
 /** A layout file this young may belong to a run another process has not saved to the index yet. */
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
-const MAX_RUNS_KEPT = 300;
+const DEFAULT_RUNS_KEPT = 300;
+const DEFAULT_ARCHIVED_KEPT = 500;
+/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs the index keeps (at least 1; live runs and active dispatch trees are never pruned). */
+function keepLimit(name: string, fallback: number): number {
+  const n = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
-const MAX_ARCHIVED_KEPT = 500;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
 const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
 
@@ -581,6 +594,7 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+  run.autoResumeReason = undefined;
 }
 
 /** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
@@ -919,6 +933,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
   if (run.status !== 'waiting') run.askParked = undefined;
+  if (run.status !== 'waiting') run.attentionRequest = undefined;
+  if (run.status !== 'done') run.completionReason = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
   // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
   // could match the created number. The evidence is all still on the record — only the
@@ -1139,6 +1155,27 @@ function lockRunIndex(dataDir: string): () => void {
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  private lifecycleObserver?: RunLifecycleObserver;
+  private lifecycleSnapshots = new Map<string, RunLifecycleSnapshot>();
+
+  /** Attaching establishes a baseline, never a backlog of historical notifications. */
+  setLifecycleObserver(observer: RunLifecycleObserver | undefined): void {
+    this.lifecycleObserver = observer;
+    this.lifecycleSnapshots.clear();
+    if (observer) for (const run of this.runs.values()) this.lifecycleSnapshots.set(run.id, runLifecycleSnapshot(run));
+  }
+
+  get hasLifecycleObserver(): boolean { return this.lifecycleObserver !== undefined; }
+
+  private observeLifecycle(id: string, run: RunRecord | undefined): void {
+    if (!this.lifecycleObserver) return;
+    const before = this.lifecycleSnapshots.get(id);
+    const after = run ? runLifecycleSnapshot(run) : undefined;
+    // Advance before invoking any listener: a reentrant mutation sees the outer transition.
+    if (after) this.lifecycleSnapshots.set(id, after);
+    else this.lifecycleSnapshots.delete(id);
+    try { this.lifecycleObserver(before, after, run ? 'change' : 'delete'); } catch { /* Capture cannot interrupt tasks. */ }
+  }
   /** The backend of each run's latest session (`session.started`), naming its agent errors. */
   private sessionBackends = new Map<string, string>();
   /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
@@ -1163,6 +1200,11 @@ export class RunStore extends EventEmitter {
   private constructor(private readonly dataDir: string) {
     super();
     this.setMaxListeners(100);
+  }
+
+  /** Stable identity for observers that outlive a store instance. */
+  getDataDir(): string {
+    return this.dataDir;
   }
 
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
@@ -1341,6 +1383,9 @@ export class RunStore extends EventEmitter {
       delete run.referencedIssueNumberSeeded;
     }
     const normalized = { ...patch };
+    const resultingStatus = normalized.status ?? run.status;
+    if (resultingStatus !== 'waiting') normalized.attentionRequest = undefined;
+    if (resultingStatus !== 'done') normalized.completionReason = undefined;
     if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
       normalized.activity = undefined;
       normalized.monitoringWakeAt = undefined;
@@ -1412,6 +1457,7 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
 
@@ -1730,7 +1776,8 @@ export class RunStore extends EventEmitter {
    */
   private janitorSettled(run: RunRecord): boolean {
     return (
-      run.pullRequestUrl !== undefined &&
+      (run.pullRequestUrl !== undefined ||
+        (run.referencedPrCandidates?.length ?? 0) >= MAX_PR_CANDIDATES) &&
       (run.referencedIssueCandidates?.length ?? 0) >= MAX_PR_CANDIDATES &&
       !(run.markerRefs?.issue === undefined && run.referencedIssueUrl && run.issueNumber === undefined)
     );
@@ -1969,7 +2016,6 @@ export class RunStore extends EventEmitter {
       }
       this.seqs.delete(id);
       this.scheduleSave();
-      this.emit('deleted', id);
     }
     return existed;
   }
@@ -2083,20 +2129,26 @@ export class RunStore extends EventEmitter {
   }
 
   private touch(run: RunRecord): void {
+    this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);
   }
 
-  /** Forget a run, and remember that we did. Dropping it from the map is no longer enough on its
+  /** Forget a run, and remember that we did. Every removal path funnels through this boundary,
+   * including retention pruning, so lifecycle subscribers cannot miss cleanup. Dropping it from
+   * the map is no longer enough on its
    *  own: `saveNow` unions the on-disk index back in, and the copy it re-reads is one THIS process
    *  wrote moments ago — so a plain `delete` would come straight back as a record whose event file
    *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
     this.forgotten.add(id);
+    if (this.runs.has(id)) this.observeLifecycle(id, undefined);
     this.sessionBackends.delete(id);
     this.persisted.delete(id);
-    return this.runs.delete(id);
+    const existed = this.runs.delete(id);
+    if (existed) this.emit('deleted', id);
+    return existed;
   }
 
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
@@ -2112,8 +2164,8 @@ export class RunStore extends EventEmitter {
       if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
     }
     const stalePool = [
-      ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
-      ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
+      ...all.filter((r) => !r.archived).slice(keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)),
+      ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);

@@ -1,0 +1,26 @@
+---
+title: "Project commands and detected addresses"
+description: "Run detected commands and open addresses printed by the terminal."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-workspace/terminal-extras.tsx
+    line: 32
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The terminal panel lists project commands and addresses detected in process output. Each address shows its availability and actions to open it in Preview or an external browser.
+
+## Where to find it
+
+Task → Terminal → Commands / Detected addresses
+
+## How to use it
+
+1. Select a project command to run it in a new tab.
+2. Find the address under Detected addresses.
+3. Click Open Preview or Open in Browser.
+
+> **Good to know**: Detecting a command or address does not run or open it.

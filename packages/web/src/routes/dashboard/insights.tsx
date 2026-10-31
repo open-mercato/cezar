@@ -11,7 +11,7 @@ import { useProjects } from '@/api/queries'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { StatusDot } from '@/components/status-dot'
-import { shortAge } from '@/lib/format'
+import { compactTokens, shortAge } from '@/lib/format'
 import { useAutomationsGate } from '@/routes/automations/use-automations'
 import { useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
@@ -22,10 +22,10 @@ import { useDashboardFilter } from './url-filter'
 
 type Period = DashboardInsights['period']
 const periodText = (period: Period) => `Last ${period === '7d' ? 7 : 30} calendar days`
-const bandLabel = 'font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground'
+const bandLabel = 'eyebrow text-muted-foreground'
 const panel = 'min-w-0 rounded-lg border bg-card-2 p-4'
 const th =
-  'whitespace-nowrap px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.1em] text-soft-foreground'
+  'whitespace-nowrap px-3 py-2 eyebrow text-soft-foreground'
 
 function useProjectName() {
   const projects = useProjects().data?.projects
@@ -90,6 +90,18 @@ export function OutcomeInsights({ period, active }: { period: Period; active: bo
   )
 }
 
+/** A quarter-width stat cell fits ~7 digits; past 10k show `193.7k` and keep the exact count in the tooltip. */
+function Count({ value, prefix = '', className }: { value: number; prefix?: string; className?: string }) {
+  const exact = `${prefix}${value.toLocaleString('en-US')}`
+  if (value < 10_000) return <span className={className}>{exact}</span>
+  return (
+    <span className={className} title={exact}>
+      {prefix}
+      {compactTokens(value)}
+    </span>
+  )
+}
+
 function Delivered({ data }: { data: DashboardInsights }) {
   const d = data.delivered
   const stats: { label: string; value: ReactNode; note?: string }[] = [
@@ -97,14 +109,14 @@ function Delivered({ data }: { data: DashboardInsights }) {
     {
       label: 'Lines',
       value: (
-        <>
-          <span className="text-success">+{d.additions.toLocaleString('en-US')}</span>{' '}
-          <span className="text-danger">−{d.deletions.toLocaleString('en-US')}</span>
-        </>
+        <span className="flex flex-wrap gap-x-1.5">
+          <Count value={d.additions} prefix="+" className="text-success" />
+          <Count value={d.deletions} prefix="−" className="text-danger" />
+        </span>
       ),
     },
-    { label: 'Files', value: d.files.toLocaleString('en-US') },
-    { label: 'Issues', value: d.issues },
+    { label: 'Files', value: <Count value={d.files} /> },
+    { label: 'Issues', value: <Count value={d.issues} /> },
   ]
   return (
     <section className={panel} aria-label="Delivered">
@@ -161,7 +173,7 @@ function FailureReasons({ data }: { data: DashboardInsights }) {
       <div className="flex items-baseline justify-between gap-2">
         <h3 className={bandLabel}>Why tasks failed</h3>
         {total > 0 && (
-          <span className="font-mono text-[11px] text-soft-foreground">{total} failed</span>
+          <span className="font-mono text-meta text-soft-foreground">{total} failed</span>
         )}
       </div>
       {total === 0 ? (
@@ -275,7 +287,7 @@ export function BackendComparison() {
             ) : (
               <p className="py-4 text-sm text-muted-foreground">No finished tasks in this period.</p>
             )}
-            <span className="block font-mono text-[11px] text-soft-foreground">
+            <span className="block font-mono text-meta text-soft-foreground">
               <Freshness at={data.asOf} />
             </span>
             <ExportRows
@@ -305,7 +317,7 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
     <tr className="border-t transition-colors hover:bg-muted/30">
       <td className="px-3 py-2.5">
         <span className="block font-medium">{backendName(b.backend)}</span>
-        <span className="block font-mono text-[11px] text-soft-foreground">
+        <span className="block font-mono text-meta text-soft-foreground">
           {b.backend === 'mixed' ? 'steps ran on different backends' : (b.model ?? 'default model')}
         </span>
       </td>
@@ -458,7 +470,7 @@ export function AutomationOutcomes() {
                     No automations yet. Create one in a project's Automations page.
                   </p>
                 )}
-                <span className="block font-mono text-[11px] text-soft-foreground">
+                <span className="block font-mono text-meta text-soft-foreground">
                   <Freshness at={data.asOf} />
                 </span>
                 <ExportRows

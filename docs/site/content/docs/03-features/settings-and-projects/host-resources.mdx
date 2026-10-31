@@ -1,0 +1,25 @@
+---
+title: "Host CPU and memory usage"
+description: "Check the load on the machine running your agents."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/machine-card.tsx
+    line: 47
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Machine shows CPU usage, occupied memory, and the time of the last measurement. The local view also includes a short history chart. In a resource-limited container, it shows the capacity actually available to the container.
+
+## Where to find it
+
+Settings → Global → Resources → Machine
+
+## How to use it
+
+1. Open Resources.
+2. Check CPU, RAM, and the updated timestamp.
+3. Compare the load with the concurrent task limit.
+
+> **Good to know**: The remote cockpit labels measurements last known. It does not present them as a continuous local chart.

@@ -79,6 +79,7 @@ import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
 import { useDraft } from './thread-draft'
 import { copyToClipboard, useCanOpenTerminal, useRunActions, useRunOpenChoices, type RunActions } from './use-run-actions'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -386,7 +387,7 @@ function RunProgress({
         // The plan dock's compact mirror (spec: "mirrored as a compact progress line in the run
         // header"). Desktop only since #764: on a phone the dock it mirrors is itself on screen,
         // so the mirror would spend the tightest row here restating it.
-        <span data-slot="plan-mirror" className="hidden shrink-0 text-[11px] text-soft-foreground tabular-nums md:inline">
+        <span data-slot="plan-mirror" className="hidden shrink-0 text-meta text-soft-foreground tabular-nums md:inline">
           Plan {planTally.done}/{planTally.total}
         </span>
       ) : null}
@@ -589,8 +590,7 @@ function OpenInMenuForRun({
   const copyPath = () => {
     const path = run.worktreePath
     if (!path) return
-    void navigator.clipboard
-      .writeText(path)
+    void writeClipboard(path)
       .then(() => toast('Worktree path copied'))
       .catch(() => toast(`Path: ${path}`))
   }
@@ -661,12 +661,12 @@ function EditableTitle({ run }: { run: ApiRun }) {
   }, [draft.hasDraft, draft.ready, draft.text, editing])
 
   if (editor.editing) {
-    return <TitleEditInput editor={drafted} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={drafted} className="flex-1 text-lead font-semibold" />
   }
 
   return (
     <span className="group flex min-w-0 items-center gap-1">
-      <h1 className="min-w-0 truncate text-[15px] font-semibold" title={run.task}>
+      <h1 className="min-w-0 truncate text-lead font-semibold" title={run.task}>
         {title}
       </h1>
       <button
@@ -695,12 +695,7 @@ function CopyBranchChip({ branch }: { branch: string }) {
   )
 
   const copy = () => {
-    if (!navigator.clipboard) {
-      toast(`Branch: ${branch}`)
-      return
-    }
-    void navigator.clipboard
-      .writeText(branch)
+    void writeClipboard(branch)
       .then(() => {
         setCopied(true)
         setTooltipOpen(true)
@@ -726,7 +721,7 @@ function CopyBranchChip({ branch }: { branch: string }) {
             <button
               type="button"
               data-slot="branch-chip"
-              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-meta font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
               aria-label={`Copy branch name ${branch}`}
               onClick={copy}
             >
@@ -804,7 +799,7 @@ function MetaRow({
         <Link
           key="automation"
           to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-meta font-medium hover:text-foreground"
         >
           Automation
         </Link>
@@ -813,7 +808,7 @@ function MetaRow({
           key="automation"
           data-slot="automation-origin"
           title="Automations are off on this server (CEZ_AUTOMATIONS)"
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-meta font-medium"
         >
           Automation
         </span>
@@ -1200,7 +1195,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         </DropdownMenuTrigger>
       </IconTooltip>
       <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-meta font-normal text-muted-foreground">
           runner: {runner}
         </DropdownMenuLabel>
         {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
@@ -1208,18 +1203,18 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         {account ? (
           <DropdownMenuLabel
             data-slot="agent-badge-account"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
+            className="font-mono text-meta font-normal text-muted-foreground"
           >
             account: {account}
           </DropdownMenuLabel>
         ) : null}
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
+        <DropdownMenuLabel className="font-mono text-meta font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
         {identity ? (
           <DropdownMenuLabel
             data-slot="agent-badge-identity"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
+            className="font-mono text-meta font-normal text-muted-foreground"
           >
             identity: {identity}
           </DropdownMenuLabel>
@@ -1227,7 +1222,7 @@ function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngi
         {continuationEngine ? (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="pb-1 text-[11px] font-normal text-muted-foreground">
+            <DropdownMenuLabel className="pb-1 text-meta font-normal text-muted-foreground">
               Next continuation
             </DropdownMenuLabel>
             <div
@@ -1402,7 +1397,7 @@ function ResumeHintLine({ hint }: { hint: string }) {
       data-slot="resume-hint"
       title="Copy the command"
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-meta text-soft-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">take over interactively: {hint}</span>

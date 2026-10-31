@@ -83,7 +83,7 @@ export function EditorScheduleFields({
         </div>
       ) : null}
       {s.type === 'once' ? (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-ui text-muted-foreground">
           on
           <Input
             type="date"
@@ -95,10 +95,10 @@ export function EditorScheduleFields({
         </div>
       ) : null}
       {s.type === 'hours' ? (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-ui text-muted-foreground">
           every
           <Select value={String(s.every)} onValueChange={(value) => { const every = Number(value); if (isScheduleEvery(every)) set({ every }) }}>
-            <SelectTrigger size="sm" aria-label="Every N hours" className="text-[13px]">
+            <SelectTrigger size="sm" aria-label="Every N hours" className="text-ui">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -110,7 +110,7 @@ export function EditorScheduleFields({
           starting at 00:00
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-ui text-muted-foreground">
           at
           <Input
             aria-label="Hour"

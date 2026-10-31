@@ -56,3 +56,17 @@ export function unwrapJsonErrorEnvelope(message: string): string {
   const summary = parsed && envelopeSummary(parsed, prefix);
   return summary ? `${prefix}${summary}${message.slice(end + 1)}` : message;
 }
+
+/** OpenAI refusing a model for a ChatGPT-plan Codex login (1350055f). */
+const CODEX_CHATGPT_MODEL_RE = /model is not supported when using Codex with a ChatGPT account/i;
+
+/**
+ * Codex's bare refusal names neither where the model came from nor the way out. Every model cezar
+ * sends is one somebody picked — the task, a workflow step or the Settings → Agents default — so
+ * the fix is the user's, and the message says which knobs to turn. Anything else is unchanged.
+ */
+export function explainCodexModelError(message: string, model: string | undefined): string {
+  if (!CODEX_CHATGPT_MODEL_RE.test(message)) return message;
+  const named = model ? `"${model}"` : 'the model this task names';
+  return `${message} — ${named} needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default), check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key`;
+}

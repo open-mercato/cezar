@@ -1,11 +1,11 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 import record from './fixtures/thread-run.record.json'
 
 /**
@@ -34,6 +34,29 @@ const LOCAL_LINK_RUN = {
   titleSummary: 'Local file link regression',
   task: 'Prepare a report in temp/report.txt',
 }
+const MERMAID_RUN = {
+  ...RUN,
+  id: 'abec1200-0000-4000-8000-000000000003',
+  titleSummary: 'Mermaid diagram previews',
+}
+const MERMAID_FLOW = `flowchart LR
+    accTitle: Gateway architecture
+    C[Klient / SDK] --> L[HTTPS / ALB]
+    L --> P[ai-gateway :8200]
+    P --> D[(Postgres: klucze API)]
+    P --> Q[Modal: Qwen / vLLM]
+    P --> B[Modal: Basal]
+    O[Operator / ECS Exec] --> A[ai-gateway :8201]
+    A --> D
+    M[Jednorazowy proces migracji] --> D`
+const MERMAID_REPLY = [
+  '## Architecture preview',
+  '```mermaid\n' + MERMAID_FLOW + '\n```',
+  '```mermaid\nsequenceDiagram\n  accTitle: Request sequence\n  Client->>Gateway: Request\n  Gateway-->>Client: Response\n```',
+  '```mermaid\n%%{init: {"securityLevel": "loose"}}%%\nflowchart LR\n  X["<img src=x onerror=window.__mermaidInjected=true>"] --> Y[Safe]\n  click Y "javascript:window.__mermaidInjected=true"\n  click X "https://example.com/diagram-link"\n  Z@{ img: "https://example.com/diagram-image.png", label: "Remote image" }\n```',
+  '```mermaid\ninvalid diagram\n```',
+  'After the diagrams.',
+].join('\n\n')
 const RUN_ID: string = RUN.id
 const OVERFLOW_TOKEN = 'X'.repeat(180) + '_END'
 const OVERFLOW_RUN = {
@@ -79,7 +102,7 @@ const scoped = (path: string) => `/p/${bootProject}${path}`
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
-  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN, OVERFLOW_RUN, LOCAL_LINK_RUN], null, 2), 'utf8')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs.json'), JSON.stringify([RUN, OVERFLOW_RUN, LOCAL_LINK_RUN, MERMAID_RUN], null, 2), 'utf8')
   copyFileSync(
     resolve(import.meta.dirname, 'fixtures/thread-run.ndjson'),
     join(dataRoot, '.ai/cezar/runs', `${RUN_ID}.ndjson`),
@@ -88,6 +111,9 @@ beforeAll(async () => {
   writeFileSync(join(dataRoot, '.ai/cezar/runs', `${LOCAL_LINK_RUN.id}.ndjson`), JSON.stringify({
     type: 'text', stepId: 'task', seq: 1, ts: RUN.createdAt,
     text: 'Done: [report and validation plan](temp/report.txt).',
+  }) + '\n')
+  writeFileSync(join(dataRoot, '.ai/cezar/runs', `${MERMAID_RUN.id}.ndjson`), JSON.stringify({
+    type: 'text', stepId: 'task', seq: 1, ts: RUN.createdAt, text: MERMAID_REPLY,
   }) + '\n')
   // The agent screenshot the transcript's `image` line points at (served by the run itself).
   cpSync(
@@ -113,10 +139,9 @@ beforeAll(async () => {
   browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
 }, 120_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('task thread', () => {
@@ -391,9 +416,10 @@ describe('task thread', () => {
       return box.textContent
     })()`) as string
     expect(parts).not.toContain('claude')
-    // …and the badge is where naming the agent does belong.
+    // …and the badge is where naming the agent does belong. It is icon-only now (the chat box's
+    // engine pills carry the words), so the runner lives in its accessible name.
     expect(
-      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').textContent`),
+      browser.evaluate(`document.querySelector('[data-slot="agent-badge"]').getAttribute('aria-label')`),
     ).toContain('claude')
     // Branch renders as the mono chip, not plain text.
     expect(
@@ -595,5 +621,88 @@ describe('relative file links', () => {
     expect(link.tag).toBe('SPAN')
     expect(link.message).not.toContain('[blocked]')
     browser.screenshot(`${artifactsDir}/thread-local-file-link.png`, { viewport: true })
+  })
+})
+
+
+describe('Mermaid conversation previews', () => {
+  it('renders real flowcharts and sequences, keeps errors readable, and blocks unsafe directives', () => {
+    browser.setViewport(1440, 1000)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${MERMAID_RUN.id}`)}`)
+    browser.waitForFunction(`document.querySelectorAll('[data-streamdown="mermaid-block"]').length === 4`)
+    // Keep it in view while lazy SVG layout changes the thread's height.
+    const revealDiagram = (index: number) => browser.waitForFunction(`(() => {
+      const block = document.querySelectorAll('[data-streamdown="mermaid-block"]')[${index}]
+      const main = block.closest('[data-slot="transcript-viewport"], [data-slot="main"]')
+      const box = block.getBoundingClientRect(), viewport = main.getBoundingClientRect()
+      const target = Math.max(0, Math.min(main.scrollHeight - main.clientHeight,
+        main.scrollTop + box.top - viewport.top - Math.max(0, (viewport.height - box.height) / 2)))
+      if (Math.abs(main.scrollTop - target) > 25) {
+        main.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
+        main.scrollTop = target
+        return false
+      }
+      return ${index === 3 ? "block.textContent.includes('Mermaid Error:')" : "block.querySelector('[role=img] svg')?.getBoundingClientRect().width > 0"}
+    })()`)
+    for (let index = 0; index < 4; index++) revealDiagram(index)
+    const result = browser.evaluate(`(() => {
+      const blocks = [...document.querySelectorAll('[data-streamdown="mermaid-block"]')]
+      const diagrams = [...document.querySelectorAll('[data-streamdown="mermaid"] [role="img"] > svg')]
+      return {
+        pele: diagrams.every(svg => svg.classList.contains('pele')),
+        flow: diagrams[0].textContent,
+        sequence: diagrams[1].textContent,
+        uniqueIds: (() => { const ids = diagrams.flatMap(svg => [...svg.querySelectorAll('[id]')].map(el => el.id)); return ids.length > 0 && new Set(ids).size === ids.length })(),
+        unsafe: blocks[2].querySelectorAll('a[href], a[*|href], image, foreignObject, script, [onerror], [onclick]').length + Number(Boolean(window.__mermaidInjected)),
+        source: blocks[3].querySelector('pre').textContent,
+        after: document.body.textContent.includes('After the diagrams.'),
+        copies: document.querySelectorAll('[data-streamdown="mermaid-block-actions"] [data-streamdown="code-block-copy-button"]').length,
+      }
+    })()`) as { pele: boolean; flow: string; sequence: string; uniqueIds: boolean; unsafe: number; source: string; after: boolean; copies: number }
+    expect(result.pele).toBe(true)
+    expect(result.flow).toContain('Klient / SDK')
+    expect(result.flow).toContain('Postgres: klucze API')
+    expect(result.sequence).toContain('Request')
+    expect(result.uniqueIds).toBe(true)
+    expect(result.unsafe).toBe(0)
+    expect(result.source).toContain('invalid diagram')
+    expect(result.after).toBe(true)
+    expect(result.copies).toBe(4)
+
+    let previousFill: string | undefined
+    for (const theme of ['dark', 'light', 'dark']) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (browser.evaluate(`document.querySelector('[data-slot="theme-toggle"]').getAttribute('data-theme-pref')`) === theme) break
+        browser.click('[data-slot="theme-toggle"]')
+      }
+      revealDiagram(0)
+      browser.waitForFunction(`(() => {
+        const node = document.querySelector('[data-streamdown="mermaid"] [role="img"] svg .pele-node rect')
+        return node && getComputedStyle(node).fill !== ${JSON.stringify(previousFill ?? null)}
+      })()`)
+      const palette = browser.evaluate(`(() => {
+        const pane = document.querySelector('[data-streamdown="mermaid"]')
+        return {
+          background: getComputedStyle(pane).backgroundColor,
+          pageBackground: getComputedStyle(document.body).backgroundColor,
+          nodeFill: getComputedStyle(pane.querySelector('[role="img"] svg .pele-node rect')).fill,
+          light: document.documentElement.classList.contains('light'),
+        }
+      })()`) as { background: string; pageBackground: string; nodeFill: string; light: boolean }
+      expect(palette.background).toBe(palette.pageBackground)
+      expect(palette.light).toBe(theme === 'light')
+      previousFill = palette.nodeFill
+      revealDiagram(0)
+      expect(browser.evaluate(`(() => {
+        const pane = document.querySelector('[data-streamdown="mermaid"]')
+        return pane.querySelector('[role="img"] > svg').getBoundingClientRect().width / pane.getBoundingClientRect().width
+      })()`)).toBeGreaterThan(0.5)
+      browser.screenshot(`${artifactsDir}/thread-mermaid-${theme}.png`, { viewport: true })
+    }
+    browser.setViewport(390, 844)
+    revealDiagram(0)
+    browser.waitForFunction(`document.querySelector('[data-streamdown="mermaid"] [role="img"] > svg')?.getBoundingClientRect().width > 0`)
+    expect(browser.evaluate('document.documentElement.scrollWidth <= innerWidth')).toBe(true)
+    browser.screenshot(`${artifactsDir}/thread-mermaid-mobile.png`, { viewport: true })
   })
 })

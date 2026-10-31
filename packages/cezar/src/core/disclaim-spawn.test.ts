@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, statSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -37,18 +37,67 @@ describe('disclaimedCommand', () => {
     expect(disclaimedCommand('./claude', [], { PATH: dir }, darwin)).toEqual(['./claude', []]);
   });
 
-  it.skipIf(process.platform !== 'darwin')('runs a version-named Mach-O from a clone named after the agent', () => {
-    mkdirSync(join(dir, 'versions'));
-    mkdirSync(join(dir, 'bin'));
-    const real = exe('versions/2.1.295', Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3]));
-    symlinkSync(real, join(dir, 'bin', 'claude'));
-    const [file, argv] = disclaimedCommand('claude', ['-p'], { PATH: join(dir, 'bin') }, darwin);
+  // `cp -c` is macOS-only, so the tests clone with a plain copy; the TCC grant itself is not testable here.
+  const clone = (from: string, to: string) => copyFileSync(from, to);
+  const machO = (body: number) => Buffer.from([0xcf, 0xfa, 0xed, 0xfe, body]);
+  const spawnPath = (bin: string) => disclaimedCommand('claude', ['-p'], { PATH: bin }, { ...darwin, clone });
+
+  it('runs a version-named Mach-O from a clone at a path stable across agent updates (#1696)', () => {
+    const root = mkdtempSync(join(dir, 'upd-'));
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const v1 = join(root, '2.1.295');
+    writeFileSync(v1, machO(1));
+    chmodSync(v1, 0o755);
+    symlinkSync(v1, join(bin, 'claude'));
+    const [file, argv] = spawnPath(bin);
     expect(file).toBe(trampoline);
-    expect(argv[1]).toMatch(/\/clones\/claude-[0-9a-f]{16}\/claude$/);
-    expect(readFileSync(argv[1]!)).toEqual(readFileSync(real));
+    expect(argv[1]).toBe(join(cloneDir, 'claude', 'claude'));
+    expect(readFileSync(argv[1]!)).toEqual(machO(1));
     expect(argv.slice(2)).toEqual(['-p']);
-    // Stable across spawns: the second call reuses the first clone.
-    expect(disclaimedCommand('claude', ['-p'], { PATH: join(dir, 'bin') }, darwin)[1][1]).toBe(argv[1]);
+    const ino = statSync(argv[1]!).ino;
+    // Same agent file: the clone is reused, not rewritten.
+    expect(spawnPath(bin)[1][1]).toBe(argv[1]);
+    expect(statSync(argv[1]!).ino).toBe(ino);
+
+    // The agent updates: a new file, size and mtime. The path must not move, the content must.
+    const v2 = join(root, '2.1.300');
+    writeFileSync(v2, Buffer.concat([machO(2), Buffer.from('more')]));
+    chmodSync(v2, 0o755);
+    rmSync(join(bin, 'claude'));
+    symlinkSync(v2, join(bin, 'claude'));
+    const after = spawnPath(bin)[1][1];
+    expect(after).toBe(argv[1]);
+    expect(readFileSync(after!)).toEqual(Buffer.concat([machO(2), Buffer.from('more')]));
+    // Refreshed by rename, so a process still running the old clone keeps its inode.
+    expect(statSync(after!).ino).not.toBe(ino);
+    expect(readdirSync(join(cloneDir, 'claude')).filter((e) => e.endsWith('.tmp'))).toEqual([]);
+  });
+
+  it('keeps one clone directory per agent, so one Allow does not cover another agent', () => {
+    const root = mkdtempSync(join(dir, 'two-'));
+    for (const n of ['2.1.1', '3.0.0']) writeFileSync(join(root, n), machO(9)), chmodSync(join(root, n), 0o755);
+    symlinkSync(join(root, '2.1.1'), join(root, 'claude'));
+    symlinkSync(join(root, '3.0.0'), join(root, 'codex'));
+    const opts = { ...darwin, clone };
+    const a = disclaimedCommand('claude', [], { PATH: root }, opts)[1][1];
+    const b = disclaimedCommand('codex', [], { PATH: root }, opts)[1][1];
+    expect(a).toBe(join(cloneDir, 'claude', 'claude'));
+    expect(b).toBe(join(cloneDir, 'codex', 'codex'));
+  });
+
+  it('removes the legacy per-version slots once and falls back when the clone fails', () => {
+    const legacy = join(cloneDir, 'claude-0123456789abcdef');
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, 'claude'), 'old');
+    const root = mkdtempSync(join(dir, 'leg-'));
+    writeFileSync(join(root, '1.0.0'), machO(5));
+    chmodSync(join(root, '1.0.0'), 0o755);
+    symlinkSync(join(root, '1.0.0'), join(root, 'claude'));
+    spawnPath(root);
+    expect(existsSync(legacy)).toBe(false);
+    const broken = disclaimedCommand('claude', [], { PATH: root }, { ...darwin, cloneDir: join(dir, 'broken'), clone: () => { throw new Error('no clonefile'); } });
+    expect(broken[1][1]).toBe(join(root, 'claude'));
   });
 
   it('never moves a script, which may find its siblings by its own path', () => {

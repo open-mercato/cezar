@@ -106,6 +106,7 @@ export type RegisterProjectResponse = z.infer<typeof registerProjectResponseSche
 export const removeProjectResponseSchema = z.object({
   removed: z.literal(true),
   id: z.string(),
+  warning: z.string().optional(),
 });
 export type RemoveProjectResponse = z.infer<typeof removeProjectResponseSchema>;
 
@@ -239,6 +240,59 @@ export const fsBrowseResponseSchema = z.object({
   truncated: z.boolean(),
 });
 export type FsBrowseResponse = z.infer<typeof fsBrowseResponseSchema>;
+
+/** One entry of `GET /api/v1/fs/repos` (spec 2026-10-26-first-run-onboarding): a git repository
+ *  the first-run "Pick a project" list offers. `projectId` is set when it is already registered. */
+export const repoSuggestionSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  projectId: z.string().optional(),
+});
+export type RepoSuggestion = z.infer<typeof repoSuggestionSchema>;
+
+/** `GET /api/v1/fs/repos` — registered projects, then folders the user's agent CLIs have worked
+ *  in, then a shallow scan of the browse root. Never an error: nothing found is `repos: []`. */
+export const repoSuggestionsResponseSchema = z.object({
+  repos: z.array(repoSuggestionSchema),
+  truncated: z.boolean(),
+});
+export type RepoSuggestionsResponse = z.infer<typeof repoSuggestionsResponseSchema>;
+
+/** `POST /api/v1/projects/:projectId/git-init` — turn a `not-git` project into a repository with
+ *  its current files committed, so task worktrees branch from what is on disk. */
+export const initProjectGitResponseSchema = z.object({
+  root: z.string(),
+  branch: z.string(),
+});
+export type InitProjectGitResponse = z.infer<typeof initProjectGitResponseSchema>;
+
+/** `POST /api/v1/projects/:projectId/publish-github` — a local repository with no remote becomes a
+ *  new GitHub repository under `owner`. ALWAYS private, like `projects/create`: there is no
+ *  visibility field, and one must never be added. */
+export const publishProjectGithubInputSchema = z.object({
+  owner: z.string().trim().min(1).max(64),
+  name: z.string().trim().regex(GITHUB_REPO_NAME_PATTERN),
+});
+export type PublishProjectGithubInput = z.infer<typeof publishProjectGithubInputSchema>;
+
+export const publishProjectGithubResponseSchema = z.object({
+  slug: z.string(),
+  url: z.string(),
+});
+export type PublishProjectGithubResponse = z.infer<typeof publishProjectGithubResponseSchema>;
+
+/** `POST/GET/DELETE /api/v1/github/login` — the GitHub device flow run by cezar. `pending` carries
+ *  the one-time code `gh` printed and the page it is entered on; `done` means `gh` is signed in;
+ *  `failed` carries `gh`'s last line, with `notFound` when the CLI is not installed at all. */
+export const githubLoginStateSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('idle') }),
+  z.object({ status: z.literal('starting') }),
+  z.object({ status: z.literal('pending'), code: z.string(), url: z.string() }),
+  /** `login` is the GitHub account `gh` reported, when it printed one. */
+  z.object({ status: z.literal('done'), login: z.string().optional() }),
+  z.object({ status: z.literal('failed'), error: z.string(), notFound: z.boolean().optional() }),
+]);
+export type GithubLoginState = z.infer<typeof githubLoginStateSchema>;
 
 /** `GET /api/v1/launch-key` — the bookmarklet auto-start secret (spec 011). Fetched to COMPARE
  *  against the `?key=` query param and to bake into the `javascript:` links the Settings → Skills

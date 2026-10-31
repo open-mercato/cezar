@@ -2,10 +2,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 
 import { ApiError, adoptRunPr, createRunPr, landRun, pushRun } from '@/api/client'
-import { queryKeys, useConfig, useHealth, useRepo, useRunGitStatus } from '@/api/queries'
+import { queryKeys, useConfig, useRepo, useRunGitStatus } from '@/api/queries'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 import { useReferenceStatus } from '@/components/reference-status'
 import { toast } from '@/components/ui/toaster'
+import { useActiveForge } from '@/lib/active-forge'
 import { gitActionPolicy, trunkGitActionPolicy, type GitAction, type GitActionId } from '@/lib/git-actions'
 import { ownedTaskPr } from '@/lib/tasks-table'
 
@@ -104,7 +105,8 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   const prEntry = useReferenceStatus('PR', prNumber)
   const prStatus = prEntry.status
   const finished = prStatus === 'merged' || prStatus === 'closed'
-  const health = useHealth()
+  // Like `repo` below, the forge must be the run's PROJECT's, not the boot folder's (#1410).
+  const forge = useActiveForge()
   // The remote that decides whether Push is offered comes from the PROJECT-scoped `/repo`, not
   // from `/api/health.repo`: health is bound to the boot folder (#791).
   const repo = useRepo()
@@ -260,7 +262,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
         uncommitted: status.data?.uncommitted,
         unpushed: status.data?.unpushed,
         behind: status.data?.behind,
-        forge: health.data?.forge ?? null,
+        forge: forge ?? null,
         agentBlocked,
       })
     : null
@@ -273,7 +275,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     behind: status.data?.behind,
     ahead: status.data?.ahead,
     remote: repo.data?.info?.remote,
-    forge: health.data?.forge ?? null,
+    forge: forge ?? null,
     prUrl,
     prStatus,
     prConflicting: prEntry.conflicting,

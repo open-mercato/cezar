@@ -1,7 +1,39 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
+
+// Inside a cezar task TMP is `<repo>/.ai/cezar/tmp/<run>` — the user's own checkout. Cases that
+// take a fresh `tmpdir()` folder for "outside any repo" then ran git there: `commitAll` committed
+// the user's dirty files and a landing path pushed HEAD to their remote. So before anything else
+// takes a temp dir, move TMP/TEMP/TMPDIR to a system temp that no git work tree contains.
+function isWritable(dir: string): boolean {
+  try {
+    accessSync(dir, constants.W_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function insideGitWorkTree(dir: string): boolean {
+  for (let d = dir; ; d = dirname(d)) {
+    if (existsSync(join(d, '.git'))) return true
+    if (dirname(d) === d) return false
+  }
+}
+
+if (insideGitWorkTree(realpathSync(tmpdir()))) {
+  const candidates =
+    process.platform === 'win32'
+      ? [join(process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local'), 'Temp'), join(process.env.SystemRoot || 'C:\\Windows', 'Temp')]
+      : ['/tmp', '/var/tmp']
+  const outside = candidates.find((dir) => existsSync(dir) && isWritable(dir) && !insideGitWorkTree(realpathSync(dir)))
+  if (!outside) {
+    throw new Error(`[cez] tmpdir ${tmpdir()} is inside a git work tree and no system temp outside one exists — refusing to run git fixtures in it`)
+  }
+  process.env.TMPDIR = process.env.TMP = process.env.TEMP = outside
+}
 
 // Nothing in this suite may write to the developer's own `~/.cezar`. Most cases pin
 // `CEZ_HOME` themselves, but the pin is one global for the whole worker and their
@@ -22,6 +54,27 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env.GIT_CONFIG_COUNT = '1'
   process.env.GIT_CONFIG_KEY_0 = 'commit.gpgsign'
   process.env.GIT_CONFIG_VALUE_0 = 'false'
+}
+
+// Fixtures under `tmpdir()` that are deliberately NOT repositories must stay that way when the
+// temp dir itself sits inside a checkout — a cezar task points TMPDIR into the repo's
+// `.ai/cezar/tmp/`, and git would otherwise discover the cezar repo above every fixture.
+process.env.GIT_CEILING_DIRECTORIES = [
+  ...new Set([tmpdir(), realpathSync(tmpdir())]),
+  ...(process.env.GIT_CEILING_DIRECTORIES ? [process.env.GIT_CEILING_DIRECTORIES] : []),
+].join(':')
+
+// The variables a cockpit sets for its own agents and check steps (.env.example). Run inside a
+// cezar task, the suite would inherit them — and the engine forwards CEZ_API_URL/CEZ_BIN to every
+// run it starts — so the env a case asserts would depend on where it ran. A case that needs one
+// sets it itself.
+for (const name of [
+  'CEZ_TASK_ID', 'CEZ_HANDOFF_FILE', 'CEZ_TODOS_FILE', 'CEZ_API_URL', 'CEZ_PROJECT_ID', 'CEZ_BIN',
+  'CEZ_TREE_DIR', 'CEZ_RUN_ID', 'CEZ_WORKTREE', 'CEZ_BRANCH', 'CEZ_BASE', 'CEZ_STEP_ID',
+  'CEZ_ATTEMPT', 'CEZ_SHARED_CACHE_DIR', 'CEZ_GITHUB_REPO', 'CEZ_GITHUB_NUMBER', 'CEZ_GITHUB_EVENT',
+  'CEZ_PR_HEAD_SHA', 'CEZ_PR_HEAD_REF', 'CEZ_PR_BASE_REF',
+]) {
+  delete process.env[name]
 }
 
 // `gh`'s signed-in hosts decide which remotes count as GitHub Enterprise (`src/github-hosts.ts`);

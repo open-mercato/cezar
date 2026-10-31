@@ -1,7 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 
-import { ApiError } from '@/api/client'
+import { ApiError, MESSAGE_RETRY_DELAYS_MS } from '@/api/client'
+import { uuidv7 } from '@/lib/sid'
 import { runQueryOptions, useSendMessage } from '@/api/queries'
 import type { ApiRun, AttachmentEntry, MessageSurface, RunStatus } from '@open-mercato/cezar-api-client'
 
@@ -33,8 +34,9 @@ import { trackMessageSent } from '@/lib/telemetry'
  *    the transitional refusals, retried on a bounded backoff (`SESSION_GAP_RETRY_DELAYS_MS`): the
  *    live path's `session closed` (a `running` run between sessions) and the Continue path's
  *    `run is still active` (a run whose record already settled while the engine still unwinds it);
- *  - re-post a request that got no answer at all, unless a fresh record proves it never landed.
- *    Only Continue can prove that: an accepted one adds its step synchronously (7adbfbd7);
+ *  - re-post a request that got no answer at all, unless it provably cannot land twice: a Continue
+ *    when a fresh record shows no new step (an accepted one adds its step synchronously, 7adbfbd7);
+ *    a live message by its idempotency key, which `sendMessage` re-posts itself (1a212342);
  *  - reopen a session for an EMPTY draft that a fresh record AGREES is settled — a genuine
  *    refusal. But an EMPTY draft whose refusal is `run is still active` is the opposite: the
  *    refetch proves the run is live already, which is the state the one-click Continue asked
@@ -61,6 +63,16 @@ const delaySessionGapRetry = (delayMs: number) => new Promise<void>((resolve) =>
 
 function isSessionClosed(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 409 && error.message === 'session closed'
+}
+
+/** What the user reads when the live path still refuses after the wait: the server's bare
+ *  `session closed` says nothing about what to do next (1408d7cb). */
+export const SESSION_CLOSED_HINT =
+  'the agent is not taking messages right now — your message is back in the composer; send it again once the task settles'
+
+/** The refusal as the user should read it; any other error is passed through untouched. */
+function explained(error: ApiError): ApiError {
+  return isSessionClosed(error) ? new ApiError(409, SESSION_CLOSED_HINT, { cause: error }) : error
 }
 
 /** The record settles (review/done) BEFORE the engine drops the run — a Continue's turn-end autosave
@@ -97,8 +109,11 @@ export function useDeliverPrompt(
 
   return useCallback(
     async (text: string, images: AttachmentEntry[]) => {
+      // Every Continue re-post below carries the same key: one accepted behind the run's teardown
+      // (continueOnDrop) adds no step yet, so only the server's receipt can tell it already landed.
+      const continueKey = uuidv7()
       const deliver = async (path: DeliveryPath) => {
-        const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images))
+        const result = await (path === 'live' ? sendMessageAsync({ text, images }) : continueWith(text, images, continueKey))
         if (surface) trackMessageSent(surface)
         return result
       }
@@ -111,8 +126,12 @@ export function useDeliverPrompt(
         firstError = error
       }
       // No answer at all (status 0: a dropped socket, a restarting server). Re-post a Continue only
-      // when the fresh record still shows no new continuation step, so it cannot land twice.
-      if (attempted === 'continue' && firstError instanceof ApiError && firstError.status === 0) {
+      // when the fresh record still shows no new continuation step, so it cannot land twice — a
+      // few times, since each failure retires only one stale pooled socket (f3d02411).
+      for (let attempt = 0; attempted === 'continue' && firstError instanceof ApiError && firstError.status === 0; attempt += 1) {
+        const delayMs = MESSAGE_RETRY_DELAYS_MS[attempt]
+        if (delayMs === undefined) throw firstError
+        await wait(delayMs)
         const fresh = await refetch().catch(() => undefined)
         if (!fresh || deliveryPath(fresh.status) !== 'continue' || continuations(fresh) !== knownContinuations) {
           throw firstError
@@ -132,14 +151,14 @@ export function useDeliverPrompt(
         } catch {
           // The refetch is the recovery, not the delivery: if it cannot answer, the user still
           // gets the server's own words about the send they made.
-          throw refusal
+          throw explained(refusal)
         }
         const path = deliveryPath(fresh.status)
         if (path === attempted) {
           // Only a transitional refusal is worth the wait; any other agreeing 409 is the server's
           // considered answer.
           const delayMs = isTransitional(attempted, refusal) ? SESSION_GAP_RETRY_DELAYS_MS[retry] : undefined
-          if (delayMs === undefined) throw refusal
+          if (delayMs === undefined) throw explained(refusal)
           await wait(delayMs)
           try {
             return await deliver(attempted)
@@ -159,7 +178,7 @@ export function useDeliverPrompt(
         // would answer its own 409, which would read as the new failure rather than the real one.
         // Judged on the FRESH record: `continueAction.available` was computed from the stale one,
         // which in this direction is precisely the record that says the run is still live.
-        if (path === 'continue' && lastSessionId(fresh) === undefined) throw refusal
+        if (path === 'continue' && lastSessionId(fresh) === undefined) throw explained(refusal)
         return await deliver(path)
       }
     },

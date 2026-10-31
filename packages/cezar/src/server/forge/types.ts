@@ -1,4 +1,5 @@
 import type { RunRecord } from '../../runs/store.ts';
+import type { GithubItem } from '@open-mercato/cezar-contract';
 
 /**
  * Forge-driver seam (cockpit-ui redesign spec §"Forge-driver seam"): every
@@ -21,23 +22,7 @@ export interface ForgeAvailability {
 
 /** One issue or pull request, flattened for the cockpit. `/api/github` serves
  *  exactly this shape (BACKWARD_COMPATIBILITY.md §2 — do not reshape). */
-export interface ForgeItem {
-  kind: 'issue' | 'pr';
-  number: number;
-  title: string;
-  author: string;
-  createdAt: string;
-  labels: string[];
-  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
-  body?: string;
-  url: string;
-  comments: number;
-  /** PRs only. */
-  isDraft?: boolean;
-  additions?: number;
-  deletions?: number;
-  checks?: 'passing' | 'failing' | 'pending' | null;
-}
+export type ForgeItem = GithubItem;
 
 /** One comment (or PR review summary) in an issue/PR conversation thread (#499). Served by the
  *  new `GET /api/github/comments/:kind/:number` endpoint; additive, no impact on `ForgeItem`. */

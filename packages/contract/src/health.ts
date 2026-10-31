@@ -58,6 +58,10 @@ export const capabilitiesSchema = z.object({
    * REQUIRED for the same reason as `tokenMetrics` below: this server always sends it.
    */
   automations: z.boolean(),
+  /** Project lifecycle notifications; independent of graph notify steps. */
+  webhooks: z.boolean(),
+  /** Present on unsupported server platforms, regardless of the opt-in flag. */
+  webhooksUnavailableReason: z.literal('unsupported_platform').optional(),
   /**
    * `true` means task dispatch is on — the default; `CEZ_DISPATCH=0` turns it off (spec
    * `.ai/specs/2026-09-10-dispatch.md`): every task learns the `cez task` CLI in its system
@@ -87,6 +91,19 @@ export const capabilitiesSchema = z.object({
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
 
 /**
+ * Free space on the volume holding the boot project's task worktrees (telemetry 9cdcedc3). No
+ * path: health is CORS-open (#431). `critical` is the floor below which agents are refused at
+ * spawn; `low` only warns. `worktreesBytes` is a cached `du` estimate, sent only once known.
+ */
+export const diskInfoSchema = z.object({
+  freeBytes: z.number(),
+  totalBytes: z.number(),
+  level: z.enum(['ok', 'low', 'critical']),
+  worktreesBytes: z.number().optional(),
+});
+export type DiskInfo = z.infer<typeof diskInfoSchema>;
+
+/**
  * `GET /api/v1/health` — the CORS-open discovery endpoint (BACKWARD_COMPATIBILITY.md §2).
  *
  * Additive fields only: this is the most externally-depended-on JSON in the app.
@@ -107,5 +124,7 @@ export const healthResponseSchema = z.object({
   bootProject: z.string(),
   /** Random identity of the installed service, when server-install supplied one. */
   instanceId: z.string().optional(),
+  /** Absent where `statfs` is unavailable or fails. */
+  disk: diskInfoSchema.optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
