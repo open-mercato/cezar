@@ -6,7 +6,7 @@
 - ✨ The Manager chat fits a phone: one header row, a composer that stays above the keyboard, thumb-sized controls, and `status`, `attention` and `prs` chips on an empty draft. (#1881) *(@patzick)*
 - ✨ Phones open on Manager: a fresh load of the cockpit's address lands there, a single manager opens straight in its chat, and the list leads with managers holding an approval. Installed on a phone, a bottom bar reaches Manager, Tasks and More. Tablets and desktops keep restoring your last page. (#1882) *(@patzick)*
 - ✨ Manager approvals are safer on a phone: Approve opens a summary of what will happen, a sheet on phones and a dialog on desktop, each card decides on its own and shows why a decision was refused, and an "N approvals waiting" pill jumps to the oldest card. Settings → Manager turns the summary off per type; all three stay on by default. (#1884) *(@patzick)*
-- ✨ A first Android and iOS shell in `packages/mobile`: connect to a hosted cezar, keep the login in the OS keychain, and open on Manager. Debug builds only for now, and the iOS code has not been compiled yet. *(@patzick)*
+- ✨ A first Android and iOS shell in `packages/mobile`: connect to a hosted cezar, keep the login in the OS keychain, and open on Manager. Debug builds only for now, and the iOS code has not been compiled yet. (#1883) *(@patzick)*
 
 ## 👥 Contributors
 
