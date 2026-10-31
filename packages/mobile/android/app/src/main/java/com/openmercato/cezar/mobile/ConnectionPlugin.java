@@ -35,7 +35,14 @@ public class ConnectionPlugin extends Plugin {
             });
             return;
         }
-        run(call, connector -> present(connector.launch(cookiesForLast(connector)), connector, null));
+        run(call, connector -> {
+            if (ServerActivity.isOpen()) {
+                JSObject result = list(connector);
+                result.put("screen", ShellConnector.OPEN);
+                return result;
+            }
+            return present(connector.launch(cookiesForLast(connector)), connector, null);
+        });
     }
 
     @PluginMethod
