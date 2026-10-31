@@ -606,7 +606,7 @@ export function Composer({
       aria-label={sendAriaLabel}
       disabled={sendDisabled}
       className={cn(
-        compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
+        compact ? 'h-10 w-auto gap-1.5 rounded-full px-4 pointer-coarse:max-md:h-11 md:size-8 md:rounded-md md:px-0' : sendLabel ? "h-8" : "size-8",
         sendMenu && "rounded-r-none",
       )}
       onClick={submitDraft}
@@ -631,7 +631,7 @@ export function Composer({
   ) : sendButtonElement
 
   const micClass = compact
-    ? 'size-10 rounded-full bg-muted text-muted-foreground md:size-8 md:rounded-md md:bg-transparent'
+    ? 'size-10 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:size-8 md:rounded-md md:bg-transparent'
     : 'h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground'
   const micIcon = <MicIcon aria-hidden="true" className={compact ? 'size-4' : 'size-3.5'} />
   const micSize = compact ? 'icon-sm' : 'sm'
@@ -677,7 +677,7 @@ export function Composer({
         data-slot="composer-stop"
         aria-label={stop.label}
         disabled={stop.pending}
-        className={compact ? 'size-10 rounded-full md:size-8 md:rounded-md' : 'size-8'}
+        className={compact ? 'size-10 rounded-full pointer-coarse:max-md:size-11 md:size-8 md:rounded-md' : 'size-8'}
         onClick={stop.onStop}
       >
         <SquareIcon aria-hidden="true" className="size-3 fill-current" />
@@ -712,7 +712,8 @@ export function Composer({
       className={cn(
         'block max-h-[220px] w-full resize-none bg-transparent text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm',
         compact
-          ? 'order-first min-h-11 min-w-0 basis-full px-2 py-1.5 md:order-none md:min-h-9 md:flex-1 md:basis-auto md:px-1.5'
+          // A third of what the keyboard leaves visible; autosize still stops at 220px.
+          ? 'order-first min-h-11 min-w-0 basis-full px-2 py-1.5 max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)] md:order-none md:min-h-9 md:flex-1 md:basis-auto md:px-1.5'
           : 'min-h-11 px-3 pt-2.5 pb-1 md:min-h-[54px] md:px-4 md:pt-3',
       )}
       onChange={(event) => {

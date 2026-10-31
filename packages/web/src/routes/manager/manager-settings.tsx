@@ -225,7 +225,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
     <>
       <Popover>
         <PopoverTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="Manager settings" data-slot="manager-settings" className="shrink-0">
+          <Button variant="ghost" size="icon" aria-label="Manager settings" data-slot="manager-settings" className="shrink-0 max-md:size-11">
             <SettingsIcon aria-hidden="true" className="size-5" />
           </Button>
         </PopoverTrigger>
