@@ -110,6 +110,10 @@ import type {
   PatchRunInput,
   PickVariantResponse,
   PlanResponse,
+  AgentSetupProvider,
+  AgentSetupAction,
+  AgentSetupSession,
+  AgentSetupState,
   ProviderConnectResponse,
   ProviderUpdateResponse,
   ProviderId,
@@ -637,6 +641,43 @@ export async function getGithubLogin(opts?: ReadOptions): Promise<GithubLoginSta
 
 export async function cancelGithubLogin(): Promise<GithubLoginState> {
   return unwrap(await cez.api.v1.github.login.$delete(), '/github/login')
+}
+
+/** Installing and signing in to an agent on the first-run page: the state, and one setup terminal. */
+export async function getAgentSetup(opts?: ReadOptions): Promise<AgentSetupState> {
+  return unwrap(await cez.api.v1.providers.setup.$get({}, init(opts)), '/providers/setup')
+}
+
+export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction): Promise<AgentSetupSession> {
+  return unwrap(await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }), '/providers/setup/sessions')
+}
+
+export async function readAgentSetup(sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].output.$get({ param: { sessionId }, query: { cursor: String(cursor) } }),
+    `/providers/setup/sessions/${sessionId}/output`,
+  )
+}
+
+export async function writeAgentSetup(sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].input.$post({ param: { sessionId }, json: { data } }),
+    `/providers/setup/sessions/${sessionId}/input`,
+  )
+}
+
+export async function resizeAgentSetup(sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].resize.$post({ param: { sessionId }, json: { cols, rows } }),
+    `/providers/setup/sessions/${sessionId}/resize`,
+  )
+}
+
+export async function cancelAgentSetup(sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].$delete({ param: { sessionId } }),
+    `/providers/setup/sessions/${sessionId}`,
+  )
 }
 
 /** The authoritative run list — sorted newest-first by the server. */
