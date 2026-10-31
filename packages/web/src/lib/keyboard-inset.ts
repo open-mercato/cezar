@@ -184,8 +184,8 @@ export interface KeyboardOpenDocument {
 }
 
 /**
- * Whether a software keyboard is up. iOS shows it as the inset; engines honoring
- * `interactive-widget=resizes-content` keep the inset at 0 and shrink `innerHeight` instead, read
+ * Whether a software keyboard is up. iOS shrinks the visual viewport; engines honoring
+ * `interactive-widget=resizes-content` shrink `innerHeight` as well, read
  * against the tallest height seen at this width (rotating changes the width). Touch and a focused
  * field gate both: pinch zoom, a resized desktop window and a keyboard dismissed by Android's back
  * button (focus stays, height returns) are not an open keyboard.
@@ -199,7 +199,9 @@ export function watchKeyboardOpen(
   const onChange = () => {
     const tall = Math.max(tallest.get(win.innerWidth) ?? 0, win.innerHeight)
     tallest.set(win.innerWidth, tall)
-    const covered = Math.max(keyboardInset(win), tall - win.innerHeight)
+    // Not `keyboardInset`: iOS pans to reveal the field, and `offsetTop` hides the keyboard from it.
+    const shrunk = win.visualViewport ? win.innerHeight - win.visualViewport.height : 0
+    const covered = Math.max(shrunk, tall - win.innerHeight)
     apply(
       covered >= KEYBOARD_MIN_PX &&
         isEditableTarget(doc.activeElement) &&

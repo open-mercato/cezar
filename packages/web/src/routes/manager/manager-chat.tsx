@@ -72,6 +72,8 @@ function useChatScroll(messages: readonly ManagerMessage[], onNearTop: () => voi
       if (pinned.current) box.scrollTop = box.scrollHeight
     })
     observer.observe(content)
+    // The box shrinks too, when the chips come back for an empty draft.
+    observer.observe(box)
     return () => observer.disconnect()
   }, [])
 

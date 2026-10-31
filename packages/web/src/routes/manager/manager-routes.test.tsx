@@ -336,6 +336,18 @@ describe('/manager/:id', () => {
     expect(box.scrollTop).toBe(900)
   })
 
+  it('watches the transcript box as well, which shrinks when the chips come back', async () => {
+    const watched = new Set<Element>()
+    vi.stubGlobal('ResizeObserver', class {
+      observe(target: Element) { watched.add(target) }
+      disconnect() {}
+    })
+    seedChat()
+    renderAt('/manager/global')
+    await screen.findByText('jak progres prac')
+    expect(watched.has(document.querySelector('[data-slot="manager-transcript"]')!)).toBe(true)
+  })
+
   it('tells an empty chat what to do', async () => {
     seedChat()
     server.messages = []
