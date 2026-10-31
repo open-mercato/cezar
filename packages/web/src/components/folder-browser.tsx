@@ -1,9 +1,16 @@
 import { ChevronRightIcon, CornerLeftUpIcon, FolderIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { ApiError } from '@/api/client'
 import { useFsBrowse } from '@/api/queries'
 import type { FsBrowseDir } from '@open-mercato/cezar-api-client'
+import { parentDir } from '@/lib/fs-path'
 import { cn } from '@/lib/utils'
+
+/** System Settings ▸ Privacy & Security ▸ Files & Folders. */
+const PRIVACY_SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders'
+const errorAction =
+  'inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-foreground hover:bg-muted'
 
 /**
  * The server-side folder picker, shared by "Add project" and "Add agent account".
@@ -49,22 +56,60 @@ export function FolderBrowser({
 }) {
   const listing = useFsBrowse(path, showHidden)
   const parent = listing.data?.parent ?? null
+  const errorParent = path === null ? null : parentDir(path)
 
   return (
     <>
       {/* The breadcrumb is the server's realpath'd answer, not the spelling we asked for. */}
       <p
         data-slot="fs-breadcrumb"
-        className="truncate font-mono text-[11.5px] text-soft-foreground"
+        className="truncate font-mono text-meta text-soft-foreground"
         title={listing.data?.path ?? undefined}
       >
         {listing.data?.path ?? (listing.isError ? '' : 'Loading…')}
       </p>
 
-      {listing.isError ? (
-        <p data-slot="fs-error" className="min-w-0 break-words text-[13px] text-danger">
-          {listing.error instanceof Error ? listing.error.message : 'could not list that folder'}
+      {!listing.isError && listing.data?.parent === null ? (
+        <p data-slot="fs-root-hint" className="text-label text-soft-foreground">
+          This is the browse root. To browse elsewhere, change{' '}
+          {/* A document navigation also dismisses pickers owned above the route (#1688). */}
+          <a href="/settings/global/projects" className="text-foreground underline underline-offset-4 hover:text-muted-foreground">
+            Default browse folder in Settings → Projects
+          </a>.
         </p>
+      ) : null}
+
+      {listing.isError ? (
+        <div className="flex min-w-0 flex-col gap-2">
+          <p data-slot="fs-error" className="min-w-0 break-words text-ui text-danger">
+            {listing.error instanceof Error ? listing.error.message : 'could not list that folder'}
+          </p>
+          {/* macOS remembers a "Don't Allow" and never asks again — the switch is in System
+              Settings. The desktop shell hands a `_blank` link to `open`, which opens the pane. */}
+          {listing.error instanceof ApiError && listing.error.status === 403 ? (
+            <p data-slot="fs-privacy-hint" className="text-label text-soft-foreground">
+              Allow it under Privacy &amp; Security ▸ Files &amp; Folders, then try again.
+            </p>
+          ) : null}
+          <div className="flex flex-wrap gap-2 text-label">
+            {errorParent !== null ? (
+              <button type="button" data-slot="fs-error-back" onClick={() => onEnter(errorParent)} className={errorAction}>
+                <CornerLeftUpIcon className="size-3.5" aria-hidden />
+                Back
+              </button>
+            ) : null}
+            {listing.error instanceof ApiError && listing.error.status === 403 ? (
+              <>
+                <a data-slot="fs-privacy-settings" href={PRIVACY_SETTINGS_URL} target="_blank" rel="noreferrer" className={errorAction}>
+                  Open Privacy Settings
+                </a>
+                <button type="button" data-slot="fs-retry" onClick={() => void listing.refetch()} className={errorAction}>
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
       ) : (
         <ul
           data-slot="fs-listing"
@@ -77,7 +122,7 @@ export function FolderBrowser({
                 type="button"
                 data-slot="fs-up"
                 onClick={() => onEnter(parent)}
-                className="flex flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-muted"
+                className="flex flex-1 items-center gap-2 px-3 py-2 text-left text-ui hover:bg-muted"
               >
                 <CornerLeftUpIcon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
                 Up one level
@@ -93,7 +138,7 @@ export function FolderBrowser({
                 onClick={() => onSelect(dir)}
                 onDoubleClick={() => onEnter(dir.path)}
                 className={cn(
-                  'flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-[13px] hover:bg-muted',
+                  'flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left text-ui hover:bg-muted',
                   selected?.path === dir.path && 'bg-muted',
                 )}
               >
@@ -116,13 +161,13 @@ export function FolderBrowser({
             </li>
           ))}
           {listing.data && listing.data.dirs.length === 0 ? (
-            <li className="px-3 py-2 text-[13px] text-muted-foreground">{emptyHint}</li>
+            <li className="px-3 py-2 text-ui text-muted-foreground">{emptyHint}</li>
           ) : null}
         </ul>
       )}
 
       {listing.data?.truncated ? (
-        <p data-slot="fs-truncated" className="text-[11.5px] text-muted-foreground">
+        <p data-slot="fs-truncated" className="text-meta text-muted-foreground">
           Too many folders to list — only the first ones are shown.
         </p>
       ) : null}

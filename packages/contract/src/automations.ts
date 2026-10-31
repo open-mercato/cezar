@@ -1,9 +1,11 @@
+import { deferredStartStateSchema, deferredCreationRecordSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
 // An automation launches an ORDINARY cezar task, so the task it carries is the composer's own
 // run-creation input minus the keys an automation supplies itself. Consumed rather than
 // redeclared — the same one-way direction `./runs.ts` takes towards `./workflows.ts`.
 import { createRunInputBaseSchema, runStatusSchema } from './runs.ts';
-import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema } from './dispatch.ts';
+import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema, dispatchIntentSchema } from './dispatch.ts';
 import { automationScheduleSchema } from './automation-schedule.ts';
 
 /**
@@ -27,7 +29,7 @@ import { automationScheduleSchema } from './automation-schedule.ts';
 
 // ---- the definition ------------------------------------------------------------------------
 
-/** The GitHub activity an automation reacts to. Seven events, all bounded polls — never a webhook. */
+/** The GitHub activity an automation reacts to. Nine events, all bounded polls — never a webhook. */
 export const automationEventSchema = z.enum([
   'pull_request.opened',
   'issue.opened',
@@ -36,8 +38,29 @@ export const automationEventSchema = z.enum([
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
+  'pull_request.closed',
+  'pull_request.merged',
 ]);
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
+
+export const trackerTriggerSchema = z.object({
+  events: z.array(trackerAutomationEventSchema).min(1).max(4),
+  targetStatusIds: z.array(z.string().min(1)).max(100).optional(),
+  changedLabelIds: z.array(z.string().min(1)).max(100).optional(),
+  /** All exact label names must be present in the polled issue snapshot. */
+  requiredLabels: z.array(z.string().trim().min(1).max(200)).max(100).optional(),
+  association: trackerAssociationSchema,
+});
+export type TrackerTrigger = z.infer<typeof trackerTriggerSchema>;
+export const trackerAutomationOptionsQuerySchema = z.object({ search: z.string().max(200).optional(), cursor: z.string().max(4096).optional() });
+export const trackerAutomationOptionsSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), association: trackerAssociationSchema,
+    events: z.array(trackerAutomationEventSchema), limitations: z.array(z.string()),
+    statuses: z.array(z.object({ id: z.string(), name: z.string() })),
+    labels: z.array(z.object({ id: z.string(), name: z.string() })), nextCursor: z.string().optional(),
+  }), trackerFailureSchema,
+]);
+export type TrackerAutomationOptions = z.infer<typeof trackerAutomationOptionsSchema>;
 
 /**
  * The bounded candidate filter.
@@ -58,17 +81,20 @@ export const automationFiltersSchema = z.object({
    *  requested reviewer for the two `review_requested` events. Optional: an empty filter means
    *  "any reviewer". */
   reviewers: z.array(z.string()).optional(),
+  status: z.string().optional(),
   lookbackDays: z.number(),
   maxRecords: z.number(),
 });
 export type AutomationFilters = z.infer<typeof automationFiltersSchema>;
 
 /**
- * What triggers an automation (spec 2026-09-14-automations-redesign): a bounded GitHub poll, or
- * a schedule in the cockpit's zone. The storage schema defaults a definition without `kind` to
- * `github`, so the wire always carries it.
+ * What triggers an automation (spec 2026-09-14-automations-redesign): a bounded GitHub poll, a
+ * schedule in the cockpit's zone, or a Jira/Linear tracker poll (2026-09-19 discussion). The
+ * storage schema defaults a definition without `kind` to `github`, so the wire always carries it.
+ *
+ * Tracker definitions use trackerTrigger for provider history events and a captured association.
  */
-export const automationKindSchema = z.enum(['github', 'schedule']);
+export const automationKindSchema = z.enum(['github', 'schedule', 'tracker']);
 export type AutomationKind = z.infer<typeof automationKindSchema>;
 
 /**
@@ -107,6 +133,12 @@ export const automationTaskSchema = createRunInputBaseSchema
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     systemPrompt: z.string().optional(),
     dispatch: automationDispatchSchema.optional(),
+    /** Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
+     *  omitted/`'base'` = the configured base; `'pr-head'` = the matched pull request's head.
+     *  GitHub automations whose events are all `pull_request.*` only. */
+    checkout: z.enum(['base', 'pr-head']).optional(),
+    /** With `checkout: 'pr-head'`: admit a head from a fork (untrusted; no secrets). */
+    allowForkHeads: z.boolean().optional(),
   });
 export type AutomationTask = z.infer<typeof automationTaskSchema>;
 
@@ -126,8 +158,14 @@ export const automationDefinitionSchema = z.object({
   intervalSeconds: z.number().optional(),
   filters: automationFiltersSchema.optional(),
   /** `schedule` kind: always present. `github` kind: absent. */
+  trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
-  task: automationTaskSchema,
+  // Composer-deferred tasks retain the full run dispatch intent. Keep this response-only:
+  // ordinary automation inputs and templates still expose only their own dispatch settings.
+  task: automationTaskSchema.extend({
+    dispatch: z.object({ ...dispatchIntentSchema.shape, ...automationDispatchSchema.shape }).optional(),
+  }),
+  deferredStart: deferredStartStateSchema.optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -152,8 +190,11 @@ export const automationRuntimeStateSchema = z.object({
   /** Enabling establishes a CURRENT-TIME baseline: records older than this never launch. */
   baselineAt: z.string().optional(),
   cursor: automationCursorSchema.optional(),
+  checkpoint: z.string().optional(),
   frozenHighWatermark: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
   backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
+  /** The cursor a widening re-poll could not get past even at the search ceiling (#982). */
+  pinnedCursor: automationCursorSchema.optional(),
   nextCheckAt: z.string().optional(),
   lastSuccessAt: z.string().optional(),
   /** `schedule` kind: the next occurrence's instant and the last fired one's. */
@@ -191,12 +232,15 @@ export const automationLogRecordSchema = z.object({
   ts: z.string(),
   automationId: z.string(),
   revision: z.number(),
-  event: automationEventSchema.optional(),
+  event: z.union([automationEventSchema, trackerAutomationEventSchema]).optional(),
   result: automationLogResultSchema,
   reason: z.string().optional(),
   durationMs: z.number().optional(),
   receiptId: z.string().optional(),
   runId: z.string().optional(),
+  trackerKey: z.string().optional(),
+  trackerTitle: z.string().optional(),
+  trackerUrl: z.string().optional(),
   githubNumber: z.number().optional(),
   githubTitle: z.string().optional(),
   githubUrl: z.string().optional(),
@@ -358,17 +402,26 @@ export const automationTemplateSchema = z.object({
   project: z.object({ id: z.string(), name: z.string() }),
   id: z.string(),
   name: z.string(),
-  kind: automationKindSchema,
+  /** Not `automationKindSchema`: a template is only ever used to PRE-FILL the create form, which
+   *  does not accept `tracker` (2026-09-19) — see `createAutomationInputSchema`. The server never
+   *  offers a tracker automation as a template (`automationTemplatesOf` skips it). */
+  kind: z.enum(['github', 'schedule']),
+  trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
   events: z.array(automationEventSchema).optional(),
   intervalSeconds: z.number().optional(),
+  /** `github` kind only. A copy without them would launch for every item. */
+  filters: automationFiltersSchema.optional(),
   task: z.object({
     prompt: z.string(),
     workflow: z.string().optional(),
+    steps: automationTaskSchema.shape.steps,
     runner: z.string().optional(),
     model: z.string().optional(),
     autonomous: z.boolean().optional(),
     dispatch: automationDispatchSchema.optional(),
+    checkout: automationTaskSchema.shape.checkout,
+    allowForkHeads: automationTaskSchema.shape.allowForkHeads,
   }),
 });
 export type AutomationTemplate = z.infer<typeof automationTemplateSchema>;
@@ -390,8 +443,9 @@ export type AutomationTemplatesResponse = z.infer<typeof automationTemplatesResp
  * `enable: true` asks the route to enable it AND establish a current-time baseline in one step.
  */
 export const createAutomationInputSchema = automationDefinitionSchema
-  .omit({ id: true, revision: true, createdAt: true, updatedAt: true, enabled: true, kind: true })
+  .omit({ id: true, revision: true, createdAt: true, updatedAt: true, enabled: true, kind: true, deferredStart: true })
   .extend({
+    task: automationTaskSchema,
     /** Omitted = `github`, the shape every pre-schedule client sends. */
     kind: automationKindSchema.optional(),
     enable: z.boolean().optional(),
@@ -416,3 +470,17 @@ export const automationCheckInputSchema = z.object({
   mode: z.enum(['preview', 'execute']),
 });
 export type AutomationCheckInput = z.input<typeof automationCheckInputSchema>;
+
+/** Dashboard-only projection: stored timing, no scheduler activation or forge probe. */
+export const dashboardAutomationsQuerySchema = z.object({ projectId: z.string().min(1).max(200) });
+export const dashboardAutomationSchema = automationListEntrySchema.pick({
+  id: true, name: true, kind: true, enabled: true, nextRunAt: true,
+}).extend({
+  state: automationRuntimeStateSchema.pick({ backoffUntil: true, consecutiveFailures: true }).optional(),
+});
+export type DashboardAutomation = z.infer<typeof dashboardAutomationSchema>;
+export const dashboardAutomationsSchema = z.object({
+  timeZone: z.string(),
+  automations: z.array(dashboardAutomationSchema),
+});
+export type DashboardAutomations = z.infer<typeof dashboardAutomationsSchema>;

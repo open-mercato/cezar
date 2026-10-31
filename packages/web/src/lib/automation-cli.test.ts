@@ -27,6 +27,13 @@ describe('automation-cli', () => {
       .not.toContain('autonomous')
   })
 
+  it('prints a one-time schedule as --at, which cez automation add maps back (#771)', () => {
+    const once = { name: 'x', kind: 'schedule' as const, schedule: { type: 'once' as const, date: '2026-10-05', hour: 23, minute: 5 }, task: { prompt: 'p' } }
+    expect(flagExpressible(once)).toBe(true)
+    expect(cliFlagsOf(once)).toBe('cez automation add --name "x" --at "2026-10-05 23:05" --prompt "p"')
+    expect(flagExpressible({ ...once, schedule: { type: 'once' } })).toBe(false)
+  })
+
   it('prints a simple poll as flags and an untitled one as "untitled"', () => {
     expect(cliOf({ name: '', kind: 'github', events: ['issue.opened'], intervalSeconds: 300, task: { prompt: '' } }))
       .toBe('cez automation add --name "untitled" --on issue.opened --every 5m --prompt "…"')
@@ -56,4 +63,11 @@ describe('automation-cli', () => {
     expect(everyFlag(7200)).toBe('2h')
     expect(everyFlag(90)).toBe('90s')
   })
+})
+
+
+it('preserves required tracker labels in Copy as CLI JSON', () => {
+  const trackerTrigger = { association: { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://fixture.atlassian.net' }, externalId: '1', externalName: 'Project' }, events: ['issue.opened' as const], requiredLabels: ['bug', 'urgent'] }
+  const command = cliOf({ name: 'bugs', kind: 'tracker', trackerTrigger, task: { prompt: 'Fix' } })
+  expect(command).toContain('"requiredLabels":["bug","urgent"]')
 })

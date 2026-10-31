@@ -8,6 +8,7 @@ import {
   sameLastLocation,
   writeStoredLastLocation,
 } from '@/lib/last-location'
+import { recordSettingsReturn } from '@/lib/settings-return'
 
 /**
  * Remembers settled project-scoped navigation for the next exact-bare-root launch, in THIS
@@ -25,6 +26,13 @@ import {
 export function LastLocationController(): null {
   const location = useLocation()
   const projects = useProjects()
+
+  // The settings frame's way back (spec 2026-10-13-unified-settings): every non-settings page
+  // is a candidate, settings pages never are. Independent of the persisted lastLocation below —
+  // that one is project-scoped and server-backed, this one is any page and memory-only.
+  useEffect(() => {
+    recordSettingsReturn(location)
+  }, [location])
 
   useEffect(() => {
     const next = locationToSave(location, projects.data)

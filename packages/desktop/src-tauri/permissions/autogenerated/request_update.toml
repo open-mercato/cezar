@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-request-update"
+description = "Enables the request_update command without any pre-configured scope."
+commands.allow = ["request_update"]
+
+[[permission]]
+identifier = "deny-request-update"
+description = "Denies the request_update command without any pre-configured scope."
+commands.deny = ["request_update"]

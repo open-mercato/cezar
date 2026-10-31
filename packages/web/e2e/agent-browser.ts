@@ -1,5 +1,5 @@
-import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, statSync } from 'node:fs'
+import { execFileSync, type ChildProcess } from 'node:child_process'
+import { mkdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 
 /**
@@ -79,6 +79,21 @@ export function fixtureServeEnv(
 }
 
 /**
+ * Stop a spec's own fixture server and remove its data dir. The server flushes its state on
+ * SIGTERM, so removing the dir before it has exited races those writes and fails with ENOTEMPTY.
+ */
+export async function stopFixtureServer(child: ChildProcess | undefined, root: string | undefined): Promise<void> {
+  if (child && child.exitCode === null && child.signalCode === null) {
+    const exited = new Promise<void>((done) => child.once('exit', () => done()))
+    child.kill()
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000)
+    await exited
+    clearTimeout(timer)
+  }
+  if (root) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+}
+
+/**
  * A JSON GET that survives a RESET idle connection.
  *
  * Specs boot a server, drive the browser for tens of seconds, then read the API back. Node's
@@ -150,6 +165,14 @@ export class AgentBrowser {
   /** operation: open */
   goto(url: string): void {
     this.run(['open', url])
+  }
+
+  /** operation: reload — a genuine document reload, unlike `goto` to the same URL (which,
+   *  against an already-open tab, leaves the SPA's in-memory React Query cache exactly as it
+   *  was). Specs that mutate state OUTSIDE the browser — a `git` command run directly against
+   *  the worktree — need this to make the next read honest. */
+  reload(): void {
+    this.run(['reload'])
   }
 
   /** operation: snapshot — the accessibility tree, as the string the descriptor documents. */

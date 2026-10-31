@@ -157,6 +157,16 @@ export function useReferenceStatus(
   return context.lookup({ projectId: owner, kind, number })
 }
 
+/** Read the shared status cache without starting another request. Consumers that paint more
+ * than one reference can use this to make a display decision from the same answer as each chip. */
+export function useReferenceStatusLookup(): {
+  lookup: ReferenceStatusLookup
+  projectId?: string
+} {
+  const context = useContext(ReferenceStatusContext)
+  return { lookup: context?.lookup ?? (() => IDLE), projectId: context?.projectId }
+}
+
 /** Outside a provider (a bare render, a test, a surface that never mounted one) nothing has been
  *  asked and nothing is claimed — the pre-status chip, exactly. Frozen and shared so it is a
  *  stable identity rather than a new object per render. */

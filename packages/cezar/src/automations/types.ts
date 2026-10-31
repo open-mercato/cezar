@@ -1,5 +1,13 @@
+import { deferredStartStateSchema } from '@open-mercato/cezar-contract';
 import { z } from 'zod';
-import { DISPATCH_MAX_SUBTASKS, automationScheduleSchema, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import {
+  DISPATCH_MAX_SUBTASKS,
+  trackerTriggerSchema,
+  trackerAutomationEventSchema,
+  trackerAssociationSchema,
+  automationScheduleSchema,
+  type AutomationSchedule,
+} from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { workflowStepSchema } from '../workflows/types.ts';
 
@@ -11,6 +19,8 @@ export const automationEventSchema = z.enum([
   'pull_request.reviewed',
   'pull_request.review_requested',
   'pull_request.rereview_requested',
+  'pull_request.closed',
+  'pull_request.merged',
 ]);
 
 const boundedString = z.string().trim().min(1).max(200);
@@ -27,6 +37,9 @@ export const automationFiltersSchema = z
     reviewers: stringList,
     lookbackDays: z.number().int().min(1).max(90).default(7),
     maxRecords: z.number().int().min(1).max(100).default(25),
+    /** Tracker kind only: the vendor workflow status a matching item must currently be in
+     *  (e.g. "To Do"). Case-insensitive match against the item's own `status` field. */
+    status: z.string().trim().min(1).max(200).optional(),
   })
   .passthrough();
 
@@ -40,11 +53,22 @@ export const automationTaskSchema = z
      *  project's selection at launch time. */
     agentProfile: z.string().trim().min(1).max(64).optional(),
     model: z.string().trim().min(1).max(200).optional(),
+    /** Codex effort of the launched runs — `POST /runs`' own `reasoningEffort`. */
+    reasoningEffort: z.string().trim().min(1).max(64).optional(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     worktree: z.boolean().optional(),
     generateFollowups: z.boolean().optional(),
     autonomous: z.boolean().optional(),
     systemPrompt: z.string().max(100_000).optional(),
+    /**
+     * Where the launched run's worktree forks from (spec 2026-10-06-agentic-e2e-checks Phase 3):
+     * omitted or `'base'` is the configured base branch, exactly as before; `'pr-head'` is the
+     * matched pull request's head. GitHub `pull_request.*` automations only.
+     */
+    checkout: z.enum(['base', 'pr-head']).optional(),
+    /** With `checkout: 'pr-head'`: admit a head from a fork. Off by default; an admitted fork is
+     *  untrusted code and its check steps get no check credentials. */
+    allowForkHeads: z.boolean().optional(),
     /** The automation's own dispatch setting (spec 2026-09-14 Q4). */
     dispatch: z
       .object({
@@ -60,9 +84,10 @@ export const automationTaskSchema = z
   });
 
 /**
- * A poll's two defaulted keys are filled BEFORE parsing, and only for the poll kind: `.default()`
- * on the keys themselves would also stamp `intervalSeconds: 300` and an empty filter onto every
- * scheduled definition, and the routes then read those as a GitHub filter on a schedule.
+ * A poll's two defaulted keys are filled BEFORE parsing, and only for a poll kind (`github` or
+ * `tracker`): `.default()` on the keys themselves would also stamp `intervalSeconds: 300` and an
+ * empty filter onto every scheduled definition, and the routes then read those as a poll filter
+ * on a schedule.
  */
 const fillGithubDefaults = (raw: unknown): unknown => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
@@ -70,7 +95,7 @@ const fillGithubDefaults = (raw: unknown): unknown => {
   if (record.kind === 'schedule') return raw;
   return {
     ...record,
-    intervalSeconds: record.intervalSeconds ?? 300,
+    intervalSeconds: record.intervalSeconds ?? (record.kind === 'tracker' ? 1800 : 300),
     filters: record.filters ?? {},
   };
 };
@@ -84,20 +109,68 @@ export const automationDefinitionObjectSchema = z
     description: z.string().max(2_000).optional(),
     enabled: z.boolean().default(false),
     /** A definition written before schedules (spec 2026-09-14) has no `kind`: it is a poll. */
-    kind: z.enum(['github', 'schedule']).default('github'),
-    events: z.array(automationEventSchema).min(1).max(7).optional(),
+    kind: z.enum(['github', 'schedule', 'tracker']).default('github'),
+    events: z.array(automationEventSchema).min(1).max(9).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
+    trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
     task: automationTaskSchema,
+    deferredStart: deferredStartStateSchema.optional(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
   .passthrough()
   .superRefine((definition, ctx) => {
+    // `checkout`/`allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3) name a pull
+    // request's head, so they mean something only where every event IS a pull request.
+    const prHeadKeys = (['checkout', 'allowForkHeads'] as const).filter((key) => definition.task[key] !== undefined);
+    const pullRequestOnly =
+      definition.kind === 'github' &&
+      !!definition.events?.length &&
+      definition.events.every((event) => event.startsWith('pull_request.'));
+    // A closed or merged PR has no head to check out — `resolvePrHead` would skip every launch.
+    const closedEvent = definition.events?.some((event) => event === 'pull_request.closed' || event === 'pull_request.merged');
+    if (definition.task.checkout === 'pr-head' && closedEvent) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['task', 'checkout'],
+        message: "checkout: 'pr-head' cannot be used with pull_request.closed or pull_request.merged",
+      });
+    }
+    for (const key of prHeadKeys) {
+      if (!pullRequestOnly) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['task', key],
+          message: `${key} is accepted only on a GitHub automation whose events are all pull_request.*`,
+        });
+      }
+    }
+    if (definition.task.allowForkHeads !== undefined && definition.task.checkout !== 'pr-head') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['task', 'allowForkHeads'],
+        message: "allowForkHeads is meaningful only with checkout: 'pr-head'",
+      });
+    }
+    if (definition.deferredStart && (definition.kind !== 'schedule' || definition.schedule?.type !== 'once')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['deferredStart'], message: 'a composer start requires a one-time schedule' });
+    }
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule'], message: 'a scheduled automation needs a schedule' });
+      } else if (definition.schedule.type === 'once' && !definition.schedule.date) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule', 'date'], message: 'a one-time schedule needs a date' });
+      }
+      return;
+    }
+    if (definition.kind === 'tracker') {
+      if (definition.intervalSeconds === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['intervalSeconds'], message: 'a tracker automation needs a poll interval' });
+      }
+      if (!definition.trackerTrigger && !definition.filters?.status) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['filters', 'status'], message: 'a tracker automation needs a target status' });
       }
       return;
     }
@@ -129,6 +202,9 @@ export const automationDefinitionsFileSchema = z
   .object({
     version: z.literal(1).default(1),
     automations: z.array(z.unknown()).default([]),
+    // Keep raw idempotency evidence, even when damaged. The store validates on access:
+    // dropping a row (or the whole file) could allow a creation key to launch twice.
+    deferredCreations: z.unknown().optional(),
     tombstones: z.record(z.string(), z.string().datetime()).optional(),
   })
   .passthrough();
@@ -145,10 +221,17 @@ export const automationRuntimeStateSchema = z
     revision: z.number().int().positive().optional(),
     baselineAt: z.string().datetime().optional(),
     cursor: automationCursorSchema.optional(),
+    checkpoint: z.string().optional(),
     frozenHighWatermark: automationCursorSchema
       .extend({ tieBreaker: z.string() })
       .optional(),
     backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
+    /**
+     * The cursor a widening re-poll failed to get past, even at the 100-record search ceiling
+     * (#982). While `cursor` still equals it the scheduler skips the climb, so a band saturated at
+     * the API's own ceiling costs one climb, not one per interval; the cursor moving clears it.
+     */
+    pinnedCursor: automationCursorSchema.optional(),
     nextCheckAt: z.string().datetime().optional(),
     lastSuccessAt: z.string().datetime().optional(),
     /** schedule kind (spec 2026-09-14): the next occurrence's instant and the last fired one's. */
@@ -174,7 +257,10 @@ export const automationReceiptSchema = z
     eventId: z.string().min(1),
     automationId: z.string().min(1),
     revision: z.number().int().positive(),
-    status: z.enum(['reserved', 'launched', 'launch-error']),
+    // `skipped` (spec 2026-10-06-agentic-e2e-checks Phase 3): the event was handled and
+    // deliberately launched nothing — a closed PR, an unadmitted fork head. Terminal, not
+    // retryable; the receipt is what stops the next poll re-firing for the same event.
+    status: z.enum(['reserved', 'launched', 'launch-error', 'skipped']),
     runId: z.string().optional(),
     observedAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
@@ -189,6 +275,26 @@ export const automationReceiptSchema = z
         assignees: z.array(z.string().max(200)).max(100), labels: z.array(z.string().max(200)).max(100),
         changedLabel: z.string().max(200).optional(),
         reviewer: z.string().max(200).optional(),
+      })
+      .passthrough()
+      .optional(),
+    /** tracker kind: its own key, same reason `automationTrigger` has one on the run record —
+     *  a github-shaped reader strips it instead of failing on the missing github-only fields. */
+    trackerCandidate: z
+      .object({
+        eventId: z.string(), timestamp: z.string().datetime(), tieBreaker: z.string(),
+        provider: z.enum(['jira', 'linear']), key: z.string().min(1),
+        event: trackerAutomationEventSchema.optional(),
+        association: trackerAssociationSchema.optional(),
+        issueId: z.string().optional(),
+        change: z.object({
+          fromId: z.string().optional(),
+          toId: z.string().optional(),
+          labelId: z.string().optional(),
+          labelName: z.string().optional(),
+        }).optional(),
+        title: z.string().max(500), url: z.string().url(), status: z.string().max(200),
+        labels: z.array(z.string().max(200)).max(100),
       })
       .passthrough()
       .optional(),
@@ -216,7 +322,7 @@ export const automationLogRecordSchema = z
     ts: z.string().datetime(),
     automationId: z.string().min(1),
     revision: z.number().int().positive(),
-    event: automationEventSchema.optional(),
+    event: z.union([automationEventSchema, trackerAutomationEventSchema]).optional(),
     result: automationLogResultSchema,
     reason: z.string().max(2_000).optional(),
     durationMs: z.number().int().nonnegative().optional(),
@@ -225,6 +331,9 @@ export const automationLogRecordSchema = z
     githubNumber: z.number().int().positive().optional(),
     githubTitle: z.string().max(500).optional(),
     githubUrl: z.string().url().optional(),
+    trackerKey: z.string().optional(),
+    trackerTitle: z.string().max(500).optional(),
+    trackerUrl: z.string().url().optional(),
     rateLimit: z
       .object({
         bucket: z.enum(['core', 'search']),
@@ -258,6 +367,13 @@ export type ScheduleAutomationDefinition = AutomationDefinition & {
   kind: 'schedule';
   schedule: AutomationSchedule;
 };
+/** A configured tracker history trigger; legacy snapshot definitions deliberately do not narrow. */
+export type TrackerAutomationDefinition = AutomationDefinition & {
+  kind: 'tracker';
+  intervalSeconds: number;
+  filters: NonNullable<AutomationDefinition['filters']>;
+  trackerTrigger: NonNullable<AutomationDefinition['trackerTrigger']>;
+};
 
 export function isGithubAutomation(definition: AutomationDefinition): definition is GithubAutomationDefinition {
   return definition.kind === 'github'
@@ -268,4 +384,11 @@ export function isGithubAutomation(definition: AutomationDefinition): definition
 
 export function isScheduleAutomation(definition: AutomationDefinition): definition is ScheduleAutomationDefinition {
   return definition.kind === 'schedule' && definition.schedule !== undefined;
+}
+
+export function isTrackerAutomation(definition: AutomationDefinition): definition is TrackerAutomationDefinition {
+  return definition.kind === 'tracker'
+    && definition.intervalSeconds !== undefined
+    && definition.filters !== undefined
+    && definition.trackerTrigger !== undefined;
 }

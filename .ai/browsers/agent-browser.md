@@ -13,7 +13,11 @@ preinstalled browser, or a cloud-browser account.
   Windows x64. WSL2 uses the matching Linux target. Windows on ARM may use the
   x64 binary only when the operating system's x64 compatibility layer is active.
 - Linux Chrome libraries may require root. The operation below performs the
-  install itself when already root or passwordless elevation is available; it
+  install itself when already root or passwordless elevation is available. If
+  elevation is unavailable, it reuses readable shared libraries already staged
+  by `agent-browser` under the per-user cache and retries the doctor check with
+  those libraries exported. In an unprivileged Linux container it also adds
+  `--no-sandbox` (and the usual container-safe flags) for that retry only; it
   never delegates commands to the operator.
 
 ## Operations
@@ -70,11 +74,43 @@ if ! "$AGENT_BROWSER_BIN" doctor --json >/dev/null 2>&1; then
     fi
   fi
 fi
-if "$AGENT_BROWSER_BIN" doctor --json >/dev/null; then
-  printf 'BROWSER_PROVIDER=agent-browser\nBROWSER_INSTALLED=1\nBROWSER_COMMAND=%s\nBROWSER_VERSION=%s\nBROWSER_NOTES=\n' \
-    "$AGENT_BROWSER_BIN" "$("$AGENT_BROWSER_BIN" --version 2>/dev/null || echo unknown)"
+if ! "$AGENT_BROWSER_BIN" doctor --json >/dev/null 2>&1 && [ "$(uname -s 2>/dev/null || true)" = Linux ] && [ "$(id -u)" != 0 ]; then
+  STAGED_LIBRARY_PATH=""
+  for STAGED_ROOT in "$HOME/.agent-browser/deps" "$HOME/.cache/agent-tools/chrome-deps"; do
+    if [ -d "$STAGED_ROOT" ]; then
+      STAGED_DIRS=$(find "$STAGED_ROOT" -type f \( -name '*.so' -o -name '*.so.*' \) -exec dirname {} \; 2>/dev/null | sort -u)
+      if [ -n "$STAGED_DIRS" ]; then
+        if [ -n "$STAGED_LIBRARY_PATH" ]; then STAGED_LIBRARY_PATH="$STAGED_LIBRARY_PATH:"; fi
+        STAGED_LIBRARY_PATH="$STAGED_LIBRARY_PATH$(printf '%s\n' "$STAGED_DIRS" | paste -sd: -)"
+      fi
+    fi
+  done
+  if [ -n "$STAGED_LIBRARY_PATH" ]; then
+    export LD_LIBRARY_PATH="$STAGED_LIBRARY_PATH${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    ROOTLESS_NO_USERNS=0
+    if command -v unshare >/dev/null 2>&1 && ! unshare -Ur true 2>/dev/null; then ROOTLESS_NO_USERNS=1; fi
+    if [ "$ROOTLESS_NO_USERNS" = 1 ] || [ -f /.dockerenv ] || [ -f /run/.containerenv ] || grep -Eqi '(docker|containerd|kubepods|libpod|lxc)' /proc/1/cgroup 2>/dev/null; then
+      case ",${AGENT_BROWSER_ARGS:-}," in
+        *,--no-sandbox,*) ;;
+        *) AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:+$AGENT_BROWSER_ARGS,}--no-sandbox,--disable-dev-shm-usage,--disable-gpu"; export AGENT_BROWSER_ARGS ;;
+      esac
+    fi
+  fi
+fi
+browser_probe() {
+  BROWSER_PROBE_SESSION="cez-provider-probe-$$"
+  if "$AGENT_BROWSER_BIN" --session "$BROWSER_PROBE_SESSION" open about:blank --json >/dev/null 2>&1; then
+    "$AGENT_BROWSER_BIN" --session "$BROWSER_PROBE_SESSION" close --json >/dev/null 2>&1 || true
+    return 0
+  fi
+  "$AGENT_BROWSER_BIN" --session "$BROWSER_PROBE_SESSION" close --json >/dev/null 2>&1 || true
+  return 1
+}
+if "$AGENT_BROWSER_BIN" doctor --json >/dev/null 2>&1 || browser_probe; then
+  printf 'BROWSER_PROVIDER=agent-browser\nBROWSER_INSTALLED=1\nBROWSER_COMMAND=%s\nBROWSER_VERSION=%s\nBROWSER_ENV_LD_LIBRARY_PATH=%s\nBROWSER_ENV_AGENT_BROWSER_ARGS=%s\nBROWSER_NOTES=\n' \
+    "$AGENT_BROWSER_BIN" "$("$AGENT_BROWSER_BIN" --version 2>/dev/null || echo unknown)" "${LD_LIBRARY_PATH:-}" "${AGENT_BROWSER_ARGS:-}"
 else
-  printf 'BROWSER_PROVIDER=agent-browser\nBROWSER_INSTALLED=0\nBROWSER_COMMAND=%s\nBROWSER_VERSION=unknown\nBROWSER_NOTES=live browser launch failed after autonomous install\n' "$AGENT_BROWSER_BIN"
+  printf 'BROWSER_PROVIDER=agent-browser\nBROWSER_INSTALLED=0\nBROWSER_COMMAND=%s\nBROWSER_VERSION=unknown\nBROWSER_ENV_LD_LIBRARY_PATH=%s\nBROWSER_ENV_AGENT_BROWSER_ARGS=%s\nBROWSER_NOTES=live browser launch failed after autonomous install\n' "$AGENT_BROWSER_BIN" "${LD_LIBRARY_PATH:-}" "${AGENT_BROWSER_ARGS:-}"
   exit 1
 fi
 ```

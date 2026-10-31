@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { SettingsField } from './settings-field'
 import { WorktreesPanel } from './worktrees-panel'
+import { WorktreeLifecycleEditor } from './worktree-lifecycle-editor'
 
 /**
  * Project settings → Worktrees: the retention count (#483) and the disk panel — what used to be
@@ -30,7 +31,7 @@ export function WorktreesSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="worktrees-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="worktrees-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading worktree settings…
       </p>
     )
@@ -120,19 +121,21 @@ function WorktreesForm({ config }: { config: ConfigResponse }) {
           </Button>
         </div>
         {retentionInvalid ? (
-          <p data-slot="resources-retention-invalid" className="text-[11px] text-danger">
+          <p data-slot="resources-retention-invalid" className="text-meta text-danger">
             Enter a whole number from {WORKTREE_RETENTION_MIN} to {WORKTREE_RETENTION_MAX} (0 = unlimited).
           </p>
         ) : (
-          <p className="text-[11px] text-soft-foreground">
+          <p className="text-meta text-soft-foreground">
             {retentionNum === 0 ? 'Keeping every finished worktree.' : `Keeping the last ${retentionNum} finished worktree${retentionNum === 1 ? '' : 's'} on disk.`}
           </p>
         )}
       </SettingsField>
 
+      <WorktreeLifecycleEditor config={config} />
+
       <SettingsField
         title="Worktrees"
-        hint="Task worktrees currently on disk. Delete one to reclaim its space now, or reclaim everything past the keep-limit at once. Branches are always kept, so the work stays recoverable."
+        hint="Task worktrees currently on disk. Delete one to reclaim its space now, or reclaim everything past the keep-limit at once. Reclamation keeps branches; deleting a worktree also deletes its managed branch."
       >
         <WorktreesPanel />
       </SettingsField>

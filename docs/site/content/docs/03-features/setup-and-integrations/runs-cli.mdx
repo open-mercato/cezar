@@ -1,0 +1,25 @@
+---
+title: "List tasks in the terminal"
+description: "List tasks from a running Cezar instance, including JSON output."
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/runs/runs-cli.ts
+    line: 43
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+cez runs list displays tasks from a running Cezar instance. --status filters by state, --all includes the archive, and --json returns data for further processing.
+
+## Where to find it
+
+Terminal → cez runs list
+
+## How to use it
+
+1. Set `CEZ_API_URL` to the running cockpit address.
+2. Run cez runs list --status running,review.
+3. Add --json for automated processing or --all to include archived tasks.
+
+> **Good to know**: This command only reads data. `CEZ_PROJECT_ID` selects the project. Without it, Cezar uses the startup project.

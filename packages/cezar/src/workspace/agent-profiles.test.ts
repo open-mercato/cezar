@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PROVIDER_IDS } from '../core/provider-auth.ts';
 import { agentAccountsPath } from '../paths.ts';
 import {
   defaultAgentProfile,
@@ -49,11 +50,30 @@ describe('agent profile resolution', () => {
       expect(defaultAgentProfile('claude', env).path).toBe('/home/u/.claude');
       expect(defaultAgentProfile('codex', env).path).toBe('/home/u/.codex');
       expect(defaultAgentProfile('opencode', env).path).toBe('/home/u/.config/opencode');
+      expect(defaultAgentProfile('cursor', env).path).toBe('/home/u/.cursor');
+      expect(defaultAgentProfile('copilot', env).path).toBe('/home/u/.copilot');
+    });
+
+    it('never hands one provider another vendor\'s home — the ternary chain\'s failure (#582)', () => {
+      // The chain this replaced defaulted every unnamed id to Claude's home, so the Settings →
+      // Agent accounts row for a newly added provider printed `~/.claude` under its name. Only
+      // `pi` keeps that fallback, and only because it has no home of its own to point at.
+      for (const provider of PROVIDER_IDS) {
+        if (provider === 'claude' || provider === 'pi') continue;
+        expect(defaultAgentProfile(provider, env).path).not.toBe('/home/u/.claude');
+      }
     });
 
     it('follows the vendor env vars, so setting one moves the DEFAULT profile', () => {
-      const relocated = { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/opt/claude' } as NodeJS.ProcessEnv;
+      const relocated = {
+        HOME: '/home/u',
+        CLAUDE_CONFIG_DIR: '/opt/claude',
+        CURSOR_CONFIG_DIR: '/opt/cursor',
+        COPILOT_HOME: '/opt/copilot',
+      } as NodeJS.ProcessEnv;
       expect(defaultAgentProfile('claude', relocated).path).toBe('/opt/claude');
+      expect(defaultAgentProfile('cursor', relocated).path).toBe('/opt/cursor');
+      expect(defaultAgentProfile('copilot', relocated).path).toBe('/opt/copilot');
     });
 
     it('is marked default so the UI can refuse to edit or delete it', () => {

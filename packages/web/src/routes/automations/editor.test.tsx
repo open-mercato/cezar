@@ -22,7 +22,7 @@ const health = (dispatch = true) => ({
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: true, dispatch, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true },
+  capabilities: { localHandoff: true, terminal: false, followups: true, singleProject: false, automations: true, dispatch, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true },
   defaultRunner: 'claude',
   checks: [{ name: 'claude', available: true }],
   projects: [],
@@ -120,8 +120,9 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
   const onBack = vi.fn()
   const onSaved = vi.fn()
   const onLog = vi.fn()
+  const client = createQueryClient()
   render(
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/automations/new']}>
         <Routes>
           <Route path="*" element={<><AutomationEditor data={DATA} onBack={onBack} onSaved={onSaved} onLog={onLog} {...props} /><LocationProbe /><Toaster /></>} />
@@ -129,7 +130,7 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
       </MemoryRouter>
     </QueryClientProvider>,
   )
-  return { onBack, onSaved, onLog }
+  return { onBack, onSaved, onLog, client }
 }
 
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
@@ -160,6 +161,39 @@ describe('AutomationEditor — new', () => {
     expect((saveButton() as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByRole('switch', { name: 'Enabled' }))
     expect(saveButton().textContent).toContain('Save and enable')
+  })
+
+  it('reads the form back as a sentence, ticks the rail as it fills in, and inserts a placeholder at the caret', () => {
+    stubFetch()
+    renderEditor()
+    const summary = () => document.querySelector('[data-slot="editor-summary"]')?.textContent
+    const rail = () => [...document.querySelectorAll('[data-slot="step-rail"] li')].map((step) => step.getAttribute('data-state'))
+    expect(summary()).toBe('Every day at 04:00: a quick task on the default agent, autonomous.')
+    expect(rail()).toEqual(['done', 'current', 'next'])
+    fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Summarize' } })
+    expect(rail()).toEqual(['done', 'done', 'current'])
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Daily digest' } })
+    expect(rail()).toEqual(['done', 'done', 'done'])
+    fireEvent.click(screen.getByRole('button', { name: '{{date}}' }))
+    expect((screen.getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe('Summarize {{date}}')
+    fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
+    expect(screen.getByRole('button', { name: '{{github.url}}' })).not.toBeNull()
+    expect(summary()).toBe('On issue.opened · every 5 min: a quick task on the default agent, autonomous.')
+  })
+
+  it('opens on the trigger the explainer tile named, with the palette closed (spec 2026-10-26 § Automations)', () => {
+    stubFetch()
+    renderEditor({ initialKind: 'tracker' })
+    expect(document.querySelector('[data-slot="template-palette"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Start from a template' })).not.toBeNull()
+    expect(document.querySelector('[data-slot="editor-kind"] [data-value="tracker"]')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('a GitHub tile with the forge unavailable falls back to a schedule', () => {
+    stubFetch()
+    renderEditor({ initialKind: 'github', data: { ...DATA, available: false, reason: 'gh not installed' } })
+    expect(document.querySelector('[data-slot="editor-kind"] [data-value="schedule"]')?.getAttribute('aria-pressed')).toBe('true')
+    expect((document.querySelector('[data-slot="editor-kind"] [data-value="github"]') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('posts a schedule body with enable per the switch and reports back', async () => {
@@ -208,7 +242,9 @@ describe('AutomationEditor — new', () => {
     const sent = stubFetch()
     const { onSaved } = renderEditor()
     fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
-    expect(screen.getByText('How it polls')).not.toBeNull()
+    // The poll explains itself in a sentence where the interval is; no side card (spec 2026-10-26 § Automations editor).
+    expect(document.querySelector('[data-slot="editor-github-how"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="next-runs-preview"]')).toBeNull()
     expect(screen.getByText(/from a current-time baseline/)).not.toBeNull()
     fillRequired('Triage', 'Read {{github.url}}')
     fireEvent.click(screen.getByRole('button', { name: 'issue.labeled' }))
@@ -226,6 +262,60 @@ describe('AutomationEditor — new', () => {
       task: { prompt: 'Read {{github.url}}', workflow: 'quick-task', autonomous: true },
       enable: false,
     })
+  })
+
+  it('flags a login the prompt names but no filter enforces, and "Add to Authors" saves it as a filter', async () => {
+    const sent = stubFetch()
+    const { onSaved } = renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull_request.opened' }))
+    fireEvent.click(screen.getByRole('button', { name: 'issue.opened' }))
+    fillRequired('Self-review', 'When user `patzick` opens PR run auto review')
+    expect(screen.getByText(/prompt names @patzick/)).not.toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Authors' }))
+    expect(screen.queryByText(/prompt names @patzick/)).toBeNull()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+    const post = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/automations')
+    expect((post?.body as { filters: unknown }).filters).toEqual({ authors: ['patzick'], lookbackDays: 7, maxRecords: 25 })
+  })
+
+  it('"Add to Reviewers" saves a review-request login as filters.reviewers', async () => {
+    const sent = stubFetch()
+    const { onSaved } = renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When GitHub changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull_request.opened' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull_request.review_requested' }))
+    fillRequired('Review mine', 'Review the PR when a review is requested for `pkarw`.')
+    expect(screen.getByText(/prompt names @pkarw/)).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Add to Authors' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add to Reviewers' }))
+    expect(screen.queryByText(/prompt names @pkarw/)).toBeNull()
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+    const post = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/automations')
+    expect((post?.body as { filters: unknown }).filters).toEqual({ reviewers: ['pkarw'], lookbackDays: 7, maxRecords: 25 })
+  })
+
+  it('copies another project\'s skill only when this repo has it', async () => {
+    const template = (skill: string) => ({
+      project: { id: 'p2', name: 'shop' },
+      id: skill,
+      name: `Review with ${skill}`,
+      kind: 'github',
+      events: ['pull_request.opened'],
+      task: { prompt: 'Review {{github.url}}', steps: [{ id: 'task', skill, prompt: '{{task}}' }] },
+    })
+    stubFetch({ 'GET /api/v1/workspace/automation-templates': () => jsonResponse({ templates: [template('om-review'), template('not-here')] }) })
+    renderEditor()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Choose a skill or workflow' })).not.toBeNull())
+    fireEvent.click(screen.getByRole('tab', { name: 'From your other projects' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this: Review with not-here' }))
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    fireEvent.click(screen.getByRole('button', { name: 'Start from a template' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'From your other projects' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use this: Review with om-review' }))
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('skill')
   })
 
   it('"Use this" fills the form from a template and closes the palette', async () => {
@@ -255,7 +345,7 @@ describe('AutomationEditor — new', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add tests' }))
     expect((screen.getByLabelText('Prompt') as HTMLInputElement).value).toBe('Bump deps.\n\nAlso add or update tests covering this change.')
     fireEvent.click(screen.getByRole('button', { name: 'Manage…' }))
-    expect(screen.getByTestId('location').textContent).toBe('/settings/prompt-templates')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/instructions')
   })
 
   it('hides the dispatch row when the cockpit has dispatch off', async () => {
@@ -310,7 +400,7 @@ describe('AutomationEditor — edit', () => {
     const runNow = vi.fn(async () => undefined)
     const { onSaved, onLog } = renderEditor({
       automation: EXISTING,
-      actions: { runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
+      actions: { preview: vi.fn(), runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
     })
     expect(screen.getByRole('heading', { name: 'Edit automation' })).not.toBeNull()
     expect(screen.getByText('enabled').getAttribute('data-slot')).toBe('pill')
@@ -352,4 +442,41 @@ describe('AutomationEditor — edit', () => {
     expect(screen.getByRole('button', { name: 'Reload' })).not.toBeNull()
     expect(onSaved).not.toHaveBeenCalled()
   })
+})
+
+describe('tracker automation editor', () => {
+  const association = { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: 'Team', connectionId: '11111111-1111-4111-8111-111111111111' }
+  it('saves the selected historical event and status ID with the shared form', async () => {
+    const sent = stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association, events: ['issue.opened', 'issue.status_changed'], statuses: [{ id: 'todo-id', name: 'To Do' }], labels: [], limitations: [] }) })
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Jira work' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Implement {{tracker.key}}' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'issue.status_changed' }))
+    expect((screen.getByRole('button', { name: 'Save paused' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'To Do' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Save paused' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Save paused' }))
+    await waitFor(() => expect(sent.find(request => request.method === 'POST' && request.path === '/api/v1/automations')?.body).toMatchObject({ kind: 'tracker', enable: false, intervalSeconds: 1800, trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo-id'] } }))
+  })
+  it('does not offer unadvertised Linear history events', async () => {
+    stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association: { ...association, kind: 'linear' }, events: ['issue.opened'], statuses: [], labels: [], limitations: ['Early changes are not fully recorded.'] }) })
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    await screen.findByText('Early changes are not fully recorded.')
+    expect(screen.queryByRole('button', { name: 'issue.status_changed' })).toBeNull()
+  })
+})
+
+it('invalidates tracker event options on the existing tracker cache prefix', async () => {
+  let connectionId = '11111111-1111-4111-8111-111111111111'
+  stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true,
+    association: { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: connectionId, connectionId },
+    events: ['issue.opened'], statuses: [], labels: [], limitations: [] }) })
+  const { client } = renderEditor()
+  fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'issue.opened' }))
+  connectionId = '22222222-2222-4222-8222-222222222222'
+  await act(async () => { await client.invalidateQueries({ queryKey: ['tracker'] }) })
+  await screen.findByText('The tracker connection changed. Select an event again before saving.')
 })

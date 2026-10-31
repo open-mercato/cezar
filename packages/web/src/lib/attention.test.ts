@@ -4,6 +4,7 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import type { StatusDotTone } from '@/components/status-dot'
 import {
   ATTENTION_RANK,
+  budgetStop,
   deriveAttention,
   wantsAttention,
   type Attention,
@@ -55,6 +56,17 @@ describe('deriveAttention', () => {
 
   it('answers for every status the API can send', () => {
     expect(cases.map(([status]) => status).sort()).toEqual([...ALL_STATUSES].sort())
+  })
+
+  it('explains a waiting dispatch run stopped by its spend ceiling', () => {
+    const stopped = run({
+      status: 'waiting',
+      costUsd: 20.83,
+      dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+    })
+    expect(deriveAttention(stopped).label).toBe('budget reached')
+    expect(budgetStop(stopped)).toEqual({ spent: 20.83, ceiling: 10 })
+    expect(wantsAttention(stopped)).toBe(true)
   })
 
   it('pulses exactly the transitioning states', () => {
@@ -167,6 +179,28 @@ describe('a run waiting out a usage limit', () => {
   })
 })
 
+describe('a run whose session closed on an unanswered question', () => {
+  const awaiting = run({ status: 'failed', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })
+
+  it('still needs you — the question was never answered', () => {
+    // `failed` on the record because the idle close ended the process, but the user still owns
+    // the next move; neither "done" nor a red failure is true.
+    expect(deriveAttention(awaiting)).toEqual({
+      bucket: 'waiting',
+      tone: 'pending',
+      pulse: true,
+      label: 'needs you',
+    })
+    expect(wantsAttention(awaiting)).toBe(true)
+  })
+
+  it('only applies to a FAILED run — any other status reads as itself', () => {
+    expect(deriveAttention(run({ status: 'done', awaitingAnswerSince: '2026-10-05T10:00:00.000Z' })).label)
+      .toBe('done')
+    expect(deriveAttention(run({ status: 'failed' })).label).toBe('failed')
+  })
+})
+
 describe('wantsAttention', () => {
   it.each(ALL_STATUSES)('%s', (status) => {
     // The spec's notification trigger (Phase R6): "waiting/review/failed".
@@ -209,5 +243,16 @@ describe('tone vocabulary', () => {
   it('every status yields a tone StatusDot can paint', () => {
     const tones = new Set(ALL_STATUSES.map((status) => deriveAttention(run({ status })).tone))
     expect([...tones].sort()).toEqual(['danger', 'neutral', 'pending', 'success', 'violet'])
+  })
+})
+
+describe('lifecycle attention', () => {
+  it('keeps finished tasks visible when cleanup needs action', () => {
+    const record = run({status:'done',worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'teardown',state:'needs_attention',needsAttention:true}})
+    expect(deriveAttention(record)).toEqual({bucket:'waiting',tone:'pending',pulse:false,label:'cleanup needs attention'})
+    expect(wantsAttention(record)).toBe(true)
+  })
+  it('identifies setup independently of agent activity', () => {
+    expect(deriveAttention(run({worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'running',needsAttention:false}})).label).toBe('preparing worktree')
   })
 })

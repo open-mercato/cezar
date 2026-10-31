@@ -22,7 +22,7 @@ Users can select a model but cannot deliberately make the latency/cost/reasoning
 
 Normalize Codex's discovered reasoning capabilities into the existing model catalog and expose them through the typed contract. Add optional run and workflow-step `reasoningEffort` fields. The workflow manager resolves a step override before the run-level choice, passes the result through `AgentRunSpec`, and `CodexAppServerRunner` maps it to App Server's `turn/start.params.effort`.
 
-The cockpit renders an **Effort** picker next to **Model**. `Codex default` omits the field; it is not a literal `auto` value. Changing runner or model clears the selection. New Task, approved plans, Inbox, GitHub handoff, and Continue use the same engine-picker state and request builders.
+The cockpit renders an **Effort** picker next to **Model**. `Codex default` omits the field; it is not a literal `auto` value. Changing runner or model clears the selection. New Task (including Start later), Inbox, GitHub and tracker handoff, the automation editor, and Continue use the same engine-picker state and request builders.
 
 Codex documents the same split: clients discover `supportedReasoningEfforts` and `defaultReasoningEffort` through `model/list`, then may pass an override on `turn/start`, which becomes a default for later turns in the same thread. [Codex App Server](https://learn.chatgpt.com/docs/app-server)
 
@@ -81,7 +81,8 @@ New-task absence means `Codex default`. Continue accepts `reasoningEffort: ""` a
 | `POST /runs` | Accept and persist `reasoningEffort` through a contract-backed body. |
 | `POST /runs/:id/continue` | Contract-backed override/reset; omission retains the current choice. |
 | `POST /todos/:id/start` | Contract-backed effort alongside runner/model. |
-| Workflow read/save/parse and inline plans | Round-trip `step.reasoningEffort`. |
+| Workflow read/save/parse and inline steps | Round-trip `step.reasoningEffort`. |
+| Automations and `POST /deferred-start` | `task.reasoningEffort` is stored and applied to every launched run. |
 | `cezar run --effort <level>` | Pass a per-run value through `StartRunInput`, with no CLI default. |
 
 ## 📝 Resolution, Validation, and Persistence
@@ -95,7 +96,7 @@ Resolve the effective runner before effort. Per agent step:
 | Explicit Codex step in a mixed workflow whose task runner is non-Codex | No run-level inheritance; YAML may provide a step value. |
 | Claude/OpenCode step | No effort is passed; a step-level value is a validation error. |
 
-Therefore `workflow step.reasoningEffort > run.reasoningEffort > Codex native default`. A run-level value is rejected when it targets a non-Codex task runner or no agent step could inherit it. Mixed workflows may use effort only on Codex steps.
+Therefore `workflow step.reasoningEffort > run.reasoningEffort > Codex native default`. A run-level value is rejected when it targets a non-Codex task runner; one that every Codex step overrides is redundant, not invalid. Mixed workflows may use effort only on Codex steps.
 
 Entry points preflight and reject an explicit non-Codex effort where possible; `RunManager` repeats the validation before execution to protect queued, recovered, programmatic, and mixed-workflow paths. `modelsLocked` is enforced at entry and manager boundaries, strips both model and effort before persistence/spawn, and returns a policy error describing model and reasoning settings.
 
@@ -126,7 +127,7 @@ The field never goes on `thread/start`, `thread/resume`, or `turn/steer`. `turn/
 | `modelsLocked` | Disabled/read-only with native-settings explanation; no override is generated. |
 | Claude/OpenCode | Hidden. |
 
-Update `NewTaskDraft`, draft normalization, `new-task-form`, `new-task-plan`, and `new-task.tsx`; runner/model changes clear effort and a new-task `Codex default` omits it. Extend shared `EnginePills` and `follow-up-engine` to cover Inbox, GitHub handoff, and Continue. No Settings control, `CEZ_*` variable, or `config.json` key is introduced.
+Update `NewTaskDraft`, draft normalization, `new-task-form`, and `new-task.tsx`; runner/model changes clear effort and a new-task `Codex default` omits it. Extend shared `EnginePills` and `follow-up-engine` to cover Inbox, GitHub handoff, and Continue. No Settings control, `CEZ_*` variable, or `config.json` key is introduced.
 
 ## 📝 Edge Cases and Failure Modes
 
@@ -145,7 +146,7 @@ Update `NewTaskDraft`, draft normalization, `new-task-form`, `new-task-plan`, an
 3. Implement precedence, native lock behavior, persistence, recovery, and continuation semantics.
 4. Map the field solely through Codex `turn/start` with mock App Server assertions.
 5. Wire typed HTTP routes, Inbox, Continue, and `cezar run --effort`.
-6. Add a shared model-filtered picker to New Task, planned runs, Inbox, GitHub handoff, and Continue.
+6. Add a shared model-filtered picker to New Task, Inbox, GitHub and tracker handoff, the automation editor, and Continue.
 7. Complete catalog, contract, runtime, runner, CLI, and UI regression coverage; run the configured full gate.
 
 ## 📝 Architectural Review

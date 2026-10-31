@@ -66,7 +66,11 @@ const ISSUE_139: GithubItem = {
   number: 139,
   title: 'Add --json flag to the CLI',
   author: 'lin',
-  createdAt: '2026-07-10T08:00:00.000Z',
+  // Older than 142, because a lower issue number always is: GitHub hands numbers out in creation
+  // order. The fixture used to date 139 a day AFTER 142 while listing it second, a combination the
+  // forge cannot produce — harmless while nothing read `createdAt`, load-bearing now that the sort
+  // toggle (#gh-sort) does.
+  createdAt: '2026-07-08T08:00:00.000Z',
   labels: [],
   body: '',
   url: 'https://github.com/acme/demo/issues/139',
@@ -148,7 +152,8 @@ const PROVIDERS_CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'not-installed', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
 }
 
 const PROVIDERS_MULTI: ProviderStatusResponse = {
@@ -156,7 +161,8 @@ const PROVIDERS_MULTI: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
-  ],
+    { provider: 'cursor', status: 'connected', enabled: true },
+        ],
 }
 
 const PROVIDERS_NONE: ProviderStatusResponse = {
@@ -164,7 +170,8 @@ const PROVIDERS_NONE: ProviderStatusResponse = {
     { provider: 'claude', status: 'disconnected', enabled: true },
     { provider: 'codex', status: 'unknown', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'disconnected', enabled: true },
+        ],
 }
 
 interface SentRequest {
@@ -234,6 +241,7 @@ function stubFetch(
         stale: false,
       })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
         return jsonResponse({
           id: 'run-1',
@@ -309,6 +317,18 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
+  it('shows issue ownership beside row navigation with separate external PR links (#1620)', async () => {
+    stubFetch({ 'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, issues: [{ ...ISSUE_142, assignees: ['grace'], linkedPrs: [{ number: 180, title: 'Fix the session refresh', url: 'https://github.com/acme/demo/pull/180', state: 'open', isDraft: false }] }] }) })
+    renderAt('/github')
+    const group = await screen.findByRole('group', { name: 'Issue #142 ownership' })
+    expect(within(group).getByText('Assigned to @grace')).toBeTruthy()
+    const pr = within(group).getByRole('link', { name: 'PR #180 · Open: Fix the session refresh' })
+    expect(pr.parentElement?.closest('a')).toBeNull()
+    const row = screen.getByRole('link', { name: /Login form drops session on refresh/ })
+    fireEvent.click(row)
+    expect(await screen.findByRole('heading', { name: 'Login form drops session on refresh' })).toBeTruthy()
+  })
+
   it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
     stubFetch()
     renderAt('/github')
@@ -372,8 +392,11 @@ describe('the GitHub tab lists', () => {
     const p203: GithubItem = { ...PR_137, number: 203, url: 'u203', checks: null }
     const pr137: GithubItem = { ...PR_137, checks: null }
     stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
-      'GET /api/v1/github/checks?prs=137%2C201%2C202%2C203': () =>
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [pr137, p201, p202, p203] }),
+      // The window follows the RENDERED order, not the payload order (#gh-sort), so it is the
+      // sort's answer for these four — all copies of PR_137, hence one `createdAt` and the
+      // number tiebreak, newest-first — that names the request.
+      'GET /api/v1/github/checks?prs=203%2C202%2C201%2C137': () =>
         jsonResponse({ available: true, checks: { 137: 'failing', 201: 'passing', 202: 'pending', 203: null } }),
     })
     renderAt('/github/prs')
@@ -438,13 +461,13 @@ describe('the GitHub tab lists', () => {
 
   it('shows the exact open count from the single fast load — no 30+ guesswork (#664)', async () => {
     // The two-shot is gone: one fast fetch (limit 1000, no rollup) returns the whole open set, so
-    // the tab reports the real count instead of the old fast-batch "30+" placeholder.
+    // the tab reports the server's exact total when the page is smaller than the open set.
     const many: GithubData = {
       ...GITHUB,
       issues: Array.from({ length: 45 }, (_, i) => ({ ...ISSUE_142, number: i + 1, url: `u${i}` })),
     }
     stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse(many),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...many, issuesTotal: 45 }),
     })
     renderAt('/github')
 
@@ -490,6 +513,140 @@ describe('the GitHub tab lists', () => {
       expect.stringContaining('Fix GitHub issue #142: Login form drops session on refresh'),
     )
     expect(setData.mock.calls[0]?.[1]).toContain(ISSUE_142.url)
+  })
+})
+
+describe('scroll-driven paging', () => {
+  /** jsdom has no IntersectionObserver; this one lets a test say "the sentinel scrolled into view". */
+  let observers: { target: Element | null; root: Element | null; fire: (visible: boolean) => void }[]
+  beforeEach(() => {
+    observers = []
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: (entries: { isIntersecting: boolean }[]) => void, opts: { root?: Element | null }) {
+          const record = { target: null as Element | null, root: opts.root ?? null, fire: (v: boolean) => cb([{ isIntersecting: v }]) }
+          observers.push(record)
+          this.observe = (el: Element) => { record.target = el }
+          this.disconnect = () => { record.target = null }
+        }
+        observe: (el: Element) => void
+        disconnect: () => void
+        unobserve() {}
+      },
+    )
+  })
+
+  const ISSUE_120: GithubItem = { ...ISSUE_139, number: 120, title: 'Older issue', url: 'https://github.com/acme/demo/issues/120' }
+  const listPage = (path: string) => path === '/api/v1/github' || path.startsWith('/api/v1/github?')
+  const sentinel = () => document.querySelector('[data-slot="gh-load-more"]')
+  const live = () => observers.filter((o) => o.target !== null)
+
+  /** First list page carries a cursor; the cursored page carries ISSUE_120 and ends the list. */
+  function stubPaged(): SentRequest[] {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    return sent
+  }
+
+  it('fetches the next page when the sentinel scrolls into view, with no button', async () => {
+    const sent = stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(screen.queryByRole('button', { name: /load more/i })).toBeNull()
+    await waitFor(() => expect(live()).toHaveLength(1))
+    // Observed against the list pane — the element that actually scrolls — not the viewport.
+    expect(live()[0]!.root?.getAttribute('data-slot')).toBe('gh-list')
+    expect(live()[0]!.target).toBe(sentinel())
+
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139', '120']))
+    expect(sent.filter((r) => listPage(r.path) && r.path.includes('issuesCursor=c1'))).toHaveLength(1)
+    // The last page is in: no sentinel, no observer, nothing left to offer.
+    expect(sentinel()).toBeNull()
+    expect(live()).toHaveLength(0)
+  })
+
+  it('marks the exhausted side done so the server does not restart it (#1750)', async () => {
+    const sent = stubFetch()
+    const base = vi.mocked(fetch).getMockImplementation()!
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = String(input)
+      if ((init?.method ?? 'GET') === 'GET' && listPage(path)) {
+        sent.push({ path, method: 'GET', body: undefined })
+        return path.includes('issuesCursor=')
+          ? jsonResponse({ ...GITHUB, issues: [ISSUE_120], prs: [], issuesNextCursor: null, prsNextCursor: null })
+          : jsonResponse({ ...GITHUB, issuesNextCursor: 'c1', prsNextCursor: null })
+      }
+      return base(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    await waitFor(() => expect(sent.some((r) => r.path.includes('issuesCursor=c1'))).toBe(true))
+    const next = sent.find((r) => r.path.includes('issuesCursor=c1'))!
+    expect(next.path).toContain('prsDone=1')
+    expect(next.path).not.toContain('issuesDone')
+  })
+
+  it('does not fetch while the sentinel stays out of view', async () => {
+    const sent = stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(false))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(sent.filter((r) => r.path.includes('issuesCursor='))).toHaveLength(0)
+    expect(rows()).toHaveLength(2)
+  })
+
+  it('a failed page stops auto-paging and offers a retry instead of looping', async () => {
+    const sent = stubPaged()
+    const paged = vi.mocked(fetch).getMockImplementation()!
+    let failNext = true
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).includes('issuesCursor=') && failNext) {
+        failNext = false
+        sent.push({ path: String(input), method: 'GET', body: undefined })
+        return jsonResponse({ error: 'boom' }, 400)
+      }
+      return paged(input, init)
+    })
+    renderAt('/github')
+    await waitFor(() => expect(live()).toHaveLength(1))
+    act(() => live()[0]!.fire(true))
+    const retry = await screen.findByRole('button', { name: 'Retry' })
+    expect(live()).toHaveLength(0)
+    expect(sent.filter((r) => r.path.includes('issuesCursor='))).toHaveLength(1)
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139', '120']))
+  })
+
+  it('offers no paging while a search narrows the list', async () => {
+    stubPaged()
+    renderAt('/github')
+    await waitFor(() => expect(sentinel()).not.toBeNull())
+    fireEvent.change(document.querySelector('[data-slot="gh-search"]')!, { target: { value: '142' } })
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(sentinel()).toBeNull()
+    expect(live()).toHaveLength(0)
+  })
+
+  it('renders no paging affordance when the first page is the whole list', async () => {
+    stubFetch()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(sentinel()).toBeNull()
   })
 })
 
@@ -541,6 +698,152 @@ describe('remembering the last-selected tab (#417)', () => {
   })
 })
 
+/**
+ * The newest/oldest toggle (#gh-sort). The tab could only ever show the newest first, so the
+ * oldest open item — the one that has been waiting longest, which is exactly what a backlog sweep
+ * is looking for — sat at the bottom of an unbounded list. The control flips the rendered order
+ * and, like the sub-tab beside it, survives a reload.
+ */
+describe('sorting the list newest or oldest first', () => {
+  const sortButton = (name: 'Newest' | 'Oldest') =>
+    within(screen.getByRole('group', { name: 'Sort order' })).getByRole('button', { name })
+
+  /**
+   * `stubFetch`, with a ui-state route that behaves like the real one: `PUT` merges the body
+   * SHALLOWLY into the stored state and answers the whole merged object, which the tab writes
+   * back into its cache. The bare `stubFetch` catch-all answers `{}` instead, so a PUT would
+   * wipe the optimistic patch and undo the click a moment after it landed — a test artifact, not
+   * the behavior, and one that would hide a real regression in either direction.
+   */
+  function stubUiStateFetch(
+    overrides: Record<string, () => Response | Promise<Response>> = {},
+    initial: Record<string, unknown> = {},
+  ): SentRequest[] {
+    const state: Record<string, unknown> = { ...initial }
+    let sent: SentRequest[] | null = null
+    sent = stubFetch({
+      'GET /api/v1/ui-state': () => jsonResponse({ ...state }),
+      'PUT /api/v1/ui-state': () => {
+        // Read at REQUEST time, so `sent` is assigned by then; the stub records before it
+        // dispatches, so the write being answered is the last one recorded.
+        const last = sent
+          ?.filter((request) => request.method === 'PUT' && request.path === '/api/v1/ui-state')
+          .at(-1)
+        Object.assign(state, last?.body ?? {})
+        return jsonResponse({ ...state })
+      },
+      ...overrides,
+    })
+    return sent
+  }
+
+  it('defaults to newest first, and says so on the control', async () => {
+    stubUiStateFetch()
+    renderAt('/github')
+
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139'])
+    expect(sortButton('Newest').getAttribute('aria-pressed')).toBe('true')
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('clicking Oldest reverses the rows and persists the choice', async () => {
+    const sent = stubUiStateFetch()
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.click(sortButton('Oldest'))
+
+    // Reordered from the cache the tab already holds — no refetch, so no second list request.
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+    const put = sent.find((request) => request.method === 'PUT' && request.path === '/api/v1/ui-state')
+    expect(put?.body).toEqual({ githubSort: 'oldest' })
+    expect(sent.filter((r) => r.method === 'GET' && r.path.startsWith('/api/v1/github?'))).toHaveLength(1)
+  })
+
+  it('opening the tab restores a remembered "oldest"', async () => {
+    stubUiStateFetch({}, { githubSort: 'oldest' })
+    renderAt('/github')
+
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('an unknown stored order falls back to newest rather than rendering nothing', async () => {
+    // A value from a newer cockpit, or a hand-edited ui-state.json. The tab must degrade to its
+    // default, never to an empty or arbitrary list.
+    stubUiStateFetch({}, { githubSort: 'alphabetical' })
+    renderAt('/github')
+
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['142', '139']))
+    expect(sortButton('Newest').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('the order survives switching sub-tabs, and applies to PRs too', async () => {
+    const olderPr: GithubItem = {
+      ...PR_137,
+      number: 120,
+      url: 'https://github.com/acme/demo/pull/120',
+      createdAt: '2026-06-01T08:00:00.000Z',
+    }
+    stubUiStateFetch({
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, olderPr] }),
+      'GET /api/v1/github/checks?prs=137%2C120': () => jsonResponse({ available: true, checks: {} }),
+      'GET /api/v1/github/checks?prs=120%2C137': () => jsonResponse({ available: true, checks: {} }),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.click(sortButton('Oldest'))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['139', '142']))
+
+    fireEvent.click(screen.getByRole('link', { name: /Pull requests/ }))
+    await waitFor(() => expect(rows().map((row) => row.dataset.number)).toEqual(['120', '137']))
+    expect(sortButton('Oldest').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('reorders the cross-state search hits by the same control (#730)', async () => {
+    // The hits render directly under the open list, so an order that visibly stopped applying
+    // halfway down the page would read as a bug.
+    const closedOld: GithubItem = {
+      ...ISSUE_142,
+      number: 90,
+      url: 'https://github.com/acme/demo/issues/90',
+      title: 'deploy went sideways',
+      createdAt: '2026-05-01T08:00:00.000Z',
+    }
+    const closedNew: GithubItem = {
+      ...ISSUE_142,
+      number: 91,
+      url: 'https://github.com/acme/demo/issues/91',
+      title: 'deploy retried',
+      createdAt: '2026-06-01T08:00:00.000Z',
+    }
+    stubUiStateFetch({
+      // `gh search` answers in best-match order — deliberately neither age order here, so the
+      // assertions below can only pass if the tab actually SORTS rather than reverses.
+      'GET /api/v1/github/search?kind=issue&q=deploy': () =>
+        jsonResponse({ available: true, items: [closedOld, closedNew] }),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.change(document.querySelector<HTMLInputElement>('[data-slot="gh-search"]')!, {
+      target: { value: 'deploy' },
+    })
+
+    const hitNumbers = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-slot="gh-search-hits"] [data-slot="gh-row"]')].map(
+        (row) => row.dataset.number,
+      )
+    await waitFor(() => expect(hitNumbers()).toEqual(['91', '90']))
+
+    fireEvent.click(sortButton('Oldest'))
+    await waitFor(() => expect(hitNumbers()).toEqual(['90', '91']))
+  })
+})
+
 describe('the GitHub detail pane', () => {
   it('a PR renders the meta line, ± stat, label chips and the checks badge', async () => {
     stubFetch()
@@ -576,6 +879,19 @@ describe('the GitHub detail pane', () => {
     expect(checks?.getAttribute('rel')).toBe('noopener noreferrer')
   })
 
+  it('hydrates the selected PR body and diffstat without changing the list row', async () => {
+    stubFetch({
+      'GET /api/v1/github/comments/pr/137': () => jsonResponse({
+        ...THREAD,
+        detail: { body: 'Hydrated PR description', additions: 240, deletions: 12 },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-body"]')?.textContent).toContain('Hydrated PR description'))
+    expect(document.querySelector('[data-slot="gh-diffstat"]')?.textContent).toBe('+240 −12')
+  })
+
   it('renders the issue body through the markdown pipeline', async () => {
     stubFetch()
     renderAt('/github/issues/142')
@@ -603,6 +919,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'approved',
           checks: [{ name: 'test', state: 'passing', required: true, url: 'https://example.com/check' }],
+          checksTier: 'detailed',
           methods: ['squash', 'rebase'],
           defaultMethod: 'squash',
           eligibility: 'ready',
@@ -625,6 +942,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'approved',
           checks: [],
+          checksTier: 'detailed',
           methods: ['squash'],
           defaultMethod: 'squash',
           eligibility: 'ready',
@@ -672,6 +990,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'review-required',
           checks: [{ name: 'test', state: 'pending', required: true }],
+          checksTier: 'detailed',
           methods: ['squash'],
           defaultMethod: 'squash',
           eligibility: 'blocked',
@@ -702,6 +1021,94 @@ describe('the GitHub detail pane', () => {
       expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
       overrideRules: true,
     }))
+  })
+
+  /** #969 — under a fine-grained PAT the per-check detail is unreadable and no permission grants
+   *  it. The panel must still render the merge state the token CAN read, show the aggregate check
+   *  tier it fell back to, and say plainly which part is missing. */
+  it('renders the merge state with the aggregate check tier and names what it could not read', async () => {
+    stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [{ name: 'All checks', state: 'passing', required: null }],
+          checksTier: 'aggregate',
+          checksReason: 'GraphQL: Resource not accessible by personal access token',
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+          canOverride: false,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const box = await waitFor(() => {
+      const found = document.querySelector('[data-slot="gh-merge-box"]')
+      if (!found) throw new Error('merge box not rendered')
+      return found
+    })
+    expect(box.textContent).toContain('Ready to merge')
+    expect(box.textContent).toContain('Reviews: approved')
+    expect(box.textContent).toContain('All checks · passing')
+    const note = document.querySelector('[data-slot="gh-merge-checks-degraded"]')
+    expect(note?.textContent).toContain('per-check detail is not')
+    expect(note?.textContent).toContain('Resource not accessible by personal access token')
+    expect(box.textContent).not.toContain('No checks configured')
+  })
+
+  it('does not pass an unreadable check tier off as "no checks configured"', async () => {
+    stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [],
+          checksTier: 'none',
+          checksReason: 'GraphQL: Resource not accessible by personal access token',
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'unknown',
+          blockers: [{ code: 'checks-unknown', message: 'This token cannot read the checks on this pull request.' }],
+          canMerge: false,
+          canOverride: true,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const note = await waitFor(() => {
+      const found = document.querySelector('[data-slot="gh-merge-checks-degraded"]')
+      if (!found) throw new Error('degraded note not rendered')
+      return found
+    })
+    expect(note.textContent).toContain('cannot read the checks')
+    const box = document.querySelector('[data-slot="gh-merge-box"]')
+    expect(box?.textContent).not.toContain('No checks configured')
+    // The blocker says the same thing as the note above it — it must not be printed twice.
+    expect(box?.textContent?.match(/cannot read the checks/g)).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Squash and merge' }).hasAttribute('disabled')).toBe(true)
   })
 })
 
@@ -1095,8 +1502,8 @@ describe('the unavailable forge state', () => {
   it('renders the server reason and the gh hint, and Try again refetches with refresh=1', async () => {
     const unavailable: GithubData = { available: false, reason: 'gh not installed', issues: [], prs: [] }
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse(unavailable),
-      'GET /api/v1/github?limit=1000&refresh=1': () => jsonResponse(unavailable),
+      'GET /api/v1/github?limit=50': () => jsonResponse(unavailable),
+      'GET /api/v1/github?limit=50&refresh=1': () => jsonResponse(unavailable),
     })
     renderAt('/github')
 
@@ -1104,12 +1511,12 @@ describe('the unavailable forge state', () => {
       expect(screen.getByRole('heading', { level: 1, name: 'GitHub is unavailable here' })).toBeTruthy(),
     )
     expect(screen.getByText('gh not installed')).toBeTruthy()
-    // One fast fetch now (#664): the single limit=1000 load is what proved the forge unreachable.
-    expect(sent.some((request) => request.path === '/api/v1/github?limit=1000')).toBe(true)
+    // The first cursor page is the request that proved the forge unreachable.
+    expect(sent.some((request) => request.path === '/api/v1/github?limit=50')).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     await waitFor(() =>
-      expect(sent.some((request) => request.path === '/api/v1/github?limit=1000&refresh=1')).toBe(true),
+      expect(sent.some((request) => request.path === '/api/v1/github?limit=50&refresh=1')).toBe(true),
     )
   })
 })
@@ -1132,7 +1539,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -1268,6 +1675,109 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
   })
 
+  /**
+   * The #906 regression. `defaultModels` is seeded server-side from the coding agent's OWN
+   * settings file, so "never touched" is not a neutral state — it hands the choice to
+   * `~/.claude/settings.json`. Before the fix the pick was plain route state, reset on every
+   * mount, and an explicit `auto` therefore survived exactly until the next navigation: the user
+   * re-picked auto forever and every run still went out pinned to the native model.
+   */
+  it('an explicitly picked auto survives a remount instead of reverting to the native default (#906)', async () => {
+    const nativeDefault = () =>
+      jsonResponse({ defaultRunner: 'claude', defaultModels: { claude: 'opus' } })
+    stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+
+    // The starting state the issue describes: untouched, so the native default shows through.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('opus'),
+    )
+    await pickPill('model-pill', 'auto')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // A full cold mount — the reload / tab hop that used to discard the pick.
+    cleanup()
+    const sent = stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // And the pick is real, not cosmetic: auto stays implicit, so no model rides the request.
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('model')
+  })
+
+  /**
+   * Remembering gave the pick a lifetime beyond the host that justified it — the same problem
+   * `github.tsx` already solves for a workflow the server no longer knows. It is not theoretical:
+   * cockpits for different repos share one `localhost:<port>` origin and therefore this
+   * localStorage key, so a pick can arrive from a repo where it was perfectly valid.
+   */
+  it('drops a remembered runner this host cannot honour instead of posting it (#906)', async () => {
+    // Remembered from elsewhere: a backend that is not connected on this host.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":null}')
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+    })
+    await openDetail()
+
+    // A single-backend host hides the runner pill entirely, so a dead pick could not even be
+    // seen, let alone corrected — it must be dropped rather than ride the request as an
+    // explicit override of the server's own default.
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('runner')
+    // And it is cleared from the store, so it stops haunting every later hand-off.
+    await waitFor(() => expect(readFollowupSelection().runner).toBeNull())
+  })
+
+  it('drops a remembered model that belongs to a different backend (#906)', async () => {
+    // `opus` is a claude preset; the remembered runner is codex. Both are valid somewhere, which
+    // is exactly how this arrives — one localStorage key is shared across repos.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({
+      'GET /api/v1/health': MULTI_BACKEND,
+      'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex'),
+    )
+    await waitFor(() => expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: null }))
+  })
+
+  /**
+   * The other half of that sweep, and the more dangerous one: "no backend is connected" and
+   * "provider status has not answered yet" look identical from inside the hook, so a sweep that
+   * treats an empty runner list as evidence would clear the pick on every single mount — and,
+   * because this surface persists, write the `null` straight back to the store. That destroys the
+   * remembered choice permanently and quietly reintroduces #906. An unreachable agent CLI is a
+   * degradation path, not a licence to discard user state.
+   */
+  it('keeps the remembered pick when no provider has answered — absence of status is not absence of a backend (#906)', async () => {
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({ 'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE) })
+    await openDetail()
+
+    // The disabled Run button proves the "nothing connected" answer really did land, so this is
+    // not merely passing on a render that happened before any query resolved.
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this issue/ }).disabled,
+      ).toBe(true),
+    )
+    expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: 'opus' })
+  })
+
   it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
     const sent = stubFetch({
       'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE),
@@ -1322,7 +1832,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
+            { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
         } satisfies ProviderStatusResponse),
     })
     await openDetail()
@@ -1347,7 +1858,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
             { provider: 'claude', status: 'connected', enabled: false },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
+            { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
         } satisfies ProviderStatusResponse),
     })
     await openDetail()
@@ -2168,11 +2680,18 @@ describe('the follow-up prompt template menu (#413)', () => {
   async function chooseTemplate(id: string): Promise<void> {
     const textarea = () => screen.getByLabelText('Custom prompt') as HTMLTextAreaElement
     const before = textarea().value
-    fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
-    await waitFor(() => {
-      if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
-    })
-    await selectOption(id)
+    // An option can unmount WITHOUT being selected — a stale node from the previous, still-closing
+    // popover, or a re-render closing the menu — and `selectOption` reads that as "landed". Only
+    // the prompt changing proves the insert, so reopen and reselect until it does.
+    await waitFor(async () => {
+      if (textarea().value !== before) return
+      if (!option(id)) fireEvent.click(document.querySelector('[data-slot="prompt-template-trigger"]')!)
+      await waitFor(() => {
+        if (!option(id)) throw new Error(`template option "${id}" not mounted yet`)
+      })
+      await selectOption(id)
+      expect(textarea().value).not.toBe(before)
+    }, { timeout: 5_000 })
   }
 
   it('an untouched ui-state shows the built-in templates, and inserting one fills the custom prompt', async () => {
@@ -2649,7 +3168,7 @@ describe('cross-state search fallback (#730)', () => {
     const MERGED_STREAM: GithubItem = { ...MERGED_PR, title: 'Stream reconcile' }
 
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
       // A real `gh search prs Stream` answers with the OPEN #137 alongside the merged one — which
       // is what made the stale payload render #137 a second time.
       'GET /api/v1/github/search?kind=pr&q=Stream': () =>
@@ -2752,7 +3271,7 @@ describe('cross-state search fallback (#730)', () => {
       checks: null,
     }
     const sent = stubFetch({
-      'GET /api/v1/github?limit=1000': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
+      'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, prs: [PR_137, PR_200] }),
     })
     renderAt('/github/prs')
     await waitFor(() => expect(rows()).toHaveLength(2))
@@ -2798,5 +3317,127 @@ describe('cross-state search fallback (#730)', () => {
       },
       { timeout: 3000 },
     )
+  })
+})
+
+// ---- swipe-to-run (mobile) --------------------------------------------------------------------
+
+/** A touch swipe on a row: down, a few moves, up. `dx` < 0 swipes left. */
+function swipeRow(row: HTMLElement, dx: number, pointerType = 'touch') {
+  const start = { pointerId: 7, pointerType, clientX: 200, clientY: 100 }
+  fireEvent.pointerDown(row, start)
+  for (const step of [0.25, 0.5, 1]) {
+    fireEvent.pointerMove(row, { ...start, clientX: 200 + dx * step })
+  }
+  fireEvent.pointerUp(row, { ...start, clientX: 200 + dx })
+  // The browser follows a touch with a click on the same target; a swipe must swallow it.
+  fireEvent.click(row)
+}
+
+const swipeSheet = () => document.querySelector('[data-slot="gh-swipe-sheet"]')
+const swipePosted = (sent: SentRequest[]) =>
+  sent.find((request) => request.method === 'POST' && request.path === '/api/v1/runs')?.body as
+    | { workflow?: string; task: string; steps?: Array<{ skill: string }> }
+    | undefined
+
+describe('swipe a row to run (mobile)', () => {
+  it('a left swipe opens the launcher without navigating, and a workflow tap starts the run', async () => {
+    const sent = stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    swipeRow(rows()[1]!, -120)
+
+    await waitFor(() => expect(swipeSheet()).not.toBeNull())
+    expect(swipeSheet()?.textContent).toContain('Run agent on issue #139')
+    // The swipe did not follow the row's link: #142 is still the open detail.
+    expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
+
+    const ship = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-slot="gh-swipe-workflow"][data-name="ship-it"]')
+      expect(button?.disabled).toBe(false)
+      return button!
+    })
+    fireEvent.click(ship)
+
+    await waitFor(() => expect(swipePosted(sent)).toBeDefined())
+    expect(swipePosted(sent)).toMatchObject({ workflow: 'ship-it' })
+    expect(swipePosted(sent)?.task).toBe(githubTaskRef(ISSUE_139))
+    await waitFor(() => expect(screen.getByText('Added to the queue — issue #139')).toBeTruthy())
+    await waitFor(() => expect(swipeSheet()).toBeNull())
+    expect(rows()[1]?.querySelector('[data-slot="gh-queued-flag"]')).not.toBeNull()
+  })
+
+  it('a skill tap runs that one skill as the chain', async () => {
+    const sent = stubFetch()
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    swipeRow(rows()[0]!, -100)
+    const skill = await waitFor(() => {
+      const button = document.querySelector<HTMLButtonElement>('[data-slot="gh-swipe-skill"][data-name="om-fix"]')
+      expect(button?.disabled).toBe(false)
+      return button!
+    })
+    fireEvent.click(skill)
+
+    await waitFor(() => expect(swipePosted(sent)).toBeDefined())
+    expect(swipePosted(sent)?.workflow).toBeUndefined()
+    expect(swipePosted(sent)?.steps?.map((step) => step.skill)).toEqual(['om-fix'])
+    expect(swipePosted(sent)?.task).toContain(PR_137.url)
+  })
+
+  it('a short swipe, a mouse drag or a vertical scroll never opens it', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    swipeRow(rows()[1]!, -40)
+    swipeRow(rows()[1]!, -150, 'mouse')
+    const row = rows()[1]!
+    fireEvent.pointerDown(row, { pointerId: 9, pointerType: 'touch', clientX: 200, clientY: 100 })
+    fireEvent.pointerMove(row, { pointerId: 9, pointerType: 'touch', clientX: 190, clientY: 160 })
+    fireEvent.pointerCancel(row, { pointerId: 9, pointerType: 'touch', clientX: 60, clientY: 160 })
+
+    await act(async () => {})
+    expect(swipeSheet()).toBeNull()
+  })
+})
+
+describe('swipe a row to run (mobile) — no lasting side effects', () => {
+  it('a swipe whose click never came does not eat the next click on that row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    // No click follows (a moved touch); a later mouse click must still open the row.
+    fireEvent.pointerDown(rows()[1]!, { pointerId: 8, pointerType: 'mouse', clientX: 200, clientY: 100 })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a key press after a swipe still activates the row', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    const start = { pointerId: 7, pointerType: 'touch', clientX: 200, clientY: 100 }
+    fireEvent.pointerDown(rows()[1]!, start)
+    fireEvent.pointerMove(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.pointerUp(rows()[1]!, { ...start, clientX: 170 })
+    fireEvent.keyDown(rows()[1]!, { key: 'Enter' })
+    fireEvent.click(rows()[1]!)
+    await waitFor(() => expect(rows()[1]?.getAttribute('aria-current')).toBe('page'))
+  })
+
+  it('a row at rest is not clipped, so its focus ring stays visible', async () => {
+    stubFetch()
+    renderAt('/github/issues/142')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    expect(rows()[0]?.closest('li')?.className).not.toContain('overflow-hidden')
   })
 })

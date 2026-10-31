@@ -9,6 +9,7 @@ import {
   ContextGroup,
   ImageItem,
   NoteLine,
+  AgentUpdateRequiredCard,
   ProviderAuthRequiredCard,
   ReasoningItem,
   ToolCard,
@@ -30,6 +31,7 @@ import type {
   ThreadEntry,
   ThreadImage,
   ThreadNote,
+  ThreadAgentUpdateRequired,
   ThreadProviderAuthRequired,
   ThreadState,
 } from './thread-state'
@@ -98,7 +100,8 @@ export interface SessionTranscriptProps {
 /** The main run record plus reduced turns, without rendering or backend inspection. */
 export function mainTranscriptSections(run: ApiRun, thread: ThreadState): TranscriptSection[] {
   const sections: TranscriptSection[] = []
-  if (run.task) {
+  // An attachment-only task (empty text) still opens the thread with its attachments.
+  if (run.task || run.taskImages?.length) {
     sections.push({
       id: 'task',
       userMessageKey: 'task',
@@ -451,6 +454,8 @@ function ThreadEntryRenderer({
       )
     case 'provider-auth-required':
       return <ProviderAuthRequiredCard incident={entry} />
+    case 'agent-update-required':
+      return <AgentUpdateRequiredCard incident={entry} />
     default:
       return assertNever(entry)
   }
@@ -532,6 +537,9 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
     case 'provider-auth-required':
       return previous.kind === 'provider-auth-required' &&
         sameFields(previous, next, PROVIDER_AUTH_COMPARE_FIELDS)
+    case 'agent-update-required':
+      return previous.kind === 'agent-update-required' &&
+        sameFields(previous, next, AGENT_UPDATE_COMPARE_FIELDS)
     default:
       return false
   }
@@ -573,6 +581,7 @@ const ASK_COMPARE_FIELDS = {
   questions: true,
   resolved: true,
   answer: true,
+  fromWorkflow: true,
 } satisfies Record<keyof ThreadAsk, true>
 
 const PROVIDER_AUTH_COMPARE_FIELDS = {
@@ -580,7 +589,14 @@ const PROVIDER_AUTH_COMPARE_FIELDS = {
   id: true,
   provider: true,
   authFailureId: true,
+  profileId: true,
 } satisfies Record<keyof ThreadProviderAuthRequired, true>
+
+const AGENT_UPDATE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  provider: true,
+} satisfies Record<keyof ThreadAgentUpdateRequired, true>
 
 /** A new transcript item field must be added here before it can be ignored by memoization. */
 const TOOL_ITEM_COMPARE_FIELDS = {

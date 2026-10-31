@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Toaster, resetToasts, toast } from './toaster'
+import { Toaster, UNREACHABLE_TOAST, onDangerToast, resetToasts, toast } from './toaster'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -14,6 +14,28 @@ afterEach(() => {
 })
 
 describe('Toaster', () => {
+  // Telemetry 2e454012: a body read that fails after the headers rejects with the browser's raw
+  // `TypeError: Failed to fetch`, which every `toast(error.message)` call site showed verbatim.
+  it.each(['Failed to fetch', 'Load failed', 'network error', 'NetworkError when attempting to fetch resource.'])(
+    'turns the raw transport failure %j into the cannot-reach message',
+    (raw) => {
+      const seen: string[] = []
+      const off = onDangerToast((message) => seen.push(message))
+      render(<Toaster />)
+      act(() => toast(raw, { tone: 'danger' }))
+
+      expect(screen.getByRole('status').textContent).toBe(UNREACHABLE_TOAST)
+      expect(seen).toEqual([UNREACHABLE_TOAST])
+      off()
+    },
+  )
+
+  it('leaves a message that merely mentions fetching alone', () => {
+    render(<Toaster />)
+    act(() => toast('Failed to fetch the PR list: 502', { tone: 'danger' }))
+    expect(screen.getByRole('status').textContent).toBe('Failed to fetch the PR list: 502')
+  })
+
   it('renders nothing while the queue is empty', () => {
     render(<Toaster />)
     expect(document.querySelector('[data-slot="toaster"]')).toBeNull()
@@ -105,5 +127,83 @@ describe('Toaster', () => {
     expect(screen.getByRole('status').getAttribute('data-state')).toBe('closed')
     act(() => vi.advanceTimersByTime(200))
     expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+  })
+  describe('the optional action link', () => {
+    it('renders no action by default — every existing toast is unchanged', () => {
+      render(<Toaster />)
+      act(() => toast('Command copied to clipboard.'))
+      expect(document.querySelector('[data-slot="toast-action"]')).toBeNull()
+    })
+
+    it('appends a link that opens in a new tab without opener or referrer', () => {
+      render(<Toaster />)
+      act(() =>
+        toast('First PR ready 🎉', {
+          action: { label: 'Star on GitHub', href: 'https://github.com/open-mercato/cezar' },
+        }),
+      )
+      const link = screen.getByRole('link', { name: 'Star on GitHub' })
+      expect(link.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+      expect(link.getAttribute('target')).toBe('_blank')
+      expect(link.getAttribute('rel')).toContain('noopener')
+      expect(link.getAttribute('rel')).toContain('noreferrer')
+      // The link lives INSIDE the live region, so a screen reader announces the ask and its
+      // affordance as one utterance rather than reading a sentence with no way to act on it.
+      expect(screen.getByRole('status').contains(link)).toBe(true)
+    })
+
+    it('honours a custom lifetime, and keeps 5s as the default', () => {
+      render(<Toaster />)
+      act(() => toast('takes a moment to read', { durationMs: 12_000 }))
+      // Still open where a default toast would already have started leaving.
+      act(() => vi.advanceTimersByTime(5000))
+      expect(screen.getByRole('status').getAttribute('data-state')).toBe('open')
+      act(() => vi.advanceTimersByTime(7000))
+      expect(screen.getByRole('status').getAttribute('data-state')).toBe('closed')
+      act(() => vi.advanceTimersByTime(200))
+      expect(document.querySelector('[data-slot="toast"]')).toBeNull()
+    })
+
+    it('gives each toast its own clock — a long one does not hold a default one open', () => {
+      render(<Toaster />)
+      act(() => toast('long', { durationMs: 12_000 }))
+      act(() => toast('short'))
+      act(() => vi.advanceTimersByTime(5000))
+      expect(
+        screen.getAllByRole('status').map((t) => [t.textContent, t.getAttribute('data-state')]),
+      ).toEqual([
+        ['long', 'open'],
+        ['short', 'closed'],
+      ])
+    })
+  })
+})
+
+describe('onDangerToast', () => {
+  it('sees every danger toast and nothing else, and a throwing observer never stops the toast', () => {
+    const seen: string[] = []
+    const offThrow = onDangerToast(() => {
+      throw new Error('observer broke')
+    })
+    const off = onDangerToast((message) => seen.push(message))
+    render(<Toaster />)
+    act(() => toast('Copied.'))
+    act(() => toast('session closed', { tone: 'danger' }))
+    expect(seen).toEqual(['session closed'])
+    expect(screen.getByText('session closed')).toBeTruthy()
+    off()
+    offThrow()
+    act(() => toast('again', { tone: 'danger' }))
+    expect(seen).toEqual(['session closed'])
+  })
+
+  it('skips an expected outcome, which still shows', () => {
+    const seen: string[] = []
+    const off = onDangerToast((message) => seen.push(message))
+    render(<Toaster />)
+    act(() => toast('a.png is too large (max 5 MB)', { tone: 'danger', expected: true }))
+    expect(seen).toEqual([])
+    expect(screen.getByText('a.png is too large (max 5 MB)')).toBeTruthy()
+    off()
   })
 })

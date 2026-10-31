@@ -1,4 +1,5 @@
 import type { RunRecord } from '../../runs/store.ts';
+import type { GithubItem } from '@open-mercato/cezar-contract';
 
 /**
  * Forge-driver seam (cockpit-ui redesign spec §"Forge-driver seam"): every
@@ -21,22 +22,7 @@ export interface ForgeAvailability {
 
 /** One issue or pull request, flattened for the cockpit. `/api/github` serves
  *  exactly this shape (BACKWARD_COMPATIBILITY.md §2 — do not reshape). */
-export interface ForgeItem {
-  kind: 'issue' | 'pr';
-  number: number;
-  title: string;
-  author: string;
-  createdAt: string;
-  labels: string[];
-  body: string;
-  url: string;
-  comments: number;
-  /** PRs only. */
-  isDraft?: boolean;
-  additions?: number;
-  deletions?: number;
-  checks?: 'passing' | 'failing' | 'pending' | null;
-}
+export type ForgeItem = GithubItem;
 
 /** One comment (or PR review summary) in an issue/PR conversation thread (#499). Served by the
  *  new `GET /api/github/comments/:kind/:number` endpoint; additive, no impact on `ForgeItem`. */
@@ -125,6 +111,7 @@ export interface ForgeCommentsData {
    *  the legacy comments-only call. Capped independently of `comments`, which keeps its exact
    *  pre-#525 shape, contents and cap (BACKWARD_COMPATIBILITY.md §2). */
   events?: ForgeTimelineEvent[];
+  detail?: { body: string; additions?: number; deletions?: number };
 }
 
 export interface ForgeListOptions {
@@ -132,6 +119,8 @@ export interface ForgeListOptions {
   refresh?: boolean;
   /** Max items to fetch (driver-capped). */
   limit?: number;
+  issuesCursor?: string;
+  prsCursor?: string;
 }
 
 /** The `GET /api/github/search` payload (#730). The list tier (`listIssues`/`listPRs`) only ever
@@ -184,6 +173,21 @@ export interface ForgePrMergeState {
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
   reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
   checks: ForgePrCheck[];
+  /**
+   * How much of the check tier the token could actually read (#969):
+   *
+   * - `detailed` — one row per check, names and links included.
+   * - `aggregate` — only the rolled-up state was readable, collapsed into a single row. A
+   *   fine-grained PAT lands here: `statusCheckRollup`'s `CheckRun` contexts need the `checks`
+   *   scope, which fine-grained PATs cannot grant at all, while `statusCheckRollup { state }`
+   *   stays readable.
+   * - `none` — neither was readable; `checks` is empty because nothing was found out, NOT because
+   *   the pull request has no CI.
+   */
+  checksTier: 'detailed' | 'aggregate' | 'none';
+  /** Why the check tier degraded — the first line of the failure, for the panel to show. Absent
+   *  when `checksTier` is `detailed`. */
+  checksReason?: string;
   methods: ForgeMergeMethod[];
   defaultMethod: ForgeMergeMethod | null;
   eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown';
@@ -252,10 +256,25 @@ export interface DraftPrInput {
   run: RunRecord;
   /** The task's handoff.md — becomes the PR body (goal + progress skim). */
   handoffText: string;
+  /** Open it as a draft. Absent = draft — what every caller got before this flag existed. */
+  draft?: boolean;
+}
+
+/** Purpose-specific creation feed; independent of open lists and relevance search. */
+export interface ForgeRecentCreatedData {
+  available: boolean;
+  reason?: string;
+  items: Array<{ number: number; title: string; createdAt: string; url: string }>;
+  truncated?: boolean;
 }
 
 export interface ForgeDriver {
   readonly kind: ForgeKind;
+  /** Workspace dashboard's Recent results feed (optional, same rationale as `searchItems`): a
+   *  driver without it simply has no creation feed, and callers must go through `resolveForge`
+   *  to reach one — never construct a driver directly, or a future forge silently bypasses the
+   *  host allowlist that keeps this feed from mistaking a non-GitHub remote for GitHub. */
+  recentCreated?(kind: 'issue' | 'pr', sinceDate: string): Promise<ForgeRecentCreatedData>;
   /** Cheap, cached availability probe. May shell out (used by the GitHub tab). */
   detect(): Promise<ForgeAvailability>;
   /** Non-blocking availability for the health path: cached result, or null while warming — never

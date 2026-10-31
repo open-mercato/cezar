@@ -52,14 +52,16 @@ const SECRET_VALUE_NAME_ALLOW: ReadonlySet<string> = new Set([
  * Pattern-based redaction below is unaffected: it matches token *shapes*, not
  * env values, and still catches short-but-real tokens.
  */
-const MIN_SECRET_LEN = 12;
+export const MIN_SECRET_LEN = 12;
 
 /** Well-known credential shapes, independent of the host env. */
 const TOKEN_PATTERNS: readonly RegExp[] = [
+  /whsec_[A-Za-z0-9+/=]{32,}/g, // outbound webhook signing keys
   /gh[pousr]_[A-Za-z0-9]{20,}/g, // GitHub PAT / OAuth / server / user / refresh
   /github_pat_[A-Za-z0-9_]{20,}/g, // GitHub fine-grained PAT
-  /sk-ant-[A-Za-z0-9-_]{20,}/g, // Anthropic
-  /sk-[A-Za-z0-9-_]{20,}/g, // OpenAI & compatible
+  // A key never follows a letter or digit; `task-scheduling-…` ends in "sk-" and is a word.
+  /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9-_]{20,}/g, // Anthropic
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9-_]{20,}/g, // OpenAI & compatible
   /AKIA[0-9A-Z]{16}/g, // AWS access key id
   /ASIA[0-9A-Z]{16}/g, // AWS temporary access key id
   /AIza[0-9A-Za-z_-]{35}/g, // Google API key
@@ -86,14 +88,44 @@ export function collectSecretValues(env: NodeJS.ProcessEnv = process.env): strin
 
 /** Replace every known secret value / token shape in `text` with `[REDACTED]`. */
 export function redactSecrets(text: string, secretValues: readonly string[]): string {
-  let out = text;
-  for (const value of secretValues) {
-    if (!out.includes(value)) continue;
-    out = out.split(value).join(REDACTED);
+  // Match against the original text: sequential replacement loses containing
+  // and crossing matches, and can even rewrite our own replacement marker.
+  // Explicit values may be shorter than the environment collection floor.
+  // One furthest endpoint per start, allocated only if anything matches.
+  // State is O(text.length), not O(occurrences): repetitive text can contain
+  // millions of overlapping matches whose union is just one span.
+  let ends: Uint32Array | undefined;
+  const cover = (start: number, stop: number): void => {
+    ends ??= new Uint32Array(text.length);
+    ends[start] = Math.max(ends[start]!, stop);
+  };
+  for (const value of new Set(secretValues.filter(value => value.length > 0))) {
+    for (let start = text.indexOf(value); start !== -1; start = text.indexOf(value, start + 1)) {
+      cover(start, start + value.length);
+    }
   }
+  // Patterns must also see the original text. Replacing a known prefix or
+  // interior first can destroy the token shape and expose the remaining key.
   for (const re of TOKEN_PATTERNS) {
-    out = out.replace(re, REDACTED);
+    re.lastIndex = 0;
+    for (let match = re.exec(text); match !== null; match = re.exec(text)) {
+      cover(match.index, match.index + match[0].length);
+    }
   }
+  if (!ends) return text;
+  let out = '', copied = 0;
+  for (let start = 0; start < ends.length; start++) {
+    let stop = ends[start]!;
+    if (stop === 0) continue;
+    out += text.slice(copied, start) + REDACTED;
+    // Strict overlap: touching matches retain separate replacement markers.
+    for (let next = start + 1; next < stop; next++) {
+      stop = Math.max(stop, ends[next]!);
+    }
+    copied = stop;
+    start = stop - 1;
+  }
+  out += text.slice(copied);
   return out;
 }
 

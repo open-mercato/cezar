@@ -1,11 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactElement } from 'react'
-import { MemoryRouter, Route, Routes } from 'react-router'
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ProjectScopeProvider } from '@/api/project-scope-context'
+import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { queryKeys } from '@/api/queries'
+import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { createQueryClient } from '@/api/query-client'
 import type {
   ApiRun,
@@ -15,11 +17,12 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-api-client'
 
-import { TaskThreadRoute, ThreadView } from './task-thread'
+import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadTurn } from './thread-state'
 
 afterEach(() => {
+  act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
 })
@@ -37,6 +40,7 @@ function renderView(
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'not-installed', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   },
   health: Partial<HealthResponse> = {},
@@ -118,6 +122,32 @@ describe('ThreadView', () => {
     expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
       '/settings/agents#providers',
     )
+  })
+
+  it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {
+    // Only `Date` is faked: the header's queries and the indicator's interval keep real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-07-14T12:01:00.000Z'))
+      const events = [
+        { ...line(1, 'turn.started', { turnId: 'turn_1' }), ts: '2026-07-14T12:00:00.000Z' },
+        {
+          ...line(2, 'item.completed', {
+            item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Working on it.' },
+          }),
+          ts: '2026-07-14T12:00:40.000Z',
+        },
+      ]
+      renderView(<ThreadView run={run('running')} thread={reduceThread(events, { activeTurn: true })} />)
+      expect(document.querySelector('[data-slot="working-elapsed"]')?.textContent).toBe('1m 00s')
+      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('(20s ago)')
+
+      cleanup()
+      renderView(<ThreadView run={run('done')} thread={reduceThread(events)} />)
+      expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('an issue-subject closed run links its DISCOVERED issue URL, never the incidental PR (#526)', () => {
@@ -234,6 +264,39 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
   })
 
+  it('budget-stopped waiting → explains the spend brake with spent and ceiling', () => {
+    renderView(
+      <ThreadView
+        run={run('waiting', {
+          costUsd: 20.83,
+          dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="budget-hint"]')?.textContent).toContain(
+      'Budget reached — spent $20.83 of $10.00; send a message to continue.',
+    )
+    expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+  })
+
+  it('failed by a transient provider error → the dock says it retries, not that a limit was hit', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: API Error: 529 Overloaded',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+          autoResumeReason: 'transient',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Temporary provider failure — this task retries automatically at')
+    expect(hint?.textContent).not.toContain('Usage limit')
+  })
+
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
     renderView(
       <ThreadView
@@ -303,6 +366,94 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
   })
 
+  it('running → the chat box still names its engine, read-only — a live session cannot switch', () => {
+    renderView(<ThreadView run={run('running', { runner: 'claude', model: 'opus' })} thread={reduceThread(EVENTS)} />)
+    const engine = document.querySelector('[data-slot="run-engine"]') as HTMLElement
+    expect(engine).not.toBeNull()
+    expect(engine.querySelector('[data-slot="run-engine-runner"]')?.textContent).toBe('claude')
+    // Read-only chips, not pickers: nothing here opens a menu.
+    expect(engine.querySelector('button')).toBeNull()
+    expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
+  })
+
+  it('a continuable run swaps the read-only engine for the editable pills', async () => {
+    renderView(
+      <ThreadView
+        run={run('done', {
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    await waitFor(() => expect(document.querySelector('[data-slot="follow-up-engine"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="run-engine"]')).toBeNull()
+  })
+
+  it('running → an empty box shows only ■ Stop; typing adds Send beside it', () => {
+    renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
+    const stop = screen.getByRole('button', { name: 'Stop the run' })
+    expect(stop.getAttribute('data-slot')).toBe('composer-stop')
+    // One button in that slot, not two side by side.
+    expect(screen.queryByRole('button', { name: 'Send' })).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Reply to the agent'), { target: { value: 'also check the tests' } })
+    // A message to a busy agent still queues — Send joins Stop, it does not replace it.
+    const send = screen.getByRole('button', { name: 'Send' })
+    const stillStop = screen.getByRole('button', { name: 'Stop the run' })
+    expect(stillStop.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect((send as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('the Stop button names itself in a tooltip, on hover and on keyboard focus', async () => {
+    // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
+    fireEvent.focus(screen.getByRole('button', { name: 'Stop the run' }))
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Stop the run')
+  })
+
+  it('waiting → End session sits beside the "waiting for your reply" hint and finishes the run', async () => {
+    renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
+    const hint = document.querySelector('[data-slot="paused-hint"]') as HTMLElement
+    const end = within(hint).getByRole('button', { name: 'End session' })
+    fireEvent.click(end)
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          ([input, init]) => String(input) === '/api/v1/runs/r1/finish' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('waiting → no Stop: the agent is waiting on you, so the button stays a reply', () => {
+    renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
+    expect(screen.queryByRole('button', { name: 'Stop the run' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Send' })).not.toBeNull()
+  })
+
+  it('running → ■ Stop confirms before it cancels', async () => {
+    renderView(<ThreadView run={run('running')} thread={reduceThread(EVENTS)} />)
+    // The header no longer carries Stop on this tab — the composer is where it lives.
+    expect(document.querySelector('[data-slot="run-actions"]')?.textContent).not.toContain('Stop')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop the run' }))
+    const cancelled = () =>
+      vi.mocked(fetch).mock.calls.some(
+        ([input, init]) => String(input) === '/api/v1/runs/r1/cancel' && init?.method === 'POST',
+      )
+    expect(cancelled()).toBe(false)
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop the run' }))
+    await waitFor(() => expect(cancelled()).toBe(true))
+  })
+
+  it('a finished run has no Stop — there is nothing live to stop', () => {
+    renderView(<ThreadView run={run('done')} thread={reduceThread(EVENTS)} />)
+    expect(screen.queryByRole('button', { name: 'Stop the run' })).toBeNull()
+  })
+
   it.each([
     ['disabled', { provider: 'claude', status: 'connected', enabled: false }],
     ['disconnected', { provider: 'claude', status: 'disconnected', enabled: true }],
@@ -342,6 +493,7 @@ describe('ThreadView', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -362,6 +514,188 @@ describe('ThreadView', () => {
 
   /** A closed run with a session to resume is still AUTHORABLE: Continue takes a prompt, so
    *  the composer stays live and its send is that Continue. */
+  it('a failure whose advice is "continue to resume it" makes Continue a button that continues', async () => {
+    const IDLE = 'the session closed after inactivity before the task declared completion — continue to resume it'
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: IDLE,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    // The composer's send is also named Continue in this state — target the footer's own.
+    // Enabled once the provider check has answered (greyed until then — see the next test).
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    const footer = document.querySelector('[data-slot="thread-footer"]') as HTMLElement
+    expect(button.textContent).toBe('Continue')
+    // The sentence still reads the same — only the word became the action.
+    expect(footer.textContent).toContain(
+      'Session failed — the session closed after inactivity before the task declared completion — Continue to resume it',
+    )
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          ([input, init]) => String(input) === '/api/v1/runs/r1/continue' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('with the provider disconnected the Continue is still there — greyed, saying why', async () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+      {
+        providers: [
+          { provider: 'claude', status: 'disconnected', enabled: true },
+          { provider: 'codex', status: 'not-installed', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
+      },
+    )
+    // Present from the first paint (the provider check is still loading then) and after it
+    // answers — never silently plain text while there is a session to resume.
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(true)
+      expect(el!.title).not.toBe('Checking the agent provider…')
+      return el!
+    })
+    expect(button.title.length).toBeGreaterThan(0)
+  })
+
+  it('any failure with a session to continue offers Continue after its message', async () => {
+    const MISSING = 'continue failed: claude CLI exited with code 1 — No conversation found with session ID: s-1'
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: MISSING,
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      `Session failed — ${MISSING} · Continue`,
+    )
+    fireEvent.click(button)
+    await waitFor(() =>
+      expect(
+        vi.mocked(fetch).mock.calls.some(
+          ([input, init]) => String(input) === '/api/v1/runs/r1/continue' && init?.method === 'POST',
+        ),
+      ).toBe(true),
+    )
+  })
+
+  it('telemetry 77117b95: a footer Continue on a record that has drifted live refetches instead of toasting', async () => {
+    const sent: { path: string; method: string }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        const method = init.method ?? 'GET'
+        sent.push({ path, method })
+        const json = (body: unknown, status = 200) =>
+          Promise.resolve(
+            new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
+          )
+        if (path === '/api/v1/providers/status')
+          return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        // The record said `failed`; the server has the run active — a resume it never saw.
+        if (path === '/api/v1/runs/r1/continue' && method === 'POST') return json({ error: 'run is still active' }, 409)
+        if (path === '/api/v1/runs/r1' && method === 'GET') return json(run('running'))
+        return json([])
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ThreadView
+            run={run('failed', {
+              error: 'the session closed after inactivity before the task declared completion — continue to resume it',
+              steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' }],
+            })}
+            thread={reduceThread(EVENTS)}
+          />
+        </MemoryRouter>
+        <Toaster />
+      </QueryClientProvider>,
+    )
+
+    const button = await waitFor(() => {
+      const el = document.querySelector('[data-slot="footer-continue"]') as HTMLButtonElement | null
+      expect(el).not.toBeNull()
+      expect(el!.disabled).toBe(false)
+      return el!
+    })
+    fireEvent.click(button)
+
+    // The refusal is answered by one authoritative refetch, not a red toast naming it...
+    await waitFor(() => expect(sent.some((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toBe(true))
+    // ...and nothing went out: an empty one-click Continue has no message to deliver.
+    expect(sent.some((r) => r.path === '/api/v1/runs/r1/messages')).toBe(false)
+    const toastEl = document.querySelector('[data-slot="toast"]')
+    expect(toastEl?.textContent ?? '').not.toContain('run is still active')
+  })
+
+  it('a failure already scheduled to resume itself offers no extra Continue', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'Claude AI usage limit reached',
+          autoResumeAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+          steps: [
+            { id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0, sessionId: 's-1' },
+          ],
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toBe(
+      'Session failed — Claude AI usage limit reached',
+    )
+    expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
+  })
+
+  it('the same advice stays plain text when there is no session to continue', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', { error: 'the session closed after inactivity — continue to resume it' })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="footer-continue"]')).toBeNull()
+    expect(document.querySelector('[data-slot="thread-footer"]')?.textContent).toContain('continue to resume it')
+  })
+
   it('closed but resumable → the composer stays enabled, and sending is Continue', async () => {
     renderView(
       <ThreadView
@@ -384,7 +718,8 @@ describe('ThreadView', () => {
     // The header badge is now a second, discoverable entrance to that SAME picker. Exercise the
     // real nested controls: a decorative test node would miss the Radix-menu interaction that
     // matters here (opening the model catalog without dismissing the agent badge first).
-    fireEvent.pointerDown(screen.getByRole('button', { name: /^Agent:/ }))
+    // Two renderings of the badge (tabs line on desktop, details row on phones) — CSS shows one.
+    fireEvent.pointerDown(screen.getAllByRole('button', { name: /^Agent:/ })[0]!)
     const badgeMenu = await screen.findByRole('menu')
     const headerModel = badgeMenu.querySelector(
       '[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]',
@@ -608,6 +943,166 @@ describe('ThreadView', () => {
       )
       // Landed, so the box is empty — not restored as a failed send would be.
       await waitFor(() => expect(composer.value).toBe(''))
+    })
+
+    // ---- diff comments (self-review) ------------------------------------------------------
+
+    const DIFF_COMMENTS = [
+      { id: 'c1', path: 'src/app/page.tsx', side: 'new', line: 11, body: 'use the shared import', excerpt: 'import {' },
+      { id: 'c2', path: 'src/lib/util.ts', side: 'old', line: 4, body: 'why drop this?', excerpt: 'export const x = 1' },
+    ]
+    const ok = () =>
+      new Response(JSON.stringify({ delivered: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+
+    /** The one fetch stub for the diff-comment cases: two stored comments, a `/messages` answer
+     *  the case picks, an optional skill catalog, and a recorded request log. */
+    const withDiffCommentDraft = (messages: () => Response, skills: { name: string }[] = []) => {
+      const sent: { path: string; method: string; body: unknown }[] = []
+      // Typing `/` opens the skill autocomplete, whose popover measures itself — jsdom has no observer.
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      )
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+          const path = String(input)
+          const method = init.method ?? 'GET'
+          sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+          const json = (body: unknown) =>
+            Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }))
+          if (path === '/api/v1/runs/r1/messages') return Promise.resolve(messages())
+          if (path === '/api/v1/providers/status')
+            return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+          if (path.includes('/api/v1/skills'))
+            return json(skills.map((skill) => ({ ...skill, description: '', path: `/s/${skill.name}.md`, source: 'project' })))
+          if (path === '/api/v1/runs/r1/drafts') {
+            return json({
+              surfaces: {
+                'diff-comments': { text: JSON.stringify(DIFF_COMMENTS), images: [], updatedAt: '2026-10-02T00:00:00.000Z' },
+              },
+            })
+          }
+          if (path.startsWith('/api/v1/runs/r1/drafts/'))
+            return json({ text: '', images: [], updatedAt: '2026-10-02T00:00:00.000Z' })
+          return json([])
+        }),
+      )
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />
+            <Toaster />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      const commentWrites = () =>
+        sent
+          .filter((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/diff-comments')
+          .map((r) => (r.body as { text: string }).text)
+      const posted = () => sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/messages')?.body as
+        | { text: string }
+        | undefined
+      const composer = () => screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
+      const sendButton = () =>
+        composer().closest('[data-slot="composer"]')!.querySelector<HTMLButtonElement>('button[aria-label="Send"]')!
+      return { commentWrites, posted, composer, sendButton }
+    }
+
+    /**
+     * Self-review: comments left on the Changes tab are draft items in the composer (one chip
+     * each), are a sendable message on their own, ride the reply as one review block, and are
+     * dropped from the draft store once it landed.
+     */
+    it('sends the diff comments drafted on the Changes tab with the next message', async () => {
+      const { commentWrites, posted, sendButton } = withDiffCommentDraft(ok)
+
+      const chip = await screen.findByText('page.tsx +11')
+      expect(chip.closest('[data-slot="composer"]')).not.toBeNull()
+      expect(screen.getByText('util.ts −4')).not.toBeNull()
+      // Nothing typed — the comments alone make it a message.
+      await waitFor(() => expect(sendButton().disabled).toBe(false))
+      fireEvent.click(sendButton())
+
+      await waitFor(() =>
+        expect(posted()?.text).toContain('`src/app/page.tsx` line 11:\n\n  ```\n  import {\n  ```\n\n  use the shared import'),
+      )
+      expect(posted()?.text).toContain('`src/lib/util.ts` line 4 (removed line):')
+      await waitFor(() => expect(screen.queryByText('page.tsx +11')).toBeNull())
+      await waitFor(() => expect(commentWrites()).toContain(''))
+    })
+
+    it('keeps the diff comments when the send is rejected', async () => {
+      const { commentWrites, posted, sendButton } = withDiffCommentDraft(
+        () => new Response(JSON.stringify({ error: 'session gone' }), { status: 500, headers: { 'content-type': 'application/json' } }),
+      )
+      await screen.findByText('page.tsx +11')
+      await waitFor(() => expect(sendButton().disabled).toBe(false))
+      fireEvent.click(sendButton())
+
+      await waitFor(() => expect(posted()).toBeDefined())
+      // Let the rejection settle, then: the chips are still there and nothing emptied the store.
+      await waitFor(() => expect(sendButton().disabled).toBe(false))
+      expect(screen.getByText('page.tsx +11')).not.toBeNull()
+      expect(commentWrites()).toEqual([])
+    })
+
+    it('never folds the diff comments into an Alt quick reply', async () => {
+      const { commentWrites, posted } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+
+      fireEvent.keyDown(window, { code: 'KeyC', key: 'c', altKey: true })
+
+      await waitFor(() => expect(posted()).toMatchObject({ text: 'Continue.' }))
+      expect(screen.getByText('page.tsx +11')).not.toBeNull()
+      expect(commentWrites()).toEqual([])
+    })
+
+    /** A backend's own command takes what follows it as ARGUMENTS — appended comments would be
+     *  swallowed by it and then cleared as though the agent had read them. */
+    it('keeps the diff comments out of a backend slash command, and says so', async () => {
+      const { commentWrites, posted, composer, sendButton } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+
+      fireEvent.change(composer(), { target: { value: '/compact' } })
+      fireEvent.click(sendButton())
+
+      await waitFor(() => expect(posted()).toMatchObject({ text: '/compact' }))
+      expect(await screen.findByText(/Diff comments kept — \/compact is a command/)).not.toBeNull()
+      expect(screen.getByText('page.tsx +11')).not.toBeNull()
+      expect(commentWrites()).toEqual([])
+    })
+
+    it('lets the diff comments ride a registry skill, which the server expands', async () => {
+      const { commentWrites, posted, composer, sendButton } = withDiffCommentDraft(ok, [{ name: 'fix-review' }])
+      await screen.findByText('page.tsx +11')
+      // The catalog decides it — wait until it has arrived.
+      await waitFor(() => expect(document.querySelector('[data-slot="composer"]')).not.toBeNull())
+      await new Promise((resolve) => setTimeout(resolve, 50))
+
+      fireEvent.change(composer(), { target: { value: '/fix-review please' } })
+      fireEvent.click(sendButton())
+
+      await waitFor(() => expect(posted()?.text.startsWith('/fix-review please\n\nReview comments on the diff:')).toBe(true))
+      await waitFor(() => expect(commentWrites()).toContain(''))
+    })
+
+    it('drops one comment from its chip and keeps the others; the last one empties the stored list', async () => {
+      const { commentWrites } = withDiffCommentDraft(ok)
+      await screen.findByText('page.tsx +11')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove comment on page.tsx line 11' }))
+      expect(screen.queryByText('page.tsx +11')).toBeNull()
+      expect(screen.getByText('util.ts −4')).not.toBeNull()
+      await waitFor(() => expect(commentWrites().length).toBeGreaterThan(0))
+      expect(JSON.parse(commentWrites().at(-1)!)).toEqual([DIFF_COMMENTS[1]])
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove comment on util.ts removed line 4' }))
+      await waitFor(() => expect(commentWrites().at(-1)).toBe(''))
     })
 
     it('leaves the composer empty when this task has no draft — including another surface\'s', async () => {
@@ -1037,6 +1532,26 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="thread-empty"]')).toBeNull()
   })
 
+  it('the queued placeholder\'s Start now posts start-now; a usage-limit hold hides it', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        new Response(urlOf(input).endsWith('/start-now') ? '{"started":true}' : '[]', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      ),
+    )
+    const { unmount } = renderView(<ThreadView run={run('queued')} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock) // after renderView, which stubs its own
+    fireEvent.click(document.querySelector('[data-slot="start-now"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/start-now'))).toBe(true))
+    unmount()
+
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
+  })
+
   it('the first real event replaces the queued placeholder', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([line(1, 'lifecycle', { message: 'cezar restarted — task re-queued' })])} />)
     expect(document.querySelector('[data-slot="queued-state"]')).toBeNull()
@@ -1085,6 +1600,31 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="plan-mirror"]')?.textContent).toBe('Plan 1/3')
     // No steps on this run — the rail knows to stay away.
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
+  })
+
+  // Regression (run 4eb1a980): codex ended its last turn at "1/4" without a final
+  // `plan.updated`, and the finished run kept pulsing "in progress" above a closed session.
+  it.each([
+    ['running', false],
+    ['done', true],
+    ['review', true],
+  ] as const)('a %s run → the plan dock settled=%s', (status, settled) => {
+    const withPlan: RunEvent[] = [
+      ...EVENTS,
+      line(8, 'plan.updated', {
+        entries: [
+          { content: 'Merge main', status: 'completed' },
+          { content: 'Resolve conflicts', status: 'in_progress' },
+          { content: 'Push', status: 'pending' },
+        ],
+      }),
+    ]
+    renderView(<ThreadView run={run(status)} thread={reduceThread(withPlan)} />)
+    const dock = document.querySelector('[data-slot="plan-dock"]')!
+    expect(dock.getAttribute('data-settled')).toBe(settled ? 'true' : null)
+    expect(dock.querySelector('[data-slot="plan-tag"]') === null).toBe(settled)
+    expect(dock.querySelector('.animate-pulse') === null).toBe(settled)
+    expect(dock.querySelector('[data-slot="plan-unfinished"]') !== null).toBe(settled)
   })
 
   it('plan-kind tool cards stay out of the thread — the dock is their surface (#382)', () => {
@@ -1249,6 +1789,12 @@ describe('TaskThreadRoute — read receipts', () => {
         const history = historyBodyFor(path, initial.id)
         if (history !== undefined) return Promise.resolve(jsonResponse(history))
         if (path === `/api/v1/runs/${initial.id}`) return Promise.resolve(jsonResponse(current))
+        // A neighbour to navigate to and back from — already read, so it never posts a receipt.
+        if (path === '/api/v1/runs/r2') {
+          return Promise.resolve(jsonResponse({ ...initial, id: 'r2', seenAt: RE_SEEN_AT }))
+        }
+        const neighbourHistory = historyBodyFor(path, 'r2')
+        if (neighbourHistory !== undefined) return Promise.resolve(jsonResponse(neighbourHistory))
         if (path === '/api/v1/runs') return Promise.resolve(jsonResponse([]))
         if (path === '/api/v1/providers/status') {
           return Promise.resolve(
@@ -1301,7 +1847,7 @@ describe('TaskThreadRoute — read receipts', () => {
     )
     visit('r1')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    await clickMarkUnread()
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/unread')).toBe(1))
 
     // Let every settled mutation, cache write and re-render drain before judging.
@@ -1319,7 +1865,7 @@ describe('TaskThreadRoute — read receipts', () => {
     )
     const first = visit('r1')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    await clickMarkUnread()
     await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
     expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
     first.unmount()
@@ -1327,6 +1873,54 @@ describe('TaskThreadRoute — read receipts', () => {
     visit('r1', first.queryClient)
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
     expect(currentRecord().seenAt).toBe(RE_SEEN_AT)
+  })
+
+  it('going to another task and back inside the cockpit marks it read again', async () => {
+    // The route element is REUSED across /tasks/A → /tasks/B → /tasks/A (React reconciles, it does
+    // not remount), so a suppression that only reset on remount survived the round trip and the
+    // task stayed bold in the sidebar however often it was reopened.
+    const { sent, currentRecord } = stubReceiptServer(
+      run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT }),
+    )
+    let go: (to: string) => void = () => {}
+    function Navigator() {
+      const navigate = useNavigate()
+      go = (to) => void navigate(to)
+      return null
+    }
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Navigator />
+          <Routes>
+            <Route path="/tasks/:id" element={<TaskThreadRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    await clickMarkUnread()
+    await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
+    expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
+
+    act(() => go('/tasks/r2'))
+    await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r2')).toBe(true))
+    act(() => go('/tasks/r1'))
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+    expect(currentRecord().seenAt).toBe(RE_SEEN_AT)
+  })
+
+  it('an unread finished task offers Mark read, and it marks it read', async () => {
+    const { sent, currentRecord } = stubReceiptServer(
+      run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT }),
+    )
+    visit('r1')
+    await clickMarkUnread()
+    await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
+    // The icon flips rather than disappearing — the way back is right where the click was.
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark read' }))
+    await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
+    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
   })
 
   it('the control appears as soon as opening the task has marked it read', async () => {
@@ -1339,4 +1933,48 @@ describe('TaskThreadRoute — read receipts', () => {
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
     expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
   })
+})
+
+/** Mark unread is an icon of its own among the task actions. */
+async function clickMarkUnread(): Promise<void> {
+  fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+}
+
+describe('liveTurnStart — where the Working… counter starts', () => {
+  const run = { startedAt: '2026-09-23T09:00:00.000Z' } as ApiRun
+  const turn = (extra: Partial<ThreadTurn>): ThreadTurn => ({ id: 't', items: [], ...extra })
+
+  it('uses the open turn’s start', () => {
+    expect(liveTurnStart(run, { turns: [turn({ startedAt: '2026-09-23T10:00:00.000Z' })] })).toBe(
+      '2026-09-23T10:00:00.000Z',
+    )
+  })
+
+  it('between turns, counts from when the last one closed', () => {
+    const closed = turn({
+      startedAt: '2026-09-23T10:00:00.000Z',
+      completed: { stopReason: 'end_turn', ts: '2026-09-23T10:05:00.000Z' },
+    })
+    expect(liveTurnStart(run, { turns: [closed] })).toBe('2026-09-23T10:05:00.000Z')
+  })
+
+  it('falls back to the run’s own start', () => {
+    expect(liveTurnStart(run, { turns: [] })).toBe(run.startedAt)
+    expect(liveTurnStart(run, { turns: [turn({})] })).toBe(run.startedAt)
+  })
+})
+
+
+it('shows lifecycle recovery before agent activity and prevents misleading reply controls', async () => {
+  const operationId = '11111111-1111-4111-8111-111111111111'
+  const queryClient = createQueryClient()
+  queryClient.setQueryData(lifecycleQueryKeys.operation(operationId), {operation:{id:operationId,worktreeId:operationId,generation:1,phase:'setup',intent:'create',state:'needs_attention',revision:1,createdAt:'now',updatedAt:'now',history:[],entries:[],allowedActions:['retry','start-anyway','cancel-task']}})
+  vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response('[]', {status:200,headers:{'content-type':'application/json'}}))))
+  const fixture = run('waiting', {worktreeLifecycle:{worktreeId:operationId,generation:1,activeOperationId:operationId,phase:'setup',state:'needs_attention',needsAttention:true}})
+  render(<QueryClientProvider client={queryClient}><MemoryRouter><ThreadView run={fixture} thread={reduceThread([])} /></MemoryRouter></QueryClientProvider>)
+  expect(await screen.findByText('Setup needs attention')).toBeTruthy()
+  expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
+  expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
+  expect(screen.getByText('Resolve the worktree operation above before continuing this task.')).toBeTruthy()
+  expect(screen.queryByRole('textbox')).toBeNull()
 })

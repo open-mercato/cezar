@@ -4,6 +4,7 @@ import { buildChildEnv } from './agent-env.ts';
 import { readNdjson } from './ndjson.ts';
 import { resolveClaudeExecutable } from './claude-cli-runner.ts';
 import type { ModelOption } from './runner-model-catalog.ts';
+import { spawnableCommand } from './windows-shim.ts';
 
 export interface ClaudeModelDiscoveryOptions {
   cwd: string;
@@ -81,7 +82,7 @@ const DISCOVERY_ARGS = [
 ];
 
 function spawnClaudeProbe(bin: string, cwd: string): ChildProcessWithoutNullStreams {
-  return nodeSpawn(bin, DISCOVERY_ARGS, {
+  return nodeSpawn(...spawnableCommand(bin, DISCOVERY_ARGS), {
     cwd,
     env: buildChildEnv({ backend: 'claude' }),
     stdio: ['pipe', 'pipe', 'pipe'],

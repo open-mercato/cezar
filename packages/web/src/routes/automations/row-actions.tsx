@@ -1,5 +1,6 @@
 import {
   CopyIcon,
+  EyeIcon,
   EllipsisIcon,
   PauseIcon,
   PencilIcon,
@@ -49,6 +50,9 @@ export function RowActions({ automation, actions }: { automation: AutomationList
 
   return (
     <span data-slot="row-actions" className="inline-flex gap-0.5" onClick={stop}>
+      {automation.kind !== 'schedule' ? <Button variant="ghost" size="icon-sm" title="Preview matches" aria-label="Preview matches" disabled={actions.busy} onClick={() => void actions.preview(automation)}>
+        <EyeIcon className="size-[13px]" />
+      </Button> : null}
       <Button
         variant="ghost"
         size="icon-sm"

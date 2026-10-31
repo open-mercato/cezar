@@ -41,7 +41,7 @@ command is verified before the installer moves on.
 From a published release:
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 ```
 
 Or from a git checkout on the box:
@@ -90,7 +90,7 @@ a hand-rolled nginx, Caddy — installing cezar's nginx would fight it for those
 ports. Use `--external-proxy`:
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps \
+npx cezar-run server-install --platform ubuntu-vps \
   --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
 ```
 
@@ -148,10 +148,10 @@ only removes the service — it never touches the proxy it doesn't own).
 ## Updating / redeploying a new version
 
 Once a new cezar is available (a fresh local build, or a newly published
-`cezar-cli`), reload the running service with one standardized command:
+release), reload the running service with one standardized command:
 
 ```bash
-npx cezar-cli server-deploy --platform ubuntu-vps
+npx cezar-run server-deploy --platform ubuntu-vps
 #   from a checkout:  node packages/cezar/dist/index.js server-deploy --platform ubuntu-vps
 #   npm script:       npm run server-deploy -- --platform ubuntu-vps
 ```
@@ -161,8 +161,9 @@ answer, and re-runs the same authenticated end-to-end check as install — so a
 green deploy means the cockpit is actually serving the new version.
 
 - **From a checkout** the service runs `<node> <repo>/packages/cezar/dist/index.js` — so build
-  first, then deploy: `git pull && npm run build && npx cezar-cli server-deploy --platform ubuntu-vps`.
-- **Via npx** the service runs `npx --yes cezar-cli`. npx caches the resolved
+  first, then deploy: `git pull && npm run build && npx cezar-run server-deploy --platform ubuntu-vps`.
+- **Via npx** the service runs `npx --yes cezar-cli` (the original alias of the
+  same package, whichever alias launched the installer). npx caches the resolved
   package under `~/.npm/_npx` and reuses it on restart, so `server-deploy` first
   **clears that cached `cezar-cli` build** and then restarts — the next launch
   re-resolves the latest published version. (Before this, a restart silently
@@ -194,10 +195,10 @@ header. Pass `--domain` to select or create an instance:
 
 ```bash
 # first cockpit — the default instance (loopback :4321, ~/.cezar/server.json)
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 
 # a SECOND, fully independent cockpit for another domain
-npx cezar-cli server-install --platform ubuntu-vps --domain shop.example.com
+npx cezar-run server-install --platform ubuntu-vps --domain shop.example.com
 ```
 
 Because instances are **keyed by domain**, running `server-install` again with a
@@ -220,8 +221,8 @@ What differs per instance:
 - **Deploy / uninstall** — pass the same `--domain` to target that instance:
 
   ```bash
-  npx cezar-cli server-deploy    --platform ubuntu-vps --domain shop.example.com
-  npx cezar-cli server-uninstall --platform ubuntu-vps --domain shop.example.com
+  npx cezar-run server-deploy    --platform ubuntu-vps --domain shop.example.com
+  npx cezar-run server-uninstall --platform ubuntu-vps --domain shop.example.com
   ```
 
   A named-instance uninstall removes only that instance's owned artifacts and
@@ -260,6 +261,7 @@ break other vhosts).
 | "no gh / claude installed" but you have them | Launched from a non-login shell without `~/.local/bin`/nvm on PATH. The current installer merges your login-shell PATH; update and re-run. |
 | certbot "verification failed" but it succeeded | Fixed — verification now reads the world-readable nginx vhost, not root-only `/etc/letsencrypt/live`. |
 | Cockpit unreachable, nginx fine | Ports 80/443 blocked. Check `ufw status` **and** any cloud firewall (Hetzner/AWS security groups). |
+| Cockpit loads, but every action fails with `403 forbidden: cross-origin request rejected` | You reach nginx through a forwarded port (a VM, NAT, `box:8080` to `:80`) and the vhost forwards `Host $host`, which drops that port. Fixed for new installs; `server-deploy` leaves an existing vhost as it is, so edit it once: `sudo sed -i 's/proxy_set_header Host \$host;/proxy_set_header Host $http_host;/' /etc/nginx/sites-available/cezar*`, then `sudo nginx -t && sudo systemctl reload nginx`. This one-line migration is the exception to the vhost's "do not edit by hand" header: `--reconfigure nginx-proxy` would regenerate the line too, but it rewrites the whole vhost (dropping certbot's TLS edits) and asks for a new cockpit password. |
 | nginx won't start: `Address already in use` | Another proxy (Dokploy/Coolify → Traefik, Caddy) owns :80/:443. Re-run with `--external-proxy` (see above). `sudo ss -ltnp \| grep -E ':80\|:443'` shows who holds them. |
 | `run server-install as a normal sudo-capable user, not root` | You're `root`. `adduser cezar && usermod -aG sudo cezar`, `su - cezar`, log your agent CLI in **as that user**, then re-run. |
 | External-proxy install: proxy returns 502 | Traefik runs in a container and can't reach `127.0.0.1`. Reinstall with `--bind-host 172.17.0.1` (or your `docker0` address). |

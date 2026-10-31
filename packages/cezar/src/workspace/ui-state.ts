@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import type { WorkspaceUiState } from '@open-mercato/cezar-contract';
+import { readFileWithRetry } from '../fs-rename.ts';
 import { workspaceUiStatePath } from '../paths.ts';
-import { atomicWriteJsonSync } from './config.ts';
+import { atomicWriteJson, serializedByPath } from './config.ts';
 
 /**
  * `~/.cezar/ui-state.json` — global GUI state, the workspace twin of the
@@ -9,9 +9,11 @@ import { atomicWriteJsonSync } from './config.ts';
  * Data Model). Same split as `src/ui-state.ts`: this module owns the tolerant
  * read and the atomic write; the schema and key cap live at the route boundary
  * (`GET/PUT /api/workspace/ui-state`, step 2.7). The state is an opaque
- * `.passthrough()`-style bag — cross-project prefs (appearance, notifications,
- * curated skills) live here; project-scoped prefs stay in each repo's own file,
- * and prefs that describe the BROWSER rather than the workspace (sidebar
+ * `.passthrough()`-style bag — cross-project prefs (appearance, notifications)
+ * live here; project-scoped prefs stay in each repo's own file. The legacy
+ * `importedSkills` key remains available as a fallback for projects that have
+ * not saved a project-level selection yet. Prefs that describe the BROWSER
+ * rather than the workspace (sidebar
  * collapse, the last visited location) stay in that browser's localStorage.
  */
 
@@ -26,7 +28,7 @@ export async function readWorkspaceUiState(
   path: string = workspaceUiStatePath(),
 ): Promise<WorkspaceUiState> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    const parsed: unknown = JSON.parse(await readFileWithRetry(path));
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as WorkspaceUiState)
       : {};
@@ -38,8 +40,10 @@ export async function readWorkspaceUiState(
 /**
  * Read-modify-write for `~/.cezar/ui-state.json`, written with the same atomic
  * per-writer tmp+rename `0600` pattern (dir `0700`) as
- * `mergeWriteWorkspaceConfig` (`atomicWriteJsonSync` — one shared writer, so
- * the unique-tmp rule cannot drift between the two files). A missing or
+ * `mergeWriteWorkspaceConfig` (`atomicWriteJson` — one shared writer, so
+ * the unique-tmp rule cannot drift between the two files). Async and queued per
+ * path: a sync rename retry starved a concurrent request's read of the same
+ * file, and its open handle failed the win32 rename EPERM (telemetry 4a7c9f6c). A missing or
  * corrupt file merges from `{}`. The mutator may mutate its argument in place
  * or return a replacement. Throws on write failure (e.g. a read-only home) —
  * degrading is the caller's policy, per house rules.
@@ -52,8 +56,10 @@ export async function mergeWriteWorkspaceUiState(
   mutator: (state: WorkspaceUiState) => WorkspaceUiState | void,
 ): Promise<WorkspaceUiState> {
   const path = workspaceUiStatePath();
-  const current = await readWorkspaceUiState(path);
-  const next = mutator(current) ?? current;
-  atomicWriteJsonSync(path, next);
-  return next;
+  return serializedByPath(path, async () => {
+    const current = await readWorkspaceUiState(path);
+    const next = mutator(current) ?? current;
+    await atomicWriteJson(path, next);
+    return next;
+  });
 }

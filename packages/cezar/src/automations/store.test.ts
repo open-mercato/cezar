@@ -1,7 +1,9 @@
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AutomationStore } from './store.ts';
 
@@ -61,6 +63,75 @@ describe('AutomationStore', () => {
     expect(warnings).toHaveLength(2);
   });
 
+  const deferredInput = (creationKey: string) => ({
+    name: 'Later', kind: 'schedule' as const, enabled: true,
+    schedule: { type: 'once' as const, date: '2026-12-01', hour: 9, minute: 0 },
+    task: { prompt: 'Do this later' },
+    deferredStart: { origin: 'composer' as const, reason: 'at' as const,
+      notBefore: '2026-12-01T09:00:00.000Z', timeZone: 'UTC',
+      binding: { revision: 'bound', runner: 'claude', accounts: [] },
+      creationKey, requestDigest: 'digest', status: 'pending' as const, runIds: [],
+    },
+  });
+
+  it.each([null, false, { id: 'damaged', requestDigest: 'digest', outcome: 'launched', runIds: null }])(
+    'preserves definitions and damaged ledger evidence across reopen and ordinary writes: %j', async (damaged) => {
+      const dir = await directory();
+      const store = AutomationStore.open(dir);
+      store.create(input, 'ordinary');
+      store.create(deferredInput('valid'), 'scheduled');
+      store.create(deferredInput('bad'), 'damaged-scheduled');
+      const path = join(dir, 'automations.json');
+      const raw = JSON.parse(readFileSync(path, 'utf8'));
+      raw.deferredCreations.bad = damaged;
+      writeFileSync(path, JSON.stringify(raw));
+
+      const reopened = AutomationStore.open(dir);
+      expect(reopened.list().map(row => row.id).sort()).toEqual(['damaged-scheduled', 'ordinary', 'scheduled']);
+      reopened.update('ordinary', 1, { ...input, name: 'Updated' });
+      reopened.create(input, 'another');
+      const again = AutomationStore.open(dir);
+      expect(again.get('ordinary')?.name).toBe('Updated');
+      expect(() => again.creation('bad')).toThrow(/corrupt deferred creation/);
+      let initialized = false;
+      expect(() => again.create(deferredInput('bad'), 'duplicate', () => { initialized = true; }))
+        .toThrow(/corrupt deferred creation/);
+      expect(initialized).toBe(false);
+      expect(() => again.finishDeferred('damaged-scheduled', 'cancelled')).toThrow(/corrupt deferred creation/);
+      expect(again.get('damaged-scheduled')).toBeDefined();
+      expect(again.get('duplicate')).toBeUndefined();
+      expect(again.creation('valid')).toEqual({ id: 'scheduled', requestDigest: 'digest', outcome: 'pending', runIds: [] });
+      expect(() => again.create(deferredInput('valid'), 'duplicate-valid')).toThrow('creation key already used');
+      expect(again.creation('unused')).toBeUndefined();
+      again.create(deferredInput('unused'), 'new-scheduled');
+      again.finishDeferred('scheduled', 'launched', ['run-1']);
+      expect(AutomationStore.open(dir).creation('valid')?.runIds).toEqual(['run-1']);
+      expect(JSON.parse(readFileSync(path, 'utf8')).deferredCreations.bad).toEqual(damaged);
+    },
+  );
+
+  it.each([null, false, 'damaged', [{ id: 'unknown-owner' }]])(
+    'blocks every creation key for a malformed ledger without losing ordinary definitions: %j', async (ledger) => {
+      const dir = await directory();
+      const store = AutomationStore.open(dir);
+      store.create(input, 'ordinary');
+      const path = join(dir, 'automations.json');
+      const raw = JSON.parse(readFileSync(path, 'utf8'));
+      raw.deferredCreations = ledger;
+      writeFileSync(path, JSON.stringify(raw));
+      const reopened = AutomationStore.open(dir);
+      expect(reopened.get('ordinary')).toBeDefined();
+      reopened.update('ordinary', 1, { ...input, name: 'Updated' });
+      reopened.create(input, 'another');
+      const again = AutomationStore.open(dir);
+      expect(() => again.creation('any-key')).toThrow(/corrupt deferred creation/);
+      expect(() => again.create(deferredInput('any-key'), 'duplicate')).toThrow(/corrupt deferred creation/);
+      expect(again.get('duplicate')).toBeUndefined();
+      expect(JSON.parse(readFileSync(path, 'utf8')).deferredCreations).toEqual(ledger);
+      expect(again.list()).toHaveLength(2);
+    },
+  );
+
   it('enforces optimistic revisions and tombstones deleted ids', async () => {
     const store = AutomationStore.open(await directory());
     store.create(input, 'one');
@@ -81,6 +152,22 @@ describe('AutomationStore', () => {
       updatedAt: '2026-07-26T01:00:00.000Z',
     });
     expect(store.latestReceipts().get('one:event')?.runId).toBe('run-1');
+  });
+
+  it('normalizes a legacy receipt key before checking event identity', async () => {
+    const store = AutomationStore.open(await directory());
+    store.appendReceipt({
+      receiptId: 'old-receipt',
+      receiptKey: 'one:1:event',
+      eventId: 'event',
+      automationId: 'one',
+      revision: 1,
+      status: 'launched',
+      runId: 'run-1',
+      observedAt: '2026-07-26T01:00:00.000Z',
+      updatedAt: '2026-07-26T01:00:00.000Z',
+    });
+    expect(store.reserveReceipt({ automationId: 'one', revision: 2, eventId: 'event' })).toBeUndefined();
   });
 
   it('holds an exclusive recoverable project polling lease', async () => {
@@ -126,11 +213,23 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(FOREIGN_PID);
   });
 
+  it('does not overwrite a replacement that appears after stale metadata validation', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement', startedAt: new Date().toISOString() });
+    const store = AutomationStore.open(dir, {
+      processAlive: () => false,
+      beforeLeaseMetadataWrite: (path) => writeFileSync(path, replacement),
+    });
+    expect(store.acquireLease()).toBeUndefined();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+  });
+
   it('falls back to the age rule for a lock whose pid cannot be read', async () => {
     const dir = await lockedDirectory('{half-writ');
     const store = AutomationStore.open(dir, { processAlive: () => false });
     expect(store.acquireLease()).toBeUndefined();
-    // Same unreadable lock, once it is old enough: reclaimed on age alone.
+    // Same unreadable lock, now with staleAfterMs of 0: "stale regardless of age" is
+    // deterministic and does not depend on any real time having passed since it was written.
     expect(store.acquireLease(0)).toBeDefined();
   });
 
@@ -142,6 +241,133 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(lease).toBeDefined();
     lease?.release();
   });
+
+  it('serializes competing stale-lock reclaimers and does not let an old owner release a replacement', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const one = AutomationStore.open(dir, { processAlive: () => false });
+    const two = AutomationStore.open(dir, { processAlive: () => false });
+    const first = one.acquireLease();
+    expect(first).toBeDefined();
+    // A contender must observe the live replacement, not reclaim it as the abandoned lock.
+    expect(two.acquireLease()).toBeUndefined();
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement', startedAt: new Date().toISOString() });
+    writeFileSync(join(dir, 'automation-poll.lock'), replacement);
+    first?.release();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+    unlinkSync(join(dir, 'automation-poll.lock'));
+  });
+
+  it('allows at most one of two processes to reclaim the same abandoned lock', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
+    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] }));
+    const states = children.map((childProcess) => {
+      let buffer = '';
+      let ready!: () => void;
+      let result!: (held: boolean) => void;
+      const readyPromise = new Promise<void>((resolve) => { ready = resolve; });
+      const resultPromise = new Promise<boolean>((resolve) => { result = resolve; });
+      childProcess.stdout.setEncoding('utf8');
+      childProcess.stdout.on('data', (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line === 'ready') ready();
+          else if (line) result(JSON.parse(line).held as boolean);
+        }
+      });
+      return { readyPromise, resultPromise };
+    });
+    await Promise.all(states.map((state) => state.readyPromise));
+    for (const childProcess of children) childProcess.stdin.write('go\n');
+    const results = await Promise.all(states.map((state) => state.resultPromise));
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('recovers a guard abandoned by a dead process', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
+    const lease = AutomationStore.open(dir).acquireLease();
+    expect(lease).toBeDefined();
+    expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(process.pid);
+    lease?.release();
+  });
+
+  it('keeps a live owner valid when a contender arrives during an event-loop stall (#1106)', async () => {
+    const dir = await directory();
+    const owner = AutomationStore.open(dir).acquireLease();
+    expect(owner).toBeDefined();
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
+    const contender = spawn(process.execPath, ['--import', 'tsx', child, dir, '2500'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const closed = new Promise<void>((resolve) => contender.once('close', () => resolve()));
+    let output = '';
+    const result = new Promise<boolean>((resolve, reject) => {
+      contender.stdout.setEncoding('utf8');
+      contender.stdout.on('data', (chunk) => {
+        output += chunk;
+        for (const line of output.split('\n')) {
+          if (!line.startsWith('{')) continue;
+          try {
+            resolve((JSON.parse(line) as { held: boolean }).held);
+          } catch { /* wait for a complete line */ }
+        }
+      });
+      contender.once('error', reject);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const onData = (chunk: Buffer | string) => {
+        if (String(chunk).includes('ready\n')) {
+          contender.stdout.off('data', onData);
+          contender.stdin.write('go\n');
+          resolve();
+        }
+      };
+      contender.stdout.on('data', onData);
+      contender.once('error', reject);
+    });
+    // The contender attempts after 2.5s, while this owner blocks for 3s. Under the old 2s
+    // guard the contender replaces the guard before the live-pid check rejects its lease.
+    const until = Date.now() + 3_000;
+    while (Date.now() < until) { /* deliberate event-loop stall */ }
+    await expect(result).resolves.toBe(false);
+    expect(owner?.isValid()).toBe(true);
+    owner?.release();
+    contender.kill('SIGTERM');
+    await closed;
+  }, 12_000);
+
+  it('recovers a real killed owner after the bounded guard stale window', async () => {
+    const dir = await directory();
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
+    const childProcess = spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] });
+    let output = '';
+    const acquired = new Promise<void>((resolve, reject) => {
+      childProcess.stdout.setEncoding('utf8');
+      childProcess.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('ready\n')) childProcess.stdin.write('go\n');
+        if (output.includes('"held":true')) resolve();
+      });
+      childProcess.once('error', reject);
+    });
+    await acquired;
+    childProcess.kill('SIGKILL');
+    await new Promise<void>((resolve) => childProcess.once('close', () => resolve()));
+    // Keep margin for the 15s guard threshold, final heartbeat/stat timestamp, and filesystem
+    // timestamp granularity. This is intentionally bounded real SIGKILL recovery coverage.
+    await new Promise((resolve) => setTimeout(resolve, 16_200));
+    const lease = AutomationStore.open(dir).acquireLease();
+    expect(lease).toBeDefined();
+    lease?.release();
+  }, 22_000);
 });
 
 describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {
@@ -183,4 +409,20 @@ describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => 
       lastSuccessAt: '2026-09-14T02:00:00.000Z',
     });
   });
+});
+
+it('keeps old tracker receipts while the definition can resume history, then expires them after deletion', async () => {
+  let now = new Date('2026-01-01T00:00:00.000Z');
+  const store = AutomationStore.open(await directory(), { now: () => now });
+  store.create({ ...input, kind: 'tracker', filters: { ...input.filters, status: 'To Do' } }, 'tracker');
+  store.create(input, 'github');
+  store.reserveReceipt({ automationId: 'tracker', revision: 1, eventId: 'history:1' });
+  store.reserveReceipt({ automationId: 'github', revision: 1, eventId: 'event:1' });
+  now = new Date('2026-09-19T00:00:00.000Z');
+  store.compact();
+  expect(store.receipts().map(receipt => receipt.automationId)).toEqual(['tracker']);
+  expect(store.reserveReceipt({ automationId: 'tracker', revision: 1, eventId: 'history:1' })).toBeUndefined();
+  store.delete('tracker');
+  store.compact();
+  expect(store.receipts()).toEqual([]);
 });

@@ -2,7 +2,8 @@ import { act, cleanup, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { setApiScope } from '@open-mercato/cezar-api-client'
-import { parseRunEvent, RUN_EVENT_BATCH_MS, useRunEvents } from './run-events'
+import type { RunRecord } from '@open-mercato/cezar-api-client'
+import { parseRunEvent, HIDDEN_STREAM_GRACE_MS, RUN_EVENT_BATCH_MS, useRunEvents } from './run-events'
 
 /**
  * Same doctrine as the global-stream suite: jsdom ships no EventSource, so the stub IS the test
@@ -135,6 +136,22 @@ describe('useRunEvents — subscription', () => {
     ])
   })
 
+  it('coalesces run-record frames into one onRun on the batch flush', async () => {
+    const runs: RunRecord[] = []
+    renderHook(() => useRunEvents('run-1', { onRun: (run) => runs.push(run) }))
+    const source = FakeEventSource.last
+    const frame = (status: string): string => JSON.stringify({ id: 'run-1', steps: [], status })
+
+    source.emit('run', frame('queued'))
+    source.emit('run', frame('running'))
+    // Not before the window: a token or cost tick must not write the detail cache on every frame.
+    expect(runs).toHaveLength(0)
+
+    await flushEvents()
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.status).toBe('running')
+  })
+
   it('survives a malformed frame — one bad line costs one line', async () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
@@ -164,6 +181,88 @@ describe('useRunEvents — subscription', () => {
     second.emit('run-event', line(2, 'stdout', { text: 'b' }))
     await flushEvents()
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])
+  })
+})
+
+describe('useRunEvents — hidden tab releases its stream (#1753)', () => {
+  const setVisibility = (state: 'visible' | 'hidden'): void => {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+  }
+  afterEach(() => setVisibility('visible'))
+
+  it('closes after the grace, reopens on return and the replay dedups', async () => {
+    const { result } = renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    first.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    await flushEvents()
+
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS))
+    expect(first.readyState).toBe(2)
+
+    setVisibility('visible')
+    expect(FakeEventSource.instances).toHaveLength(2)
+    FakeEventSource.last.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    FakeEventSource.last.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    await flushEvents()
+    expect(result.current.map((event) => event.seq)).toEqual([1, 2])
+  })
+
+  it('keeps the stream when the tab returns inside the grace', () => {
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    setVisibility('hidden')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS - 1))
+    setVisibility('visible')
+    act(() => vi.advanceTimersByTime(5_000))
+
+    expect(first.readyState).not.toBe(2)
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
+describe('useRunEvents — tab opened hidden (#1782)', () => {
+  const hideSilently = (): void => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+  }
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+
+  it('D: releases a stream mounted while hidden, with no visibilitychange', () => {
+    hideSilently()
+    renderHook(() => useRunEvents('run-1'))
+    const first = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(first.readyState).toBe(2)
+  })
+
+  it('E: releases the new stream when the runId changes while hidden', () => {
+    hideSilently()
+    const { rerender } = renderHook(({ id }) => useRunEvents(id), { initialProps: { id: 'run-1' } })
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    rerender({ id: 'run-2' })
+    const second = FakeEventSource.last
+    expect(second.url).toContain('run-2')
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(second.readyState).toBe(2)
+  })
+
+  it('arms the timer after a bfcache restore into a hidden document', () => {
+    renderHook(() => useRunEvents('run-1'))
+    act(() => {
+      window.dispatchEvent(new Event('pagehide'))
+    })
+    hideSilently()
+    const event = new Event('pageshow')
+    Object.defineProperty(event, 'persisted', { value: true })
+    act(() => {
+      window.dispatchEvent(event)
+    })
+    const reopened = FakeEventSource.last
+    act(() => vi.advanceTimersByTime(HIDDEN_STREAM_GRACE_MS + 5_000))
+    expect(reopened.readyState).toBe(2)
   })
 })
 
@@ -442,8 +541,8 @@ describe('useRunEvents — lifecycle', () => {
     })
     expect(first.closeCount).toBe(1)
 
-    // Restored from bfcache: a fresh socket to the same run, and the server's replay of what
-    // we already rendered stays swallowed by the high-water mark.
+    // Restored from bfcache: a fresh socket to the same run that asks only for what follows the
+    // high-water mark, which still swallows anything the server replays anyway.
     const pageshow = new Event('pageshow')
     Object.defineProperty(pageshow, 'persisted', { value: true })
     act(() => {
@@ -452,7 +551,7 @@ describe('useRunEvents — lifecycle', () => {
 
     const second = FakeEventSource.last
     expect(second).not.toBe(first)
-    expect(second.url).toBe('/api/v1/runs/run-1/events')
+    expect(second.url).toBe('/api/v1/runs/run-1/events?afterSeq=1')
     second.emit('run-event', line(1, 'stdout', { text: 'before' })) // replayed prefix
     second.emit('run-event', line(2, 'stdout', { text: 'after' }))
     await flushEvents()

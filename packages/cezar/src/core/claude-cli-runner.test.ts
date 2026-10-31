@@ -1,6 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -10,7 +10,12 @@ import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   buildClaudeArgs,
+  CLAUDE_HEADLESS_GUIDANCE,
   ClaudeCliRunner,
+  appendClaudeSystemPrompt,
+  shouldSpoolSystemPrompt,
+  writeClaudeSystemPromptFile,
+  claudeExitMessage,
   EOF_KILL_GRACE_MS,
   EOF_TERM_GRACE_MS,
   KILL_GRACE_MS,
@@ -43,11 +48,40 @@ describe('buildClaudeArgs systemPrompt', () => {
     const args = buildClaudeArgs({ ...spec, systemPrompt: 'Extra rules.\n\n---\n\nContract.' });
     const idx = args.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe('Extra rules.\n\n---\n\nContract.');
+    expect(args[idx + 1]).toBe(appendClaudeSystemPrompt('Extra rules.\n\n---\n\nContract.'));
   });
 
-  it('omits the flag entirely when no systemPrompt is set', () => {
-    expect(buildClaudeArgs(spec)).not.toContain('--append-system-prompt');
+  it('always appends Claude-local headless denial guidance', () => {
+    const args = buildClaudeArgs(spec);
+    const idx = args.indexOf('--append-system-prompt');
+    expect(args[idx + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+  });
+
+  it('preserves caller instructions before the backend guidance', () => {
+    expect(appendClaudeSystemPrompt('Caller rules.')).toBe(
+      `Caller rules.\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`,
+    );
+  });
+
+  it('uses the same guidance for a resumed call without changing resume args', () => {
+    const initial = buildClaudeArgs({ ...spec, sessionId: 'session-1' });
+    const resumed = buildClaudeArgs({ ...spec, sessionId: 'session-1', resume: true });
+    expect(initial[initial.indexOf('--append-system-prompt') + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(resumed[resumed.indexOf('--append-system-prompt') + 1]).toBe(CLAUDE_HEADLESS_GUIDANCE);
+    expect(initial).toContain('--session-id');
+    expect(resumed).toContain('--resume');
+  });
+});
+
+describe('buildClaudeArgs output mode', () => {
+  const spec = { userPrompt: 'do it', cwd: '/tmp' };
+
+  it('runs in print mode, which both stream-json formats require', () => {
+    expect(buildClaudeArgs(spec)).toContain('--print');
+  });
+
+  it('asks for partial messages so text streams as deltas', () => {
+    expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
   });
 
   it('rejects the Codex-only reasoning effort instead of ignoring it', () => {
@@ -222,6 +256,41 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
     });
   });
 
+  // cf2191f1: a 30-minute WALL clock killed steps that were still streaming work.
+  it('never kills a session that keeps streaming, only one that went silent for the whole window', async () => {
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    vi.useFakeTimers();
+    try {
+      const events: AgentEvent[] = [];
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 1_000 }).startSession(
+        { userPrompt: 'do it', cwd: process.cwd() },
+        (event) => events.push(event),
+      );
+      void session.result.catch(() => undefined);
+      const frame = `${JSON.stringify({ type: 'system', subtype: 'status' })}\n`;
+      for (let i = 0; i < 5; i += 1) {
+        (fake.child.stdout as PassThrough).write(frame);
+        await vi.advanceTimersByTimeAsync(800);
+      }
+      // 4 s of wall clock against a 1 s limit: still alive, because it never went quiet.
+      expect(fake.signals).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(200);
+      expect(fake.signals).toEqual(['SIGTERM']);
+      fake.exit(143);
+      await session.result;
+      const error = events.find((e) => e.type === 'error');
+      expect(error).toEqual({
+        type: 'error',
+        message: 'claude CLI timed out after 1s without any output and was killed — Continue picks the task up again',
+      });
+    } finally {
+      vi.useRealTimers();
+      spawnHook.override = null;
+    }
+  });
+
   it('stops escalating once the CLI really exits after SIGTERM', () => {
     withFakeChild((fake) => {
       const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
@@ -237,6 +306,36 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
       expect(fake.signals).toEqual(['SIGTERM']);
     });
+  });
+
+  it('stops accepting messages once the child has exited on its own', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      expect(session.open).toBe(true);
+      fake.exit(1);
+
+      expect(session.open).toBe(false);
+      expect(session.sendMessage([{ type: 'text', text: 'are you there?' }])).toBe(false);
+    });
+  });
+});
+
+describe('claudeExitMessage', () => {
+  it('names a hangup the CLI exited on, which cezar never sends (telemetry 046a0525)', () => {
+    expect(claudeExitMessage(129, '')).toBe(
+      'claude CLI exited with code 129 (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)',
+    );
+  });
+
+  it('names any other signal exit, and keeps the stderr tail', () => {
+    expect(claudeExitMessage(137, 'a\nb')).toBe('claude CLI exited with code 137 (SIGKILL: a signal cezar did not send) — a | b');
+  });
+
+  it('leaves an ordinary failure code alone', () => {
+    expect(claudeExitMessage(1, 'boom\n')).toBe('claude CLI exited with code 1 — boom');
   });
 });
 
@@ -280,6 +379,94 @@ describe('ClaudeCliRunner token usage', () => {
       ]);
     } finally {
       rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+});
+
+describe('ClaudeCliRunner private MCP (spec 2026-10-07-private-project-mcp)', () => {
+  it('spawns with --mcp-config pointing at a 0600 file that is gone once the session ends', async () => {
+    const mockBin = fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url));
+    const runner = new ClaudeCliRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const cwd = mkdtempSync(join(tmpdir(), 'cez-claude-private-mcp-'));
+    const argsFile = join(cwd, 'args.ndjson');
+    try {
+      await runner.run({
+        userPrompt: 'do it',
+        cwd,
+        env: { CEZ_HANDOFF_FILE: '', CEZ_MOCK_ARGS_FILE: argsFile, CEZ_TODOS_FILE: '' },
+        allowedTools: ['Read'],
+        mcpServers: [{ name: 'tracker', transport: 'stdio', command: 'tracker-mcp', args: [], env: { TOKEN: 's3cret' }, headers: {} }],
+      });
+      const argv = JSON.parse(readFileSync(argsFile, 'utf8').trim().split('\n')[0]!) as string[];
+      const configPath = argv[argv.indexOf('--mcp-config') + 1]!;
+      expect(argv).toContain('--mcp-config');
+      expect(argv[argv.indexOf('--allowedTools') + 1]).toBe('Read,mcp__tracker');
+      expect(argv.join(' ')).not.toContain('s3cret');
+      expect(existsSync(configPath)).toBe(false);
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  });
+});
+
+describe('a CLI that dies before reading its prompt', () => {
+  const stubBin = fileURLToPath(
+    new URL('./__fixtures__/claude/stub-exits-before-reading.mjs', import.meta.url),
+  );
+
+  // A failed stdin write surfaces as an async 'error' event on the pipe, not a throw; unhandled,
+  // it crashed the whole cezar process (seen on a fleet hub when the CLI failed to start).
+  it('fails the session instead of crashing the process on EPIPE', async () => {
+    const runner = new ClaudeCliRunner({ bin: stubBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      { userPrompt: 'x'.repeat(8 * 1024 * 1024), cwd: process.cwd() },
+      () => {},
+    );
+    await expect(session.result).rejects.toThrow('claude CLI exited with code 1');
+    // Give a late EPIPE time to surface as an unhandled error, which vitest reports as a failure.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  });
+});
+
+// Spec 2026-10-24 item 9 (eb4b12dc): a gateway's OpenAI-shaped envelope read as its type and message.
+describe('claude result error with a JSON envelope', () => {
+  it('shows the vendor error type and message, not the raw JSON', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'claude-envelope-'));
+    const bin = join(root, 'claude.mjs');
+    const result = 'API Error: 400 [400]: {"error":{"type":"invalid_request_error","message":"model gpt-5 is not available","param":null,"code":null}}';
+    writeFileSync(bin, `#!/usr/bin/env node\nconsole.log(${JSON.stringify(JSON.stringify({ type: 'result', is_error: true, result }))});\nprocess.exit(1);\n`, { mode: 0o755 });
+    try {
+      const errors: string[] = [];
+      await new ClaudeCliRunner({ bin, timeoutMs: 5000 })
+        .run({ cwd: root, userPrompt: 'work' }, (event) => { if (event.type === 'error') errors.push(event.message); })
+        .catch(() => undefined);
+      expect(errors).toContain('API Error: 400 [400]: invalid_request_error: model gpt-5 is not available');
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe('system prompt past the Windows command-line limit (#1584)', () => {
+  const big = 'x'.repeat(40_000);
+
+  it('spools only on win32 and only when the prompt is large', () => {
+    expect(shouldSpoolSystemPrompt(big, 'win32')).toBe(true);
+    expect(shouldSpoolSystemPrompt('short', 'win32')).toBe(false);
+    expect(shouldSpoolSystemPrompt(big, 'linux')).toBe(false);
+    expect(shouldSpoolSystemPrompt(big, 'darwin')).toBe(false);
+    expect(writeClaudeSystemPromptFile(big, 'linux')).toBeUndefined();
+  });
+
+  it('passes a file flag and keeps the prompt out of argv', () => {
+    const file = writeClaudeSystemPromptFile(big, 'win32');
+    expect(file).toBeDefined();
+    try {
+      const args = buildClaudeArgs({ userPrompt: 'do it', cwd: '/tmp', systemPrompt: big }, process.env, undefined, file!.path);
+      expect(args).not.toContain('--append-system-prompt');
+      expect(args[args.indexOf('--append-system-prompt-file') + 1]).toBe(file!.path);
+      expect(args.join(' ').length).toBeLessThan(2_000);
+      expect(readFileSync(file!.path, 'utf8')).toBe(big);
+    } finally {
+      file!.cleanup();
     }
   });
 });

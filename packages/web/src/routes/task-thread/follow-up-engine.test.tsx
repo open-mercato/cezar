@@ -62,14 +62,14 @@ const HEALTH_MULTI: HealthResponse = {
   forge: null,
   // `followups` became a required capability in #471 (merged from main): irrelevant to the
   // Continue pills these tests drive, but the shape must be whole.
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 type Recorded = { method: string; url: string; body?: unknown }
 let requests: Recorded[]
 
 const providersForHealth = (health: HealthResponse): ProviderStatusResponse => ({
-  providers: (['claude', 'codex', 'opencode'] as const).map((provider) => ({
+  providers: (['claude', 'codex', 'opencode', 'cursor'] as const).map((provider) => ({
     provider,
     status: health.checks.some((check) => check.name === provider && check.available)
       ? 'connected' as const
@@ -118,11 +118,13 @@ function serve(
         })
       }
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/config' && method === 'GET')
         return json({
           baseBranch: null,
           defaultRunner: 'claude',
           systemPrompt: null,
+          branchNaming: null,
           defaultModels,
           modelsLocked,
           maxParallel: 1,
@@ -343,6 +345,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'disconnected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -362,6 +365,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -384,6 +388,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -406,6 +411,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'unknown', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'disconnected', enabled: true },
         ],
       },
     )
@@ -435,7 +441,8 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
-      ],
+        { provider: 'cursor', status: 'connected', enabled: true },
+        ],
     }
     serve(HEALTH_MULTI, {}, providers)
     renderAction(makeRun({ runner: 'claude' }))

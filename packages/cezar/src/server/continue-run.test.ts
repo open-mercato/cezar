@@ -8,6 +8,12 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
+import {
+  ATTACHMENT_IMAGES_TOO_LARGE,
+  ATTACHMENT_UPLOAD_MISSING,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENTS_TOTAL_BASE64,
+} from '@open-mercato/cezar-contract';
 
 /**
  * `POST /api/v1/runs/:id/continue` runner/model override (#401) — the follow-up composer lets the
@@ -29,6 +35,8 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     agentProfile?: string;
   };
   let captured: { id: string; opts: ContinueOpts } | undefined;
+  let calls: number;
+  let refuse: string | undefined;
   let home: string;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedHome = process.env.CEZ_HOME;
@@ -42,6 +50,8 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
+    calls = 0;
+    refuse = undefined;
     runId = store.createRun({
       title: 't',
       workflow: 'quick-task',
@@ -50,6 +60,8 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     }).id;
     const manager = {
       continueRun: (id: string, opts: ContinueOpts = {}) => {
+        calls += 1;
+        if (refuse) return { ok: false, error: refuse };
         captured = { id, opts };
         return { ok: true };
       },
@@ -135,6 +147,33 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured?.opts.model).toBeUndefined();
   });
 
+  /** A Continue taken behind the run's teardown (continueOnDrop) adds no step yet, so the
+   *  cockpit's re-post of a Continue that got no answer is told apart only by its key. */
+  it('continues a re-posted Continue once — a repeated idempotency key answers its first response', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e20';
+    const [first, retry] = await Promise.all([post({ text: 'once', idempotencyKey }), post({ text: 'once', idempotencyKey })]);
+    expect(await first.json()).toEqual({ continued: true });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ continued: true });
+    expect(calls).toBe(1);
+    expect((await post({ text: 'other', idempotencyKey: '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e21' })).status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it('a refused Continue key is judged afresh on retry', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e22';
+    refuse = 'run is still active';
+    expect((await post({ idempotencyKey })).status).toBe(409);
+    refuse = undefined;
+    expect(await (await post({ idempotencyKey })).json()).toEqual({ continued: true });
+    expect(calls).toBe(2);
+  });
+
+  it('rejects an idempotency key that is not a uuid', async () => {
+    expect((await post({ idempotencyKey: 'nope' })).status).toBe(400);
+    expect(calls).toBe(0);
+  });
+
   /** The follow-up composer is a full composer, so a screenshot pasted into it has to reach the
    *  reopened session — as content blocks, the same shape `POST /messages` hands the engine. */
   it('converts pasted images into content blocks for the manager', async () => {
@@ -149,8 +188,68 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     // Since #950 the follow-up composer takes PDF/TXT/MD too — the refusal is what is left
     // outside that allowlist, not "anything that is not an image".
     expect((await post({ images: [{ mediaType: 'application/zip', data: 'AAAA' }] })).status).toBe(400);
+    const tooMany = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE + 1 }, () => ({ mediaType: 'image/png', data: 'AAAA' }));
+    expect((await post({ images: tooMany })).status).toBe(400);
+    expect(captured).toBeUndefined();
+  });
+
+  /** Telemetry 7054e5f2: a message names staged uploads instead of carrying their bytes, so the
+   *  inline size budget does not apply to them — files travel as paths, so they never count. */
+  const stage = async (mediaType: string, data: string, name: string): Promise<string> => {
+    const res = await apiRequest(app, '/api/v1/workspace/uploads', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mediaType, data, name }),
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { uploadId: string }).uploadId;
+  };
+
+  it('resolves staged uploads, past the inline size budget', async () => {
+    // Five of these inline would exceed the budget; each alone is a valid attachment.
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 5 + 4);
+    const staged = [await stage('image/png', 'AAAA', 'shot.png')];
+    for (let i = 0; i < 5; i += 1) staged.push(await stage('application/pdf', big, `doc-${i}.pdf`));
+    const res = await post({ text: 'compare', images: staged.map((uploadId) => ({ uploadId })) });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.images).toHaveLength(6);
+    expect(captured?.opts.images?.[0]?.source.data).toBe('AAAA');
+  });
+
+  /** Images reach the provider inline in one turn, so staging them does not lift their budget. */
+  it('refuses staged images past the image budget', async () => {
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 5 + 4);
+    const staged = [];
+    for (let i = 0; i < 5; i += 1) staged.push(await stage('image/png', big, `shot-${i}.png`));
+    const res = await post({ text: 'compare', images: staged.map((uploadId) => ({ uploadId })) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENT_IMAGES_TOO_LARGE);
+    expect(captured).toBeUndefined();
+  });
+
+  /** #1735: an over-limit body used to answer a bare "Payload Too Large" the cockpit could not explain. */
+  it('answers an over-limit body with a JSON 413 naming the limit', async () => {
+    const res = await post({ text: 'x', pad: 'A'.repeat(33 * 1024 * 1024) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(((await res.json()) as { error: string }).error).toContain('32 MiB');
+  });
+
+  it('refuses a reference to an upload that is gone, with the wording the composer matches', async () => {
+    const res = await post({ images: [{ uploadId: 'a'.repeat(24) }] });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENT_UPLOAD_MISSING);
+    expect(captured).toBeUndefined();
+  });
+
+  /** Telemetry 7054e5f2: five screenshots in one message were refused under the old cap of four. */
+  it('accepts five attachments, and refuses a set over the total size budget', async () => {
     const five = Array.from({ length: 5 }, () => ({ mediaType: 'image/png', data: 'AAAA' }));
-    expect((await post({ images: five })).status).toBe(400);
+    expect((await post({ images: five })).status).toBe(200);
+    captured = undefined;
+    const big = 'A'.repeat(MAX_ATTACHMENTS_TOTAL_BASE64 / 4 + 4);
+    const heavy = Array.from({ length: 4 }, () => ({ mediaType: 'image/png', data: big }));
+    expect((await post({ images: heavy })).status).toBe(400);
     expect(captured).toBeUndefined();
   });
 

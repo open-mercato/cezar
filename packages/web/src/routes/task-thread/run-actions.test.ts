@@ -47,17 +47,17 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
   // `pin` (#935) is the one flag `archived` does turn off, since archiving retires the pin: the
   // archived rows below assert exactly that, and every live row offers it whatever the status,
   // because a pin is about what YOU are working on rather than what the engine is doing.
-  // `markUnread` (#775) is false in every cell of this matrix because the fixture carries no
+  // `markUnread` (#775) and its twin `markRead` are false in every cell of this matrix because the fixture carries no
   // `finishedAt` — a record with no finish instant can never wear the unread marker, whatever
   // its status says. The flag's real matrix is the FINISHED one in its own describe below.
   const matrix: Array<{ status: RunStatus; expected: Omit<ReturnType<typeof runActionFlags>, 'notes'> }> = [
-    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, pin: true, cancel: true, deleteRun: false } },
-    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, pin: true, cancel: true, deleteRun: false } },
-    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, pin: true, cancel: true, deleteRun: false } },
-    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
-    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
-    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
-    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, cancel: true, deleteRun: false } },
+    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, cancel: true, deleteRun: false } },
+    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, cancel: true, deleteRun: false } },
+    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
   ]
 
   it.each(matrix)('$status (live)', ({ status, expected }) => {
@@ -123,6 +123,14 @@ describe('runActionFlags.markUnread — the read→unread affordance (#775)', ()
     // never simultaneously wear the violet marker AND offer to be put back into it.
     for (const { record } of cases) {
       expect(runActionFlags(record).markUnread && isUnread(record)).toBe(false)
+      expect(runActionFlags(record).markUnread && runActionFlags(record).markRead).toBe(false)
+    }
+  })
+
+  it('markRead is offered exactly where the task wears the unread marker', () => {
+    // The control flips instead of vanishing: an unread finished task can be read without reopening.
+    for (const { record } of cases) {
+      expect(runActionFlags(record).markRead).toBe(isUnread(record))
     }
   })
 })
@@ -160,6 +168,8 @@ describe('resumeCommand — per backend, mirroring the server', () => {
     [undefined, 'claude --resume s1'], // legacy records predate the runner choice
     ['codex', 'codex resume s1'],
     ['opencode', 'opencode --session s1'],
+    ['junie', 'junie --resume --session-id=s1'],
+    ['cursor', 'agent --resume s1'],
   ] as Array<[RunRecord['runner'], string]>)('%s → %s', (runner, expected) => {
     expect(resumeCommand(runner, 's1')).toBe(expected)
   })
@@ -221,6 +231,7 @@ describe('cliTargetResumes — Open in… menu labeling (#402)', () => {
     ['claude', 'cli:claude'],
     ['codex', 'cli:codex'],
     ['opencode', 'cli:opencode'],
+    ['cursor', 'cli:cursor'],
   ] as Array<[RunRecord['runner'], string]>)('%s CLI resumes a %s run with a session', (runner, target) => {
     expect(cliTargetResumes(run('done', { runner }), target)).toBe(true)
   })
@@ -271,16 +282,14 @@ describe('finishTitle', () => {
 
 describe('resolveConflictsPrompt', () => {
   it('names the pull request, because a task can point at more than one', () => {
-    // The reason the number is in the words at all (#901: the PR a task opened AND the PR it is
-    // about both get chips). Told to "resolve the conflicts" with no number, the agent picks one
-    // at even odds — and half the time it is not the chip the user pressed.
-    expect(resolveConflictsPrompt(534)).toBe('Merge head branch and resolve conflicts in PR number 534')
-    expect(resolveConflictsPrompt(902)).toContain('PR number 902')
+    // The reason the number rides along at all (#901: the PR a task opened AND the PR it is about
+    // both get chips). Told to resolve conflicts with no number, the agent picks one at even odds.
+    expect(resolveConflictsPrompt(534)).toBe('Resolve conflicts in PR 534')
   })
 
-  it('still reads as a sentence for a reference with no number', () => {
+  it('still reads for a reference with no number', () => {
     // `taskPrUrl`'s tolerance: a forge whose PR URLs do not end in a number still gets a chip.
-    expect(resolveConflictsPrompt()).toBe('Merge head branch and resolve conflicts in this pull request')
+    expect(resolveConflictsPrompt()).toBe('Resolve conflicts')
   })
 })
 
@@ -302,5 +311,14 @@ describe('queuePosition — the legacy FIFO math (web/app.js), 1-based among que
   it('is undefined for a run the queue does not hold (not queued, or list not loaded yet)', () => {
     expect(queuePosition([run('running', { id: 'busy' })], 'busy')).toBeUndefined()
     expect(queuePosition([], 'anything')).toBeUndefined()
+  })
+})
+
+describe('lifecycle action exclusion', () => {
+  it.each(['waiting', 'review', 'done'] as const)('keeps ordinary task/session actions out of an active gate (%s)', status => {
+    const record = run(status, {worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'needs_attention',needsAttention:true}})
+    expect(runActionFlags(record)).toMatchObject({finish:false,continueRun:false,terminal:false,cancel:false,deleteRun:false})
+    expect(resumeHint(record)).toBeUndefined()
+    expect(cliTargetResumes(record, 'claude')).toBe(false)
   })
 })

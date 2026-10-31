@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { UiState } from '@open-mercato/cezar-contract';
+import { readWorkspaceUiState } from './workspace/ui-state.ts';
 
 /**
  * `.ai/cezar/ui-state.json` — small GUI preferences the cockpit persists (files, not a DB).
@@ -16,7 +17,9 @@ export function uiStatePath(repoRoot: string): string {
 }
 
 /**
- * Read `ui-state.json` on demand — never cached, never throws.
+ * Read `ui-state.json` on demand — never cached, never throws. The old
+ * workspace-level `importedSkills` value seeds projects without a local
+ * selection; a project-local value always takes precedence.
  *
  * Typed by the CONTRACT (`UiState`), not by a loose record: `GET /api/v1/ui-state` answers this
  * value verbatim, so a `Record<string, unknown>` here made the route name no key at all and the
@@ -30,10 +33,15 @@ export function uiStatePath(repoRoot: string): string {
  * by `uiStateBody`) is what actually enforces it.
  */
 export async function readUiState(repoRoot: string): Promise<UiState> {
+  let state: UiState = {};
   try {
     const parsed: unknown = JSON.parse(await readFile(uiStatePath(repoRoot), 'utf8'));
-    return parsed && typeof parsed === 'object' ? (parsed as UiState) : {};
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) state = parsed as UiState;
   } catch {
-    return {};
+    // Missing/unreadable local state remains an empty preference bag.
   }
+
+  if (Array.isArray(state.importedSkills)) return state;
+  const legacy = await readWorkspaceUiState();
+  return Array.isArray(legacy.importedSkills) ? { ...state, importedSkills: legacy.importedSkills } : state;
 }

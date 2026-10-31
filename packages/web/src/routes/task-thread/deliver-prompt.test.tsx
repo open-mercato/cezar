@@ -2,11 +2,16 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { MESSAGE_RETRY_DELAYS_MS } from '@/api/client'
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 
-import { deliveryPath, useDeliverPrompt } from './deliver-prompt'
+import { trackMessageSent } from '@/lib/telemetry'
+
+import { SESSION_GAP_RETRY_DELAYS_MS, deliveryPath, useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
+
+vi.mock('@/lib/telemetry', () => ({ trackMessageSent: vi.fn() }))
 
 /**
  * The composer's delivery recovery (deliver-prompt.ts).
@@ -74,13 +79,18 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
 }
 
 /** The two hooks the thread wires together, driven from one harness. */
-async function renderDeliver(record: ApiRun, overrides: Record<string, () => Response> = {}) {
+async function renderDeliver(
+  record: ApiRun,
+  overrides: Record<string, () => Response> = {},
+  wait: (delayMs: number) => Promise<void> = async () => {},
+  surface?: 'existing_session' | 'review' | null,
+) {
   const sent = stubFetch(overrides)
   const client = createQueryClient()
   const view = renderHook(
     () => {
       const action = useContinueAction(record)
-      return { action, deliver: useDeliverPrompt(record, action) }
+      return { action, deliver: useDeliverPrompt(record, action.continueWith, surface === undefined ? { wait } : { wait, surface }) }
     },
     {
       wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
@@ -97,6 +107,7 @@ const posts = (sent: SentRequest[], path: string) =>
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
+  vi.mocked(trackMessageSent).mockClear()
 })
 
 describe('deliveryPath', () => {
@@ -166,26 +177,258 @@ describe('useDeliverPrompt', () => {
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
   })
 
-  it('an empty submit is a Continue, and a run that is already live has nothing to continue', async () => {
-    const { sent, deliver } = await renderDeliver(run('done'), {
+  it('telemetry 77117b95: an empty one-click Continue on a run that is already live succeeds silently', async () => {
+    const { sent, client, deliver } = await renderDeliver(run('done'), {
       'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
       'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
     })
 
-    await expect(deliver('')).rejects.toThrow('run is still active')
-    // An empty message is not a message: nothing is delivered on the live path either.
+    // Nothing to continue: the run the click asked for is ALREADY live, so this is the state the
+    // user wanted, not a failure. Resolving (rather than throwing "run is still active") is what
+    // stops the cockpit toasting an error for a task that is simply already under way.
+    await expect(deliver('')).resolves.toBeUndefined()
+    // Nothing was delivered on the live path either — an empty message is not a message.
     expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+    // The refetch ran and healed the cache the thread reads.
+    expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(1)
+    expect(client.getQueryData<ApiRun>(['default', 'runs', 'detail', 'r1'])?.status).toBe('running')
   })
 
-  it('a fresh record with no session to resume keeps the original error', async () => {
+  it('a fresh record with no session to resume explains the refusal instead of a bare "session closed"', async () => {
     const { sent, deliver } = await renderDeliver(run('running'), {
       'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
       'GET /api/v1/runs/r1': () =>
         jsonResponse(run('failed', { steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'failed', iterations: 1, tokensUsed: 0 }] as ApiRun['steps'] })),
     })
 
-    await expect(deliver('carry on')).rejects.toThrow('session closed')
+    await expect(deliver('carry on')).rejects.toThrow(/not taking messages right now/)
     expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  /** Answers from `responses` in order, repeating the last one. */
+  const sequence = (...responses: Array<() => Response>) => {
+    let call = 0
+    return () => responses[Math.min(call++, responses.length - 1)]!()
+  }
+
+  it('telemetry 1408d7cb: a session that closed while the run settles waits for Continue instead of failing', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('running'),
+      {
+        'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
+        // Still `running` while the engine settles the record, then parked at review.
+        'GET /api/v1/runs/r1': sequence(() => jsonResponse(run('running')), () => jsonResponse(run('review'))),
+        'POST /api/v1/runs/r1/continue': () => jsonResponse({ continued: true }),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('carry on')).resolves.toBeTruthy()
+
+    expect(waits).toEqual([SESSION_GAP_RETRY_DELAYS_MS[0]])
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(2)
+    expect(posts(sent, '/api/v1/runs/r1/continue')[0]?.body).toMatchObject({ text: 'carry on' })
+  })
+
+  it('a message sent between two workflow steps reaches the next step’s session', async () => {
+    const { sent, deliver } = await renderDeliver(run('running'), {
+      'POST /api/v1/runs/r1/messages': sequence(
+        () => jsonResponse({ error: 'session closed' }, 409),
+        () => jsonResponse({ delivered: true }),
+      ),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+
+    await expect(deliver('carry on')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(2)
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('the wait is bounded: a run that never settles reports an actionable refusal', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('running'),
+      {
+        'POST /api/v1/runs/r1/messages': () => jsonResponse({ error: 'session closed' }, 409),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('carry on')).rejects.toThrow(/not taking messages right now/)
+    expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(0)
+  })
+
+  it('telemetry 77117b95: a Continue refused while a settled run still unwinds waits for it to let go', async () => {
+    const waits: number[] = []
+    // The record already says `review` — the engine settles it BEFORE the turn-end autosave drops
+    // the run — so the fresh record agrees with the Continue path while the server still refuses it.
+    const { sent, deliver } = await renderDeliver(
+      run('review'),
+      {
+        'POST /api/v1/runs/r1/continue': sequence(
+          () => jsonResponse({ error: 'run is still active' }, 409),
+          () => jsonResponse({ error: 'run is still active' }, 409),
+          () => jsonResponse({ continued: true }),
+        ),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('one more fix')).resolves.toBeTruthy()
+    expect(waits).toEqual([SESSION_GAP_RETRY_DELAYS_MS[0], SESSION_GAP_RETRY_DELAYS_MS[1]])
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(3)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
+  it('the unwinding wait is bounded too: a run that never lets go reports the refusal', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('review'),
+      {
+        'POST /api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('one more fix')).rejects.toThrow('run is still active')
+    expect(waits).toEqual([...SESSION_GAP_RETRY_DELAYS_MS])
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(SESSION_GAP_RETRY_DELAYS_MS.length + 1)
+  })
+
+  /** What `fetch` throws when the request got no answer — WebKit's `Load failed`. */
+  const unreachable = () => {
+    throw new TypeError('Load failed')
+  }
+
+  it('telemetry 7adbfbd7: a Continue that got no answer is re-posted once when the record proves it never landed', async () => {
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': sequence(unreachable, () => jsonResponse({ continued: true })),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+    })
+
+    await expect(deliver('one more fix')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(2)
+  })
+
+  it('a lost Continue that landed behind the teardown is not delivered a second time', async () => {
+    // The first Continue reached the server as a continueOnDrop: no step yet, so the record still
+    // reads `review`; the server refuses any OTHER Continue while the run unwinds, and the
+    // refetch after that refusal would find the run live and post the text again as a message.
+    let landedKey: string | undefined
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': () => {
+        const body = sent[sent.length - 1]?.body as { idempotencyKey?: string }
+        if (landedKey === undefined) {
+          landedKey = body.idempotencyKey ?? ''
+          return unreachable()
+        }
+        return body.idempotencyKey && body.idempotencyKey === landedKey
+          ? jsonResponse({ continued: true })
+          : jsonResponse({ error: 'run is still active' }, 409)
+      },
+      'GET /api/v1/runs/r1': sequence(() => jsonResponse(run('review')), () => jsonResponse(run('running'))),
+    })
+
+    await expect(deliver('one more fix')).resolves.toEqual({ continued: true })
+    const attempts = posts(sent, '/api/v1/runs/r1/continue').map((r) => r.body as { idempotencyKey?: string })
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/)
+    expect(attempts[1]?.idempotencyKey).toBe(attempts[0]?.idempotencyKey)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
+  it('a lost Continue the record shows as landed is never re-posted', async () => {
+    const landed = run('review', {
+      steps: [
+        ...run('review').steps,
+        { id: 'continue-1', name: 'Continue', kind: 'agent', status: 'pending', iterations: 0, tokensUsed: 0 },
+      ] as ApiRun['steps'],
+    })
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': unreachable,
+      'GET /api/v1/runs/r1': () => jsonResponse(landed),
+    })
+
+    await expect(deliver('one more fix')).rejects.toThrow('cannot reach the cezar server')
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(0)
+  })
+
+  it('a lost Continue is not re-posted when the server cannot answer the refetch either', async () => {
+    const { sent, deliver } = await renderDeliver(run('review'), {
+      'POST /api/v1/runs/r1/continue': unreachable,
+      'GET /api/v1/runs/r1': unreachable,
+    })
+
+    await expect(deliver('one more fix')).rejects.toThrow('cannot reach the cezar server')
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(1)
+  })
+
+  it('telemetry 1a212342: a live message that got no answer is re-posted under the same idempotency key', async () => {
+    const { sent, deliver } = await renderDeliver(run('waiting'), {
+      'POST /api/v1/runs/r1/messages': sequence(unreachable, () => jsonResponse({ delivered: true })),
+    })
+
+    await expect(deliver('hello')).resolves.toEqual({ delivered: true })
+    const attempts = posts(sent, '/api/v1/runs/r1/messages').map((r) => r.body as { idempotencyKey?: string })
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/)
+    // The server delivers a key once, so the re-post cannot double the message.
+    expect(attempts[1]?.idempotencyKey).toBe(attempts[0]?.idempotencyKey)
+  })
+
+  it('a live message the server never answers is reported after a bounded number of re-posts', async () => {
+    const { sent, deliver } = await renderDeliver(run('waiting'), {
+      'POST /api/v1/runs/r1/messages': unreachable,
+      'GET /api/v1/runs/r1': () => jsonResponse(run('waiting')),
+    })
+
+    await expect(deliver('hello')).rejects.toThrow('cannot reach the cezar server')
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(MESSAGE_RETRY_DELAYS_MS.length + 1)
+    expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(0)
+  })
+
+  it('telemetry f3d02411: a Continue that keeps hitting dead sockets is re-posted while the record proves it never landed', async () => {
+    const waits: number[] = []
+    const { sent, deliver } = await renderDeliver(
+      run('review'),
+      {
+        'POST /api/v1/runs/r1/continue': sequence(unreachable, unreachable, () => jsonResponse({ continued: true })),
+        'GET /api/v1/runs/r1': () => jsonResponse(run('review')),
+      },
+      async (delayMs) => {
+        waits.push(delayMs)
+      },
+    )
+
+    await expect(deliver('one more fix')).resolves.toBeTruthy()
+    expect(posts(sent, '/api/v1/runs/r1/continue')).toHaveLength(3)
+    expect(waits).toEqual(MESSAGE_RETRY_DELAYS_MS.slice(0, 2))
+  })
+
+  it('a different live 409 the fresh record agrees with is not retried', async () => {
+    const { sent, deliver } = await renderDeliver(run('running'), {
+      'POST /api/v1/runs/r1/messages': () =>
+        jsonResponse({ error: 'Claude Code is disabled. Enable it in Settings → Agents → Providers.' }, 409),
+      'GET /api/v1/runs/r1': () => jsonResponse(run('running')),
+    })
+
+    await expect(deliver('go on')).rejects.toThrow('Claude Code is disabled')
+    expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
   })
 
   it('a non-409 failure is reported as it comes — no refetch, no second attempt', async () => {
@@ -196,5 +439,24 @@ describe('useDeliverPrompt', () => {
     await expect(deliver('carry on')).rejects.toThrow('agent crashed')
     expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1')).toHaveLength(0)
     expect(posts(sent, '/api/v1/runs/r1/messages')).toHaveLength(1)
+  })
+
+  it('counts a landed delivery under its surface, and nothing when the caller opts out (#1473 review)', async () => {
+    const counted = await renderDeliver(run('waiting'))
+    await counted.deliver('hello')
+    expect(trackMessageSent).toHaveBeenCalledWith('existing_session')
+
+    vi.mocked(trackMessageSent).mockClear()
+    cleanup()
+    const review = await renderDeliver(run('waiting'), {}, undefined, 'review')
+    await review.deliver('notes')
+    expect(trackMessageSent).toHaveBeenCalledWith('review')
+
+    vi.mocked(trackMessageSent).mockClear()
+    cleanup()
+    // The footer's one-click Continue: delivered, but never a `message_sent`.
+    const footer = await renderDeliver(run('done'), {}, undefined, null)
+    await footer.deliver('')
+    expect(trackMessageSent).not.toHaveBeenCalled()
   })
 })

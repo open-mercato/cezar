@@ -1,6 +1,9 @@
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows } from './usage-windows.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { dirname, join, resolve as resolvePath } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -19,9 +22,14 @@ import {
   isSignalTerminationExit,
   trackChildExit,
 } from './agent-runner.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { disclaimedCommand } from './disclaim-spawn.ts';
+import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
   claudeTurnStarted,
   createClaudeUiState,
@@ -31,7 +39,7 @@ import {
   type ClaudeUiMapping,
 } from './claude-ui-mapper.ts';
 
-/** Default wall-clock cap for a single run before SIGTERM → SIGKILL.
+/** Default inactivity cap (no stream frame for this long) before SIGTERM → SIGKILL (cf2191f1).
  *  Interactive sessions pass `timeoutMs: 0` to disable it entirely. */
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
 /** Grace period between SIGTERM and SIGKILL when a timeout fires. */
@@ -43,16 +51,31 @@ export const EOF_KILL_GRACE_MS = 4_000;
 /** Reopen window after a turn ends before an auto-ended session closes stdin. */
 export const AUTO_END_DELAY_MS = 250;
 
+/**
+ * Claude runs through cezar's headless stream-json transport. There is no
+ * cockpit permission response channel yet, so a denial must become actionable
+ * prose rather than an invitation to use Claude Code's interactive controls.
+ */
+export const CLAUDE_HEADLESS_GUIDANCE = `You are running Claude Code through cezar's headless integration. Permission prompts cannot be answered in the cezar cockpit. If a tool call is denied, do not suggest Shift+Tab, /permissions, changing Claude permission settings, or replying Continue to retry it. Report the exact blocked tool and path or command, stop retrying that operation, and explain that the task's actual Open in… action is the workaround: continue in an interactive claude --resume <session id> shell in the task worktree and approve the prompt there. Do not use filesystem workarounds or claim that cezar can approve the request.`;
+
+/** Keep caller-owned instructions intact while adding guidance owned by this backend. */
+export function appendClaudeSystemPrompt(systemPrompt?: string): string {
+  return systemPrompt
+    ? `${systemPrompt}\n\n---\n\n${CLAUDE_HEADLESS_GUIDANCE}`
+    : CLAUDE_HEADLESS_GUIDANCE;
+}
+
 export interface ClaudeCliRunnerOptions {
   /** Override the binary name/path; defaults to `claude` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
 /**
  * The claude binary a spawn should use: an explicit override, else `CEZ_CLAUDE_BIN`, else the
- * bundled mock under `CEZ_DRY_RUN`, else `claude` on PATH.
+ * bundled mock under `CEZ_DRY_RUN`, else `claude` on PATH or at a known install location
+ * (`resolveClaudeBin`).
  *
  * Exported so model discovery (`claude-model-catalog.ts`) resolves the executable exactly the
  * way execution does — the catalog and the runs it feeds cannot disagree about which CLI, and
@@ -62,7 +85,8 @@ export function resolveClaudeExecutable(override?: string): string {
   if (override) return override;
   // CEZ_DRY_RUN=1 swaps in the bundled mock so the cockpit / store /
   // GUI can be exercised without a logged-in claude or burning tokens.
-  return process.env.CEZ_CLAUDE_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockClaudePath() : 'claude');
+  if (process.env.CEZ_CLAUDE_BIN) return process.env.CEZ_CLAUDE_BIN;
+  return process.env.CEZ_DRY_RUN === '1' ? mockClaudePath() : resolveClaudeBin();
 }
 
 /**
@@ -103,22 +127,29 @@ export class ClaudeCliRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const args = buildClaudeArgs(spec);
+    const mcpConfig = writeClaudeMcpConfig(spec.mcpServers);
+    const promptFile = writeClaudeSystemPromptFile(appendClaudeSystemPrompt(spec.systemPrompt));
+    const args = buildClaudeArgs(spec, process.env, mcpConfig?.path, promptFile?.path);
 
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = nodeSpawn(this.bin, args, {
-        cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
-      });
+      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      const [file, argv] = disclaimedCommand(this.bin, args, env);
+      child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
+      mcpConfig?.cleanup();
+      promptFile?.cleanup();
       throw wrapSpawnError(err, this.bin);
     }
 
+    // A write racing the child's exit reports EPIPE as an async 'error', which the try/catch in
+    // sendMessage cannot see; unhandled, it kills the server (acfb01e4). Exit owns settlement.
+    child.stdin.on('error', () => {});
     let stdinOpen = true;
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -162,7 +193,7 @@ export class ClaudeCliRunner implements AgentRunner {
     };
 
     // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
-    // wall-clock kill switch. claude installs its own SIGTERM handler and exits
+    // inactivity kill switch. claude installs its own SIGTERM handler and exits
     // 143 instead of dying from the signal, so without this flag our own
     // teardown reads as an agent failure (#703).
     let terminatedByCezar = false;
@@ -175,6 +206,9 @@ export class ClaudeCliRunner implements AgentRunner {
     // SIGTERM itself, so `killed` is true while the process runs on; escalation
     // has to follow real termination or it never fires (#844).
     const hasExited = trackChildExit(child);
+    child.once('exit', () => {
+      stdinOpen = false;
+    });
 
     const end = (): void => {
       if (!stdinOpen) return;
@@ -199,6 +233,15 @@ export class ClaudeCliRunner implements AgentRunner {
       if (!hasExited()) signalChild('SIGTERM');
     };
 
+    const hardStop = (): void => {
+      interrupt();
+      if (hardKillTimer || hasExited()) return;
+      hardKillTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, 1_000);
+      hardKillTimer.unref?.();
+    };
+
     // Seed the first user message — the same path every follow-up takes.
     // Pasted task screenshots (spec.images) ride along as leading blocks.
     sendMessage([...(spec.images ?? []), { type: 'text', text: spec.userPrompt }]);
@@ -217,28 +260,25 @@ export class ClaudeCliRunner implements AgentRunner {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        timedOut = true;
-        interrupt();
-        child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!hasExited()) signalChild('SIGKILL');
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      interrupt();
+      child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
           if (timedOut) break;
+          deadline.touch();
           let msg: ClaudeStreamMessage;
           try {
             msg = JSON.parse(line) as ClaudeStreamMessage;
@@ -246,6 +286,8 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'note', message: `claude: skipped unparseable stream line: ${truncate(line)}` });
             continue;
           }
+
+          emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
 
           // Claude reports `error_during_execution` while reacting to our
           // teardown signal. Once cezar has signalled the child, that frame
@@ -270,7 +312,7 @@ export class ClaudeCliRunner implements AgentRunner {
           }
 
           if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
+            if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
               onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
             }
             onEvent?.({ type: 'turn-end' });
@@ -285,10 +327,14 @@ export class ClaudeCliRunner implements AgentRunner {
         // error — expected; rethrow anything else.
         if (!timedOut) throw err;
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
+        if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
+        // stdout closed: the CLI read `--mcp-config` at startup long ago, so the file can go.
+        mcpConfig?.cleanup();
+        promptFile?.cleanup();
       }
 
       const exitCode = await waitForExit(child);
@@ -300,8 +346,7 @@ export class ClaudeCliRunner implements AgentRunner {
       const text = textChunks.join('\n').trim();
 
       if (timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        onEvent?.({ type: 'error', message: `claude CLI timed out after ${mins}m and was killed` });
+        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('claude CLI', limitMs, deadline.expiredBy) });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }
@@ -319,9 +364,7 @@ export class ClaudeCliRunner implements AgentRunner {
       }
 
       if (exitCode !== 0 && exitCode !== null) {
-        const stderr = stderrChunks.join('').trim();
-        const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
-        const msg = `claude CLI exited with code ${exitCode}${detail}`;
+        const msg = claudeExitMessage(exitCode, stderrChunks.join(''));
         onEvent?.({ type: 'error', message: msg });
         throw new Error(msg);
       }
@@ -339,6 +382,7 @@ export class ClaudeCliRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      hardStop,
       pid: child.pid,
       get open() {
         return stdinOpen;
@@ -350,29 +394,36 @@ export class ClaudeCliRunner implements AgentRunner {
 }
 
 /**
- * Build the headless argv. `--input-format stream-json` reads user messages
- * from stdin; `--output-format stream-json --verbose` gives per-event NDJSON;
+ * Build the headless argv. `--print` is spelled out because both stream-json
+ * formats are documented as "only works with --print"; `--input-format
+ * stream-json` reads user messages from stdin; `--output-format stream-json
+ * --verbose` gives per-event NDJSON, and `--include-partial-messages` adds the
+ * `stream_event` token deltas the cockpit renders as live text;
  * `--permission-mode dontAsk` keeps headless runs non-interactive: tools in
  * `--allowedTools` proceed and everything else is denied instead of prompting.
- * `CEZ_APPROVAL_GATE=1` opts back into Claude's approval UI (#435).
+ * `CEZ_APPROVAL_GATE=1` selects Claude's `acceptEdits` mode, but cezar still
+ * has no cockpit permission response channel.
  */
 export function buildClaudeArgs(
   spec: AgentRunSpec,
   env: NodeJS.ProcessEnv = process.env,
+  mcpConfigPath?: string,
+  systemPromptFilePath?: string,
 ): string[] {
   assertReasoningEffortSupported('claude', spec.reasoningEffort);
   const args: string[] = [
+    '--print',
     '--input-format',
     'stream-json',
     '--output-format',
     'stream-json',
     '--verbose',
+    '--include-partial-messages',
     '--permission-mode',
     env.CEZ_APPROVAL_GATE === '1' ? 'acceptEdits' : 'dontAsk',
   ];
-  if (spec.systemPrompt) {
-    args.push('--append-system-prompt', spec.systemPrompt);
-  }
+  if (systemPromptFilePath) args.push('--append-system-prompt-file', systemPromptFilePath);
+  else args.push('--append-system-prompt', appendClaudeSystemPrompt(spec.systemPrompt));
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the
   // existing on-disk conversation instead.
@@ -384,6 +435,12 @@ export function buildClaudeArgs(
     }
   }
   const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  // Private MCP servers (spec 2026-10-07-private-project-mcp): `--mcp-config` ADDS to the repo's
+  // own MCP config, and their tools are allowed — `dontAsk` would deny every one of them otherwise.
+  if (mcpConfigPath && spec.mcpServers?.length) {
+    args.push('--mcp-config', mcpConfigPath);
+    allowed.push(...claudeMcpAllowRules(spec.mcpServers));
+  }
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
   }
@@ -394,6 +451,53 @@ export function buildClaudeArgs(
     args.push('--add-dir', dir);
   }
   return args;
+}
+
+/** Windows caps a command line at 32,767 chars; a skill body plus cezar's rules blows past it (#1584). */
+const WINDOWS_ARGV_PROMPT_LIMIT = 8_000;
+
+/** Whether the system prompt must travel in a file instead of argv. Never true off Windows. */
+export function shouldSpoolSystemPrompt(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return platform === 'win32' && prompt.length > WINDOWS_ARGV_PROMPT_LIMIT;
+}
+
+/** Write an oversized system prompt to a `0600` temp file for `--append-system-prompt-file`. */
+export function writeClaudeSystemPromptFile(
+  prompt: string,
+  platform: NodeJS.Platform = process.platform,
+): { path: string; cleanup: () => void } | undefined {
+  if (!shouldSpoolSystemPrompt(prompt, platform)) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-prompt-'));
+    const path = join(dir, 'system-prompt.md');
+    writeFileSync(path, prompt, { mode: 0o600 });
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write the private MCP servers to a `0600` temp file for `--mcp-config` — a file, not an inline
+ * JSON argument, because argv is world-readable through `ps` and these entries carry tokens.
+ * Removed when the session's process exits. Undefined when there is nothing to attach or the
+ * temp dir is unwritable (the run then simply starts without them).
+ */
+export function writeClaudeMcpConfig(
+  servers: readonly PrivateMcpServer[] | undefined,
+): { path: string; cleanup: () => void } | undefined {
+  if (!servers?.length) return undefined;
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-mcp-'));
+    const path = join(dir, 'mcp.json');
+    writeFileSync(path, JSON.stringify(toClaudeMcpConfig(servers)), { mode: 0o600 });
+    return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -418,6 +522,12 @@ export function buildAllowedTools(allowedTools: string[], bashAllowlist?: string
 
 function truncate(s: string, max = 200): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/** `claude --resume <id>` for a transcript the CLI no longer has — typically pruned by its own
+ *  `cleanupPeriodDays` (default 30) between two Continues of a long-lived task. */
+export function isClaudeMissingSessionError(message: string): boolean {
+  return /No conversation found with session ID/i.test(message);
 }
 
 /** Path to the bundled mock (`scripts/mock-claude.mjs`), for CEZ_DRY_RUN=1. */
@@ -516,8 +626,9 @@ function handleClaudeMessage(
     if (msg.is_error) {
       ctx.onEvent?.({
         type: 'error',
+        // `API Error: 400 [400]: {"error":{…}}` from a gateway reads as its type and message (eb4b12dc).
         message: typeof msg.result === 'string' && msg.result.trim() !== ''
-          ? msg.result
+          ? unwrapJsonErrorEnvelope(msg.result)
           : `claude reported result error${msg.subtype ? ` (${msg.subtype})` : ''}`,
       });
     }
@@ -531,6 +642,21 @@ function handleClaudeMessage(
 // stringify/image helpers moved to claude-ui-mapper.ts (shared by v1 and v2).
 
 // ---- subprocess plumbing --------------------------------------------------
+
+/** The signals a `128 + n` exit names; only reached when cezar did NOT signal the child. */
+const EXIT_SIGNALS: Record<number, string> = { 1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 6: 'SIGABRT', 9: 'SIGKILL', 11: 'SIGSEGV', 13: 'SIGPIPE', 15: 'SIGTERM' };
+
+/** A failed exit, naming the signal behind a `128 + n` code — a bare "code 129" (telemetry 046a0525)
+ *  read as a crash, and cezar never sends SIGHUP (Windows raises it when the console closes). */
+export function claudeExitMessage(exitCode: number, stderr: string): string {
+  const signal = exitCode > 128 ? EXIT_SIGNALS[exitCode - 128] : undefined;
+  const hint = signal === 'SIGHUP'
+    ? ' (SIGHUP: the terminal or console it ran under went away — cezar did not stop it)'
+    : signal ? ` (${signal}: a signal cezar did not send)` : '';
+  const tail = stderr.trim();
+  const detail = tail ? ` — ${tail.split('\n').slice(-3).join(' | ')}` : '';
+  return `claude CLI exited with code ${exitCode}${hint}${detail}`;
+}
 
 function waitForExit(child: ChildProcessWithoutNullStreams): Promise<number | null> {
   if (child.exitCode != null) return Promise.resolve(child.exitCode);
