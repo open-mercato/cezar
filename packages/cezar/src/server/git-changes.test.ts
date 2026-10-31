@@ -1480,7 +1480,7 @@ describe('pushCurrentBranch — a rebased branch (#1758)', () => {
       const c = join(other, 'c');
       writeFileSync(join(c, 'theirs.txt'), 't\n');
       g(c, 'add', '-A');
-      g(c, 'commit', '-m', 'theirs');
+      g(c, '-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-m', 'theirs');
       g(c, 'push', '-q', 'origin', 'cez/x');
       g(dir, 'fetch', '-q', 'origin');
       g(dir, 'commit', '--amend', '-m', 'work, rewritten');
