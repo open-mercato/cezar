@@ -1,5 +1,7 @@
 package com.openmercato.cezar.mobile.shell;
 
+import java.util.Locale;
+
 /** Answers the webview's Basic challenge for one saved server (spec Decision 2). */
 public final class BasicChallengeResponder {
     /** Reads the password only when a challenge passes every check. */
@@ -40,7 +42,7 @@ public final class BasicChallengeResponder {
      * rotated password from a redirect.
      */
     public synchronized Reply onChallenge(String host, String realm, String pageUrl, boolean previousAttemptFailed) {
-        boolean ours = server.realm != null && server.realm.equals(realm) && origin.host.equalsIgnoreCase(host)
+        boolean ours = server.realm != null && server.realm.equals(realm) && origin.host.equals(host.toLowerCase(Locale.ROOT))
                 && origin.sameOrigin(pageUrl);
         if (!ours) return new Reply(Kind.CANCEL_FOREIGN, null, null);
         if (previousAttemptFailed) return new Reply(Kind.CANCEL_REJECTED, null, null);

@@ -189,23 +189,25 @@ func run() async {
     expect(memory.get(added.serverId!) == "secret", "password in the store")
     expect(script.sent[1]["Authorization"] == nil && script.sent[2]["Authorization"] == "Basic bWU6c2VjcmV0", "first probe bare, second basic")
 
-    script.answers = [basicGate]
+    script.answers = [basicGate, basicGate]
     let rotated = await connector.open(added.serverId!, cookies: nil)
     expect(rotated.screen == "password-rejected", "rotated password")
     script.answers = []
     let offline = await connector.open(added.serverId!, cookies: nil)
     expect(offline.screen == "connection-error", "offline")
-    script.answers = [cezar]
+    script.answers = [basicGate, cezar]
     let again = await connector.launch(cookiesForLast: "sso=1")
     expect(again.screen == "open" && script.sent.last?["Cookie"] == "sso=1", "launch opens last used")
 
     let movedGate = answer(401, type: "text/html", auth: "Basic realm=\"moved\"", "<html>")
-    script.answers = [cezar, basicGate]
+    script.answers = [basicGate, cezar]
     let sameRealm = await connector.open(added.serverId!, cookies: nil)
     expect(sameRealm.screen == "open", "unchanged realm opens")
-    script.answers = [cezar, movedGate]
+    script.answers = [movedGate]
+    let before = script.sent.count
     let moved = await connector.open(added.serverId!, cookies: nil)
-    expect(moved.screen == "ask-credentials", "changed realm asks again")
+    expect(moved.screen == "ask-credentials" && script.sent.count == before + 1, "changed realm asks again")
+    expect(script.sent.last?["Authorization"] == nil, "the new realm gets no password")
     script.answers = [movedGate, cezar]
     let readded = await connector.add(url: "https://cezar.example.com", username: "me", password: "secret", label: nil)
     expect(readded.screen == "open" && store.get(added.serverId!)?.realm == "moved", "the new answer saves the realm")

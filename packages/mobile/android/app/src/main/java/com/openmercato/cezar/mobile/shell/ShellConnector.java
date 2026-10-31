@@ -62,6 +62,7 @@ public final class ShellConnector {
     public Outcome open(String id, String cookies) {
         ServerRecord server = servers.get(id);
         if (server == null) return Outcome.screen(LIST, null, 0);
+        if (realmChanged(server, cookies)) return Outcome.screen(ASK_CREDENTIALS, id, 401);
         String password = credentials.get(id);
         HealthAnswer health = probe.probe(server.origin(), server.username, password, cookies);
         StartDecision.Route route = StartDecision.decide(health, password != null);
@@ -75,7 +76,6 @@ public final class ShellConnector {
             case CONNECTION_ERROR:
                 return Outcome.screen(health.kind == HealthAnswer.Kind.TLS_FAILURE ? TLS_FAILURE : CONNECTION_ERROR, id, health.status);
             default:
-                if (realmChanged(server, cookies)) return Outcome.screen(ASK_CREDENTIALS, id, health.status);
                 servers.markUsed(id);
                 return new Outcome(OPEN, id, server.origin().url(StartDecision.path(route)), oneTimeNote(server, route, health), health.status);
         }
@@ -127,7 +127,7 @@ public final class ShellConnector {
         return servers.get(serverId);
     }
 
-    /** The responder would refuse a new realm and strand a 401 page (BACKWARD_COMPATIBILITY.md §6b). */
+    /** Before the password goes out: a new realm gets no answer, and would strand a 401 page (BACKWARD_COMPATIBILITY.md §6b). */
     private boolean realmChanged(ServerRecord server, String cookies) {
         if (server.realm == null) return false;
         HealthAnswer bare = probe.probe(server.origin(), null, null, cookies);

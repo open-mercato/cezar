@@ -11,10 +11,10 @@ import java.util.regex.Pattern;
  */
 final class UrlParts {
     private static final Pattern URL = Pattern.compile(
-            "^([a-zA-Z][a-zA-Z0-9+.-]*):(?://(?:[^/?#\\\\]*@)?(\\[[^\\]/?#\\\\]*\\]|[^:/?#\\\\@]*)(?::(\\d{0,5}))?(?=[/?#\\\\]|$))?");
+            "^([a-zA-Z][a-zA-Z0-9+.-]*):(?://(?:[^/?#\\\\]*@)?(\\[[^\\]/?#\\\\]*\\]|[^:/?#\\\\@]*)(?::([0-9]{0,5}))?(?=[/?#\\\\]|$))?");
 
     final String scheme;
-    /** Null when the URL has no authority this class can read. */
+    /** Lower case, null when the URL has no authority this class can read. */
     final String host;
     /** -1 when the URL names none. */
     final int port;
@@ -32,6 +32,7 @@ final class UrlParts {
         if (!match.find()) return null;
         String digits = match.group(3);
         int port = digits == null || digits.isEmpty() ? -1 : Integer.parseInt(digits);
-        return new UrlParts(match.group(1).toLowerCase(Locale.ROOT), match.group(2), port);
+        String host = match.group(2);
+        return new UrlParts(match.group(1).toLowerCase(Locale.ROOT), host == null ? null : host.toLowerCase(Locale.ROOT), port);
     }
 }

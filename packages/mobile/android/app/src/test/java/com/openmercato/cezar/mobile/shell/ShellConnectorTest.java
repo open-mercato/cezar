@@ -133,8 +133,11 @@ public class ShellConnectorTest {
     public void aChangedRealmAsksAgainAndTheNewAnswerSavesIt() {
         String id = addGated().serverId;
         HttpAnswer moved = HealthClassifierTest.answer(401, "text/html", "Basic realm=\"moved\"", "<html>");
-        script(CEZAR, moved);
+        script(moved);
+        int before = sent.size();
         assertEquals(ShellConnector.ASK_CREDENTIALS, connector.open(id, null).screen);
+        assertEquals("the new realm gets no password", before + 1, sent.size());
+        assertNull(sent.get(before).get("Authorization"));
 
         script(moved, CEZAR);
         assertEquals(ShellConnector.OPEN, connector.add("https://cezar.example.com", "me", "secret", null).screen);
@@ -144,7 +147,7 @@ public class ShellConnectorTest {
     @Test
     public void anUnchangedRealmOpens() {
         String id = addGated().serverId;
-        script(CEZAR, GATE);
+        script(GATE, CEZAR);
         assertEquals(ShellConnector.OPEN, connector.open(id, null).screen);
     }
 
@@ -164,17 +167,17 @@ public class ShellConnectorTest {
     @Test
     public void launchOpensTheLastUsedWithTheSavedPassword() {
         addGated();
-        script(CEZAR, GATE);
+        script(GATE, CEZAR);
         ShellConnector.Outcome outcome = connector.launch(null);
         assertEquals(ShellConnector.OPEN, outcome.screen);
-        assertNotNull(sent.get(sent.size() - 2).get("Authorization"));
-        assertNull("the realm check sends no password", sent.get(sent.size() - 1).get("Authorization"));
+        assertNull("the realm check sends no password", sent.get(sent.size() - 2).get("Authorization"));
+        assertNotNull(sent.get(sent.size() - 1).get("Authorization"));
     }
 
     @Test
     public void aRotatedPasswordIsRejectedOnOpen() {
         String id = addGated().serverId;
-        script(GATE);
+        script(GATE, GATE);
         assertEquals(ShellConnector.PASSWORD_REJECTED, connector.open(id, null).screen);
     }
 
