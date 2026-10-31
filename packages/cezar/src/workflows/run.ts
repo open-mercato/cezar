@@ -251,6 +251,15 @@ async function configuredModelProvider(
 const CANCEL_GRACE_MS = 1_000;
 /** Fallback monitoring window when the waiting-session idle timeout is disabled. */
 export const MONITORING_LIVENESS_MS = 4 * DEFAULT_IDLE_TIMEOUT_MINUTES * 60_000;
+/**
+ * Inactivity bound on an in-flight turn (#1499). A quiet turn parks the run as "needs you" and
+ * frees its slot; the session stays open and ANY later event resumes it. 45m beats the longest
+ * legitimate silence we know of: reasoning and text stream events, so only a blocked prompt or a
+ * hung server is this quiet. A tool the backend reports as running (a ~40m test gate, a sub-agent)
+ * is silent by design, so it gets the longer bound.
+ */
+export const TURN_STALL_MS = 45 * 60_000;
+export const TURN_STALL_TOOL_MS = 4 * 60 * 60_000;
 /** How long a settled task's agent CLI gets to exit on its own before its leftovers are reaped (#1411). */
 const LEFTOVER_SETTLE_GRACE_MS = 5_000;
 /** `runs/<id><suffix>` holds how many messages `deferMessage` is holding for that run. */
@@ -529,6 +538,13 @@ interface ActiveRun {
   graphFinish?: () => void;
   graphChildWaits?: Map<string, (child: { status: string; summary: string }) => void>;
   idleTimer?: NodeJS.Timeout;
+  /** In-flight turn inactivity watchdog (#1499): `lastActivityAt` is bumped by every agent event. */
+  stallTimer?: NodeJS.Timeout;
+  lastActivityAt?: number;
+  /** Tool items the backend reports as running; a silent long tool call gets the longer bound. */
+  runningTools?: Set<string>;
+  /** The stall watchdog parked this run; activity, a turn end or a message un-parks it. */
+  stallParked?: boolean;
   /** The inactivity watchdog closed this session; a plain final wait is not success evidence. */
   idleClosed?: boolean;
   /** The user pressed Finish on this owner; a repeat while it settles is the same request (6a3cecee). */
@@ -4454,12 +4470,14 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
+      state.stallParked = false;
       state.idleClosed = undefined;
       // A message into the session is a fresh start for the compaction bound (#955): whoever
       // sent it — the user, a child's report, the monitoring wake-up — is asking for work
       // that has not been tried yet, so it must not inherit a spent anti-spin budget.
       state.compactionContinues = 0;
       this.leaveMonitoring(runId);
+      this.touchTurn(runId, state); // the new turn's inactivity clock starts now (#1499)
       // The answer landed, so a mid-workflow ask park (#917) is over and the
       // workflow may advance past this step again. The durable twin
       // (`RunRecord.askParked`) is retired by the status write below.
@@ -4911,6 +4929,7 @@ export class RunManager {
     );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      this.touchTurn(runId, state);
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -4954,6 +4973,7 @@ export class RunManager {
         this.store.updateStep(runId, stepId, { tokensUsed: event.tokensUsed });
       }
       if (event.type === 'turn-end') {
+        this.endTurnWatch(runId, state);
         // Belt-and-braces: v2 `turn.completed` already flushed the delta
         // coalescers; the v1 turn boundary flushes again (idempotent) so no
         // buffered delta can outlive its turn.
@@ -5262,6 +5282,7 @@ export class RunManager {
       state.session = resume ? resumeGuard.track(started) : started;
       state.sessionEverOpened = true;
       this.flushDeferred(runId);
+      this.touchTurn(runId, state);
       state.interrupt = () => started.interrupt();
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
       return started;
@@ -7063,6 +7084,7 @@ export class RunManager {
     );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      this.touchTurn(runId, state);
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -7109,6 +7131,7 @@ export class RunManager {
         this.store.updateStep(runId, step.id, { tokensUsed: startTokens + event.tokensUsed });
       }
       if (event.type === 'turn-end') {
+        this.endTurnWatch(runId, state);
         // v2 `turn.completed` already flushed the coalescers; the v1 turn
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
@@ -7443,6 +7466,7 @@ export class RunManager {
       state.finishRequested = undefined;
       state.acceptReviewOnDrop = undefined;
       this.flushDeferred(runId);
+      this.touchTurn(runId, state);
       state.currentStepId = step.id;
       state.interrupt = () => started.interrupt();
       if (started.pid !== undefined) registerRunProcess(runId, started.pid);
@@ -7529,6 +7553,8 @@ export class RunManager {
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
     this.recordUsageUiEvent(runId, state, event);
+    this.trackRunningTool(state, event);
+    this.touchTurn(runId, state);
     if (event.type === 'session.started') state.sessionBackend = event.backend;
     if (!state.skillMissingReported && isUnknownSkillFailure(event)) {
       state.skillMissingReported = true;
@@ -8639,7 +8665,76 @@ export class RunManager {
     state.idleTimer.unref?.();
   }
 
+  /**
+   * Liveness bound for an in-flight turn (#1499); `armIdleTimer` covers only the gap BETWEEN turns.
+   * Called on every agent event and whenever a turn starts. Exits from the stall park: any event
+   * (`touchTurn`), the turn ending (`endTurnWatch`), a user message (`deliverMessage`), cancel or
+   * finish, and the process dying (the session result settles the step).
+   */
+  private touchTurn(runId: string, state: ActiveRun): void {
+    if (state.cancelled) return;
+    state.lastActivityAt = Date.now();
+    if (state.stallParked) this.unparkStall(runId, state, 'the agent produced output again');
+    if (state.stallTimer || !state.session?.open) return;
+    if (this.waiting.has(runId) || this.monitoring.has(runId)) return;
+    this.armStallTimer(runId, state, TURN_STALL_MS);
+  }
+
+  private armStallTimer(runId: string, state: ActiveRun, delayMs: number): void {
+    state.stallTimer = setTimeout(() => {
+      state.stallTimer = undefined;
+      if (state.cancelled || !state.session?.open || this.active.get(runId) !== state) return;
+      if (this.waiting.has(runId) || this.monitoring.has(runId) || this.lifecycle.isBlocked(runId)) return;
+      const bound = state.runningTools?.size ? TURN_STALL_TOOL_MS : TURN_STALL_MS;
+      const quietFor = Date.now() - (state.lastActivityAt ?? 0);
+      if (quietFor < bound) return this.armStallTimer(runId, state, bound - quietFor);
+      state.stallParked = true;
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId: state.currentStepId,
+        tone: 'danger',
+        message: `the agent has been silent for ${Math.round(quietFor / 60_000)}m mid-turn — the run is parked for you and its slot released; send a message to nudge it, or cancel`,
+      });
+      // `askParked` is the durable twin: without it a restart would read this `waiting` as a finished session.
+      this.store.updateRun(runId, { status: 'waiting', activity: undefined, askParked: true });
+      if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
+      this.waiting.add(runId);
+      this.releaseSlot();
+    }, Math.max(1_000, delayMs));
+    state.stallTimer.unref?.();
+  }
+
+  private unparkStall(runId: string, state: ActiveRun, why: string): void {
+    state.stallParked = false;
+    this.waiting.delete(runId);
+    this.store.updateRun(runId, { status: 'running', activity: undefined, askParked: undefined });
+    if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'running' });
+    this.store.appendEvent(runId, { type: 'note', stepId: state.currentStepId, message: `${why} — the run is active again` });
+  }
+
+  private clearStallTimer(state: ActiveRun): void {
+    if (state.stallTimer) clearTimeout(state.stallTimer);
+    state.stallTimer = undefined;
+  }
+
+  /** A turn ended: hand the run back to the turn-end handler's own parking rules. */
+  private endTurnWatch(runId: string, state: ActiveRun): void {
+    this.clearStallTimer(state);
+    state.runningTools?.clear();
+    if (state.stallParked) this.unparkStall(runId, state, 'the turn ended');
+  }
+
+  private trackRunningTool(state: ActiveRun, event: UiEvent): void {
+    if (event.type !== 'item.started' && event.type !== 'item.updated' && event.type !== 'item.completed') return;
+    if (event.item.kind !== 'tool') return;
+    const open = event.type !== 'item.completed' && (event.item.status === 'running');
+    const tools = (state.runningTools ??= new Set());
+    if (open) tools.add(event.item.id);
+    else tools.delete(event.item.id);
+  }
+
   private clearIdleTimer(state: ActiveRun): void {
+    this.clearStallTimer(state);
     if (state.idleTimer) {
       clearTimeout(state.idleTimer);
       state.idleTimer = undefined;
