@@ -1,5 +1,5 @@
 import { classifyAgentFailure } from '../core/agent-failure-class.ts';
-import { isClaudeMissingSessionError } from '../core/claude-cli-runner.ts';
+import { isMissingSessionError } from '../core/claude-cli-runner.ts';
 
 /** `task_failed`'s closed set (#1438): the label never carries the error text itself. */
 export type FailureKind =
@@ -16,7 +16,7 @@ const TIMEOUT_RE = /\btimed out after [\d.]+\s?(?:h|m|s)\b|\bclosed after (?:\d+
 export function failureKind(error: string | undefined): FailureKind | undefined {
   const message = (error ?? '').replace(RUN_ERROR_PREFIX_RE, '');
   if (INTERRUPTED_RE.test(message)) return undefined;
-  if (isClaudeMissingSessionError(message)) return 'missing_session';
+  if (isMissingSessionError(message)) return 'missing_session';
   const failure = classifyAgentFailure(message);
   if (failure !== 'other') return failure;
   if (TIMEOUT_RE.test(message)) return 'timeout';

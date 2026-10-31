@@ -525,6 +525,14 @@ export function isClaudeMissingSessionError(message: string): boolean {
   return /No conversation found with session ID/i.test(message);
 }
 
+/** A stored session/thread the backend no longer has, on any backend (#1193): Claude's pruned
+ *  transcript, Codex's `no rollout found for thread`, OpenCode's 404 on `GET /session/:id`. */
+export function isMissingSessionError(message: string): boolean {
+  return isClaudeMissingSessionError(message)
+    || /no rollout found for thread/i.test(message)
+    || /opencode no longer has the requested session/i.test(message);
+}
+
 /** Path to the bundled mock (`scripts/mock-claude.mjs`), for CEZ_DRY_RUN=1. */
 function mockClaudePath(): string {
   const here = dirname(fileURLToPath(import.meta.url));
