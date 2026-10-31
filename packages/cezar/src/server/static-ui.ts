@@ -22,10 +22,23 @@ export function resolveIndexHtml(opts: { distExists: boolean }): IndexTarget {
  *  served by them. */
 export type GetTarget = IndexTarget | 'passthrough';
 
+/** The installable cockpit's unhashed `public/` files (#1762), URL → content type. */
+export const INSTALL_FILES: Readonly<Record<string, string>> = {
+  '/manifest.webmanifest': 'application/manifest+json',
+  '/apple-touch-icon.png': 'image/png',
+  '/icon-192.png': 'image/png',
+  '/icon-512.png': 'image/png',
+};
+
 /** Paths owned by routes registered before the catch-all: the built app's
- *  hashed bundles and the favicon. */
+ *  hashed bundles, the favicon and the install files. */
 function isStaticAsset(path: string): boolean {
-  return path.startsWith('/assets/') || path === '/icon.svg' || path === '/open-mercato.svg';
+  return (
+    path.startsWith('/assets/') ||
+    path === '/icon.svg' ||
+    path === '/open-mercato.svg' ||
+    Object.hasOwn(INSTALL_FILES, path)
+  );
 }
 
 /** Decide what any GET gets, so every route in the spec's map (`/tasks/:id/changes`,

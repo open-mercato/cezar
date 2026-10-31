@@ -18,6 +18,10 @@ export type ResolvedTheme = 'light' | 'dark'
 /** Dark, matching the legacy page's `localStorage.getItem('cez-theme') || 'dark'`. */
 export const DEFAULT_THEME: Theme = 'dark'
 
+/** Each palette's `--background` (styles/index.css), for the phone's status bar. One meta rather
+ *  than two `media` ones: the cockpit defaults to dark whatever the OS asks for. */
+export const THEME_COLORS: Record<ResolvedTheme, string> = { light: '#ffffff', dark: '#0d0d0d' }
+
 /** Coerce anything (missing key, a future value, garbage) into a Theme. */
 export function normalizeTheme(raw: unknown): Theme {
   return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : DEFAULT_THEME
@@ -64,4 +68,5 @@ export function systemPrefersLight(): boolean {
 export function applyResolvedTheme(root: HTMLElement, resolved: ResolvedTheme): void {
   root.classList.toggle('light', resolved === 'light')
   root.style.colorScheme = resolved
+  root.ownerDocument.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLORS[resolved])
 }
