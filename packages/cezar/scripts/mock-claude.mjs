@@ -5,6 +5,7 @@
 // NDJSON lines from stdin, answers each with a scripted turn (assistant
 // events + a terminal `result`), and exits when stdin closes (EOF).
 
+import { execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
@@ -145,9 +146,66 @@ function writeHandoffAndTodo() {
   }
 }
 
+// Spec 2026-10-31-managers: a scripted manager turn that really calls `cez-manager`, so cards and
+// proposals are the ones the routes produced. Deterministic: first task, first ready pull request.
+async function managerTurn(userText) {
+  const kind = /\[cez-manager:(chat|watch|job)\]/.exec(userText)?.[1] ?? 'chat';
+  const said = userText.slice(userText.lastIndexOf(`[cez-manager:${kind}]`));
+  const tool = (args) => {
+    const id = `toolu_manager_${turn}_${args.join('_').replace(/\W+/g, '_').slice(0, 40)}`;
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `cez-manager ${args.join(' ')}` } }], usage: { input_tokens: 90, output_tokens: 30 } } });
+    let output = '';
+    let failed = false;
+    try {
+      output = execFileSync('cez-manager', args, { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+      failed = true;
+      output = String(error?.stderr || error?.message || error);
+    }
+    emit({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: output, is_error: failed }] } });
+    return failed ? undefined : output;
+  };
+  const parsed = (output) => {
+    try {
+      return JSON.parse(output ?? '');
+    } catch {
+      return undefined;
+    }
+  };
+  const say = async (text) => {
+    await pace(150);
+    emit({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }], usage: { input_tokens: 400, output_tokens: 80 } } });
+    await pace(100);
+    emit({ type: 'result', subtype: 'success', result: text, usage: { input_tokens: 400, output_tokens: 80 }, total_cost_usd: 0.0123 });
+  };
+  if (kind === 'watch') {
+    const count = Number(/New attention items: (\d+)/.exec(userText)?.[1] ?? 0);
+    const key = /"projectId":"([^"]+)","title":"[^"]*"(?:,"number":(\d+))?/.exec(userText);
+    if (count === 0 || userText.includes('mock:quiet')) return say('MANAGER:QUIET');
+    return say(`${count} thing${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} you.${key?.[2] ? ` Start with [[pr:${key[1]}/${key[2]}]].` : ''} (dry run)`);
+  }
+  if (kind === 'job') return say('Job done: nothing changed since the last run. (dry run)');
+  const status = parsed(tool(['status', '--json']));
+  await pace(150);
+  const projects = status?.projects ?? [];
+  let card = projects.flatMap((project) => project.tasks.map((task) => `[[task:${project.projectId}/${task.runId}]]`))[0];
+  if (!card && projects[0]) {
+    const created = tool(['task', 'create', '--project', projects[0].projectId, '--title', 'Dry-run task', 'Say hello from the manager']);
+    card = /\[\[task:[^\]]+\]\]/.exec(created ?? '')?.[0];
+  }
+  const lines = [card ? `Here is where things stand:\n\n${card}` : 'Nothing is running yet.'];
+  if (/\bmerge\b/i.test(said)) {
+    const pr = projects.flatMap((project) => project.prs.filter((candidate) => !candidate.draft).map((candidate) => ({ projectId: project.projectId, number: candidate.number })))[0];
+    const proposed = pr && tool(['merge', '--project', pr.projectId, String(pr.number), '--reason', 'Checks pass and nothing blocks it (dry run).']);
+    lines.push(proposed ? `I proposed merging [[pr:${pr.projectId}/${pr.number}]]. Approve the card when you are ready.` : 'There is no pull request I can propose merging.');
+  }
+  return say(lines.join('\n\n'));
+}
+
 async function respond(userText, imageCount) {
   turn += 1;
   await pace(250);
+  if (userText.includes('[cez-manager:')) return managerTurn(userText);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
