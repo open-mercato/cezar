@@ -30,8 +30,10 @@ its own manual approval before it completes the signing request.
 
 ## Privacy policy
 
-cezar runs on your machine and has no accounts, no telemetry and no analytics. It does not send
-your code, your prompts or your usage anywhere on its own behalf.
+cezar runs on your machine and has no accounts. Telemetry is opt-in: nothing is sent until you
+say yes, and even then it never includes your code, your prompts, paths or repository names
+(see [telemetry.md](telemetry.md)). Without that yes, cezar does not send your usage anywhere on
+its own behalf.
 
 It does talk to the network, and only for what you can see it doing:
 
