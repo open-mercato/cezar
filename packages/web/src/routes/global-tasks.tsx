@@ -428,7 +428,7 @@ export function GlobalTasksRoute() {
         onChange={(event) => setQueryDraft(event.target.value)}
         placeholder="Search every project…"
         aria-label="Search tasks across projects"
-        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-ui text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
       />
     </div>
   )
@@ -446,7 +446,7 @@ export function GlobalTasksRoute() {
           </ViewTab>
         </div>
         <div className="flex-1" />
-        <span data-slot="global-tasks-count" className="text-[12.5px] text-soft-foreground tabular-nums">
+        <span data-slot="global-tasks-count" className="text-label text-soft-foreground tabular-nums">
           {visible.length} of {allTasks.length}
         </span>
         {search}
@@ -478,7 +478,7 @@ export function GlobalTasksRoute() {
         />
 
         {truncated.length > 0 ? (
-          <p data-slot="global-tasks-truncated" className="text-[11.5px] text-soft-foreground">
+          <p data-slot="global-tasks-truncated" className="text-meta text-soft-foreground">
             Showing the {index.data?.perProjectLimit} most recently active tasks per project — older ones in{' '}
             {truncated.join(', ')} are only in that project&rsquo;s own Tasks page.
           </p>
@@ -500,7 +500,7 @@ export function GlobalTasksRoute() {
             {groups.map((group) => (
               <section key={group.key} data-slot="task-group" data-group-key={group.key}>
                 {groupBy === 'none' ? null : (
-                  <h2 className="mb-1.5 flex items-center gap-2 text-[12px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+                  <h2 className="mb-1.5 flex items-center gap-2 eyebrow text-soft-foreground">
                     {/* A project heading is a DOOR, not a label: that project's own Tasks page is
                         the better version of "just this project" (live SSE, the full column set,
                         the composer), which is why there is no project filter here at all. */}
@@ -515,7 +515,7 @@ export function GlobalTasksRoute() {
                     ) : (
                       group.label
                     )}
-                    <span className="font-mono text-[11px] font-medium tabular-nums">
+                    <span className="font-mono text-meta font-medium tabular-nums">
                       {group.tasks.length}
                     </span>
                   </h2>
@@ -563,7 +563,7 @@ function ViewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 items-center justify-center rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground',
+        'flex h-7 items-center justify-center rounded-[7px] px-3 text-label font-medium text-muted-foreground',
         isActive && 'bg-card font-semibold text-foreground shadow-xs',
       )}
     >
@@ -680,7 +680,7 @@ function FilterBar({
           emptyLabel="No tasks to filter"
         />
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Group by</span>
+        <span className="text-meta font-medium text-soft-foreground">Group by</span>
         {/* Pressing the pressed one releases it — see `toggleGroupBy`, which is why there is
             no "None" button to hunt for. */}
         <SegmentedControl
@@ -692,7 +692,7 @@ function FilterBar({
         />
         {/* Same labelled-segmented grammar as Group by beside it. */}
         <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-soft-foreground">Sort by</span>
+        <span className="text-meta font-medium text-soft-foreground">Sort by</span>
         <Segmented
           slot="sort-by"
           label="Sort tasks by"
@@ -716,7 +716,7 @@ function FilterBar({
 
       {tags.length > 0 ? (
         <div data-slot="tag-filters" className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-medium text-soft-foreground">Tags</span>
+          <span className="text-meta font-medium text-soft-foreground">Tags</span>
           {tags.map((tag) => (
             <ToggleChip
               key={tag}
@@ -742,7 +742,7 @@ function FilterBar({
         // Not silence: a workspace with no tags anywhere is the ONE state where the feature is
         // invisible, and the sentence that fixes it is one line long — with the door in it,
         // since the pane that fixes it is two clicks away and outside this page.
-        <p data-slot="no-tags-hint" className="text-[11px] text-soft-foreground">
+        <p data-slot="no-tags-hint" className="text-meta text-soft-foreground">
           Tag connected repositories in{' '}
           <Link to="/settings/global/projects" className="font-medium text-violet hover:underline">
             Settings → Projects
@@ -870,7 +870,7 @@ function Th({ children, className }: { children: React.ReactNode; className?: st
     <th
       scope="col"
       className={cn(
-        'h-[38px] border-b border-border px-2.5 text-left text-[11px] font-semibold tracking-[0.05em] whitespace-nowrap text-soft-foreground uppercase first:pl-4 last:pr-4',
+        'h-[38px] border-b border-border px-2.5 text-left eyebrow whitespace-nowrap text-soft-foreground first:pl-4 last:pr-4',
         className,
       )}
     >
@@ -967,7 +967,7 @@ const TaskRow = React.memo(function TaskRow({
             <span
               aria-hidden="true"
               data-slot="subtask-tick"
-              className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+              className="shrink-0 font-mono text-meta leading-none text-soft-foreground"
             >
               &#9492;
             </span>
@@ -976,7 +976,7 @@ const TaskRow = React.memo(function TaskRow({
             to={to}
             title={runTitle(run)}
             className={cn(
-              'min-w-0 truncate text-[13px]',
+              'min-w-0 truncate text-ui',
               unread
                 ? 'font-semibold text-foreground'
                 : readDone
@@ -991,7 +991,7 @@ const TaskRow = React.memo(function TaskRow({
           {dispatchKindLabel(run) ? (
             <span
               data-slot="dispatch-kind"
-              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
             >
               {dispatchKindLabel(run)}
             </span>
@@ -1008,7 +1008,7 @@ const TaskRow = React.memo(function TaskRow({
         </span>
       </td>
       {showProject ? (
-        <td className={cn(TD_BASE, 'text-[12.5px] text-muted-foreground')}>
+        <td className={cn(TD_BASE, 'text-label text-muted-foreground')}>
           <Link to={scopeTo(run.projectId, '/')} className="truncate hover:text-foreground">
             {task.projectName}
           </Link>
@@ -1032,7 +1032,7 @@ const TaskRow = React.memo(function TaskRow({
           <Dash />
         )}
       </td>
-      <td className={cn(TD_BASE, 'hidden text-[12.5px] text-muted-foreground xl:table-cell')}>
+      <td className={cn(TD_BASE, 'hidden text-label text-muted-foreground xl:table-cell')}>
         {run.workflow}
       </td>
       {showCost ? (
@@ -1235,7 +1235,7 @@ export function TagChip({ tag, className }: { tag: string; className?: string })
     <span
       data-slot="project-tag"
       className={cn(
-        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground',
+        'inline-flex max-w-full items-center truncate rounded-full bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground',
         className,
       )}
     >
@@ -1259,7 +1259,7 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         TD_BASE,
         'hidden text-right font-mono tabular-nums xl:table-cell',
         cell.kind === 'live' && 'bg-violet/5 text-xs font-medium text-foreground',
-        cell.kind === 'peak' && 'text-[11.5px] text-soft-foreground',
+        cell.kind === 'peak' && 'text-meta text-soft-foreground',
         cell.kind === 'none' && 'text-xs text-soft-foreground',
       )}
     >

@@ -46,7 +46,7 @@ const CLAUDE_MARKER_RE = /claude(?:\s+ai)?\s+usage\s+limit\s+reached\s*\|\s*(\d{
  * false positive there would schedule a resume on a timestamp that means something else entirely.
  */
 const LIMIT_PHRASE_RE =
-  /\b(?:usage|rate|session|weekly|hourly)[\s-]?limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
+  /\b(?:usage|rate|session|weekly|hourly)[\s-]?limit\b|\b\d+[\s-]hours?\s+limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
 
 /** `…try again at 2026-08-03T18:00:00Z`, `…resets at 2026-08-03 18:00`. */
 const RESET_AT_RE =

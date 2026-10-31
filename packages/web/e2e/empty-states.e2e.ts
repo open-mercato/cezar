@@ -8,12 +8,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 
 /**
- * The CenteredState surfaces (Step 4.1), in a real browser: the no-tasks hero on the overview
- * and the 404 with its way back home.
+ * The empty surfaces in a real browser: the first run on the overview (spec
+ * 2026-10-26-first-run-onboarding, which replaced the old "No tasks yet" hero) and the
+ * CenteredState 404 with its way back home.
  *
- * Same per-spec boot pattern as quick-list.e2e.ts, but over an EMPTY repo: a fresh data dir with
- * no `runs.json` is not a contrived fixture — it is exactly what `npx cezar-cli` serves on first
- * run, and the empty state is the first thing a new user sees. The store answers `[]`, honestly.
+ * Same per-spec boot pattern as quick-list.e2e.ts, but over an EMPTY folder: a fresh data dir with
+ * no `runs.json` and no `.git` is not a contrived fixture — it is exactly what `npx cezar-cli`
+ * serves when started outside a repository, and the first-run page is the first thing a new user
+ * sees. The store answers `[]`, honestly, and the dry-run agent counts as signed in.
  */
 
 const artifactsDir = resolve(import.meta.dirname, '../../../.ai/qa/artifacts_e2e')
@@ -76,42 +78,32 @@ afterAll(async () => {
   await stopFixtureServer(server, dataRoot)
 })
 
-describe('tasks overview — no tasks yet', () => {
+describe('tasks overview — first run outside a repository', () => {
   beforeAll(() => {
     browser.goto(`${baseUrl}${scoped('/')}`)
-    // The empty state is async: it may render only after /api/v1/runs has answered [].
-    browser.waitForFunction(`document.querySelector('[data-slot="tasks-empty"]') !== null`)
+    // The first run is async: it renders only after /api/v1/runs and the provider status answer.
+    browser.waitForFunction(`document.querySelector('[data-slot="first-run"]') !== null`)
   })
 
-  it('is the hero CenteredState: primary tone, title, subtitle, a New-task action', () => {
+  it('replaces the empty state with the pick-a-project step, and offers Initialize git here', () => {
     expect(
       browser.evaluate(`document.querySelector('[data-slot="tasks-empty"]').dataset.emptyKind`)
     ).toBe('no-tasks')
     expect(
-      browser.evaluate(`document.querySelector('[data-slot="tasks-empty"] ${STATE}').dataset.tone`)
-    ).toBe('primary')
-    expect(browser.text(`[data-slot="tasks-empty"] h2`)).toBe('No tasks yet')
-    expect(browser.text(`[data-slot="tasks-empty"] p`)).toBe('Describe a task to get started.')
+      browser.evaluate(`document.querySelector('[data-slot="tasks-empty"] [data-slot="first-run"]').dataset.firstRun`)
+    ).toBe('pick-project')
+    expect(browser.text(`[data-slot="first-run"] h2`)).toBe('Pick a project')
+    // The rail: the agent step is behind (the dry-run agent is signed in), the project is current.
     expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="tasks-empty"] a[href="${scoped('/new')}"]').textContent.trim()`
-      )
-    ).toBe('New task')
+      browser.evaluate(`[...document.querySelectorAll('[data-slot="step-rail"] [data-step]')].map((step) => step.dataset.step + ':' + step.dataset.state).join(' ')`)
+    ).toBe('agent:done project:current task:next')
+    expect(
+      browser.evaluate(`[...document.querySelectorAll('[data-slot="first-run"] button')].some((button) => button.textContent.trim() === 'Initialize git here')`)
+    ).toBe(true)
     // And no table pretending otherwise.
     expect(browser.count('[data-slot="task-table-row"]')).toBe(0)
-  })
 
-  it('carries the decorative backdrop, marked decorative', () => {
-    const backdrop = browser.evaluate(`(() => {
-      const el = document.querySelector('[data-slot="tasks-empty"] [data-slot="twinkle-backdrop"]')
-      return el && { ariaHidden: el.getAttribute('aria-hidden'), squares: el.children.length }
-    })()`) as { ariaHidden: string; squares: number } | null
-
-    expect(backdrop).not.toBeNull()
-    expect(backdrop?.ariaHidden).toBe('true')
-    expect(backdrop?.squares).toBeGreaterThan(5)
-
-    browser.screenshot(`${artifactsDir}/tasks-empty-no-tasks.png`)
+    browser.screenshot(`${artifactsDir}/tasks-first-run-pick-project.png`)
   })
 })
 

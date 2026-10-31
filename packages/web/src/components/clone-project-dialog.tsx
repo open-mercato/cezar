@@ -197,7 +197,7 @@ export function CloneProjectDialog({
           <div className="flex min-w-0 items-center gap-1">
             <p
               data-slot="clone-target"
-              className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-soft-foreground"
+              className="min-w-0 flex-1 truncate font-mono text-meta text-soft-foreground"
               title={target}
             >
               {target}
@@ -232,13 +232,13 @@ export function CloneProjectDialog({
         {/* One line, replaced in place: `git clone` emits a counter update every few hundred ms,
             and a growing log would scroll a dialog that is otherwise a form. */}
         {checkout.isPending ? (
-          <p data-slot="clone-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
+          <p data-slot="clone-progress" className="truncate font-mono text-meta text-muted-foreground">
             {progress ?? 'Starting the clone…'}
           </p>
         ) : null}
 
         {checkout.isError ? (
-          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-[13px] text-danger">
+          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-ui text-danger">
             {ssoUrl ? (
               <>
                 <p>GitHub requires SAML authorization for this organization.</p>

@@ -35,9 +35,9 @@ export function EditorDispatchRow({
       data-slot="editor-dispatch"
       data-enabled={enabled ? 'true' : undefined}
       title="Let this run start its own subtasks with cez task create — each in a worktree forked off its branch, reporting back into the parent session."
-      className="flex flex-wrap items-center gap-2.5 border-t border-border pt-3 text-[13px] text-muted-foreground"
+      className="flex flex-wrap items-center gap-2.5 border-t border-border pt-3 text-ui text-muted-foreground"
     >
-      <Label className="text-[13px] font-medium text-foreground">
+      <Label className="text-ui font-medium text-foreground">
         <GitForkIcon aria-hidden="true" className={cn('size-3.5', enabled ? 'text-violet' : 'text-soft-foreground')} />
         Dispatch
         {/* Review child is a dispatch child: off with its parent, and not restored with it (#1742). */}
@@ -49,7 +49,7 @@ export function EditorDispatchRow({
           <span className="inline-flex items-center gap-1.5">
             up to
             <Select value={String(maxSubtasks)} onValueChange={(value) => onChange({ maxSubtasks: Number(value) })}>
-              <SelectTrigger size="sm" aria-label="Max subtasks" className="h-7 px-2 text-[12.5px]">
+              <SelectTrigger size="sm" aria-label="Max subtasks" className="h-7 px-2 text-label">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -61,11 +61,11 @@ export function EditorDispatchRow({
             subtasks
           </span>
           <span className="text-soft-foreground">·</span>
-          <Label className="text-[13px] font-normal text-muted-foreground">
+          <Label className="text-ui font-normal text-muted-foreground">
             <Switch size="sm" aria-label="Review child" checked={reviewChild} onCheckedChange={(next) => onChange({ reviewChild: next })} />
             review child
           </Label>
-          <span data-slot="editor-dispatch-hint" className="ml-auto text-[11.5px] whitespace-nowrap text-soft-foreground">
+          <span data-slot="editor-dispatch-hint" className="ml-auto text-meta whitespace-nowrap text-soft-foreground">
             ≤ {maxSubtasks + 1} agents
           </span>
         </>

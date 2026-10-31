@@ -58,7 +58,7 @@ export function StepRail({ steps }: { steps: StepState[] }) {
           key={step.id}
           data-slot="step-row"
           data-visual={railVisual(step.status)}
-          className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
+          className="flex min-h-[22px] min-w-0 items-center gap-2 text-ui text-muted-foreground"
         >
           <RailIcon visual={railVisual(step.status)} />
           <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
@@ -67,7 +67,7 @@ export function StepRail({ steps }: { steps: StepState[] }) {
               ×{step.iterations}
             </span>
           ) : null}
-          <span className="ml-auto shrink-0 pl-2 text-[11.5px] text-soft-foreground tabular-nums">
+          <span className="ml-auto shrink-0 pl-2 text-meta text-soft-foreground tabular-nums">
             {step.kind} · step {index + 1} of {steps.length}
           </span>
         </div>

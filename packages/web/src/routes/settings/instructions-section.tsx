@@ -32,7 +32,7 @@ export function InstructionsSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="instructions-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="instructions-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading instructions…
       </p>
     )
@@ -103,11 +103,11 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
             Save
           </Button>
           {promptOverLimit ? (
-            <p data-slot="instructions-prompt-limit" className="text-[11px] text-danger">
+            <p data-slot="instructions-prompt-limit" className="text-meta text-danger">
               {trimmedPrompt.length.toLocaleString()} characters — the limit is {SYSTEM_PROMPT_MAX.toLocaleString()}.
             </p>
           ) : (
-            <p className="text-[11px] text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
+            <p className="text-meta text-soft-foreground">Leave empty and save to clear. Applied to new runs only.</p>
           )}
         </div>
       </SettingsField>
@@ -136,12 +136,12 @@ function InstructionsForm({ config }: { config: ConfigResponse }) {
             Save
           </Button>
           {branchNamingOverLimit ? (
-            <p data-slot="instructions-branch-naming-limit" className="text-[11px] text-danger">
+            <p data-slot="instructions-branch-naming-limit" className="text-meta text-danger">
               {trimmedBranchNaming.length.toLocaleString()} characters — the limit is{' '}
               {BRANCH_NAMING_MAX.toLocaleString()}.
             </p>
           ) : (
-            <p className="text-[11px] text-soft-foreground">
+            <p className="text-meta text-soft-foreground">
               Leave empty for the default names. A new task waits for its name before it forks.
             </p>
           )}
