@@ -245,7 +245,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
   const createPr = useMutation({
     mutationFn: (draft: boolean) => createRunPr(run.id, { draft }),
     onSuccess: (result, draft) => {
-      toast(`${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
+      toast(result.updated ? `PR updated — ${result.url}` : `${draft ? 'Draft PR' : 'PR'} created — ${result.url}`)
       void invalidateRuns() // the record now carries pullRequestUrl → the policy moves past Create PR
     },
     onError,

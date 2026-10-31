@@ -23,3 +23,5 @@ Task → Git action in the header → Create PR
 3. Follow the step execution and open the linked PR.
 
 > **Good to know**: The action depends on the task state and GitHub support. The task agent usually runs the command; when unavailable, some operations have a server-side path. Creating a PR does not merge it.
+
+> **Good to know**: Publishing again after Continue updates the PR the branch already has instead of opening a second one, and the result says "PR updated". Once a PR is recorded the step reads **Push update**. If the branch was rebased or amended since the last push, the push uses `--force-with-lease` pinned to the remote tip the task last held; a remote commit the task never had is never overwritten.
