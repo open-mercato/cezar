@@ -762,3 +762,4 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 - 2026-11-01: Review fixes. Corrected the streaming note. Added cold-launch probe handling,
   `/manager?all=1`, relay grants and revocation, which give the relay a small store, and an M2
   decision rule. Needs-you task push moved after the relay.
+- 2026-11-01: M7 (#1883) departures. Server pages run in a separate plain webview instead of a subclassed Capacitor client, and the bundled connect page sees the password during entry. Android answers one challenge per server view, for the start URL, because its callback has no port and a redirect hop skips `shouldInterceptRequest`. Forget server restarts the Android process to end its auth cache; iOS has no known way yet. Servers is reachable only from the connection-error screen until M6.

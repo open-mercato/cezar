@@ -72,7 +72,7 @@ function drawForget(server) {
       'div',
       { className: 'actions' },
       button('Cancel', () => drawList()),
-      button('Forget server', async () => show({ ...(await call('forget', { id: server.id })), screen: 'list' }), 'primary'),
+      button('Forget server', () => run('forget', { id: server.id }, {}), 'primary'),
     ),
   );
 }

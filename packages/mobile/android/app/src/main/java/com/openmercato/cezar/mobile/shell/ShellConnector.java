@@ -75,6 +75,7 @@ public final class ShellConnector {
             case CONNECTION_ERROR:
                 return Outcome.screen(health.kind == HealthAnswer.Kind.TLS_FAILURE ? TLS_FAILURE : CONNECTION_ERROR, id, health.status);
             default:
+                if (realmChanged(server, cookies)) return Outcome.screen(ASK_CREDENTIALS, id, health.status);
                 servers.markUsed(id);
                 return new Outcome(OPEN, id, server.origin().url(StartDecision.path(route)), oneTimeNote(server, route, health), health.status);
         }
@@ -124,6 +125,13 @@ public final class ShellConnector {
 
     public ServerRecord server(String serverId) {
         return servers.get(serverId);
+    }
+
+    /** The responder would refuse a new realm and strand a 401 page (BACKWARD_COMPATIBILITY.md §6b). */
+    private boolean realmChanged(ServerRecord server, String cookies) {
+        if (server.realm == null) return false;
+        HealthAnswer bare = probe.probe(server.origin(), null, null, cookies);
+        return bare.kind == HealthAnswer.Kind.BASIC_GATE && !server.realm.equals(bare.realm);
     }
 
     private Outcome afterAnswer(HealthAnswer health, ServerOrigin origin, String username, String password, String realm, String label) {

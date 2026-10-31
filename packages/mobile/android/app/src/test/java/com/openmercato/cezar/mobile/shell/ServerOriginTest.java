@@ -55,4 +55,14 @@ public class ServerOriginTest {
         assertFalse(origin.sameOrigin("https://evil.com\\@cezar.example.com/"));
         assertFalse(origin.sameOrigin(null));
     }
+
+    @Test
+    public void readsWhatTheWebviewLeavesRaw() throws Exception {
+        ServerOrigin origin = ServerOrigin.parse("https://cezar.example.com");
+        assertTrue(origin.sameOrigin("https://cezar.example.com/x?q=a|b^{c}"));
+        assertFalse(origin.sameOrigin("https://cezar.example.com:8443/x?q=a|b"));
+        assertFalse(origin.sameOrigin("https://evil.com#@cezar.example.com/"));
+        assertFalse(origin.sameOrigin("https://cezar.example.com:notaport/"));
+        assertTrue(ServerOrigin.parse("https://[::1]:8443").sameOrigin("https://[::1]:8443/x"));
+    }
 }

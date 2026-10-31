@@ -15,6 +15,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
     private var pendingLogin: Bool
     private var responder: BasicChallengeResponder?
     private var webView: WKWebView!
+    private var cancelButton: UIButton?
     private var provisional = false
     private var leaving = false
 
@@ -57,7 +58,22 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        if pendingLogin { addCancelButton() }
         webView.load(URLRequest(url: startUrl))
+    }
+
+    /// Android has Back. Without this, a site that is not cezar holds an unsaved add for good.
+    private func addCancelButton() {
+        let button = UIButton(type: .system, primaryAction: UIAction(title: "Cancel") { [weak self] _ in
+            self?.leave(ShellConnector.notCezar)
+        })
+        button.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            button.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+        ])
+        cancelButton = button
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -69,7 +85,8 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
         guard !leaving else { return }
         leaving = true
         let route = ShellRoute(screen: screen, serverId: serverId)
-        dismiss(animated: true) { [onLeave] in onLeave(route) }
+        // From the presenter: `dismiss` here would close an open alert and leave this view up.
+        presentingViewController?.dismiss(animated: true) { [onLeave] in onLeave(route) }
     }
 
     private func alert(_ message: String, done: @escaping () -> Void) {
@@ -158,6 +175,7 @@ final class ServerViewController: UIViewController, WKNavigationDelegate, WKUIDe
             let outcome = await connector.confirmLogin(url: url, cookies: cookies, label: label)
             guard outcome.screen == ShellConnector.open, let next = outcome.url.flatMap(URL.init(string:)) else { return }
             pendingLogin = false
+            cancelButton?.removeFromSuperview()
             serverId = outcome.serverId
             bindResponder()
             webView.load(URLRequest(url: next))
