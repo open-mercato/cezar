@@ -245,6 +245,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
+    managers: env.CEZ_MANAGERS !== '0',
     webhooks: webhookPlatformSupported() && env.CEZ_WEBHOOKS === '1',
     ...(!webhookPlatformSupported() ? { webhooksUnavailableReason: 'unsupported_platform' as const } : {}),
     dispatch: env.CEZ_DISPATCH !== '0',
