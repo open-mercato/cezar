@@ -268,6 +268,17 @@ public class RelayLinkTest {
     }
 
     @Test
+    public void aFrameOutsideTheTransportLengthClassIsADecryptionFailure() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"online\"}");
+        for (int i = 0; i < 200 && socket.binary.isEmpty(); i++) Thread.sleep(5);
+        socket.events.binary(Bytes.concat(new byte[] {1}, new byte[304]));
+        assertEquals(Integer.valueOf(1000), socket.closes.poll(2, TimeUnit.SECONDS));
+        assertNotNull("reconnects with jitter", fake.sockets.poll(3, TimeUnit.SECONDS));
+    }
+
+    @Test
     public void aFrameWithNoSessionIsDropped() throws Exception {
         link.start();
         Socket socket = opened();

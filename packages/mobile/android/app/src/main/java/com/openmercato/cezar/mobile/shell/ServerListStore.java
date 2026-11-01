@@ -49,8 +49,10 @@ public final class ServerListStore {
         return null;
     }
 
-    public synchronized ServerRecord findByCezarId(String cezarId) {
-        for (ServerRecord server : list()) if (server.relay != null && server.relay.cezarId.equals(cezarId)) return server;
+    public synchronized ServerRecord findPaired(String cezarId, String cezarKey) {
+        for (ServerRecord server : list()) {
+            if (server.relay != null && server.relay.cezarId.equals(cezarId) && server.relay.cezarKey.equals(cezarKey)) return server;
+        }
         return null;
     }
 

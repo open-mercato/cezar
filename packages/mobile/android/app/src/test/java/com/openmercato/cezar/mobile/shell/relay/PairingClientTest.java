@@ -55,7 +55,10 @@ public class PairingClientTest {
     }
 
     private PairingClient client(PairSecret secret) throws Exception {
-        PairingClient client = new PairingClient(fake, secret, keys, "Pixel\n9", states::add);
+        return started(new PairingClient(fake, secret, keys, "Pixel\n9", states::add));
+    }
+
+    private PairingClient started(PairingClient client) throws Exception {
         client.start();
         assertEquals(PairingClient.Phase.CONNECTING, states.poll(2, TimeUnit.SECONDS).phase);
         for (int i = 0; i < 200 && fake.events == null; i++) Thread.sleep(5);
@@ -138,6 +141,50 @@ public class PairingClientTest {
         assertEquals("pin-mismatch", failed.reason);
         assertEquals(1000, fake.closed);
         assertNull("the third message is never sent", fake.binary.poll(100, TimeUnit.MILLISECONDS));
+    }
+
+    /** `psk3` only enters at the third message, so the second cannot say anything about the code. */
+    @Test
+    public void aDamagedSecondMessageIsNotCalledAPinMismatch() throws Exception {
+        PairSecret secret = qrSecret(RelayCrypto.x25519Public(cezarSecret));
+        client(secret);
+        fake.events.text("{\"t\":\"hello\",\"protocol\":1}");
+        fake.events.text("{\"t\":\"peer-joined\"}");
+        byte[] prologue = Bytes.concat(Bytes.ascii("cezar-pair-v1"), secret.locatorBytes);
+        NoiseHandshake responder = NoiseHandshake.forVector("XXpsk3", false, prologue, cezarSecret, null, secret.psk, RelayCrypto.x25519Secret());
+        responder.readMessage(nextMessage());
+        byte[] second = responder.writeMessage(new byte[0]);
+        second[second.length - 1] ^= 1;
+        fake.events.binary(Bytes.concat(new byte[] {1}, second));
+        assertEquals("internal", states.poll(2, TimeUnit.SECONDS).reason);
+    }
+
+    /** A wrong PSK with a right pin: cezar cannot read the third message, and only the socket says so. */
+    @Test
+    public void aWrongPskSurfacesAsALostConnection() throws Exception {
+        PairSecret secret = PairSecret.fromCode("QRFX-7KMD-2NVB", RelayOrigin.parse("https://relay.example.test", false));
+        client(secret);
+        fake.events.text("{\"t\":\"hello\",\"protocol\":1}");
+        fake.events.text("{\"t\":\"peer-joined\"}");
+        byte[] prologue = Bytes.concat(Bytes.ascii("cezar-pair-v1"), secret.locatorBytes);
+        NoiseHandshake responder = NoiseHandshake.forVector("XXpsk3", false, prologue, cezarSecret, null, RelayCrypto.random(32), RelayCrypto.x25519Secret());
+        responder.readMessage(nextMessage());
+        fake.events.binary(Bytes.concat(new byte[] {1}, responder.writeMessage(new byte[0])));
+        nextMessage();
+        fake.events.text("{\"t\":\"peer-left\"}");
+        assertEquals("lost", states.poll(2, TimeUnit.SECONDS).reason);
+    }
+
+    @Test
+    public void aPeerThatNeverDecidesEndsThePairing() throws Exception {
+        PairSecret secret = qrSecret(RelayCrypto.x25519Public(cezarSecret));
+        started(new PairingClient(fake, secret, keys, "Pixel", states::add, 300));
+        deliver(handshake(secret, new NoiseHandshake[1], new JSONObject[1]), pending());
+        assertEquals(PairingClient.Phase.CONFIRM, states.poll(2, TimeUnit.SECONDS).phase);
+        PairingClient.State failed = states.poll(2, TimeUnit.SECONDS);
+        assertEquals(PairingClient.Phase.FAILED, failed.phase);
+        assertEquals("timeout", failed.reason);
+        assertEquals(1000, fake.closed);
     }
 
     @Test

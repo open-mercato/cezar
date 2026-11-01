@@ -45,6 +45,8 @@ public final class RelayLink {
     private static final long HELLO_WAIT_MS = 15000;
     private static final long RESET_ATTEMPTS_AFTER_MS = 60000;
     private static final int SILENT_KK_LIMIT = 3;
+    /** The AEAD tag: what sets a transport message's length class apart from a `KK` reply's (§ 10). */
+    private static final int TRANSPORT_OVERHEAD = 16;
     private static final byte[] PROLOGUE_LABEL = Bytes.ascii("cezar-session-v1");
 
     private final SocketTransport transport;
@@ -338,7 +340,9 @@ public final class RelayLink {
         }
         byte[] ciphertext = java.util.Arrays.copyOfRange(frame, 1, frame.length);
         // A frame from an ended session can reach a new socket: the relay routes by deviceId (§ 10).
-        if (handshake != null) finishHandshake(ciphertext);
+        if (handshake != null) {
+            if ((ciphertext.length - TRANSPORT_OVERHEAD) % TunnelRecord.UNIT != 0) finishHandshake(ciphertext);
+        }
         else if (session != null) session.receive(ciphertext);
     }
 
@@ -348,6 +352,7 @@ public final class RelayLink {
         try {
             payload = current.readMessage(reply);
         } catch (RelayCrypto.DecryptFailure e) {
+            lost();
             return;
         }
         handshake = null;

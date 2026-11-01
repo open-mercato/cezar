@@ -69,6 +69,8 @@ final class ProxyRequest {
             if (line.isEmpty()) break;
             int colon = line.indexOf(':');
             if (colon <= 0 || !NAME.matcher(line.substring(0, colon)).matches()) throw new Refused(400);
+            // A name's length is one byte on the wire (§ 12).
+            if (colon > TunnelFrame.MAX_NAME_BYTES) throw new Refused(431);
             String value = trim(line.substring(colon + 1));
             if (!TunnelFrame.validHeaderValue(value)) throw new Refused(400);
             headers.add(new TunnelFrame.Header(line.substring(0, colon).toLowerCase(Locale.ROOT), value));

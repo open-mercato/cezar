@@ -39,6 +39,7 @@ public final class PairingClient {
     }
 
     private static final long XX_DEADLINE_MS = 30000;
+    private static final long OUTCOME_DEADLINE_MS = 300000;
     private static final long PING_EVERY_MS = 45000;
     private static final int MAX_NAME_BYTES = 64;
     private static final int MAX_MESSAGE_BYTES = 1024;
@@ -49,6 +50,7 @@ public final class PairingClient {
     private final DeviceKeys keys;
     private final String name;
     private final Updates updates;
+    private final long outcomeDeadlineMs;
     private final ScheduledExecutorService actor = Executors.newSingleThreadScheduledExecutor(run -> {
         Thread thread = new Thread(run, "cezar-relay-pair");
         thread.setDaemon(true);
@@ -65,11 +67,16 @@ public final class PairingClient {
     private boolean finished;
 
     public PairingClient(SocketTransport transport, PairSecret secret, DeviceKeys keys, String phoneName, Updates updates) {
+        this(transport, secret, keys, phoneName, updates, OUTCOME_DEADLINE_MS);
+    }
+
+    PairingClient(SocketTransport transport, PairSecret secret, DeviceKeys keys, String phoneName, Updates updates, long outcomeDeadlineMs) {
         this.transport = transport;
         this.secret = secret;
         this.keys = keys;
         this.name = safeName(phoneName);
         this.updates = updates;
+        this.outcomeDeadlineMs = outcomeDeadlineMs;
     }
 
     /** No control characters, and cut on a character boundary at 64 UTF-8 bytes (§ 9.3). */
@@ -154,7 +161,8 @@ public final class PairingClient {
         finished = true;
         if (socket != null) socket.close(1000);
         updates.state(state(phase, reason));
-        actor.shutdown();
+        // Now, not after the 300 s timer.
+        actor.shutdownNow();
     }
 
     private void onText(String text) {
@@ -193,6 +201,7 @@ public final class PairingClient {
         actor.schedule(() -> post(() -> {
             if (transportKeys == null) finish(Phase.FAILED, "timeout");
         }), XX_DEADLINE_MS, TimeUnit.MILLISECONDS);
+        actor.schedule(() -> post(() -> finish(Phase.FAILED, "timeout")), outcomeDeadlineMs, TimeUnit.MILLISECONDS);
     }
 
     private void sendData(byte[] ciphertext) throws IOException {
@@ -218,8 +227,8 @@ public final class PairingClient {
         try {
             payload = handshake.readMessage(message);
         } catch (RelayCrypto.DecryptFailure e) {
-            // Wrong PSK or a peer that only knows the locator.
-            finish(Phase.FAILED, "pin-mismatch");
+            // A damaged message. `psk3` is only mixed in the third, so a wrong PSK fails at cezar: this phone sees `lost`.
+            finish(Phase.FAILED, "internal");
             return;
         }
         if (payload.length != 0) {

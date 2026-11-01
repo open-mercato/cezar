@@ -18,6 +18,7 @@ public final class TunnelFrame {
     /** An `OPEN` or `HEAD` frame's content limit, § 13.1. */
     public static final int MAX_HEAD_BYTES = 16000;
     public static final int MAX_TARGET_BYTES = 8192;
+    public static final int MAX_NAME_BYTES = 255;
 
     private static final List<String> METHODS = Arrays.asList("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
     private static final Pattern NAME = Pattern.compile("[a-z0-9!#$%&'*+.^_`|~-]+");
@@ -50,12 +51,12 @@ public final class TunnelFrame {
         return METHODS.contains(method);
     }
 
-    /** One leading `/`, printable ASCII, within the limit. */
+    /** One leading `/`, printable ASCII with no `\\`, within the limit (§ 13.1). */
     public static boolean validTarget(String target) {
         if (target.isEmpty() || target.length() > MAX_TARGET_BYTES || target.charAt(0) != '/' || target.startsWith("//")) return false;
         for (int i = 0; i < target.length(); i++) {
             char c = target.charAt(i);
-            if (c <= ' ' || c >= 0x7f) return false;
+            if (c <= ' ' || c >= 0x7f || c == '\\') return false;
         }
         return true;
     }

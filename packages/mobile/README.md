@@ -55,6 +55,10 @@ without a camera. It does not exist in a release build:
 adb shell "am start --activity-clear-task -n com.openmercato.cezar.mobile/.shell.DebugPairActivity --es qr '<qr string>'"
 ```
 
+The activity requires `android.permission.DUMP`, which adb's shell holds and an installed app cannot
+get, so other apps on the phone cannot start a pairing through it. A debug build still trusts user
+CAs: keep it to a phone you trust.
+
 ## Build the debug APK
 
 You need Node 22+, JDK 21 and the Android SDK with `platforms;android-36` and

@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -37,6 +38,8 @@ public final class LoopbackProxy implements Closeable {
     private static final int HEAD_TIMEOUT_MS = 30000;
     private static final int KEEP_ALIVE_MS = 60000;
     private static final int READ_CHUNK = 16384;
+    /** Added beside the server's own policy, which still applies: the cookie must not reach another loopback port. */
+    private static final String CONTENT_SECURITY_POLICY = "content-security-policy: connect-src 'self'\r\n";
     private static final Set<String> DROPPED_REQUEST = new HashSet<>(Arrays.asList(
             "host", "origin", "cookie", "authorization", "x-cezar-runtime-handoff", "forwarded", "x-real-ip", "user-agent", "expect",
             "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"));
@@ -53,6 +56,8 @@ public final class LoopbackProxy implements Closeable {
         return thread;
     });
     private final Set<Socket> connections = ConcurrentHashMap.newKeySet();
+    /** Oldest first. Any app can open these, so they give way before the webview does. */
+    private final ConcurrentLinkedQueue<Socket> ungated = new ConcurrentLinkedQueue<>();
     private ServerSocket listener;
     private String authority;
     private String allowedOrigin;
@@ -136,11 +141,12 @@ public final class LoopbackProxy implements Closeable {
         while (!closed) {
             try {
                 Socket socket = listener.accept();
-                if (connections.size() >= MAX_CONNECTIONS) {
+                if (connections.size() >= MAX_CONNECTIONS && !evictUngated()) {
                     closeQuietly(socket);
                     continue;
                 }
                 connections.add(socket);
+                ungated.add(socket);
                 workers.execute(() -> {
                     try {
                         serve(socket);
@@ -148,6 +154,7 @@ public final class LoopbackProxy implements Closeable {
                         // The connection went away. The stream, if any, was cancelled on the way out.
                     } finally {
                         connections.remove(socket);
+                        ungated.remove(socket);
                         closeQuietly(socket);
                     }
                 });
@@ -155,6 +162,14 @@ public final class LoopbackProxy implements Closeable {
                 if (closed) return;
             }
         }
+    }
+
+    private boolean evictUngated() {
+        Socket oldest = ungated.poll();
+        if (oldest == null) return false;
+        connections.remove(oldest);
+        closeQuietly(oldest);
+        return true;
     }
 
     private void serve(Socket socket) throws IOException {
@@ -178,6 +193,7 @@ public final class LoopbackProxy implements Closeable {
                 plain(out, refusal, null, true);
                 return;
             }
+            ungated.remove(socket);
             if (!serving) {
                 plain(out, 503, "retry-after: 1\r\n", true);
                 return;
@@ -371,6 +387,7 @@ public final class LoopbackProxy implements Closeable {
             if (DROPPED_RESPONSE.contains(header.name)) continue;
             text.append(header.name).append(": ").append(header.value).append("\r\n");
         }
+        text.append(CONTENT_SECURITY_POLICY);
         if (chunked) text.append("transfer-encoding: chunked\r\n");
         text.append("\r\n");
         out.write(text.toString().getBytes(StandardCharsets.ISO_8859_1));

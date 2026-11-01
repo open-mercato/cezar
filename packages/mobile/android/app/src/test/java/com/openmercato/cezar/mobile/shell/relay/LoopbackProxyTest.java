@@ -4,6 +4,7 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -168,6 +169,7 @@ public class LoopbackProxyTest {
         refused(gated("CONNECT", "/x", ""), "405");
         refused(gated("GET", "http://evil/x", ""), "400");
         refused(gated("GET", "//evil/x", ""), "400");
+        refused(gated("GET", "/\\evil/x", ""), "400");
     }
 
     @Test
@@ -176,6 +178,38 @@ public class LoopbackProxyTest {
         refused(gated("POST", "/x", "Content-Length: 1\r\nTransfer-Encoding: chunked\r\n"), "400");
         refused(gated("POST", "/x", "Content-Length: 1\r\nContent-Length: 2\r\n"), "400");
         refused(gated("GET", "/" + new String(new char[9000]).replace('\0', 'a'), ""), "431");
+        refused(gated("GET", "/x", new String(new char[256]).replace('\0', 'a') + ": v\r\n"), "431");
+    }
+
+    @Test
+    public void theLongestHeaderNameTheWireCanCarryRoundTrips() throws Exception {
+        String name = new String(new char[255]).replace('\0', 'a');
+        send(connect(), gated("GET", "/x", name + ": v\r\n"));
+        TunnelFrame opened = peer.opened.poll(2, TimeUnit.SECONDS);
+        assertEquals(name, opened.headers.get(0).name);
+        assertEquals("v", opened.headers.get(0).value);
+    }
+
+    @Test
+    public void idleSocketsWithNoCookieCannotStarveTheWebview() throws Exception {
+        for (int i = 0; i < 64; i++) connect();
+        Socket held = connect();
+        send(held, gated("GET", "/x", ""));
+        TunnelFrame opened = peer.opened.poll(2, TimeUnit.SECONDS);
+        assertNotNull("the 65th connection reached the tunnel", opened);
+        peer.head(opened.stream, 204);
+        assertTrue(readHead(held.getInputStream()).startsWith("HTTP/1.1 204"));
+    }
+
+    @Test
+    public void everyAnswerKeepsThePageOffOtherLoopbackPorts() throws Exception {
+        Socket socket = connect();
+        send(socket, gated("GET", "/x", ""));
+        TunnelFrame opened = peer.opened.poll(2, TimeUnit.SECONDS);
+        peer.head(opened.stream, 200, "content-length", "0", "content-security-policy", "default-src 'none'");
+        String head = readHead(socket.getInputStream());
+        assertTrue(head, head.contains("content-security-policy: connect-src 'self'\r\n"));
+        assertTrue("the server's own policy still applies", head.contains("content-security-policy: default-src 'none'\r\n"));
     }
 
     @Test

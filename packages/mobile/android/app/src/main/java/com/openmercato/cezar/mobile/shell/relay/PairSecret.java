@@ -11,7 +11,8 @@ public final class PairSecret {
     private static final byte[] CODE_SALT = Bytes.ascii("cezar-pair-code-v1");
     private static final int CODE_ITERATIONS = 200000;
     private static final String ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-    private static final Pattern QR = Pattern.compile("(.*)/p#([0-9]+)\\.([A-Za-z0-9_-]{43})\\.([A-Za-z0-9_-]{43})");
+    private static final Pattern QR = Pattern.compile("(.*?)/p#([0-9]+)\\.(.*)");
+    private static final Pattern FIELDS = Pattern.compile("([A-Za-z0-9_-]{43})\\.([A-Za-z0-9_-]{43})");
 
     public final RelayOrigin relay;
     public final byte[] locatorBytes;
@@ -30,15 +31,18 @@ public final class PairSecret {
         return Bytes.base64url(locatorBytes);
     }
 
-    /** The strict § 9.1 parser. A `version` that is not 1 is refused only after the grammar holds. */
+    /** The strict § 9.1 parser. `version` is read first, so a later layout still says "Update the app". */
     public static PairSecret fromQr(String text, boolean debugBuild) throws RelayOrigin.Refused {
         Matcher match = QR.matcher(text == null ? "" : text);
         if (!match.matches()) throw new RelayOrigin.Refused("grammar");
-        RelayOrigin relay = RelayOrigin.parse(match.group(1), debugBuild);
-        byte[] secret = Bytes.fromBase64url(match.group(3), 32);
-        byte[] key = Bytes.fromBase64url(match.group(4), 32);
-        if (secret == null || key == null) throw new RelayOrigin.Refused("grammar");
+        RelayOrigin.matched(match.group(1));
         if (!match.group(2).equals("1")) throw new RelayOrigin.Refused("version");
+        Matcher fields = FIELDS.matcher(match.group(3));
+        if (!fields.matches()) throw new RelayOrigin.Refused("grammar");
+        byte[] secret = Bytes.fromBase64url(fields.group(1), 32);
+        byte[] key = Bytes.fromBase64url(fields.group(2), 32);
+        if (secret == null || key == null) throw new RelayOrigin.Refused("grammar");
+        RelayOrigin relay = RelayOrigin.parse(match.group(1), debugBuild);
         return new PairSecret(relay, hkdfLabel(secret, "cezar-pair-locator-v1"), hkdfLabel(secret, "cezar-pair-psk-v1"), key);
     }
 

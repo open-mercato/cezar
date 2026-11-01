@@ -2,6 +2,7 @@ package com.openmercato.cezar.mobile.shell;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -77,7 +78,7 @@ public class RelayServerTest {
     public void pairingTheSameCezarAgainKeepsItsRowAndPort() {
         String id = connector.saveRelayServer("Laptop", fields);
         connector.saveRelayPort(id, 4242);
-        assertEquals(id, connector.saveRelayServer("Renamed", new RelayFields("https://other.example.test", "cezar-id", "new-key", "device-2", 0)));
+        assertEquals(id, connector.saveRelayServer("Renamed", new RelayFields("https://other.example.test", "cezar-id", "key", "device-2", 0)));
         ServerRecord server = servers.get(id);
         assertEquals("Renamed", server.label);
         assertEquals(4242, server.relay.port);
@@ -86,11 +87,25 @@ public class RelayServerTest {
     }
 
     @Test
+    public void aCezarIdWithAnotherPinCannotTakeOverASavedServer() {
+        String id = connector.saveRelayServer("Laptop", fields);
+        connector.saveRelayPort(id, 4242);
+        String other = connector.saveRelayServer("Hostile", new RelayFields("https://evil.example.test", "cezar-id", "attacker-key", "device-2", 0));
+        assertNotEquals(id, other);
+        ServerRecord saved = servers.get(id);
+        assertEquals("Laptop", saved.label);
+        assertEquals("https://relay.example.test", saved.relay.origin);
+        assertEquals("key", saved.relay.cezarKey);
+        assertEquals("device-id", saved.relay.deviceId);
+        assertEquals("a new origin, so no storage is shared", 0, servers.get(other).relay.port);
+    }
+
+    @Test
     public void aManualServerStaysFindableBesideARelayOne() {
         connector.saveRelayServer("Laptop", fields);
         servers.put(new ServerRecord("m", "Box", "https://box.example.com", null, null, null));
         assertEquals("m", servers.findByUrl("https://box.example.com").id);
-        assertNull(servers.findByCezarId("nope"));
+        assertNull(servers.findPaired("nope", "key"));
         assertEquals(2, servers.list().size());
     }
 
@@ -188,5 +203,11 @@ public class RelayServerTest {
         assertTrue(xml, xml.contains("<base-config cleartextTrafficPermitted=\"false\""));
         String manifest = new String(Files.readAllBytes(new File("src/main/AndroidManifest.xml").toPath()), StandardCharsets.UTF_8);
         assertFalse("the debug QR intent is not in main", manifest.contains("DebugPairActivity"));
+    }
+
+    @Test
+    public void onlyAdbCanStartTheDebugPairingEntry() throws IOException {
+        String manifest = new String(Files.readAllBytes(new File("src/debug/AndroidManifest.xml").toPath()), StandardCharsets.UTF_8);
+        assertTrue(manifest, manifest.contains("android:permission=\"android.permission.DUMP\""));
     }
 }

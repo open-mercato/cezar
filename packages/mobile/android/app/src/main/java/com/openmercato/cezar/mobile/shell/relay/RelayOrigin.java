@@ -27,13 +27,19 @@ public final class RelayOrigin {
 
     /** The strict `origin` production. `debugBuild` is what admits the `http` rows of § 9.1. */
     public static RelayOrigin parse(String text, boolean debugBuild) throws Refused {
+        Matcher match = matched(text);
+        boolean secure = match.group(1).equals("https");
+        if (!secure && !(debugBuild && isDevHost(match.group(2)))) throw new Refused("cleartext");
+        return new RelayOrigin(text, (secure ? "wss" : "ws") + text.substring(secure ? 5 : 4));
+    }
+
+    /** The production alone, with no word on which schemes this build allows. */
+    static Matcher matched(String text) throws Refused {
         Matcher match = ORIGIN.matcher(text == null ? "" : text);
         if (!match.matches()) throw new Refused("grammar");
         String port = match.group(3);
         if (port != null && Integer.parseInt(port) > 65535) throw new Refused("grammar");
-        boolean secure = match.group(1).equals("https");
-        if (!secure && !(debugBuild && isDevHost(match.group(2)))) throw new Refused("cleartext");
-        return new RelayOrigin(text, (secure ? "wss" : "ws") + text.substring(secure ? 5 : 4));
+        return match;
     }
 
     /** What the Enter code field takes: `https://` is assumed with no scheme, one trailing `/` goes. */

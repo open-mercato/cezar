@@ -10,7 +10,7 @@ public final class TunnelRecord {
         }
     }
 
-    private static final int UNIT = 256;
+    static final int UNIT = 256;
 
     private TunnelRecord() {}
 

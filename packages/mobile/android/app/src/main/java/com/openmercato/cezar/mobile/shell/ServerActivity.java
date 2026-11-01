@@ -372,6 +372,12 @@ public final class ServerActivity extends AppCompatActivity {
         super.onDestroy();
     }
 
+    /** Null lets the request go; anything else answers it. */
+    private WebResourceResponse gated(WebResourceRequest request) {
+        if (!RequestGate.blocks(origin, request.getUrl().toString())) return null;
+        return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked", Collections.<String, String>emptyMap(), new ByteArrayInputStream(new byte[0]));
+    }
+
     private final class ServerClient extends WebViewClient {
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -393,8 +399,7 @@ public final class ServerActivity extends AppCompatActivity {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            if (!RequestGate.blocks(origin, request.getUrl().toString())) return null;
-            return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked", Collections.<String, String>emptyMap(), new ByteArrayInputStream(new byte[0]));
+            return gated(request);
         }
 
         @Override
@@ -471,6 +476,12 @@ public final class ServerActivity extends AppCompatActivity {
         public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, Message resultMsg) {
             WebView popup = new WebView(ServerActivity.this);
             popup.setWebViewClient(new WebViewClient() {
+                // A blank popup is a document too: script can write a request into it.
+                @Override
+                public WebResourceResponse shouldInterceptRequest(WebView popupView, WebResourceRequest request) {
+                    return gated(request);
+                }
+
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView popupView, WebResourceRequest request) {
                     String url = request.getUrl().toString();

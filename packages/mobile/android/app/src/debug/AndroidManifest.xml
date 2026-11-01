@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Debug builds only: pair from a QR string over adb, for an emulator with no camera path. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<!--
+  Debug builds only: pair from a QR string over adb, for an emulator with no camera path.
+  DUMP is held by adb's shell and by no app a user can install, so only adb can start it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <application>
         <activity
             android:name=".shell.DebugPairActivity"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:exported="true" />
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            tools:ignore="ProtectedPermissions" />
     </application>
 </manifest>
