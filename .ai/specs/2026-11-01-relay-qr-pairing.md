@@ -165,7 +165,7 @@ relay server has no password.
 | Layer | Handling |
 | --- | --- |
 | Cockpit | Cannot drift. It comes from cezar |
-| Tunnel protocol | Each side sends `{ min, max }` in the handshake and they use the highest shared version |
+| Tunnel protocol | Each side states `{ min, max }` when a session starts, cezar in the `KK` reply and the phone in `HELLO`, and they use the highest shared version |
 | No shared version, app too old | "Update the app", with a store link |
 | No shared version, cezar too old | "Update cezar on your computer" |
 | Relay contract | `/v1` in the path, and 4426 if retired. cezar and the app each read `hello` limits rather than build them in |
@@ -328,7 +328,7 @@ grants access.**
 
 | Scenario | Result |
 | --- | --- |
-| Photo used after 2 minutes | 4404. Nothing happens |
+| Photo used after 2 minutes | 4408, or 4404 once the rendezvous is gone. Nothing happens |
 | Photo used after the real phone paired | 4404. The rendezvous is gone |
 | Attacker scans first, then the user's phone tries | The phone gets 4410 and a warning, and `pair-contested` makes desktop cancel the pairing and warn, so it fails safe |
 | Attacker joins while the user's phone is pairing | 4410 for the attacker and `pair-contested` on desktop, with the same result |
@@ -904,3 +904,6 @@ promise of this feature, and the claim that anyone can check it is only as good 
   a daily cron deletes expired rooms, and a rendezvous keeps one alarm of at most 300 s. A typed code needs a
   relay address while QR1 is open. Added `HELLO` and `HEAD`, the pairing messages, the `LEASE` echo and one
   rendezvous per credential. Applied the parent spec amendments.
+- 2026-11-01: R1 review. `device-add` is idempotent for a listed device, a failed pairing also sends
+  `device-remove`, a `failure` in place of `pending` uses nonce 0, and a phone with no shared tunnel version
+  closes and waits. Protocol version stays 1.
