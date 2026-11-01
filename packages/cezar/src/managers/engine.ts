@@ -32,6 +32,7 @@ import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { chatPrompt, jobPrompt, MANAGER_IMPORTANT, managerSystemPrompt, MANAGER_QUIET, recapPrompt, watchPrompt } from './prompts.ts';
 import { buildSnapshot, gateAttention, taskDetailRows, type ManagerGithubFacts, type ManagerProjectSource } from './snapshot.ts';
 import type { ManagerStore } from './store.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 
 /**
  * The manager turn engine (spec 2026-10-31-managers § Turns, § Watching, § Safety). One turn per
@@ -568,11 +569,12 @@ export class ManagerEngine {
     return true;
   }
 
+  /** A turn outlives the request that asked for it, so it reads the unscoped value. */
   private enqueue(id: string, item: QueueItem): void {
     const runtime = this.runtime(id);
     runtime.queue.push(item);
     this.emitChange(id);
-    this.pump(id);
+    outsideRelayScope(() => this.pump(id));
   }
 
   /** Chat outranks timers, and everything the user typed meanwhile folds into one turn. */
@@ -955,10 +957,10 @@ export class ManagerEngine {
     const dues = this.deps.store.list().flatMap((manager) => this.nextDue(manager, now) ?? []);
     if (dues.length === 0) return;
     const delay = Math.min(Math.max(Math.min(...dues) - now, TICK_FLOOR_MS), MAX_TIMER_MS);
-    this.timer = setTimeout(() => {
+    this.timer = outsideRelayScope(() => setTimeout(() => {
       this.tick();
       this.reschedule();
-    }, delay);
+    }, delay));
     this.timer.unref?.();
   }
 

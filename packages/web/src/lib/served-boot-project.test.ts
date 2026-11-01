@@ -20,6 +20,7 @@ const HEALTH: HealthResponse = {
     tokenUsageMetrics: true,
     costMetrics: true,
     followups: false,
+    phonePairing: false,
     singleProject: false,
     automations: false,
     webhooks: false,
