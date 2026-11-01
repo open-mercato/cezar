@@ -22,6 +22,8 @@ import { trackAddProjectOpened } from '@/lib/telemetry'
 import { CommandPaletteHint } from '@/components/command-palette-hint'
 import { GithubIcon } from '@/components/icons'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { shortcutsBlocked } from '@/lib/keybindings'
+import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname } from '@/lib/managers'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
@@ -41,7 +43,7 @@ import {
 import { Sheet, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
 import type { TrackerKind } from '@open-mercato/cezar-api-client'
-import { SidebarDrawer, SidebarFrame, useDesktopShell, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
+import { SidebarDrawer, SidebarFoldButton, SidebarFrame, SidebarRail, useDesktopShell, useSidebarFolded, useSidebarWidth, type SidebarResize } from '@/components/sidebar-frame'
 import { cn } from '@/lib/utils'
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -425,16 +427,47 @@ type NavProps = {
   managerSidebar?: ReactNode
 }
 
-/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content. */
+/** The desktop column: the shared `SidebarFrame` (resizable, #788) around the app's content,
+ *  foldable into a rail. Focus follows a fold the user makes, so the keyboard is never dropped. */
 const Sidebar = React.memo(function Sidebar({
   width,
   onWidthChange,
   desktop = null,
   ...props
 }: NavProps & SidebarResize & { desktop?: 'macos' | 'windows' | 'linux' | null }) {
+  const [folded, setFolded] = useSidebarFolded()
+  const [toggled, setToggled] = React.useState(false)
+  const foldButton = React.useRef<HTMLButtonElement>(null)
+  React.useEffect(() => {
+    if (toggled && !folded) foldButton.current?.focus()
+  }, [toggled, folded])
+  const toggle = (next: boolean) => {
+    setToggled(true)
+    setFolded(next)
+  }
+  // ⌘B / Ctrl+B, the editor convention for the side bar. Reserved in `lib/keybindings.ts`.
+  // Focus follows only when it sat in the column being swapped out (or nowhere): ⌘B from the
+  // composer must leave the caret where it is.
+  useCommandShortcut(
+    'b',
+    () => {
+      if (shortcutsBlocked()) return
+      const active = document.activeElement
+      setToggled(!active || active === document.body || active.closest('[data-slot="sidebar"], [data-slot="sidebar-rail"]') !== null)
+      setFolded(!folded)
+    },
+    { inEditable: true },
+  )
+  if (folded) {
+    return <SidebarRail onUnfold={() => toggle(false)} titlebarInset={desktop === 'macos'} autoFocus={toggled} />
+  }
   return (
     <SidebarFrame width={width} onWidthChange={onWidthChange} titlebarInset={desktop === 'macos'}>
-      <SidebarContent {...props} compactHeader={desktop === 'macos'} />
+      <SidebarContent
+        {...props}
+        compactHeader={desktop === 'macos'}
+        headerAction={<SidebarFoldButton ref={foldButton} onFold={() => toggle(true)} />}
+      />
     </SidebarFrame>
   )
 })

@@ -20,6 +20,7 @@ import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
 import { withServedBootProject } from '@/lib/served-boot-project'
 import { useActiveForge } from '@/lib/active-forge'
 import { useFeatureNews, WhatsNewNavItem } from '@/components/first-run'
+import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { pageTitleContext } from '@/routes'
@@ -236,6 +237,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       <CommandPalette />
       {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
       <TaskPalette />
+      {/* ⌥↑/⌥↓ walk the sidebar's tasks, ⌥⇧ the ones that need you — on every page. */}
+      <TaskSwitchShortcut />
     </ListViewProvider>
   )
 })

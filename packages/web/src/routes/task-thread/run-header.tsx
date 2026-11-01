@@ -8,6 +8,7 @@ import {
   ChevronsUpDownIcon,
   CircleStopIcon,
   CopyIcon,
+  FolderMinusIcon,
   EllipsisIcon,
   EllipsisVerticalIcon,
   MailIcon,
@@ -70,12 +71,14 @@ import { cn, isHttpUrl } from '@/lib/utils'
 
 import {
   isRunActive,
+  canRemoveTaskWorktree,
   resumeHint,
   runActionFlags,
 } from './run-actions'
 import { GitActions } from '../task-git/git-toolbar'
 import { useRunGitStep, type RunGitStep } from '../task-git/run-git-step'
 import { RunConfirmDialog } from './run-confirm-dialog'
+import { TaskWorktreeRemovalDialog } from './task-worktree-removal'
 import { useRunEngine } from './run-engine'
 import { WorkflowSteps } from './step-rail'
 import { useDraft } from './thread-draft'
@@ -354,6 +357,10 @@ function RunHeaderView({
           onOpenChange={(open) => !open && actions.setConfirming(null)}
           onConfirm={(kind) => (kind === 'delete' ? actions.delete.mutate() : actions.cancel.mutate())}
         />
+        {actions.worktreeRemovalOpen ? (
+          <TaskWorktreeRemovalDialog key={run.id} run={run} pending={actions.removeWorktree.isPending}
+            onClose={() => actions.setWorktreeRemovalOpen(false)} onConfirm={() => actions.removeWorktree.mutate()} />
+        ) : null}
       </header>
     </ReferenceStatusProvider>
   )
@@ -493,7 +500,7 @@ function TaskItemActions({
       >
         <Trash2Icon aria-hidden="true" />
       </IconAction>
-      {moreStop || moreEnd ? (
+      {moreStop || moreEnd || canRemoveTaskWorktree(run) ? (
         <DropdownMenu>
           <IconTooltip label="More actions">
             <DropdownMenuTrigger asChild>
@@ -503,6 +510,11 @@ function TaskItemActions({
             </DropdownMenuTrigger>
           </IconTooltip>
           <DropdownMenuContent align="end" data-slot="run-more-menu">
+            {canRemoveTaskWorktree(run) ? (
+              <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
+                <FolderMinusIcon aria-hidden="true" /> Remove worktree…
+              </DropdownMenuItem>
+            ) : null}
             {moreEnd ? (
               <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
                 <CheckIcon aria-hidden="true" /> End session
@@ -1366,6 +1378,11 @@ function ActionsKebab({
             {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
         ))}
+        {canRemoveTaskWorktree(run) ? (
+          <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
+            <FolderMinusIcon aria-hidden="true" /> Remove worktree…
+          </DropdownMenuItem>
+        ) : null}
         {stop || remove ? <DropdownMenuSeparator /> : null}
         {[stop, remove].map((command) =>
           command ? (

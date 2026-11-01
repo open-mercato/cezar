@@ -1,5 +1,5 @@
 import { CalendarClockIcon } from 'lucide-react'
-import { occurrencesBetween, zonedParts, type AutomationListEntry } from '@open-mercato/cezar-api-client'
+import { scheduleOccurrencesBetween, zonedParts, type AutomationListEntry } from '@open-mercato/cezar-api-client'
 
 import { StatusDot } from '@/components/status-dot'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -28,7 +28,7 @@ export function nextRuns(
   const out: NextRun[] = []
   for (const automation of automations) {
     if (!automation.enabled || automation.kind !== 'schedule' || !automation.schedule) continue
-    for (const at of occurrencesBetween(automation.schedule, now, now + 14 * 86_400_000, timeZone, limit)) {
+    for (const at of scheduleOccurrencesBetween(automation, now, now + 14 * 86_400_000, timeZone, limit)) {
       out.push({ automation, at })
     }
   }

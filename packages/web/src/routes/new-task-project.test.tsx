@@ -62,6 +62,7 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   repoRoot: '/home/u/cezar',
   repo: { root: '/home/u/cezar', branch: 'main' },
   defaultRunner: 'claude',

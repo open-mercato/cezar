@@ -77,7 +77,7 @@ a Download button (Gatekeeper reports them "damaged"; SmartScreen blocks them).
 | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) | updater artifacts + `desktop-latest.json`. Public key is in `tauri.conf.json` `plugins.updater.pubkey`. Generated with `npx tauri signer generate`; the private half lives in the maintainer's `~/.tauri/cezar-desktop.key` and in this secret — lose it and installed shells can never adopt another update. |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` | Developer ID Application certificate (base64 .p12) for code signing |
 | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | notarization (app-specific password) |
-| Windows code signing | not wired yet — Azure Trusted Signing via `bundle.windows.signCommand` is the intended route; until then Windows builds are unsigned |
+| `SIGNPATH_API_TOKEN`, `SIGNPATH_ORGANIZATION_ID` (secrets); `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`, `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` (variables, defaults `cezar` / `release-signing` / SignPath's default) | Windows code signing through SignPath Foundation (free for open source). The installer is signed AFTER the build, as a run artifact; the updater signature is made again over the signed file and the publish job writes it into `desktop-latest.json`. Until the secrets exist the installer is unsigned and the summary says so. `docs/code-signing-policy.md` is the page the programme requires |
 
 Apple Developer Program membership (99 USD/year) is the one purchase required before publishing
 to anyone but maintainers.
@@ -124,7 +124,7 @@ old app. `~/.cezar` (versions, settings, window geometry) is untouched by that.
 | Add `TAURI_SIGNING_PRIVATE_KEY` (the file's contents) as a repository secret | GitHub → Settings → Secrets | without it the workflow builds installers but no `desktop-latest.json`, so shells never see a new version |
 | Join the Apple Developer Program (99 USD/year), create a Developer ID Application certificate, export as base64 `.p12` | developer.apple.com | without it the build is signed AD-HOC (`signingIdentity: "-"`), which seals the bundle: a downloaded copy gets "could not verify" and Open Anyway in System Settings. A bundle that is not sealed at all is what macOS calls "damaged" — the first 0.1.1 build shipped that way. Notarization (no prompt at all) still needs the certificate |
 | Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID` | GitHub secrets | tauri-action signs and notarizes with these; all-or-nothing |
-| Windows: Azure Trusted Signing (or an EV cert), wired through `bundle.windows.signCommand` | later | SmartScreen otherwise warns on every install |
+| Windows: apply to SignPath Foundation (signpath.org), then set `SIGNPATH_API_TOKEN` and `SIGNPATH_ORGANIZATION_ID` and install the SignPath GitHub App on the repository | after approval | SmartScreen otherwise warns on every install |
 | Cut `desktop-v0.1.0` and check the workflow summary shows no "UNSIGNED" warning | GitHub Actions | the first real run will surface platform-specific matrix issues |
 | Landing page + Homebrew tap pointing at the stable asset URLs | after the first green release | see "Downstream pointers" |
 
@@ -277,6 +277,18 @@ of them is the one case where the shell must ship BEFORE the cezar version that 
   pops the Versions list up as a native menu at the pointer. A registry cockpit without the
   update dialog therefore still has a visible, in-window way to any installed version,
   local builds included.
+- **New task from anywhere**: a system-wide **Cmd/Ctrl+Alt+N** (`tauri-plugin-global-shortcut`,
+  registered at launch) brings the main window forward, un-minimized and un-hidden, and moves
+  the cockpit client-side to the active project's `/new` (`history.pushState` + `popstate`, so
+  the page keeps its state and the composer focuses itself). Before the cockpit is up it only
+  shows the window. A combination another app already owns is logged and skipped; the shell
+  starts without it. A separate always-on-top quick-entry window was tried first and dropped
+  for this: it showed a second, partial cockpit and stayed over the main one.
+- **Global task switch** (`tauri-plugin-global-shortcut`): ⌃⌥↑ / ⌃⌥↓ from any application raise
+  the window and send the cockpit `cezar:switch-task` (`previous` / `next`), which steps to the
+  previous / next task that needs you (spec 2026-10-17-task-palette § Switching by arrow). The
+  stepping is the cockpit's; the shell only owns the OS-level chord. A chord another app holds
+  is logged and skipped at startup, never fatal.
 - **Port**: 4321 first (so `http://localhost:4321` works in a browser beside the app), the
   next few when busy, then any free port; the actual URL is on the app menu's
   "Open … in browser" item.

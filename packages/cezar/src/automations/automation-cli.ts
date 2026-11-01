@@ -16,7 +16,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, parseScheduleDate, scheduleLabel, schedulesOf, type AutomationSchedule, type AutomationResponse, type AutomationsResponse } from '@open-mercato/cezar-contract';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
@@ -57,8 +57,8 @@ const USAGE = `cez automation — create and manage automations (GitHub/Jira/Lin
                      [--changed-label <label-id>] [--require-label <name>]... [--every 30m] --prompt <text> [--enable]
                                                 use this project's configured tracker; only advertised events are accepted
   cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, kind,
-                                                events, intervalSeconds, filters, schedule, task); keys you omit keep
-                                                their value
+                                                events, intervalSeconds, filters, schedule, schedules, task); omitted
+                                                keys keep their value; an explicit schedule replaces the whole list
   cez automation check <id> [--execute]         event poll: run the filter now — preview counts matches and launches
                                                 nothing, --execute launches a task per match exactly as a poll would
   cez automation run <id>                       schedule: launch it once, now, by hand (paused or not)
@@ -72,7 +72,7 @@ const CHECK_POLL_MS = 500;
 const CHECK_TIMEOUT_MS = 120_000;
 
 /** The keys `PUT /automations/:id` accepts besides `enabled` and `expectedRevision`. */
-const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'trackerTrigger', 'task'] as const;
+const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'schedules', 'trackerTrigger', 'task'] as const;
 
 function base(env: AutomationCliEnv): { url: string; scope: string; projectId?: string } | null {
   const url = env.CEZ_API_URL?.replace(/\/+$/, '');
@@ -199,7 +199,7 @@ export function bodyFromAddFlags(values: {
     body.schedule = schedule;
   } else if (values.kind === 'tracker') {
     body.kind = 'tracker';
-    body.trackerTrigger = { events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
+    body.trackerTrigger = { access: { version: 1, writes: [] }, events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
       ...(values['to-status']?.length ? { targetStatusIds: values['to-status'] } : {}),
       ...(values['require-label']?.length ? { requiredLabels: values['require-label'] } : {}),
       ...(values['changed-label']?.length ? { changedLabelIds: values['changed-label'] } : {}),
@@ -221,6 +221,24 @@ export function bodyFromAddFlags(values: {
 
 function shortEvents(events: unknown): string {
   return Array.isArray(events) ? events.map(String).join(',') : '';
+}
+
+/**
+ * Tracker write grants are the user's explicit decision in the cockpit editor: this CLI (the agent's
+ * path) may keep or narrow them, never add one. Not a boundary against a same-user process.
+ */
+function withTrackerAccess(next: Record<string, unknown>, current?: Record<string, unknown>): void {
+  const trigger = next.trackerTrigger as { access?: { writes?: unknown } } | undefined;
+  if (!trigger || typeof trigger !== 'object') return;
+  const existing = (current?.trackerTrigger as { access?: { version: 1; writes: string[] } } | undefined)?.access;
+  if (!trigger.access) {
+    // A new definition starts read-only; an edit that restates the trigger keeps its grants.
+    if (existing || !current) (trigger as Record<string, unknown>).access = existing ?? { version: 1, writes: [] };
+    return;
+  }
+  const writes = Array.isArray(trigger.access.writes) ? trigger.access.writes : [];
+  const added = writes.filter(write => !(existing?.writes ?? []).includes(write as string));
+  if (added.length) throw new Error(`tracker write access (${added.join(', ')}) can only be granted in the cockpit's automation editor; create or update it read-only here`);
 }
 
 export async function runAutomationCommand(
@@ -262,8 +280,8 @@ export async function runAutomationCommand(
     const body = options.neverEnable ? paused : requested;
     const response = await json(`${api.scope}/automations`, { method: 'POST', body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
-    const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean; kind?: string; schedule?: AutomationSchedule } };
-    const schedule = automation.kind === 'schedule' && automation.schedule ? ` — ${scheduleLabel(automation.schedule)}, in the cockpit's time zone` : '';
+    const { automation } = (await response.json()) as AutomationResponse;
+    const schedule = automation.kind === 'schedule' ? ` — ${schedulesOf(automation).map(scheduleLabel).join('; ')}, in the cockpit's time zone` : '';
     io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? (automation.kind === 'schedule' ? 'ENABLED, next occurrence armed' : 'ENABLED from a current-time baseline') : 'paused'}${schedule}`);
     io.log(`cockpit: ${pageUrl(api, automation.id)}`);
     if (!automation.enabled) {
@@ -287,6 +305,7 @@ export async function runAutomationCommand(
         // `enable: true` is the one-step "create and baseline". A definition that carries it
         // (copied from `show`) would be refused, so it is lifted into the flag's slot.
         const { enabled, ...body } = definition;
+        withTrackerAccess(body);
         const enable = values.enable || enabled === true;
         return await createFrom({ ...body, ...(enable ? { enable: true } : {}) });
       }
@@ -357,8 +376,13 @@ export async function runAutomationCommand(
           const value = key in patch ? patch[key] : automation[key];
           if (value !== undefined) body[key] = value;
         }
+        // #1818: timing explicitly supplied by this patch replaces inherited timing. A prompt-only
+        // partial update retains the entire union, while a legacy --file with schedule replaces it.
+        if ('schedule' in patch && !('schedules' in patch)) delete body.schedules;
+        if ('schedules' in patch && !('schedule' in patch)) delete body.schedule;
         // A PUT restates `enabled` (an edit may not silently pause a running automation) and
         // echoes the revision it read, so a concurrent edit in the cockpit is a 409, not a clobber.
+        withTrackerAccess(body, automation);
         body.enabled = options.neverEnable ? false : 'enabled' in patch ? patch.enabled : automation.enabled;
         body.expectedRevision = automation.revision;
         const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) });
@@ -405,17 +429,7 @@ export async function runAutomationCommand(
       case 'list': {
         const response = await io.fetch(`${api.scope}/automations`);
         if (!response.ok) throw new Error(`could not list automations — ${await readError(response)}`);
-        const data = (await response.json()) as {
-          available: boolean;
-          reason?: string;
-          automations: Array<{
-            id: string; name: string; enabled: boolean; kind?: string; events?: string[]; intervalSeconds?: number; schedule?: AutomationSchedule;
-            counts: { launched: number; duplicates: number; errors: number };
-            nextRunAt?: string;
-            trackerTrigger?: { events: string[]; association: { kind: string } };
-            state?: { nextCheckAt?: string; lastSuccessAt?: string };
-          }>;
-        };
+        const data = (await response.json()) as AutomationsResponse;
         if (!data.available) io.log(`GitHub is not available to this cockpit${data.reason ? ` — ${data.reason}` : ''}; GitHub polls will not run until it is (schedules still do).`);
         if (data.automations.length === 0) {
           io.log('no automations in this project');
@@ -425,7 +439,7 @@ export async function runAutomationCommand(
           const nextAt = item.nextRunAt ?? item.state?.nextCheckAt;
           const next = item.enabled && nextAt ? `  next ${nextAt}` : '';
           const trigger = item.kind === 'schedule' && item.schedule
-            ? scheduleLabel(item.schedule)
+            ? schedulesOf(item).map(scheduleLabel).join('; ')
             : item.kind === 'tracker'
               ? `${item.trackerTrigger?.association.kind ?? 'tracker'} every ${item.intervalSeconds ?? 1800}s  ${item.trackerTrigger ? shortEvents(item.trackerTrigger.events) : 'select an event to complete setup'}`
               : `every ${item.intervalSeconds ?? 300}s  ${shortEvents(item.events)}`;

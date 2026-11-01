@@ -218,3 +218,14 @@ describe('describeManagerNotification', () => {
     expect(describeManagerNotification(managerFixture()).body).toBe('New message')
   })
 })
+
+it('silences fallback selection and notifies once only if selection ends in failure', () => {
+  const pending = run({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } })
+  const selection = diffRunTransitions(new Map([['r1', 'running']]), [pending])
+  expect(selection.entering).toEqual([])
+  expect(diffRunTransitions(selection.statuses, [run({ status: 'running' })]).entering).toEqual([])
+  const failed = run({ status: 'failed', fallbackEpisode: { attempted: ['claude:default'], done: true } })
+  const stopped = diffRunTransitions(selection.statuses, [failed])
+  expect(stopped.entering).toEqual([failed])
+  expect(diffRunTransitions(stopped.statuses, [failed]).entering).toEqual([])
+})
