@@ -78,6 +78,14 @@ describe('the managers routes', () => {
     expect((await request('/api/v1/runs')).status).toBe(200);
   });
 
+  it('says how many attachments it kept, and refuses a key it does not know', async () => {
+    const { id } = await createManager({ instructions: '', projects: 'all', cronMinutes: 0 });
+    const path = `${BASE}/${id}/messages`;
+    const sent = await request(path, { method: 'POST', body: { text: 'look', images: [{ mediaType: 'image/png', data: 'aGk=', name: 'a.png' }] } });
+    expect(await sent.json()).toEqual({ ok: true, attachments: 1 });
+    expect((await request(path, { method: 'POST', body: { text: 'look', pictures: [] } })).status).toBe(400);
+  });
+
   it('validates as middleware and 404s an unknown manager', async () => {
     expect((await request(BASE, { method: 'POST', body: { totalNonsense: 1 } })).status).toBe(400);
     expect((await request(`${BASE}/NOT VALID`)).status).toBe(400);
@@ -222,13 +230,5 @@ esac
 
   it('a watch with nothing new is quiet', async () => {
     expect((await turn('[cez-manager:watch]\nNew attention items: 0.')).text).toBe('MANAGER:QUIET');
-  });
-
-  it('says how many attachments it kept, and refuses a key it does not know', async () => {
-    const { id } = await createManager({ instructions: '', projects: 'all', cronMinutes: 0 });
-    const path = `${BASE}/${id}/messages`;
-    const sent = await request(path, { method: 'POST', body: { text: 'look', images: [{ mediaType: 'image/png', data: 'aGk=', name: 'a.png' }] } });
-    expect(await sent.json()).toEqual({ ok: true, attachments: 1 });
-    expect((await request(path, { method: 'POST', body: { text: 'look', pictures: [] } })).status).toBe(400);
   });
 });
