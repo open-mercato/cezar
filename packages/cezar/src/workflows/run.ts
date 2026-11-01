@@ -104,6 +104,7 @@ import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/stor
 import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
 import { composeDispatchPrompt } from '../dispatch/prompts.ts';
+import { releaseSimlockLeases, SIMLOCK_PROMPT, simlockAgentEnv, simlockAvailable } from '../simlock.ts';
 import {
   appendLedger,
   inboxDigest,
@@ -638,6 +639,8 @@ interface ActiveRun {
    * the cockpit is reachable — a task that could not run `cez automation` is never told about it.
    */
   automationsPrompt?: string;
+  /** Present ⇔ `simlock` is on PATH (spec 2026-10-30-simlock-zero-config). Same two construction sites. */
+  simlockPrompt?: string;
   /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
    *  monitor for the children it just created. */
   dispatchedThisTurn?: boolean;
@@ -1540,8 +1543,12 @@ export class RunManager {
     this.offUsage = onUsage((snapshot) => void this.enforceMemoryLimit(snapshot));
     const onRun = (run: RunRecord): void => {
       if (run.archived) this.releaseCheckState(run.id);
+      this.releaseSimlockOnSettle(run);
     };
-    const onDeleted = (runId: string): void => this.releaseCheckState(runId);
+    const onDeleted = (runId: string): void => {
+      this.releaseCheckState(runId);
+      if (this.simlockUnsettled.delete(runId)) this.releaseSimlock(runId);
+    };
     this.store.on('run', onRun);
     this.store.on('deleted', onDeleted);
     this.offStoreLifecycle = () => {
@@ -1683,6 +1690,7 @@ export class RunManager {
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       ...agentTmpEnv(this.dataDir, runId),
+      ...simlockAgentEnv(runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
       // is byte-for-byte as before.
@@ -2903,6 +2911,25 @@ export class RunManager {
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
   }
 
+  /** Fires on the transition only: `run` events keep coming for settled runs (archive, rename). An
+   *  unanswered CEZ:ASK is a hold, not an outcome, and may still resume on the same device. */
+  private releaseSimlockOnSettle(run: RunRecord): void {
+    if (!isTerminalStatus(run.status)) {
+      this.simlockUnsettled.add(run.id);
+    } else if (run.awaitingAnswerSince === undefined && this.simlockUnsettled.delete(run.id)) {
+      this.releaseSimlock(run.id);
+    }
+  }
+
+  private releaseSimlock(runId: string): void {
+    if (!simlockAvailable()) return;
+    void releaseSimlockLeases(runId).then((released) => {
+      if (released.length > 0 && this.store.getRun(runId)) {
+        this.store.appendEvent(runId, { type: 'note', message: `released simlock lease ${released.join(', ')}` });
+      }
+    });
+  }
+
   /**
    * The automations twin of `prepareDispatchSession` (spec 2026-09-13-automations-from-prompt):
    * the short prompt part that lets a task recognise "whenever a PR is opened, do X" as an
@@ -4070,6 +4097,7 @@ export class RunManager {
   /** Last hold inputs seen per run. Token and title updates fire `run` constantly, and each
    *  notification re-derives every participant's queue reasons, so only hold inputs notify (#1340). */
   private readonly holdInputs = new Map<string, string>();
+  private readonly simlockUnsettled = new Set<string>();
   private readonly onRunHoldInputs = (run: RunRecord) => {
     const inputs = JSON.stringify([run.status, run.autoResumeAt, run.autoResumeAttempts, run.autoResumeReason, run.runner, run.agentProfile]);
     if (this.holdInputs.get(run.id) === inputs) return;
@@ -5336,6 +5364,7 @@ export class RunManager {
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+    state.simlockPrompt = simlockAvailable() ? SIMLOCK_PROMPT : undefined;
 
     // Cancellation may have retired this continuation while its async preparation was running.
     // Do not let the late promise make a durably cancelled run look active again.
@@ -5739,6 +5768,7 @@ export class RunManager {
           systemPrompt: composeSystemPrompt(
             dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
             state.automationsPrompt,
+            state.simlockPrompt,
             record?.systemPrompt,
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
@@ -6165,6 +6195,7 @@ export class RunManager {
     // twin is in `runContinuation`.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+    state.simlockPrompt = simlockAvailable() ? SIMLOCK_PROMPT : undefined;
     let runError: string | null = null;
     let idleFailed = false;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
@@ -7898,6 +7929,7 @@ export class RunManager {
             systemPrompt,
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
+            state.simlockPrompt,
             extraSystemPrompt,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS

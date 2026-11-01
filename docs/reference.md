@@ -558,6 +558,7 @@ Useful environment variables:
 | `CEZ_HIDE_COST=1` | Hide backend-reported monetary cost throughout the browser cockpit while leaving raw input/output token counts visible. Only the exact value `1` enables it; telemetry and API payloads are unchanged, and a restart is required after changing it. |
 | `CEZ_HIDE_TOKEN_METRICS=1` | Legacy master switch that hides both token usage and cost. It takes precedence over the two independent flags; only the exact value `1` enables it, payloads are unchanged, and a restart is required. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
+| `CEZ_SIMLOCK=0` | Turn OFF the **simlock** integration, which is on whenever `simlock` is on PATH: see [Mobile apps with simlock](#mobile-apps-with-simlock). Only the exact value `0` opts out. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment except inherited `CEZ_TRACKER_CAPABILITY` (any casing); explicit per-launch task grants still apply. Off by default; only set it if you understand that this hands other host secrets to the agent process. |
 | `CEZ_REMOTE=1` | Hosted/server-install mode. The configured port is authoritative so an occupied port fails the real bind with `EADDRINUSE` instead of drifting away from the reverse-proxy upstream; interactive local launches keep bounded auto-increment. Read at startup. |
@@ -644,6 +645,35 @@ Remove orphaned `secrets/<project>.json` files for unregistered projects manuall
 A replacement key is created only when no ciphertext remains. If the lost key belonged
 to a keychain this environment cannot use, also remove the stale `secrets/.backend`
 hint after removing the ciphertext. Paths are relative to `CEZ_HOME` (default `~/.cezar`).
+
+---
+
+## Mobile apps with simlock
+
+[simlock](https://github.com/callstackincubator/simlock) leases iOS simulators and Android
+emulators to parallel agents, queues requests when the machine is full and wipes each device
+between holders. The whole setup is installing it on the machine that runs cezar:
+
+```sh
+npm i -g simlock
+simlock doctor
+```
+
+cezar finds `simlock` on `PATH` when a task's agent starts, so no restart is needed. Then, with any runner:
+
+- **Every task is its own requester.** cezar sets `SIMLOCK_AGENT_ID=cezar:<task id>` and
+  `AGENT_DEVICE_SESSION=cezar-<task id>`, so workflow steps share a device while variants and
+  child tasks get their own. These replace any value inherited from the host.
+- **Agents know about it.** One paragraph in the system prompt points them at
+  `simlock instructions`, so `simlock setup` is not needed.
+- **Devices come back.** When a task settles, cezar releases the leases it still holds and notes
+  it on the task. A later Continue leases again and starts from a wiped device.
+
+**Limits.** The release covers leases on the local simlock daemon, under this task's requester.
+Leases taken through `simlock --gateway` or a remote `agent-device` token are not swept and end at
+their TTL (15 minutes by default). iOS needs a Mac, and Android emulators on Linux need KVM.
+
+Without `simlock` on `PATH`, or with `CEZ_SIMLOCK=0`, none of this happens.
 
 ---
 
