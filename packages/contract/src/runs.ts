@@ -332,6 +332,9 @@ export const runRecordSchema = z.object({
    *  `failed`. Present only on a `failed` run; the cockpit shows "closed · idle" rather than a
    *  failure (spec 2026-11-04-idle-closed-attention-state). */
   idleClosedAt: z.string().optional(),
+  /** ISO-8601 instant the current wait on the user began. Kept past the session while
+   *  `awaitingAnswerSince` holds the same question open; a manager's attention key is built on it. */
+  waitingSince: z.string().optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z
