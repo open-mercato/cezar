@@ -21,5 +21,8 @@ New task → model selector
 1. Select an installed agent.
 2. Open the model list.
 3. Choose a model or auto to leave the choice to the CLI.
+4. For a Codex model that advertises reasoning levels, optionally choose an **Effort**. **Codex default** leaves the choice to Codex. A workflow step's own effort wins over this one.
+
+> **Good to know**: Changing the agent or model returns the effort to **Codex default**, and so does an automatic fallback to another agent or account.
 
 > **Good to know**: If the CLI lookup fails, the list uses cached data or fallback entries. The pi agent has no local model catalog.

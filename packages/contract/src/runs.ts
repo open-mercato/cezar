@@ -1,6 +1,7 @@
 import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
 import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
@@ -109,6 +110,8 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Reasoning level selected when this agent step started. Absent means the native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
    *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
    *  that created it, so resume and Continue read this rather than the project's current
@@ -180,6 +183,8 @@ export const runRecordSchema = z.object({
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Absent means the App Server's native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
@@ -1199,6 +1204,7 @@ export const createRunInputBaseSchema = z
     /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
     task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
@@ -1291,6 +1297,8 @@ export const continueInputSchema = z.object({
   images: attachmentListSchema.optional(),
   runner: runnerSchema.optional(),
   model: z.string().max(200).optional(),
+  /** Empty string is the explicit reset to the native default; omission keeps the run's choice. */
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
    *  account the run is already on. */
   agentProfile: z.string().max(64).optional(),

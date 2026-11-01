@@ -423,8 +423,8 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                 skillUsage={skillUsage}
                 workflows={workflowList}
                 onSource={(source) => patch(pickSource(source))}
-                pick={{ runner: draft.runner, model: draft.model, account: draft.account }}
-                onPick={(pick) => patch({ runner: pick.runner, model: pick.model, account: pick.account })}
+                pick={{ runner: draft.runner, model: draft.model, reasoningEffort: draft.reasoningEffort, account: draft.account }}
+                onPick={(pick) => patch({ runner: pick.runner, model: pick.model, reasoningEffort: pick.reasoningEffort ?? null, account: pick.account })}
                 baseBranch={baseBranch}
                 autonomous={draft.autonomous}
                 onAutonomous={(autonomous) => patch({ autonomous })}

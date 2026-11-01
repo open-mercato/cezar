@@ -107,6 +107,19 @@ describe('automatic agent fallback', () => {
     expect(store.listRuns()).toHaveLength(1);
   }, 40_000);
 
+  it('returns a fallback successor to the native effort instead of carrying the previous choice', async () => {
+    registerAccounts(['second']);
+    await enable([{ provider: 'claude', profileId: 'second' }]);
+    manager = new RunManager(store, repoRoot);
+    const started = manager.startRun(workflow, { task: 'fix the bug mock:limit', worktree: false });
+    // The dry run only drives Claude's exhaustion, so the Codex selection is seeded on the record.
+    store.updateRun(started.id, { reasoningEffort: 'high' });
+    await until(() => (store.getRun(started.id)?.fallbackEpisode?.current !== undefined), 'fallback to reserve its successor');
+    const record = store.getRun(started.id);
+    expect(record?.reasoningEffort).toBeUndefined();
+    expect(record?.steps.find((step) => step.id === record.fallbackEpisode?.current?.stepId)?.reasoningEffort).toBeUndefined();
+  }, 40_000);
+
   it('uses the project checkout default and retains it across fallback after the trunk-based merge', async () => {
     registerAccounts(['second']);
     await enable([{ provider: 'claude', profileId: 'second' }]);

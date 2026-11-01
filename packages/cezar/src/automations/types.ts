@@ -55,6 +55,8 @@ export const automationTaskSchema = z
      *  project's selection at launch time. */
     agentProfile: z.string().trim().min(1).max(64).optional(),
     model: z.string().trim().min(1).max(200).optional(),
+    /** Codex effort of the launched runs — `POST /runs`' own `reasoningEffort`. */
+    reasoningEffort: z.string().trim().min(1).max(64).optional(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     worktree: z.boolean().optional(),
     generateFollowups: z.boolean().optional(),

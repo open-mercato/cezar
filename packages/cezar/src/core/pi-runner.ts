@@ -12,7 +12,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.js';
-import { trackChildExit } from './agent-runner.js';
+import { assertReasoningEffortSupported, trackChildExit } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
 import { readNdjson } from './ndjson.js';
 import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.js';
@@ -60,6 +60,7 @@ export class PiRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('pi', spec.reasoningEffort);
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
     const [file, argv] = disclaimedCommand(this.bin, buildPiArgs(spec), env);
     const child = nodeSpawn(file, argv, { cwd: spec.cwd, env });

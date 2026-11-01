@@ -51,6 +51,7 @@ A GitHub poll:
     "runner": "claude",                              // optional: ${RUNNER_IDS.join(' | ')}
     "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
+    "reasoningEffort": "high",                       // optional, Codex tasks only; refused on other runners
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
     "worktree": true,                                // isolate each run in its own git worktree (recommended)
     "autonomous": true,                              // never park to ask — an automation has no one watching (recommended)

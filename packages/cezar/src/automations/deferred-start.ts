@@ -5,6 +5,7 @@ import { constants } from 'node:fs';
 import { localTimeZone, onceInstant, type DeferredBinding, type DeferredPreviewInput, type DeferredPreview, type DeferredOptions, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import { loadConfig } from '../config.ts';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
+import { REASONING_EFFORT_UNSUPPORTED_ERROR } from '../core/agent-runner.ts';
 import { loadWorkflows } from '../workflows/load.ts';
 import { forkOfBranch } from '../workflows/graph.ts';
 import { stepsIssue, stepKind, workflowStepSchema, type WorkflowDef } from '../workflows/types.ts';
@@ -28,7 +29,7 @@ export function digest(value: unknown): string {
 /** Expand actual workflow runners before requiring any provider profile directory. */
 async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['task']) {
   const config = await loadConfig(root);
-  if (agentModelsLocked(root) && task.model?.trim()) throw new Error('Model selection is locked for this project.');
+  if (agentModelsLocked(root) && (task.model?.trim() || task.reasoningEffort?.trim())) throw new Error('Model selection is locked for this project.');
   const catalog = (await loadWorkflows(root)).workflows;
   let workflow: WorkflowDef | undefined;
   if (task.steps) {
@@ -39,6 +40,8 @@ async function resolveDeferredPlan(root: string, task: DeferredPreviewInput['tas
   } else workflow = catalog.find(w => w.name === task.workflow);
   if (!workflow) throw new Error('The selected workflow is unavailable.');
   const runner = task.runner ?? config.defaultRunner;
+  // Same refusal the launch would give, while the user is still there to read it.
+  if (task.reasoningEffort?.trim() && runner !== 'codex') throw new Error(REASONING_EFFORT_UNSUPPORTED_ERROR);
   const store = await loadAgentAccounts();
   const locked = agentModelsLocked(root);
   const models: { runner: string; model?: string; step?: string }[] = [];

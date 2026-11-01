@@ -166,6 +166,14 @@ describe('fromDefinition / toBody', () => {
     expect(body).not.toHaveProperty('intervalSeconds')
   })
 
+  it('round-trips a stored reasoning effort, and omits it when none was picked', () => {
+    const saved = { id: 'a', name: 'x', kind: 'schedule' as const, enabled: true, schedule: { type: 'daily' as const, hour: 4, minute: 0 }, task: { prompt: 'p', runner: 'codex' as const, model: 'gpt-future', reasoningEffort: 'high' }, createdAt: '', updatedAt: '', revision: 1 }
+    const draft = fromDefinition(saved as unknown as AutomationDefinition)
+    expect(draft.reasoningEffort).toBe('high')
+    expect(toBody(draft).task.reasoningEffort).toBe('high')
+    expect(toBody({ ...newDraft(), name: 'x', prompt: 'p' }).task).not.toHaveProperty('reasoningEffort')
+  })
+
   it('omits an untouched runner and an auto model; sends dispatch only when on', () => {
     const body = toBody({ ...newDraft(), name: ' x ', prompt: 'p', model: '' })
     expect(body.name).toBe('x')

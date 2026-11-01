@@ -270,7 +270,7 @@ export function trimBlankEdges(text: string): string {
 }
 
 /** What `POST /runs/:id/messages` and `POST /runs/:id/continue` accept (`messageInputSchema`,
- *  `continueSchema`): a message the review pushes past it would be refused with a schema error. */
+ *  `continueInputSchema`): a message the review pushes past it would be refused with a schema error. */
 export const MESSAGE_TEXT_MAX = 100_000
 
 /** The send with the review attached, refused HERE with a reason the user can act on when it would
