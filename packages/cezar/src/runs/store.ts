@@ -120,6 +120,9 @@ const stepStateSchema = z.object({
   /** Canonical provider/model identity resolved for this step. Optional so older runs.json files
    *  remain readable and auto-model steps can retain an absent identity. */
   modelIdentity: z.string().optional(),
+  /** Raw model this turn was spawned with ('' = deliberately auto), so a continued turn keeps
+   *  the model of the step that owns its session (#1488). Absent on older records. */
+  model: z.string().optional(),
   /** Dollar cost reported by the claude CLI for this step's turns. */
   costUsd: z.number().optional(),
 });
@@ -1512,7 +1515,7 @@ export class RunStore extends EventEmitter {
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
-  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'>): void {
+  addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'> & Partial<Pick<StepState, 'model'>>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
     run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
