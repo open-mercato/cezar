@@ -70,6 +70,28 @@ public final class NoiseHandshake {
         return new NoiseHandshake(pattern, initiator, prologue, staticSecret, remoteStatic, psk, ephemeralSecret);
     }
 
+    /** A reply that fails must leave this state untouched, so the real one can still follow (§ 10). */
+    public NoiseHandshake copy() {
+        return new NoiseHandshake(this);
+    }
+
+    private NoiseHandshake(NoiseHandshake other) {
+        messages = other.messages;
+        initiator = other.initiator;
+        hasPsk = other.hasPsk;
+        staticSecret = other.staticSecret;
+        staticPublic = other.staticPublic;
+        psk = other.psk;
+        fixedEphemeral = other.fixedEphemeral;
+        remoteStatic = other.remoteStatic;
+        ephemeral = other.ephemeral;
+        remoteEphemeral = other.remoteEphemeral;
+        ck = other.ck;
+        h = other.h;
+        cipher = other.cipher.copy();
+        index = other.index;
+    }
+
     private void mixHash(byte[] data) {
         h = RelayCrypto.sha256(h, data);
     }

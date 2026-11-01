@@ -181,7 +181,7 @@ public class LoopbackProxyTest {
     @Test
     public void headersAreDroppedAndTheUserAgentReplaced() throws Exception {
         Socket socket = connect();
-        send(socket, gated("GET", "/api/x?y=1", "Origin: http://127.0.0.1:" + proxy.port() + "\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nAuthorization: Basic x\r\nX-Forwarded-For: 1.2.3.4\r\nX-Real-IP: 1.2.3.4\r\nForwarded: for=1\r\nUser-Agent: webview\r\nAccept: */*\r\n"));
+        send(socket, gated("GET", "/api/x?y=1", "Origin: http://127.0.0.1:" + proxy.port() + "\r\nSec-Fetch-Site: same-origin\r\nSec-Fetch-Mode: cors\r\nAuthorization: Basic x\r\nX-Forwarded-For: 1.2.3.4\r\nX-Real-IP: 1.2.3.4\r\nForwarded: for=1\r\nX-Cezar-Runtime-Handoff: t\r\nUser-Agent: webview\r\nAccept: */*\r\n"));
         TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
         assertEquals("GET", open.method);
         assertEquals("/api/x?y=1", open.target);
@@ -327,6 +327,23 @@ public class LoopbackProxyTest {
         assertTrue(readHead(waiting.getInputStream()).startsWith("HTTP/1.1 502"));
         assertEquals(-1, in.read());
         assertNull("a write is never retried", peer.opened.poll(200, TimeUnit.MILLISECONDS));
+    }
+
+    /** A complete early answer, such as a 413, survives the RESET that follows cezar's END (§ 13.2). */
+    @Test
+    public void aResetAfterEndDoesNotAbortACompleteResponse() throws Exception {
+        Socket socket = connect();
+        send(socket, gated("POST", "/x", "Content-Length: 5\r\n") + "abc");
+        TunnelFrame open = peer.opened.poll(2, TimeUnit.SECONDS);
+        peer.head(open.stream, 413, "content-length", "2");
+        peer.data(open.stream, new byte[] {'n', 'o'});
+        peer.reply(TunnelFrame.end(open.stream));
+        peer.reply(TunnelFrame.reset(open.stream, TunnelFrame.RESET_CANCELLED));
+        send(socket, "de");
+        InputStream in = socket.getInputStream();
+        assertTrue(readHead(in).startsWith("HTTP/1.1 413"));
+        assertEquals('n', in.read());
+        assertEquals('o', in.read());
     }
 
     @Test

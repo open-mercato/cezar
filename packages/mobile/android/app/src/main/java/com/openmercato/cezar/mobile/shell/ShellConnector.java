@@ -39,6 +39,7 @@ public final class ShellConnector {
     public static final String CLEARTEXT = "cleartext-refused";
     public static final String INVALID_URL = "invalid-url";
     public static final String CEZAR_OFFLINE = "cezar-offline";
+    public static final String NOT_ANSWERING = "cezar-not-answering";
     public static final String RELAY_DOWN = "relay-down";
     public static final String QUOTA = "quota";
     public static final String DEVICE_REMOVED = "device-removed";
@@ -108,7 +109,7 @@ public final class ShellConnector {
         StartDecision.Route route = StartDecision.decide(health, false);
         switch (route) {
             case CEZAR_OFFLINE:
-                return Outcome.screen(CEZAR_OFFLINE, server.id, 0);
+                return Outcome.screen(health.kind == HealthAnswer.Kind.NOT_ANSWERING ? NOT_ANSWERING : CEZAR_OFFLINE, server.id, 0);
             case RELAY_DOWN:
                 return Outcome.screen(health.kind == HealthAnswer.Kind.QUOTA ? QUOTA : RELAY_DOWN, server.id, health.status);
             case DEVICE_REMOVED:

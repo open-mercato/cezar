@@ -5,7 +5,7 @@ public final class HealthAnswer {
     public enum Kind {
         CEZAR, BASIC_GATE, LOCAL_MODE, LOGIN_PAGE, TLS_FAILURE, UNREACHABLE, NOT_CEZAR,
         /** Relay servers only: why the tunnel gave no answer. */
-        CEZAR_OFFLINE, RELAY_DOWN, QUOTA, DEVICE_REMOVED, UPDATE_APP, UPDATE_CEZAR
+        CEZAR_OFFLINE, NOT_ANSWERING, RELAY_DOWN, QUOTA, DEVICE_REMOVED, UPDATE_APP, UPDATE_CEZAR
     }
 
     public final Kind kind;
@@ -33,6 +33,8 @@ public final class HealthAnswer {
         switch (relayKind) {
             case "CEZAR_OFFLINE":
                 return of(Kind.CEZAR_OFFLINE, 0);
+            case "NOT_ANSWERING":
+                return of(Kind.NOT_ANSWERING, 0);
             case "QUOTA":
                 return of(Kind.QUOTA, minutes);
             case "DEVICE_REMOVED":

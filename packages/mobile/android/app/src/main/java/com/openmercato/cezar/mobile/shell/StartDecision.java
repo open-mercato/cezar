@@ -22,6 +22,7 @@ public final class StartDecision {
             case LOGIN_PAGE:
                 return Route.ROOT_LOGIN;
             case CEZAR_OFFLINE:
+            case NOT_ANSWERING:
                 return Route.CEZAR_OFFLINE;
             case RELAY_DOWN:
             case QUOTA:

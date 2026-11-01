@@ -169,6 +169,10 @@ public class RelayVectorsTest {
         JSONObject pending = after.getJSONObject("pending");
         assertEquals(pending.getString("ciphertext"), hex(cezarKeys.send.encrypt(hex(pending.getString("record")))));
         assertEquals(pending.getString("text"), new String(TunnelRecord.unpad(phoneKeys.receive.decrypt(hex(pending.getString("ciphertext")))), StandardCharsets.UTF_8));
+        for (JSONObject row : list(after.getJSONArray("failuresWithoutPending"))) {
+            assertEquals(0, row.getInt("nonce"));
+            assertEquals(row.getString("text"), new String(TunnelRecord.unpad(new NoiseCipher(toPhone, 0).decrypt(hex(row.getString("ciphertext")))), StandardCharsets.UTF_8));
+        }
         for (JSONObject row : list(after.getJSONArray("outcomesAtNonce1"))) {
             byte[] sealed = hex(row.getString("ciphertext"));
             assertEquals(row.getString("ciphertext"), hex(new NoiseCipher(toPhone, row.getLong("nonce")).encrypt(hex(row.getString("record")))));

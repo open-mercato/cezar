@@ -33,6 +33,8 @@ public final class ConnectionBanner {
                 return new ConnectionBanner("Can't reach the Cezar relay. Your computer is fine. Retrying…", true);
             case CEZAR_OFFLINE:
                 return new ConnectionBanner("Your computer is asleep or cezar isn't running.", true);
+            case NOT_ANSWERING:
+                return new ConnectionBanner("cezar is not answering.", true);
             case QUOTA:
                 return new ConnectionBanner("Too much traffic today. Back in " + Math.max(1, (status.retryAfterSeconds + 59) / 60) + " minutes.", false);
             default:

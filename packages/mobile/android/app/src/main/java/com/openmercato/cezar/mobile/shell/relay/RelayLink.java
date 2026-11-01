@@ -43,6 +43,7 @@ public final class RelayLink {
     private static final long KK_WAIT_MS = 10000;
     private static final long HELLO_WAIT_MS = 15000;
     private static final long RESET_ATTEMPTS_AFTER_MS = 60000;
+    private static final int SILENT_KK_LIMIT = 3;
     private static final byte[] PROLOGUE_LABEL = Bytes.ascii("cezar-session-v1");
 
     private final SocketTransport transport;
@@ -54,6 +55,7 @@ public final class RelayLink {
     private volatile RelayStatus status = RelayStatus.of(RelayStatus.Kind.IDLE);
     private volatile TunnelSession session;
     private volatile Listener listener;
+    private volatile boolean relayAnswered;
 
     private boolean running;
     private int epoch;
@@ -66,6 +68,8 @@ public final class RelayLink {
     private long closingRetryAfter = -1;
     private long connectedAt;
     private boolean pongPending;
+    private boolean helloSeen;
+    private int silentHandshakes;
 
     public RelayLink(SocketTransport transport, Target target, LongSupplier clock) {
         this(transport, target, clock, Executors.newSingleThreadScheduledExecutor(run -> {
@@ -93,6 +97,11 @@ public final class RelayLink {
 
     public TunnelSession session() {
         return session;
+    }
+
+    /** A `hello` arrived, so a wait that ran out was not the relay's silence. */
+    public boolean relayAnswered() {
+        return relayAnswered;
     }
 
     public void start() {
@@ -216,8 +225,6 @@ public final class RelayLink {
         later(RESET_ATTEMPTS_AFTER_MS, () -> attempts = 0);
     }
 
-    private boolean helloSeen;
-
     private void ping() {
         if (socket == null) return;
         socket.sendText("ping");
@@ -261,6 +268,7 @@ public final class RelayLink {
 
     private void onHello(JSONObject hello) {
         helloSeen = true;
+        relayAnswered = true;
         proofRetried = false;
         if (hello.optInt("protocol", 1) != 1) {
             stopWith(RelayStatus.of(RelayStatus.Kind.UPDATE_APP));
@@ -272,8 +280,10 @@ public final class RelayLink {
             stopWith(RelayStatus.of(RelayStatus.Kind.BROKEN));
             return;
         }
-        if ("online".equals(hello.optString("cezar"))) startHandshake();
-        else setStatus(RelayStatus.of(RelayStatus.Kind.CEZAR_OFFLINE));
+        // The key is absent on a 4430 hello, and `closing` follows (§ 4).
+        String cezar = hello.optString("cezar");
+        if (cezar.equals("online")) startHandshake();
+        else if (cezar.equals("offline")) setStatus(RelayStatus.of(RelayStatus.Kind.CEZAR_OFFLINE));
     }
 
     private void stopWith(RelayStatus next) {
@@ -293,8 +303,16 @@ public final class RelayLink {
         }
         NoiseHandshake mine = handshake;
         later(KK_WAIT_MS, () -> {
-            if (handshake == mine) lost();
+            if (handshake == mine) onSilentHandshake();
         });
+    }
+
+    /** A relay that still admits a removed phone looks like this, so it must not stay invisible (§ 10.1). */
+    private void onSilentHandshake() {
+        silentHandshakes++;
+        dropSocket();
+        if (silentHandshakes >= SILENT_KK_LIMIT) setStatus(RelayStatus.of(RelayStatus.Kind.NOT_ANSWERING));
+        reconnect(jitterMs());
     }
 
     private static void send(SocketTransport.Connection connection, byte[] ciphertext) throws IOException {
@@ -307,15 +325,23 @@ public final class RelayLink {
             return;
         }
         byte[] ciphertext = java.util.Arrays.copyOfRange(frame, 1, frame.length);
+        // A frame from an ended session can reach a new socket: the relay routes by deviceId (§ 10).
         if (handshake != null) finishHandshake(ciphertext);
         else if (session != null) session.receive(ciphertext);
     }
 
     private void finishHandshake(byte[] reply) {
-        NoiseHandshake current = handshake;
-        handshake = null;
+        NoiseHandshake current = handshake.copy();
+        byte[] payload;
         try {
-            JSONObject json = new JSONObject(new String(TunnelRecord.unpad(current.readMessage(reply)), java.nio.charset.StandardCharsets.UTF_8));
+            payload = current.readMessage(reply);
+        } catch (RelayCrypto.DecryptFailure e) {
+            return;
+        }
+        handshake = null;
+        silentHandshakes = 0;
+        try {
+            JSONObject json = new JSONObject(new String(TunnelRecord.unpad(payload), java.nio.charset.StandardCharsets.UTF_8));
             JSONObject tunnel = json.getJSONObject("tunnel");
             int cezarMin = tunnel.getInt("min");
             int cezarMax = tunnel.getInt("max");
@@ -331,7 +357,7 @@ public final class RelayLink {
             session = next;
             later(TunnelSession.LEASE_EVERY_MS, () -> leaseTick(next));
             setStatus(RelayStatus.of(RelayStatus.Kind.READY));
-        } catch (RelayCrypto.DecryptFailure | TunnelRecord.Malformed | JSONException | IOException e) {
+        } catch (TunnelRecord.Malformed | JSONException | IOException e) {
             lost();
         }
     }
@@ -388,7 +414,11 @@ public final class RelayLink {
     private void reconnect(long delayMs) {
         if (!running) return;
         attempts++;
-        if (status.kind != RelayStatus.Kind.QUOTA && status.kind != RelayStatus.Kind.CEZAR_OFFLINE) setStatus(RelayStatus.of(RelayStatus.Kind.RELAY_DOWN));
+        RelayStatus.Kind now = status.kind;
+        // A silent handshake is not the relay being down: it answered, cezar did not.
+        boolean keep = now == RelayStatus.Kind.QUOTA || now == RelayStatus.Kind.CEZAR_OFFLINE || now == RelayStatus.Kind.NOT_ANSWERING
+                || (now == RelayStatus.Kind.CONNECTING && silentHandshakes > 0);
+        if (!keep) setStatus(RelayStatus.of(RelayStatus.Kind.RELAY_DOWN));
         later(delayMs, this::connect);
     }
 

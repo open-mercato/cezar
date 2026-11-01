@@ -40,6 +40,7 @@ const PAIR_FAILURES = {
 
 const RELAY_SCREENS = {
   'cezar-offline': "Your computer is asleep or cezar isn't running.",
+  'cezar-not-answering': 'cezar is not answering.',
   'relay-down': "Can't reach the Cezar relay. Your computer is fine.",
   'update-app': 'Update the app.',
   'update-cezar': 'Update cezar on your computer.',
@@ -60,6 +61,7 @@ export function screenFor(outcome, context = {}) {
     case 'quota':
       return { name: 'error', serverId: server?.id, message: `Too much traffic today. Back in ${outcome.status} minutes.` };
     case 'cezar-offline':
+    case 'cezar-not-answering':
     case 'relay-down':
     case 'update-app':
     case 'update-cezar':

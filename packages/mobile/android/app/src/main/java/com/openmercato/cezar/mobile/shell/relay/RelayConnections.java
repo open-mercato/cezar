@@ -79,7 +79,8 @@ public final class RelayConnections implements ShellConnector.RelayPort {
         }
         HealthAnswer answer = status.kind == RelayStatus.Kind.READY
                 ? new HealthProbe(new TunnelHttpGet(current::session), userAgent).probePath()
-                : HealthAnswer.fromRelay(status.kind.name(), (int) Math.ceil(status.retryAfterSeconds / 60.0));
+                : HealthAnswer.fromRelay(status.kind == RelayStatus.Kind.CONNECTING && current.relayAnswered() ? "NOT_ANSWERING" : status.kind.name(),
+                        (int) Math.ceil(status.retryAfterSeconds / 60.0));
         // Foreground only: nothing holds a socket behind a connect-page error screen.
         if (answer.kind != HealthAnswer.Kind.CEZAR) current.stop();
         return answer;

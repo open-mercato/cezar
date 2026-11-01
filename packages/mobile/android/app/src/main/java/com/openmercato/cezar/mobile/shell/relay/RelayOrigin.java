@@ -45,6 +45,6 @@ public final class RelayOrigin {
     }
 
     private static boolean isDevHost(String host) {
-        return host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]") || host.equals("10.0.2.2");
+        return host.equals("127.0.0.1") || host.equals("localhost") || host.equals("[::1]");
     }
 }

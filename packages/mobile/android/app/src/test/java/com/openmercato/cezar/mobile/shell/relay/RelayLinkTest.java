@@ -256,6 +256,57 @@ public class RelayLinkTest {
     }
 
     @Test
+    public void aStaleFrameDuringTheHandshakeIsDroppedAndTheRealReplyStillWorks() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"online\"}");
+        for (int i = 0; i < 200 && socket.binary.isEmpty(); i++) Thread.sleep(5);
+        socket.events.binary(Bytes.concat(new byte[] {1}, new byte[272]));
+        answerHandshake(socket);
+        waitFor(RelayStatus.Kind.READY);
+        assertTrue(socket.closes.isEmpty());
+    }
+
+    @Test
+    public void aFrameWithNoSessionIsDropped() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"offline\"}");
+        waitFor(RelayStatus.Kind.CEZAR_OFFLINE);
+        socket.events.binary(Bytes.concat(new byte[] {1}, new byte[272]));
+        Thread.sleep(50);
+        assertEquals(RelayStatus.Kind.CEZAR_OFFLINE, link.status().kind);
+        assertTrue(socket.closes.isEmpty());
+    }
+
+    @Test
+    public void aQuotaHelloHasNoCezarKeyAndIsNotOffline() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1}");
+        socket.events.text("{\"t\":\"closing\",\"retryAfter\":60}");
+        socket.events.closed(4430);
+        waitFor(RelayStatus.Kind.QUOTA);
+        assertFalse(seen.contains(RelayStatus.Kind.CEZAR_OFFLINE));
+    }
+
+    @Test
+    public void closeDeviceRemovedReconnectsAndTheRefusalDecides() throws Exception {
+        link.start();
+        Socket socket = opened();
+        socket.events.text("{\"t\":\"hello\",\"protocol\":1,\"cezar\":\"online\"}");
+        NoiseHandshake.Keys cezar = answerHandshake(socket);
+        waitFor(RelayStatus.Kind.READY);
+        socket.events.binary(Bytes.concat(new byte[] {1}, cezar.send.encrypt(TunnelRecord.pad(TunnelFrame.close(TunnelFrame.CLOSE_DEVICE_REMOVED)))));
+        assertEquals(Integer.valueOf(1000), socket.closes.poll(2, TimeUnit.SECONDS));
+        assertFalse(seen.contains(RelayStatus.Kind.DEVICE_REMOVED));
+        Socket next = fake.sockets.poll(3, TimeUnit.SECONDS);
+        assertNotNull("it reconnects", next);
+        next.events.failed(403, "device-removed", -1, -1);
+        waitFor(RelayStatus.Kind.DEVICE_REMOVED);
+    }
+
+    @Test
     public void stopClosesWith1000() throws Exception {
         link.start();
         Socket socket = opened();

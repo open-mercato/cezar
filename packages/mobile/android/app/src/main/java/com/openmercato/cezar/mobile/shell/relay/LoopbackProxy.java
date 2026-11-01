@@ -38,7 +38,7 @@ public final class LoopbackProxy implements Closeable {
     private static final int KEEP_ALIVE_MS = 60000;
     private static final int READ_CHUNK = 16384;
     private static final Set<String> DROPPED_REQUEST = new HashSet<>(Arrays.asList(
-            "host", "origin", "cookie", "authorization", "forwarded", "x-real-ip", "user-agent", "expect",
+            "host", "origin", "cookie", "authorization", "x-cezar-runtime-handoff", "forwarded", "x-real-ip", "user-agent", "expect",
             "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "proxy-connection", "te", "trailer", "transfer-encoding", "upgrade"));
     private static final Set<String> DROPPED_RESPONSE = new HashSet<>(Arrays.asList(
             "set-cookie", "www-authenticate",

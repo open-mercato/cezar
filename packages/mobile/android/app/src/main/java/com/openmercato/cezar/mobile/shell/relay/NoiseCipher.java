@@ -21,6 +21,10 @@ public final class NoiseCipher {
         this.nonce = nonce;
     }
 
+    NoiseCipher copy() {
+        return new NoiseCipher(key, nonce);
+    }
+
     boolean hasKey() {
         return key != null;
     }

@@ -107,7 +107,7 @@ public class RelayServerTest {
     public void relayRoutes() {
         String id = connector.saveRelayServer("Laptop", fields);
         Object[][] rows = {
-            {HealthAnswer.Kind.CEZAR_OFFLINE, ShellConnector.CEZAR_OFFLINE}, {HealthAnswer.Kind.RELAY_DOWN, ShellConnector.RELAY_DOWN},
+            {HealthAnswer.Kind.CEZAR_OFFLINE, ShellConnector.CEZAR_OFFLINE}, {HealthAnswer.Kind.NOT_ANSWERING, ShellConnector.NOT_ANSWERING}, {HealthAnswer.Kind.RELAY_DOWN, ShellConnector.RELAY_DOWN},
             {HealthAnswer.Kind.QUOTA, ShellConnector.QUOTA}, {HealthAnswer.Kind.DEVICE_REMOVED, ShellConnector.DEVICE_REMOVED},
             {HealthAnswer.Kind.UPDATE_APP, ShellConnector.UPDATE_APP}, {HealthAnswer.Kind.UPDATE_CEZAR, ShellConnector.UPDATE_CEZAR},
             {HealthAnswer.Kind.BASIC_GATE, ShellConnector.CONNECTION_ERROR}, {HealthAnswer.Kind.NOT_CEZAR, ShellConnector.CONNECTION_ERROR},
