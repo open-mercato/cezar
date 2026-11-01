@@ -1,3 +1,4 @@
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
@@ -119,6 +120,10 @@ class CodexSession implements AgentSession {
   private followUpDeliveryOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
+  /** Codex reports provider failures in a standalone `error` notification immediately before
+   *  the terminal `turn/completed` frame. Keep it until that boundary so the v1 error event
+   *  carries the provider's real message (and reset time) instead of a generic fallback. */
+  private pendingTurnError: { message: string; codexErrorInfo?: string } | undefined;
   private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
@@ -561,6 +566,12 @@ class CodexSession implements AgentSession {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
+        this.pendingTurnError = undefined;
+        break;
+      }
+      case 'error': {
+        if (this.isForeignThreadTurn(params)) break;
+        this.pendingTurnError = codexErrorDetails(params.error, params) ?? this.pendingTurnError;
         break;
       }
       case 'item/agentMessage/delta': {
@@ -632,11 +643,20 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
+          // The current protocol nests the authoritative failure in Turn.error.
+          // A retry notification can precede it; never let that stale message win.
+          const turn = params.turn as Record<string, unknown> | undefined;
+          const error = codexErrorDetails(turn?.error)
+            ?? codexErrorDetails(params.error)
+            ?? this.pendingTurnError;
+          const message = unwrapJsonErrorEnvelope(error?.message ?? turnError);
+          const codexErrorInfo = error?.codexErrorInfo;
+          this.emit({ type: 'error', message: explainCodexModelError(codexErrorInfo ? `${message} [${codexErrorInfo}]` : message, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
         this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
+        this.pendingTurnError = undefined;
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
           this.autoEndTimer.unref?.();
@@ -771,6 +791,17 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined && v !== null) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+/** Keep each message and discriminator together when selecting an error source. */
+function codexErrorDetails(value: unknown, fallback: Record<string, unknown> = {}): { message: string; codexErrorInfo?: string } | undefined {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+  const message = (typeof value === 'string' ? value : stringField(record, 'message'))
+    ?? stringField(fallback, 'message');
+  if (!message) return undefined;
+  const codexErrorInfo = stringField(record, 'codexErrorInfo') ?? stringField(fallback, 'codexErrorInfo');
+  return { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {

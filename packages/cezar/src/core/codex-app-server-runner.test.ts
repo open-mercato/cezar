@@ -91,7 +91,43 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     await session.result;
 
-    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported [other]" });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+
+  it.each([
+    ['mock:retry-error', 'model unavailable'],
+    ['mock:nested-error', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+    ['mock:nested-error mock:retry-error', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+    ['mock:nested-limit', "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]"],
+    ['mock:nested-error mock:usage-limit', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
+  ])('prefers the terminal turn.error (%s)', async (scenario, message) => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: `mock:turn-failed mock:turn-completed-failed ${scenario}`, cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    expect(events.filter((event) => event.type === 'error')).toEqual([{ type: 'error', message }]);
+  }, 15_000);
+
+  it('preserves a standalone Codex usage-limit error before the failed turn', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-failed mock:usage-limit', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({
+      type: 'error',
+      message: "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]",
+    });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
 });

@@ -255,6 +255,9 @@ describe('mapCodexNotification edge cases', () => {
   it('maps turn frames onto stop reasons per §7.1', () => {
     const cases: Array<[Record<string, unknown>, string]> = [
       [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'completed' } } }, 'end_turn'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'error' } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1' }, error: { message: 'boom' } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed' }, error: { message: 'usage limit reached' } } }, 'error'],
       [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'interrupted' } } }, 'cancelled'],
       [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed', error: { message: 'boom' } } } }, 'error'],
       [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'failed' }, error: { message: 'boom' } } }, 'error'],

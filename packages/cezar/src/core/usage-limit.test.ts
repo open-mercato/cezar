@@ -46,7 +46,7 @@ describe('parseUsageLimit', () => {
       "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",
       NOW,
     );
-    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T18:10:00.000Z');
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T18:11:00.000Z');
     expect(hit?.evidence).toBe('clock');
   });
 
@@ -56,20 +56,59 @@ describe('parseUsageLimit', () => {
       "You've hit your session limit · resets 8:10pm (Europe/Warsaw)",
       lateWarsawNight,
     );
-    expect(hit?.resetAt.toISOString()).toBe('2026-08-04T18:10:00.000Z');
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-04T18:11:00.000Z');
+  });
+
+  it.each([0, 30, 38, 59])('buffers a clock-only reset before day rollover at second %s', (second) => {
+    const now = new Date(2026, 9, 16, 14, 39, second).getTime();
+    const hit = parseUsageLimit("You've hit your usage limit. Try again at 2:39 PM.", now);
+    expect(hit?.resetAt.getTime()).toBe(new Date(2026, 9, 16, 14, 40).getTime());
+    expect(hit?.evidence).toBe('clock');
+  });
+
+  it('keeps the buffered minute boundary on today', () => {
+    const now = new Date(2026, 9, 16, 14, 40).getTime();
+    expect(parseUsageLimit('Usage limit reached. Try again at 14:39.', now)?.resetAt.getTime()).toBe(now);
+  });
+
+  it('buffers a zoned clock before choosing tomorrow', () => {
+    const now = Date.parse('2026-10-16T14:39:38Z');
+    const hit = parseUsageLimit('Usage limit reached. Try again at 2:39 PM (UTC).', now);
+    expect(hit?.resetAt.toISOString()).toBe('2026-10-16T14:40:00.000Z');
+  });
+
+  it('buffers the final minute across midnight', () => {
+    const now = Date.parse('2026-10-16T23:59:38Z');
+    const hit = parseUsageLimit('Usage limit reached. Try again at 23:59 (UTC).', now);
+    expect(hit?.resetAt.toISOString()).toBe('2026-10-17T00:00:00.000Z');
+  });
+
+  it('buffers real elapsed time across a named-zone DST jump', () => {
+    const now = Date.parse('2026-03-29T00:59:38Z');
+    const hit = parseUsageLimit('Usage limit reached. Resets 1:59am (Europe/Warsaw).', now);
+    expect(hit?.resetAt.toISOString()).toBe('2026-03-29T01:00:00.000Z');
+  });
+
+  it('keeps an exact reset second from Claude and timestamp prose', () => {
+    const now = Date.parse('2026-10-16T14:39:38Z');
+    const resetAt = Date.parse('2026-10-16T14:39:52Z');
+    for (const message of [
+      `Claude AI usage limit reached|${resetAt / 1000}`,
+      'Usage limit reached. Try again at 2026-10-16T14:39:52Z.',
+    ]) expect(parseUsageLimit(message, now)?.resetAt.getTime()).toBe(resetAt);
   });
 
   it('resumes now, not a day later, when a minute-truncated clock reset just passed (telemetry 4bf9686a)', () => {
     const justAfter = Date.parse('2026-08-03T18:10:40.000Z');
     const zoned = parseUsageLimit("You've hit your session limit · resets 8:10pm (Europe/Warsaw)", justAfter);
-    expect(zoned?.resetAt.getTime()).toBe(justAfter);
+    expect(zoned?.resetAt.getTime()).toBe(justAfter + 20_000);
     const local = new Date(2026, 7, 3, 2, 10, 40).getTime();
-    expect(parseUsageLimit("You've hit your session limit · resets 2:10am", local)?.resetAt.getTime()).toBe(local);
+    expect(parseUsageLimit("You've hit your session limit · resets 2:10am", local)?.resetAt.getTime()).toBe(local + 20_000);
   });
 
   it('reads the session-limit prose with a UTC zone (telemetry 987e8238)', () => {
     const hit = parseUsageLimit("You've hit your session limit · resets 3:10pm (UTC)", NOW);
-    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T15:10:00.000Z');
+    expect(hit?.resetAt.toISOString()).toBe('2026-08-03T15:11:00.000Z');
   });
 
   it('honors the day a weekly reset names instead of resuming at the next matching clock', () => {
