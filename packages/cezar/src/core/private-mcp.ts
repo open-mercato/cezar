@@ -217,6 +217,18 @@ export function opencodeConfigContent(servers: readonly PrivateMcpServer[], exis
   return JSON.stringify({ ...base, mcp: { ...baseMcp, ...toOpencodeMcp(servers) } });
 }
 
+/** Loaded after the project's own config, so a repository cannot grant itself back these tools. */
+export function opencodeReadOnlyConfig(existing?: string): string {
+  let base: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(existing ?? '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) base = parsed as Record<string, unknown>;
+  } catch {
+    // an unparseable host value cannot be merged into; the denial still applies
+  }
+  return JSON.stringify({ ...base, permission: { edit: 'deny', bash: 'deny' } });
+}
+
 /** What an ACP agent advertised in `initialize` → `agentCapabilities.mcpCapabilities`. */
 export interface AcpMcpCapabilities {
   http?: boolean;
