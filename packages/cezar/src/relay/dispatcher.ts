@@ -1,7 +1,7 @@
 import { HOP_BY_HOP_HEADERS, MAX_HEAD_CONTENT, RESET, encodeFrame, isDroppedRequestHeader, type TunnelFrame, type TunnelHeaders } from './wire.ts';
 
 export const STREAM_WINDOW = 262_144;
-const CREDIT_THRESHOLD = 65_536;
+const CREDIT_THRESHOLD = 120_000;
 /** Read no further ahead of the tunnel than this, so a stalled phone stalls the producer. */
 const OUTGOING_LIMIT = 131_072;
 /** Never a real host, so nothing can mistake it for this machine. */
@@ -109,11 +109,11 @@ export class TunnelStream {
     }
   }
 
-  /** Credit as the consumer takes bytes, by 131,072 at the latest, § 12.2. */
+  /** Credit as the consumer takes bytes, by 131,072 at the latest, § 12.2. Each WINDOW counts against the relay's pace. */
   private grant(bytes: number): void {
     this.credit += bytes;
     this.recvWindow += bytes;
-    if (this.credit < CREDIT_THRESHOLD && this.chunks.length > 0) return;
+    if (this.credit < CREDIT_THRESHOLD) return;
     if (!this.finished) this.host.sendFrame({ type: 'window', stream: this.id, increment: this.credit });
     this.credit = 0;
   }

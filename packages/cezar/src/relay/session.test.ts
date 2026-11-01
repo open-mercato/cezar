@@ -263,6 +263,24 @@ describe('sessions and the tunnel', () => {
     expect(frames / ((Date.now() - started) / 1000)).toBeLessThanOrEqual(220);
   });
 
+  it('a large upload is not one WINDOW per DATA, which reached 4429 on the real relay', async () => {
+    const phone = await session();
+    responder = async (request) => new Response(String((await request.arrayBuffer()).byteLength));
+    phone.frame({ type: 'open', stream: 1, method: 'POST', target: '/api/v1/up', headers: [] });
+    const chunk = Buffer.alloc(16_384);
+    const frames = 100;
+    for (let index = 0; index < frames; index += 1) {
+      phone.frame({ type: 'data', stream: 1, data: chunk });
+      await tick();
+    }
+    phone.frame({ type: 'end', stream: 1 });
+    await waitFor(() => phone.tunnelFrames.some((frame) => frame.type === 'end'), 'END');
+    expect(requests).toHaveLength(1);
+    const windows = phone.tunnelFrames.filter((frame) => frame.type === 'window').length;
+    expect(windows).toBeGreaterThan(0);
+    expect(windows).toBeLessThanOrEqual(frames / 7);
+  });
+
   it('drops x-cezar-runtime-handoff', async () => {
     const phone = await session();
     await phone.fetch('GET', '/x', [['x-cezar-runtime-handoff', 'token']]);
