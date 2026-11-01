@@ -10,8 +10,9 @@ import { computeShapes, tucked } from '../ui/notch/shapes.js'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const read = (relative) => readFileSync(path.resolve(here, relative), 'utf8')
 const layout = JSON.parse(read('../ui/notch/layout.json'))
-const notched = { width: 200, height: 37, top: 0 }
-const floating = { width: 0, height: 32, top: 31 }
+const centre = layout.window.width / 2
+const notched = { width: 200, height: 37, top: 0, centre }
+const floating = { width: 0, height: 32, top: 31, centre }
 const compact = { expanded: false, rows: 1, textWidth: 100, minis: 0, overflow: 0 }
 const inside = (rect) =>
   rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= layout.window.width && rect.y + rect.height <= layout.window.height
@@ -48,13 +49,13 @@ describe('shapes', () => {
     for (const textWidth of [10, 100, 900]) {
       const { island } = computeShapes(layout, notched, { ...compact, textWidth })
       const cameraLeft = island.x + layout.pill1.leftWing
-      expect(cameraLeft + notched.width / 2).toBe(layout.window.width / 2)
+      expect(cameraLeft + notched.width / 2).toBe(centre)
     }
   })
 
   it('centres a floating capsule on itself', () => {
     const { island } = computeShapes(layout, floating, compact)
-    expect(island.x + island.width / 2).toBe(layout.window.width / 2)
+    expect(island.x + island.width / 2).toBe(centre)
     expect(island.y).toBe(floating.top)
   })
 
@@ -73,7 +74,7 @@ describe('shapes', () => {
 
   it('stays inside the panel in the largest state, notched or floating', () => {
     const widest = { ...compact, textWidth: 900, minis: 4, overflow: 9 }
-    for (const housing of [notched, { width: 260, height: 54, top: 0 }, floating]) {
+    for (const housing of [notched, { width: 260, height: 54, top: 0, centre }, floating]) {
       const { island, pill2 } = computeShapes(layout, housing, widest)
       expect(inside(island)).toBe(true)
       expect(inside(pill2)).toBe(true)
@@ -81,8 +82,13 @@ describe('shapes', () => {
     }
   })
 
+  it('follows the shell off the panel\'s middle on a narrow screen', () => {
+    const { island } = computeShapes(layout, { ...floating, centre: 200 }, compact)
+    expect(island.x + island.width / 2).toBe(200)
+  })
+
   it('tucks behind the camera', () => {
-    expect(tucked(layout, notched)).toEqual({ x: layout.window.width / 2 - 100, y: 0, width: 200, height: 37 })
+    expect(tucked(layout, notched)).toEqual({ x: centre - 100, y: 0, width: 200, height: 37 })
   })
 })
 

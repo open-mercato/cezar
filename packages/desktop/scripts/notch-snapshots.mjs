@@ -25,8 +25,8 @@ const docs = entry('docs', 'Docs', 7, 'working', 'Updating the guide')
 const costs = entry('costs', 'Costs', 2, 'working', 'Summing the week')
 const extra = entry('extra', 'Dependencies', 5, 'working', 'Checking updates')
 
-const notched = { width: 200, height: 37, top: 0 }
-const floating = { width: 0, height: 32, top: 31 }
+const notched = { width: 200, height: 37, top: 0, centre: 500 }
+const floating = { width: 0, height: 32, top: 31, centre: 500 }
 
 const states = [
   { name: '1-working', housing: notched, model: model(watcher) },

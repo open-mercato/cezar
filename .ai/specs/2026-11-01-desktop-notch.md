@@ -87,7 +87,12 @@ only an `NSPanel` honours `NonactivatingPanel`. `canBecomeKey` and `canBecomeMai
   the pointer is over a shape the page reported. Corners of a shape's bounding box count as shape.
 - **Hover**: WebKit gives a window that can never be key no hover, so a thread samples
   `NSEvent.mouseLocation` every 70ms while the panel shows. 140ms of dwell opens, 380ms off it
-  closes, and row highlight is forwarded to the page.
+  closes, and row highlight is forwarded to the page. Only pill 1 opens on hover: the list does not
+  cover pill 2, so hovering there would open, leave and close it in a loop. Pill 2 takes clicks: a
+  mini opens that chat, `+N` opens the list and holds it 2.5s for the pointer to arrive. A list
+  closed by clicking a manager stays shut until the pointer has left.
+- **A crashed page**: not handled. If its web process dies and is not reloaded, the last shapes keep
+  catching clicks until the app restarts.
 - **Displays**: the panel lives on the display the pointer is on, checked once a second, which also
   catches displays coming and going. An open list stays put until it folds.
 - **Spaces**: `canJoinAllSpaces`, `fullScreenAuxiliary`, `stationary`, `ignoresCycle`, level 25 (over
