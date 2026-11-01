@@ -170,7 +170,7 @@ export class RelayService {
       deviceId,
       send: (bytes) => this.connection?.sendData(deviceId, bytes),
       frameBytes: () => this.connection?.limits.frameBytes ?? 0,
-      dataSlot: () => this.connection?.dataSlot() ?? Promise.resolve(),
+      frameSlot: () => this.connection?.frameSlot() ?? Promise.resolve(),
       fetch: (request) => this.dispatch(deviceId, request),
       onProven: () => this.onSessionProven(deviceId),
       onEnd: (reason) => this.onSessionEnd(deviceId, reason),

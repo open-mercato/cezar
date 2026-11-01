@@ -155,7 +155,7 @@ export class PhoneSim {
   closes: number[] = [];
   lastFirstMessage: Buffer | undefined;
 
-  constructor(private readonly open: SocketFactory, private readonly identity = { name: 'Sim phone', platform: 'android' }, edSeed = randomBytes(32)) {
+  constructor(private readonly open: SocketFactory, private readonly identity = { name: 'Sim phone', platform: 'android' }, edSeed: Buffer = randomBytes(32)) {
     this.edSeed = edSeed;
     this.relayKey = edPublic(edSeed);
     this.deviceId = relayId(this.relayKey);

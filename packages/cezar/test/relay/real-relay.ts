@@ -1,6 +1,8 @@
 // Drives cezar's relay client against a real relay under `wrangler dev`. Not part of any suite:
 //   CEZ_RELAY_URL=http://127.0.0.1:8788 CEZ_HOME=<scratch> tsx test/relay/real-relay.ts <cockpit url>
 // The cockpit must already be serving with the same CEZ_RELAY_URL and CEZ_HOME.
+import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { PhoneSim, type OpenStream } from '../../src/relay/phone-sim.testkit.ts';
 import { openWebSocket } from '../../src/relay/socket.ts';
 
@@ -71,6 +73,29 @@ sse.reset();
 
 const big = await phone.fetch('GET', '/');
 log('GET / through the tunnel', big.status, big.body.length, 'bytes');
+
+// A first cockpit load at its worst: every bundle and a burst of API calls, on nearly every stream.
+const assets = readdirSync(join(import.meta.dirname, '../../web/dist/assets')).map((name) => `/assets/${name}`);
+const queue = [...assets, ...Array.from({ length: 60 }, () => '/api/v1/health')];
+const requested = queue.length;
+const loadStart = Date.now();
+const statuses = new Set<string>();
+const watcher = setInterval(() => {
+  void fetch(`${cockpit}/api/v1/workspace/phones`).then((r) => r.json()).then((body: any) => statuses.add(body.relay.status));
+}, 100);
+const loaded = Promise.all(Array.from({ length: 30 }, async () => {
+  for (let target = queue.shift(); target; target = queue.shift()) await phone.fetch('GET', target);
+}));
+const stalled = new Promise<string>((resolve) => { setTimeout(() => resolve('STALLED'), 30_000).unref(); });
+const load = await Promise.race([loaded.then(() => 'done'), stalled]);
+clearInterval(watcher);
+log('first load', load, requested - queue.length, 'of', requested, 'requests in', Date.now() - loadStart, 'ms; closes', phone.closes, 'relay saw', [...statuses]);
+if (load === 'STALLED') process.exit(1);
+
+const blob = JSON.stringify({ workflow: 'quick-task', task: 'cd09'.repeat(24_750) });
+const blobStart = Date.now();
+const huge = await phone.fetch('POST', '/api/v1/runs', [['content-type', 'application/json']], blob);
+log('POST /runs with a 99 KB task', huge.status, Date.now() - blobStart, 'ms');
 
 log(`idle: holding the session for ${idleSeconds} s; the relay should see only LEASE`);
 await new Promise((resolve) => setTimeout(resolve, 5_000));

@@ -10,7 +10,7 @@ const BODYLESS = new Set(['GET', 'HEAD']);
 
 export interface StreamHost {
   sendFrame(frame: TunnelFrame): void;
-  dataSlot(): Promise<void>;
+  frameSlot(): Promise<void>;
   streamDone(id: number): void;
   readonly maxData: number;
 }
@@ -151,6 +151,11 @@ export class TunnelStream {
       this.reset(RESET.internal);
       return;
     }
+    await this.host.frameSlot();
+    if (this.finished) {
+      await response.body?.cancel().catch(() => {});
+      return;
+    }
     this.host.sendFrame({ type: 'head', stream: this.id, status: response.status, headers });
     if (response.body && this.open.method !== 'HEAD') {
       const flushed = this.flush();
@@ -169,6 +174,7 @@ export class TunnelStream {
     } else {
       await response.body?.cancel().catch(() => {});
     }
+    await this.host.frameSlot();
     if (this.finished) return;
     this.responseEnded = true;
     this.host.sendFrame({ type: 'end', stream: this.id });
@@ -185,7 +191,7 @@ export class TunnelStream {
       } else if (this.sendWindow === 0) {
         await new Promise<void>((resolve) => { this.windowWaiter = resolve; });
       } else {
-        await this.host.dataSlot();
+        await this.host.frameSlot();
         if (!this.finished) this.sendReady();
       }
     }

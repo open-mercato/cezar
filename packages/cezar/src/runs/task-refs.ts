@@ -22,26 +22,37 @@ function num(raw: string | undefined): number | undefined {
   return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
 }
 
+/** Past this, a run of URL characters is a pasted blob. The URL patterns are quadratic on one. */
+const MAX_URL_RUN = 512;
+
+/** The URL patterns only span these characters, so no match crosses a run. */
+function urlNumber(text: string, pattern: RegExp): string | undefined {
+  for (const [run] of text.matchAll(/[\w.:/-]+/g)) {
+    if (run.length > MAX_URL_RUN) continue;
+    const found = pattern.exec(run);
+    if (found) return found[1];
+  }
+  return undefined;
+}
+
 /** First match wins per kind, scanning the whole prompt. */
 export function extractTaskRefs(task: string): TaskRefs {
   const refs: TaskRefs = {};
   const text = task ?? '';
 
   // 1. Explicit URLs — the strongest signal.
-  const prUrl = /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/i.exec(text);
-  if (prUrl) refs.prNumber = num(prUrl[1]);
-  const issueUrl = /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/issues\/(\d+)/i.exec(text);
-  if (issueUrl) refs.issueNumber = num(issueUrl[1]);
+  refs.prNumber = num(urlNumber(text, /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/pull\/(\d+)/i));
+  refs.issueNumber = num(urlNumber(text, /(?:https?:\/\/)?[\w-]+(?:\.[\w-]+)+(?::\d+)?\/[\w.-]+\/[\w.-]+\/issues\/(\d+)/i));
 
   // 2. Worded references — covers the GitHub-tab templates verbatim
   //    ("Address GitHub pull request #N", "Fix GitHub issue #N") and free text
   //    ("pr 437", "PR#437", "review pull request 437", "issue #12").
   if (refs.prNumber === undefined) {
-    const pr = /\b(?:pull\s+request|pr)\s*#?\s*(\d+)/i.exec(text);
+    const pr = /\b(?:pull\s+request|pr)\s*(?:#\s*)?(\d+)/i.exec(text);
     if (pr) refs.prNumber = num(pr[1]);
   }
   if (refs.issueNumber === undefined) {
-    const issue = /\bissue\s*#?\s*(\d+)/i.exec(text);
+    const issue = /\bissue\s*(?:#\s*)?(\d+)/i.exec(text);
     if (issue) refs.issueNumber = num(issue[1]);
   }
 

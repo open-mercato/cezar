@@ -13,8 +13,12 @@ const KILL_SWITCH_MIN_MS = 5 * 60_000;
 const KILL_SWITCH_MAX_MS = 15 * 60_000;
 /** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
 const COMMANDS_PER_MINUTE = 30;
-/** DATA stays well under `framesPerSecond`: past it the relay closes cezar and drops every phone. */
-const DATA_SHARE_OF_FRAMES = 0.4;
+/**
+ * The relay counts both directions per room, and past `framesPerSecond` it closes cezar and drops
+ * every phone. A first load is small responses, so HEAD and END take slots too, and the phone's
+ * OPEN, END and WINDOW, which follow what cezar sends, stay within the share left over.
+ */
+const SEND_SHARE_OF_FRAMES = 0.4;
 
 export interface RelayLimits {
   frameBytes: number;
@@ -79,7 +83,7 @@ export class RelayConnection {
   private pongTimer: NodeJS.Timeout | undefined;
   private readonly commands = new Map<string, PendingCommand>();
   private commandTimes: number[] = [];
-  private nextDataAt = 0;
+  private nextFrameAt = 0;
   private readyWaiters: { resolve(): void; reject(error: Error): void }[] = [];
   limits: RelayLimits = { ...LIMIT_DEFAULTS };
 
@@ -143,12 +147,12 @@ export class RelayConnection {
     });
   }
 
-  /** Resolves when one more DATA frame fits the pace. Bytes that wait here coalesce, § 12.2. */
-  dataSlot(): Promise<void> {
-    const spacingMs = 1000 / Math.max(1, this.limits.framesPerSecond * DATA_SHARE_OF_FRAMES);
+  /** Resolves when one more tunnel frame fits the pace. Bytes that wait here coalesce, § 12.2. */
+  frameSlot(): Promise<void> {
+    const spacingMs = 1000 / Math.max(1, this.limits.framesPerSecond * SEND_SHARE_OF_FRAMES);
     const now = Date.now();
-    const at = Math.max(now, this.nextDataAt);
-    this.nextDataAt = at + spacingMs;
+    const at = Math.max(now, this.nextFrameAt);
+    this.nextFrameAt = at + spacingMs;
     return new Promise((resolve) => { setTimeout(resolve, at - now); });
   }
 

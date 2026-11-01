@@ -77,3 +77,26 @@ describe('extractTaskRefs on GitHub Enterprise', () => {
     expect(extractTaskRefs('github.com/acme/demo/pull/5')).toMatchObject({ prNumber: 5 });
   });
 });
+
+describe('extractTaskRefs on a pasted blob', () => {
+  const blobs = {
+    hex: 'cd09'.repeat(10_000),
+    'dotted run': 'a.'.repeat(20_000),
+    'URL-shaped runs': 'a.b/c/d/e '.repeat(4_000),
+    'spaces after pr': `pr${' '.repeat(40_000)}x`,
+    'spaces after issue': `issue${' '.repeat(40_000)}x`,
+  };
+
+  // It runs inline at `startRun`: 99 KB of hex used to hold the event loop for a minute.
+  it.each(Object.entries(blobs))('stays fast on %s', (_name, blob) => {
+    const started = performance.now();
+    expect(extractTaskRefs(blob)).toEqual({});
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it('still finds a link beside one', () => {
+    const blob = 'cd09'.repeat(10_000);
+    expect(extractTaskRefs(`${blob} https://github.com/acme/demo/pull/12 ${blob}`)).toMatchObject({ prNumber: 12 });
+    expect(extractTaskRefs(`(see https://github.com/acme/demo/issues/34).`)).toMatchObject({ issueNumber: 34 });
+  });
+});

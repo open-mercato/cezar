@@ -26,7 +26,7 @@ export interface SessionDeps {
   /** Every byte a session emits leaves here, and only a live session calls it. */
   send(ciphertext: Buffer): void;
   frameBytes(): number;
-  dataSlot(): Promise<void>;
+  frameSlot(): Promise<void>;
   fetch(request: Request): Promise<Response>;
   /** The first frame only the phone could have sealed arrived. */
   onProven(): void;
@@ -86,8 +86,8 @@ export class PhoneSession implements StreamHost {
     return this.phase !== 'hello';
   }
 
-  dataSlot(): Promise<void> {
-    return this.deps.dataSlot();
+  frameSlot(): Promise<void> {
+    return this.deps.frameSlot();
   }
 
   /** The Largest `DATA` payload for this socket, § 8. */

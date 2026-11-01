@@ -247,6 +247,15 @@ describe('sessions and the tunnel', () => {
     expect(rate).toBeLessThanOrEqual(220);
   });
 
+  it('paces HEAD and END with DATA, because a first load is mostly small responses', async () => {
+    const phone = await session();
+    const responses = 30;
+    const started = Date.now();
+    await Promise.all(Array.from({ length: responses }, (_, index) => phone.fetch('GET', `/chunk-${index}.js`)));
+    const frames = responses * 3;
+    expect(frames / ((Date.now() - started) / 1000)).toBeLessThanOrEqual(220);
+  });
+
   it('drops x-cezar-runtime-handoff', async () => {
     const phone = await session();
     await phone.fetch('GET', '/x', [['x-cezar-runtime-handoff', 'token']]);
