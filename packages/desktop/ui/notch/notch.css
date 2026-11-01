@@ -1,0 +1,339 @@
+:root {
+  --spring: cubic-bezier(0.3, 1.3, 0.5, 1);
+  --ink: #000;
+  --text: rgb(255 255 255 / 0.92);
+  --muted: rgb(255 255 255 / 0.56);
+  --needs-you: #fbbf24;
+  --error: #f87171;
+  --working: #a8f372;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  color: var(--text);
+  font: 500 12px/1.3 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
+#island,
+#pill2 {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--ink);
+  transition:
+    left 0.36s var(--spring),
+    top 0.36s var(--spring),
+    width 0.36s var(--spring),
+    height 0.36s var(--spring),
+    border-radius 0.28s ease,
+    opacity 0.2s ease;
+}
+
+#island {
+  border-radius: 0 0 var(--corner) var(--corner);
+}
+body[data-floating] #island {
+  border-radius: var(--corner);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.32);
+}
+#island[data-state='tucked'] {
+  opacity: 0;
+}
+body:not([data-floating]) #island[data-state='tucked'] {
+  opacity: 1;
+}
+
+/* The concave corners that join the shape to the top of the screen. */
+.ear {
+  position: absolute;
+  top: 0;
+  width: var(--ear);
+  height: var(--ear);
+  background: radial-gradient(circle at var(--ear-at) 100%, transparent calc(var(--ear) - 0.5px), var(--ink) var(--ear));
+}
+.ear.left {
+  --ear-at: 0%;
+  left: calc(var(--ear) * -1);
+}
+.ear.right {
+  --ear-at: 100%;
+  right: calc(var(--ear) * -1);
+}
+body[data-floating] .ear {
+  display: none;
+}
+
+#compact {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  transition: opacity 0.16s ease;
+}
+#primary-face {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--left-wing);
+  height: 100%;
+}
+#primary-text {
+  flex: none;
+  box-sizing: border-box;
+  margin-left: var(--housing);
+  padding: 0 calc(var(--text-padding) / 2);
+  width: var(--text-width);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#sheet {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+  transition: opacity 0.16s ease;
+}
+#sheet-title {
+  position: absolute;
+  top: 0;
+  left: 18px;
+  height: var(--header);
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+#rows {
+  position: absolute;
+  top: var(--header);
+  left: 8px;
+  right: 8px;
+  bottom: var(--padding-bottom);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+#rows::-webkit-scrollbar {
+  display: none;
+}
+
+#island[data-state='expanded'] #compact {
+  opacity: 0;
+  pointer-events: none;
+}
+#island[data-state='expanded'] #sheet {
+  opacity: 1;
+  pointer-events: auto;
+  transition-delay: 0.1s;
+}
+
+.row {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: calc(var(--row-face) + 12px) 1fr auto;
+  align-items: center;
+  width: 100%;
+  height: var(--row-height);
+  padding: 0 10px;
+  border: 0;
+  border-radius: 13px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.row:hover,
+.row.hot {
+  background: rgb(255 255 255 / 0.1);
+}
+.row-main {
+  min-width: 0;
+}
+.row-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+}
+.row-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.row-badge {
+  margin-left: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--needs-you);
+  background: rgb(251 191 36 / 0.16);
+}
+.row-word {
+  margin-left: 10px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.row[data-face='error'] .row-word {
+  color: var(--error);
+}
+.row[data-face='working'] .row-word {
+  color: var(--working);
+}
+
+#pill2 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--mini-gap);
+  border-radius: 999px;
+}
+#pill2[data-gone] {
+  opacity: 0;
+  pointer-events: none;
+}
+#minis {
+  display: flex;
+  align-items: center;
+  gap: var(--mini-gap);
+}
+.mini {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  width: var(--mini);
+  height: var(--mini);
+}
+#overflow {
+  width: var(--count-width);
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- faces: idle blinks, working looks about, needs-you bounces at you, error is crossed out ---- */
+
+.face {
+  display: block;
+  overflow: visible;
+}
+.face * {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.halo {
+  fill: none;
+  stroke-width: 2;
+  opacity: 0;
+}
+.cross {
+  display: none;
+  stroke: #fff;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.face[data-face='idle'] .eyes {
+  animation: blink 6s infinite;
+}
+.face[data-face='idle'] .body {
+  opacity: 0.72;
+}
+
+.face[data-face='working'] .eyes {
+  animation: look 2.6s ease-in-out infinite;
+}
+.face[data-face='working'] .body {
+  animation: bob 1.3s ease-in-out infinite;
+}
+
+.face[data-face='needs-you'] .eyes {
+  transform: scale(1.3);
+}
+.face[data-face='needs-you'] .body {
+  animation: bounce 1.1s var(--spring) infinite;
+}
+.face[data-face='needs-you'] .halo {
+  stroke: var(--needs-you);
+  opacity: 0.9;
+  animation: ring 1.6s ease-out infinite;
+}
+
+.face[data-face='error'] .eyes {
+  display: none;
+}
+.face[data-face='error'] .cross {
+  display: block;
+}
+.face[data-face='error'] .skin {
+  filter: saturate(0.3) brightness(0.8);
+}
+.face[data-face='error'] .body {
+  animation: shudder 0.5s ease-in-out 2;
+}
+.face[data-face='error'] .halo {
+  stroke: var(--error);
+  opacity: 0.9;
+}
+
+/* Nothing on screen, nothing running (spec: no battery cost while no manager is active). */
+body[data-asleep] .face * {
+  animation: none !important;
+}
+
+@keyframes blink {
+  0%, 94%, 100% { transform: scaleY(1); }
+  97% { transform: scaleY(0.08); }
+}
+@keyframes look {
+  0%, 18%, 100% { transform: translateX(0); }
+  30%, 46% { transform: translateX(1.4px); }
+  62%, 78% { transform: translateX(-1.4px); }
+}
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
+}
+@keyframes bounce {
+  0%, 55%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-3px); }
+}
+@keyframes ring {
+  from { opacity: 0.9; transform: scale(0.92); }
+  to { opacity: 0; transform: scale(1.2); }
+}
+@keyframes shudder {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-1px); }
+  75% { transform: translateX(1px); }
+}
+
+/* Reduce Motion: every state keeps its pose (eyes, cross, ring, colour) and nothing moves. */
+@media (prefers-reduced-motion: reduce) {
+  #island,
+  #pill2,
+  #compact,
+  #sheet {
+    transition: opacity 0.12s linear;
+  }
+  .face * {
+    animation: none !important;
+  }
+}

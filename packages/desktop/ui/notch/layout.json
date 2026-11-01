@@ -1,0 +1,7 @@
+{
+  "window": { "width": 1000, "height": 400 },
+  "pill1": { "leftWing": 46, "textPadding": 16, "textMin": 96, "textMax": 210, "face": 26 },
+  "pill2": { "placement": "right", "gap": 6, "inset": 4, "padding": 7, "mini": 20, "miniGap": 5, "countWidth": 24, "belowHeight": 30 },
+  "expanded": { "width": 440, "headerFloating": 14, "rowHeight": 54, "maxRows": 6, "paddingBottom": 12, "face": 34 },
+  "corner": { "notched": 12, "ear": 8, "expanded": 22 }
+}
