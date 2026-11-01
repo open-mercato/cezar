@@ -193,6 +193,16 @@
       "expect": "refuse"
     },
     {
+      "name": "target with a backslash",
+      "content": "01000000010347455400072f5c6576696c2f0000",
+      "expect": "refuse"
+    },
+    {
+      "name": "target with a tab",
+      "content": "01000000010347455400082f092f6576696c2f0000",
+      "expect": "refuse"
+    },
+    {
       "name": "CONNECT",
       "content": "010000000107434f4e4e45435400012f0000",
       "expect": "refuse"
