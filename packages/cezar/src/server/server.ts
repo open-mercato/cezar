@@ -136,6 +136,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, type PhonePairingEvent } from '@open-mercato/cezar-contract';
 import { hasTaskOrAttachments, TASK_OR_ATTACHMENTS_ISSUE } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
@@ -341,6 +342,8 @@ import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
+import { narrowForRelay, inRelayScope, outsideRelayScope } from '../relay/scope.ts';
+import { PairingStartError, RelayService } from '../relay/service.ts';
 import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
@@ -452,6 +455,8 @@ export interface ServerDeps {
   workspaceEvents?: WorkspaceEventBus;
   /** Hands `startServer` the engine `createApp` built, which arms its timer and drains it. */
   onManagerEngine?: (engine: ManagerEngine) => void;
+  /** The phone relay client. `startServer` starts it; a bare app only answers the routes. */
+  relay?: RelayService;
   /** Test seam: the agent backend a manager turn talks to (spec 2026-10-31-managers). */
   managerRunnerFor?: ManagerEngineDeps['runnerFor'];
   /** How `POST /api/projects/checkout` (step 4.3) actually clones. Defaults to
@@ -838,7 +843,8 @@ export type WorkspaceEventName =
   | 'tracker-changed'
   | 'worktree-lifecycle'
   | 'manager-change'
-  | 'manager-message';
+  | 'manager-message'
+  | 'phone-pairing';
 
 /**
  * The in-process bus for workspace-level SSE events. The registry-mutating
@@ -1694,7 +1700,10 @@ export function createApp(deps: ServerDeps) {
   // CEZ_REMOTE flips take effect live (and tests can toggle it).
   const trackers = createTrackerService();
   const trackerWatches = new TrackerWatches(trackers, deps.socketHub);
-  const capabilities = () => resolveCapabilities(process.env, bindHost);
+  // The one place a relay request narrows (spec 2026-11-01-relay-qr-pairing § One new principal).
+  const capabilities = () => narrowForRelay(resolveCapabilities(process.env, bindHost));
+  // Account management needs the machine, so no flag opens it to a phone.
+  const accountsEnabled = () => !inRelayScope() && agentAccountsEnabled(process.env, bindHost);
   // The task terminal's registry (spec `2026-10-07-task-workspace` §6): one per server, because a
   // shell outlives the request that opened it and belongs to the host, not to a project context.
   const detectedUrls = new DetectedUrls();
@@ -1758,12 +1767,13 @@ export function createApp(deps: ServerDeps) {
   });
   const offWebhookReady = contexts.onContextBuilt(context => webhooks?.ready(context.root, context));
   deps.onDispose?.(() => { offWebhookPrepare(); offWebhookReady(); void webhooks?.dispose(); });
-  const webhookRoutes = createWebhookRoutes(async context => {
+  // A receiver's delivery timers outlive the request that first opened its service.
+  const webhookRoutes = createWebhookRoutes(context => outsideRelayScope(async () => {
     if (!webhooks) throw new Error('Webhook service is unavailable');
     const id = context === bootContext ? await resolveBootProject() : context.id;
     await webhooks.attach(context, id, true, context === bootContext);
     return webhooks.get(id, context.root, context === bootContext);
-  });
+  }));
   // Production injects the observer before boot recovery; embedded callers attach before serving.
   if (webhooks) void resolveBootProject().then(id => webhooks.attach(bootContext, id, true, true)).then(() => { if (deps.webhookPort !== undefined) webhooks.start(); });
   // Workspace-level SSE bus (step 2.8) — the registry mutators and the
@@ -1780,7 +1790,7 @@ export function createApp(deps: ServerDeps) {
     revision,
     ...(deleted ? { deleted: true } : {}),
   });
-  const automationsChanged = () => deps.automationsChanged?.();
+  const automationsChanged = () => outsideRelayScope(() => deps.automationsChanged?.());
 
   const providerRuntimeAuth = deps.providerRuntimeAuth
     ?? new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -1847,7 +1857,7 @@ export function createApp(deps: ServerDeps) {
   // handler mutates state. Rebinding, which WOULD make those reads legible, is
   // what check 1 stops.
   const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-  const isHostedMode = () => !resolveCapabilities(process.env, bindHost).localHandoff;
+  const isHostedMode = () => !capabilities().localHandoff;
   app.use('/api/*', async (c, next) => {
     const hostName = hostnameOfHost(c.req.header('host'));
     // Strict twin of `isLoopbackHost`: a *missing* Host is untrusted here (an
@@ -2069,7 +2079,6 @@ export function createApp(deps: ServerDeps) {
     // Additive fields only below — the pre-forge shape is the most
     // externally-depended-on JSON in the app (BACKWARD_COMPATIBILITY.md §2).
     const forge = resolveForge(repo);
-    const caps = capabilities();
     return {
       version,
       runtimeId,
@@ -2078,22 +2087,12 @@ export function createApp(deps: ServerDeps) {
       // the key as always-present, which is a shape no client ever receives. The contract schema
       // says `.optional()`, and contract-parity.test.ts holds the two together.
       ...(update?.latest !== undefined ? { latestVersion: update.latest } : {}),
-      // Health is CORS-open and, in hosted mode, reachable off the loopback —
-      // so any site/host that reads it would learn the developer's absolute
-      // checkout path and username (#431). Local mode keeps the full path (the
-      // protected bookmarklet shape); hosted/remote mode trims it to a basename.
-      // NB this narrows the VALUE of a field named in BACKWARD_COMPATIBILITY.md
-      // §2: the field is always present and a string, but under CEZ_REMOTE it is
-      // no longer an absolute path. Deliberate — a hosted cockpit's paths are on
-      // a machine the reader does not have anyway. See §2's `repoRoot` note.
-      repoRoot: caps.localHandoff ? bootRoot : basename(bootRoot),
       repo,
       checks,
       defaultRunner: config.defaultRunner,
       // Non-blocking: cached availability or null-until-warm — health must never pay a `gh`
       // shell-out (the bookmarklet aborts its port probe at 800 ms). See detectGithubCached.
       forge: forge ? { kind: forge.kind, ...(forge.detectCached() ?? {}) } : null,
-      capabilities: caps,
       // Workspace enumeration (multi-project spec) — additive, id+name ONLY.
       // NEVER `projects[].root` here: health is the one CORS-open route, and
       // the repoRoot trim above exists precisely to keep absolute paths and
@@ -2105,6 +2104,24 @@ export function createApp(deps: ServerDeps) {
       bootProject: workspace.bootProject,
       ...(process.env.CEZ_INSTANCE_ID ? { instanceId: process.env.CEZ_INSTANCE_ID } : {}),
       ...diskHealth(bootRoot),
+    };
+  };
+  // The scope-dependent fields, added per send: the cache below is process-wide, so a phone must
+  // not read the desktop's view from it, nor its refresh change what a desktop reads.
+  const healthForReader = (snapshot: Awaited<ReturnType<typeof healthSnapshot>>) => {
+    const caps = capabilities();
+    return {
+      // Health is CORS-open and, in hosted mode, reachable off the loopback —
+      // so any site/host that reads it would learn the developer's absolute
+      // checkout path and username (#431). Local mode keeps the full path (the
+      // protected bookmarklet shape); hosted/remote mode trims it to a basename.
+      // NB this narrows the VALUE of a field named in BACKWARD_COMPATIBILITY.md
+      // §2: the field is always present and a string, but under CEZ_REMOTE it is
+      // no longer an absolute path. Deliberate — a hosted cockpit's paths are on
+      // a machine the reader does not have anyway. See §2's `repoRoot` note.
+      repoRoot: caps.localHandoff ? bootRoot : basename(bootRoot),
+      capabilities: caps,
+      ...snapshot,
     };
   };
   // ---- server-side health cache (stale-while-revalidate) -------------------
@@ -2137,24 +2154,26 @@ export function createApp(deps: ServerDeps) {
   // here (a noop when nobody is listening).
   let publishHealth: (data: unknown) => void = () => {};
 
-  const refreshHealth = (): Promise<HealthPayload> => {
+  // Outside any relay scope, so what it publishes is always the desktop's view.
+  const refreshHealth = (): Promise<HealthPayload> => outsideRelayScope(() => {
     // Dedupe: a GET's background revalidation and the topic's interval tick
     // share ONE compute (and one set of CLI spawns) rather than racing two.
     if (healthInFlight) return healthInFlight;
     healthInFlight = (async () => {
       try {
         const payload = await healthSnapshot();
-        const body = JSON.stringify(payload);
+        const stamped = healthForReader(payload);
+        const body = JSON.stringify(stamped);
         const changed = body !== healthCache?.body;
         healthCache = { at: Date.now(), payload, body };
-        if (changed) publishHealth(payload); // only a real change reaches the wire
+        if (changed) publishHealth(stamped); // only a real change reaches the wire
         return payload;
       } finally {
         healthInFlight = undefined;
       }
     })();
     return healthInFlight;
-  };
+  });
 
   // The read the GET and the topic snapshot share. On the live server (a hub is
   // injected) it answers from cache instantly and revalidates behind the
@@ -2175,7 +2194,7 @@ export function createApp(deps: ServerDeps) {
   // statement's return value is discarded, so `typeof app` would record nothing
   // and `hc<AppType>` would have no endpoint to offer. `createApp` mounts this
   // under both `/api` (the frozen legacy spelling) and `/api/v1`.
-  const healthRoutes = new Hono().get('/health', async (c) => c.json(await readHealth()));
+  const healthRoutes = new Hono().get('/health', async (c) => c.json(healthForReader(await readHealth())));
 
   // The push twin of the poll it replaced (#369): while at least one cockpit
   // holds the `health` topic the server re-reads the snapshot on the old 5 s
@@ -2188,7 +2207,7 @@ export function createApp(deps: ServerDeps) {
   deps.socketHub?.registerTopic(
     'health',
     {
-      snapshot: readHealth,
+      snapshot: async () => healthForReader(await readHealth()),
       start: (publish) => {
         publishHealth = publish;
         const timer = setInterval(() => void refreshHealth(), HEALTH_TTL_MS);
@@ -2239,7 +2258,7 @@ export function createApp(deps: ServerDeps) {
    */
   const warmAgentKnowledge = async (): Promise<void> => {
     await providerAuth.status().catch(() => {});
-    if (!agentAccountsEnabled(process.env, bindHost)) return;
+    if (!accountsEnabled()) return;
     const store = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
     for (const account of listAgentProfiles(store, PROVIDER_IDS)) {
       if (account.isDefault) continue; // covered by `status()` above
@@ -2425,7 +2444,7 @@ export function createApp(deps: ServerDeps) {
       // Providers card has always worked.
       if (body.data.profileId !== undefined
         && body.data.profileId !== DEFAULT_AGENT_ACCOUNT_ID
-        && !agentAccountsEnabled(process.env, bindHost)) {
+        && !accountsEnabled()) {
         return c.json(hostedProfileRefusal, 409);
       }
       // Resolve the account BEFORE anything else: both the command and the status probe below
@@ -2718,7 +2737,7 @@ export function createApp(deps: ServerDeps) {
       return c.json(result);
     })
     .get('/workspace/agent-profiles', async (c) => {
-      const editable = agentAccountsEnabled(process.env, bindHost);
+      const editable = accountsEnabled();
       // Hosted mode without the explicit permission withholds the listing entirely rather than
       // serving it read-only: the paths are the host disclosure, so an empty list is the only
       // honest answer.
@@ -2752,7 +2771,7 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/workspace/agent-profiles', jsonZodValidator(() => createAgentProfileSchema), async (c) => {
-      if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
+      if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
       const { provider, configDir, label } = c.req.valid('json');
       if (!supportsProfiles(provider)) {
         return c.json({ error: `${provider} cannot carry more than one account` }, 400);
@@ -2808,7 +2827,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(z.object({ id: z.string() })),
       jsonZodValidator(() => updateAgentProfileSchema),
       async (c) => {
-        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
+        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
         const id = c.req.param('id');
         const { label, configDir } = c.req.valid('json');
         if (configDir !== undefined) {
@@ -2877,7 +2896,7 @@ export function createApp(deps: ServerDeps) {
         recheck: queryValue.refine((v) => v === undefined || v === '1'),
       }), { message: 'refresh and recheck must be 1 when provided' }),
       async (c) => {
-        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
+        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         const query = c.req.valid('query');
@@ -2917,7 +2936,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id/details',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
+        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         return c.json(await readAccountIdentity(account.provider, account.path));
@@ -2988,7 +3007,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/selection',
       jsonZodValidator(() => selectAgentProfileSchema),
       async (c) => {
-        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
+        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
         const { projectId, provider, profileId } = c.req.valid('json');
         // `null` writes the MACHINE-WIDE default instead of one repo's selection: the account any
         // repo that has chosen nothing uses, so a second login is set up once rather than per
@@ -3040,7 +3059,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
+        if (!accountsEnabled()) return c.json(hostedProfileRefusal, 409);
         const id = c.req.param('id');
         let removed = false;
         // Captured inside the mutator, because after the write there is nothing left to ask which
@@ -3858,6 +3877,10 @@ export function createApp(deps: ServerDeps) {
     .put('/workspace/config', jsonZodValidator(() => setWorkspaceConfigInputSchema), async (c) => {
       const parsed = { data: c.req.valid('json') };
       const { browseRoot, projectsDir, skillsAutoUpdate, orgSkillsRepos, systemPrompt, composerDefaults, resources, agentDefaults, branding } = parsed.data;
+      // The browse containment reads `browseRoot`, so a phone could otherwise move its own boundary.
+      if (inRelayScope() && (browseRoot !== undefined || projectsDir !== undefined)) {
+        return c.json({ error: 'browseRoot and projectsDir are set from the computer' }, 403);
+      }
       for (const src of orgSkillsRepos ?? []) {
         if (safeRemoteFor(src.repo) === null || !isSafeRef(src.ref)) {
           return c.json({ error: `unsafe skills repo: ${src.repo}@${src.ref}` }, 400);
@@ -6665,6 +6688,8 @@ export function createApp(deps: ServerDeps) {
     // the all-project stream arrives as `/api/workspace/events` in step 2.8).
     .get('/events', (c) => {
       const { dataDir, store } = c.get('project');
+      // Captured at open: a listener runs in its emitter's scope, not this stream's.
+      const caps = capabilities();
       return streamSSENoBuffer(c, async (stream) => {
         const onDeleted = (id: string) =>
           void stream.writeSSE({
@@ -6679,7 +6704,7 @@ export function createApp(deps: ServerDeps) {
         // watcher (step 2.3), so with the capability off we never subscribe —
         // no watcher, no fd. Scoped to this stream's dataDir: another
         // project's todos.json writes never reach this connection.
-        const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
+        const offTodos = caps.followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
         // Live resource telemetry (#348): the sampler ticks ~every 2 s only
         // while some run has a registered process; each tick is relayed as one
         // `usage` message (runId → {cpuPct, rssBytes, procCount}). Never
@@ -6715,6 +6740,9 @@ export function createApp(deps: ServerDeps) {
       // Pre-0.17 bundles replace a cached row with the frame wholesale, so only a client that
       // asks for the slim frame gets it (#1848).
       const slim = c.req.valid('query').slim === '1';
+      // Captured at open: `attach` and the bus listener run in whoever emitted's scope.
+      const caps = capabilities();
+      const relayReader = inRelayScope();
       return streamSSENoBuffer(c, async (stream) => {
         // One detach bundle per attached project — the id guard makes a double
         // attach (connect-time snapshot vs. the built hook) impossible.
@@ -6736,7 +6764,7 @@ export function createApp(deps: ServerDeps) {
           };
           // Same opt-in gate as the per-project stream (#471): no capability, no
           // watcher — and each subscription is scoped to its own dataDir (2.3).
-          const offTodos = capabilities().followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
+          const offTodos = caps.followups ? onTodosChanged(dataDir, () => void sendTodos()) : () => undefined;
           const offRun = onRunFrames(store, (_run, frames) =>
             void stream.writeSSE({ event: 'run', data: frames.workspace(project, slim) }),
           );
@@ -6805,6 +6833,7 @@ export function createApp(deps: ServerDeps) {
         // same slug would rebuild a fresh context whose events never reach this
         // already-open stream.
         const offWorkspace = workspaceEvents.on((event, data) => {
+          if (relayReader && event === 'phone-pairing') return;
           if (event === 'project-removed') {
             const removed = (data as { id?: string }).id;
             if (removed !== undefined && attached.has(removed)) {
@@ -8516,6 +8545,52 @@ export function createApp(deps: ServerDeps) {
       return 'error' in removed ? c.json({ error: removed.error }, removed.status) : c.json(removed);
     });
 
+  // ---- chained family: phones (workspace-level, spec 2026-11-01-relay-qr-pairing) ----
+  const phonePairing = deps.relay ?? new RelayService();
+  deps.onDispose?.(() => phonePairing.dispose());
+  // A phone never reaches this family, so it cannot pair another phone or remove one. The 403 comes
+  // first: `phonePairing` is false in a relay scope, which would read as "the feature is off".
+  const requirePhones = async (c: Context, next: Next) => {
+    if (inRelayScope()) return c.json({ error: 'phones are managed from the computer' }, 403);
+    if (!capabilities().phonePairing) return c.json({ error: 'phone pairing is off: set CEZ_RELAY_URL' }, 409);
+    await next();
+  };
+  const PHONE_NOT_FOUND = { error: 'phone not found' } as const;
+  const PAIRING_NOT_FOUND = { error: 'that pairing is over' } as const;
+  const phonesRoutes = new Hono()
+    .use('/workspace/phones', requirePhones)
+    .use('/workspace/phones/*', requirePhones)
+    .get('/workspace/phones', (c) => c.json(phonePairing.list()))
+    .post('/workspace/phones/pairing', async (c) => {
+      c.header('Cache-Control', 'no-store');
+      try {
+        return c.json(await phonePairing.startPairing());
+      } catch (error) {
+        if (!(error instanceof PairingStartError)) throw error;
+        if (error.retryAfter !== undefined) c.header('Retry-After', String(error.retryAfter));
+        return c.json({ error: error.message }, 409);
+      }
+    })
+    .post('/workspace/phones/pairing/:id/code', paramZodValidator(phonePairingParamSchema), async (c) => {
+      c.header('Cache-Control', 'no-store');
+      try {
+        const code = await phonePairing.pairingCode(c.req.valid('param').id);
+        return code ? c.json(code) : c.json(PAIRING_NOT_FOUND, 409);
+      } catch (error) {
+        if (!(error instanceof PairingStartError)) throw error;
+        if (error.retryAfter !== undefined) c.header('Retry-After', String(error.retryAfter));
+        return c.json({ error: error.message }, 409);
+      }
+    })
+    .post('/workspace/phones/pairing/:id/approve', paramZodValidator(phonePairingParamSchema), (c) =>
+      phonePairing.approvePairing(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(PAIRING_NOT_FOUND, 409))
+    .post('/workspace/phones/pairing/:id/deny', paramZodValidator(phonePairingParamSchema), (c) =>
+      phonePairing.denyPairing(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(PAIRING_NOT_FOUND, 409))
+    .patch('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), jsonZodValidator(renamePhoneInputSchema), (c) =>
+      phonePairing.rename(c.req.valid('param').deviceId, c.req.valid('json').label) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404))
+    .delete('/workspace/phones/:deviceId', paramZodValidator(phoneDeviceParamSchema), (c) =>
+      phonePairing.remove(c.req.valid('param').deviceId) ? c.json({ ok: true as const }) : c.json(PHONE_NOT_FOUND, 404));
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -8536,6 +8611,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
     .route('/', managersRoutes)
+    .route('/', phonesRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
     .route('/', workspaceEventsRoutes)
     .route('/', telemetryRoutes);
@@ -8566,6 +8642,10 @@ export function createApp(deps: ServerDeps) {
   // state — the published tarball ships web/dist), never a 404.
   routed.get('*', (c) => serveShell(c) ?? c.notFound());
   managerLoopback.request = (path, init) => routed.request(path, init);
+  phonePairing.attach(
+    (request) => Promise.resolve(routed.fetch(request)),
+    () => workspaceEvents.emit('phone-pairing', { pairing: phonePairing.list().pairing } satisfies PhonePairingEvent),
+  );
 
   return routed;
 }
@@ -8600,8 +8680,10 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   let rescheduleAutomations = () => {};
   const appCleanups: Array<() => void> = [];
   let managerEngine: ManagerEngine | undefined;
+  const relay = deps.relay ?? new RelayService();
   const app = createApp({
     ...deps,
+    relay,
     onManagerEngine: (engine) => { managerEngine = engine; deps.onManagerEngine?.(engine); },
     onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
@@ -8705,6 +8787,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
     }
   });
   server.once('listening', () => {
+    void relay.start();
     void listProjects().then((projects) => {
       if (shutdownPromise) return;
       // Spec 2026-10-31-managers: arms for a manager that exists, and only behind the flag.

@@ -24,6 +24,7 @@ import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
+import { narrowForRelay } from './relay/scope.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
 import {
   ProviderRuntimeAuthObserver,
@@ -472,7 +473,7 @@ async function serveCommand(
     runs: semaphore,
     // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
     // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
-    trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
+    trimPaths: () => !narrowForRelay(resolveCapabilities(process.env, bindHost)).localHandoff,
     restart: () => {
       void (httpServer?.shutdownLifecycle() ?? manager.lifecycle.shutdown()).then(() => {
         store.flush({ pretty: true });

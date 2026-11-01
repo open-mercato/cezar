@@ -59,7 +59,7 @@ function projectSettingsPath(projectId: string, sectionId?: SettingsSection['id'
   return sectionId === undefined ? base : `${base}/${sectionId}`
 }
 
-type CapabilityProps = Partial<Pick<Capabilities, 'singleProject' | 'managers' | 'webhooks' | 'webhooksUnavailableReason'>>
+type CapabilityProps = Partial<Pick<Capabilities, 'singleProject' | 'managers' | 'phonePairing' | 'webhooks' | 'webhooksUnavailableReason'>>
 
 /** One row of the project tree. `missing` rows render inert (their panes all 409). */
 type TreeProject = Pick<ProjectListEntry, 'id' | 'name' | 'status'>
