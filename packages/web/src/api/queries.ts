@@ -185,7 +185,9 @@ export const queryKeys = {
     all: () => ['tracker', queryScope()] as const,
     associationFor: (projectId: string) => ['tracker', projectId, 'association'] as const,
     association: () => ['tracker', queryScope(), 'association'] as const,
-    candidates: (kind: TrackerKind, query = '') => ['tracker', queryScope(), 'candidates', kind, query] as const,
+    candidates: (kind: TrackerKind, query = '', parent?: string) => parent
+      ? ['tracker', queryScope(), 'candidates', kind, query, parent] as const
+      : ['tracker', queryScope(), 'candidates', kind, query] as const,
     connection: () => ['tracker', queryScope(), 'connection'] as const,
     items: (
       association: TrackerAssociation,
@@ -339,13 +341,14 @@ export function useTrackerAssociation() {
   })
 }
 
-export function useTrackerCandidates(kind: TrackerKind, query: string, enabled: boolean) {
+export function useTrackerCandidates(kind: TrackerKind, query: string, enabled: boolean, parent?: string) {
   return useInfiniteQuery({
-    queryKey: queryKeys.tracker.candidates(kind, query),
+    queryKey: queryKeys.tracker.candidates(kind, query, parent),
     staleTime: TRACKER_STALE_TIME,
     queryFn: ({ pageParam, signal }) =>
       getTrackerCandidates(kind, {
         q: query.trim() || undefined,
+        parent,
         cursor: pageParam,
         limit: 50,
       }, { signal }),

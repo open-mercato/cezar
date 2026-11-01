@@ -69,7 +69,7 @@
 - 💸&nbsp;Track reported cost and token usage by project in **Usage & cost**.
 - ⏰&nbsp;Schedule recurring work or launch tasks from GitHub and supported tracker events with **Automations**.
 - 🌳&nbsp;Agents can delegate independent work to child tasks, each in its own worktree, and receive their reports in the parent session.
-- 🎫&nbsp;Connect **Jira or Linear** to browse issues and launch tasks from your project tracker.
+- 🎫&nbsp;Connect **Jira, Linear or ClickUp** to browse issues and launch tasks from your project tracker.
 - 💾&nbsp;No database. Everything is saved as plain files in `.ai/cezar/`.
 
 ## Screenshots
@@ -234,6 +234,6 @@ npm run dev
 
 Windows installers are covered by the [code signing policy](docs/code-signing-policy.md).
 
-## Jira and Linear
+## Jira, Linear and ClickUp
 
-Connect a project issue tracker in Settings to browse issues, launch workflows and configure event automations. See [setup, permissions and recovery](docs/issue-trackers.md).
+Connect a project issue tracker in Settings to browse issues and launch workflows, plus event automations on Jira and Linear. See [setup, permissions and recovery](docs/issue-trackers.md).
