@@ -313,6 +313,13 @@ export const runRecordSchema = z.object({
    */
   awaitingAnswerSince: z.string().datetime().optional().catch(undefined),
   /**
+   * When the current wait on the user began: stamped by `updateRun` on entering `waiting` or on a
+   * new question while there, so a wait has an identity even without a question. It outlives the
+   * session on an unanswered question (`awaitingAnswerSince`), which is still the same wait, so a
+   * manager reports it once. Additive and optional (BACKWARD_COMPATIBILITY §3).
+   */
+  waitingSince: z.string().datetime().optional().catch(undefined),
+  /**
    * A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    * 2026-10-06-agentic-e2e-checks Phase 3). `headSha` is what was fetched and tested — also the
    * run's `baseBranch` — and `ref` the namespaced `refs/cezar/pr/<n>` holding it. Its presence
@@ -633,6 +640,7 @@ function isAccessDenied(err: unknown): boolean {
  */
 function clearAwaitingAnswer(run: RunRecord): void {
   run.awaitingAnswerSince = undefined;
+  run.waitingSince = undefined;
 }
 
 /**
@@ -931,10 +939,12 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   ) {
     // A run parked on an unanswered `CEZ:ASK` still owes the user that question — the same
     // answer `RunManager.recover()` gives, so this reader and the manager agree on "needs you".
-    const askParked = run.status === 'waiting' && run.askParked === true;
+    const askParked = run.status === 'waiting' && (run.askParked === true || run.attentionRequest !== undefined);
+    // A wait has no `finishedAt`, and a cold read persists nothing: `now` would move on every read.
+    const stoppedAt = run.status === 'waiting' ? run.waitingSince ?? run.startedAt ?? run.createdAt : new Date().toISOString();
     run.status = 'failed';
     run.error = 'interrupted — cezar process exited during the run';
-    run.finishedAt = run.finishedAt ?? new Date().toISOString();
+    run.finishedAt = run.finishedAt ?? stoppedAt;
     // Stamped from `finishedAt`, so every cold read of the same record agrees on the instant.
     if (askParked) run.awaitingAnswerSince = run.finishedAt;
     for (const step of run.steps) {
@@ -951,6 +961,7 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   if (run.status !== 'failed') run.autoResumeAt = undefined;
   // Likewise an unanswered question only means anything on the `failed` run it stopped.
   if (run.status !== 'failed') run.awaitingAnswerSince = undefined;
+  if (run.status !== 'waiting' && run.awaitingAnswerSince === undefined) run.waitingSince = undefined;
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
@@ -1445,6 +1456,15 @@ export class RunStore extends EventEmitter {
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
     if (normalized.status && normalized.status !== 'failed') {
       normalized.awaitingAnswerSince = undefined;
+    }
+    // Stamped here so no park site can forget it; every wait reaches the record through this line.
+    if (resultingStatus === 'waiting') {
+      const requestId = 'attentionRequest' in normalized ? normalized.attentionRequest?.requestId : run.attentionRequest?.requestId;
+      if (run.status !== 'waiting' || run.waitingSince === undefined || requestId !== run.attentionRequest?.requestId) {
+        normalized.waitingSince = new Date().toISOString();
+      }
+    } else if (('awaitingAnswerSince' in normalized ? normalized.awaitingAnswerSince : run.awaitingAnswerSince) === undefined) {
+      normalized.waitingSince = undefined;
     }
     // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
     // projection often provide the replacement URL/number in the same patch; seeding afterward

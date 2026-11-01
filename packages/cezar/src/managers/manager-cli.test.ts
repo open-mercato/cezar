@@ -3,7 +3,7 @@ import { runManagerCommand, type ManagerCliIo } from './manager-cli.ts';
 
 const snapshot = {
   generatedAt: '',
-  attention: [{ key: 'k', kind: 'pr-ready', projectId: 'alpha', title: 'Ship it', number: 4 }],
+  attention: [{ key: 'k', kind: 'pr-ready', projectId: 'alpha', title: 'Ship it', number: 4 }, { key: 'q', kind: 'task-needs-you', projectId: 'alpha', title: 'Gate', runId: 'r2', detail: 'Ship it?' }],
   projects: [{ projectId: 'alpha', name: 'alpha', available: true, tasks: [{ runId: 'r1', title: 't', status: 'running', workflow: 'w', childCount: 2 }], prs: [{ number: 4, title: 'Ship it', status: 'ready' }] }],
 };
 
@@ -42,6 +42,12 @@ describe('cez manager', () => {
     expect(await run('status')).toBe(0);
     expect(logs.join('\n')).toContain('pr-ready');
     expect(logs.join('\n')).toContain('(2 dispatched)');
+  });
+
+  it('says what a waiting task is asking', async () => {
+    const { run, logs } = harness();
+    expect(await run('attention')).toBe(0);
+    expect(logs.join('\n')).toContain('Gate — Ship it?');
   });
 
   it('merge only ever proposes', async () => {
