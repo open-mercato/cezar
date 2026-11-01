@@ -126,7 +126,7 @@ export class ProjectContexts {
     try {
       const ctx = await build;
       this.contexts.set(projectId, ctx);
-      this.notifyBuilt(ctx);
+      outsideRelayScope(() => this.notifyBuilt(ctx));
       return ctx;
     } finally {
       this.building.delete(projectId);

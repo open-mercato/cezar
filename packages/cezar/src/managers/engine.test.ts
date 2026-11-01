@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GithubData, ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
+import { inRelayScope, runInRelayScope } from '../relay/scope.ts';
 import { ManagerEngine, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
 import type { ManagerProjectSource } from './snapshot.ts';
@@ -500,6 +501,17 @@ describe('ManagerEngine', () => {
       expect((await engine.summary(id))).toMatchObject({ important: 1, headline: 'Task blocked on you' });
       vi.advanceTimersByTime(3_000);
       expect(raised).toEqual([[store.get(id)!.name, 'Task blocked on you']]);
+    });
+
+    it('a turn started from a relay request reads the unscoped value, and its alert still fires', async () => {
+      let scoped: boolean | undefined;
+      const engine = makeEngine({ notifySystem: () => { scoped = inRelayScope(); } });
+      const id = await create(engine, 0);
+      backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you\nIt asks which branch to use.'));
+      runInRelayScope({ deviceId: 'phone' }, () => engine.send(id, 'hi'));
+      await settled(engine);
+      vi.advanceTimersByTime(3_000);
+      expect(scoped).toBe(false);
     });
 
     it('stays quiet for routine replies', async () => {

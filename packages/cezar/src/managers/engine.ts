@@ -721,12 +721,12 @@ export class ManagerEngine {
   private alert(id: string, seq: number, body: string): void {
     const { notifySystem, store } = this.deps;
     if (!notifySystem) return;
-    const timer = setTimeout(() => {
+    const timer = outsideRelayScope(() => setTimeout(() => {
       this.alerts.delete(timer);
       const manager = store.get(id);
       if (!manager || manager.notify === false || store.state(id).readSeq >= seq) return;
       notifySystem(manager.name, body);
-    }, SYSTEM_NOTIFY_DELAY_MS);
+    }, SYSTEM_NOTIFY_DELAY_MS));
     timer.unref?.();
     this.alerts.add(timer);
   }
