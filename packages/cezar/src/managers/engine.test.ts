@@ -505,13 +505,18 @@ describe('ManagerEngine', () => {
 
     it('a turn started from a relay request reads the unscoped value, and its alert still fires', async () => {
       let scoped: boolean | undefined;
-      const engine = makeEngine({ notifySystem: () => { scoped = inRelayScope(); } });
+      let turnScoped: boolean | undefined;
+      const engine = makeEngine({
+        notifySystem: () => { scoped = inRelayScope(); },
+        runnerFor: () => { turnScoped = inRelayScope(); return backend.runner; },
+      });
       const id = await create(engine, 0);
       backend.scripts.push(say('MANAGER:IMPORTANT Task blocked on you\nIt asks which branch to use.'));
       runInRelayScope({ deviceId: 'phone' }, () => engine.send(id, 'hi'));
       await settled(engine);
       vi.advanceTimersByTime(3_000);
       expect(scoped).toBe(false);
+      expect(turnScoped).toBe(false);
     });
 
     it('stays quiet for routine replies', async () => {

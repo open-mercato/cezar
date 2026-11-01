@@ -177,7 +177,7 @@ export class RelayService {
     if (!accepted) return;
     this.slots.delete(deviceId);
     this.sessions.set(deviceId, accepted);
-    this.devices.update(deviceId, { lastSeenAt: new Date(this.now()).toISOString() });
+    this.touch(deviceId);
     this.onChange();
   }
 
@@ -193,8 +193,17 @@ export class RelayService {
       this.dropDevice(deviceId);
       return;
     }
-    if (this.devices.get(deviceId)) this.devices.update(deviceId, { lastSeenAt: new Date(this.now()).toISOString() });
+    this.touch(deviceId);
     this.onChange();
+  }
+
+  /** Runs on a socket callback, so a read-only home costs a stale "seen", never the process. */
+  private touch(deviceId: string): void {
+    try {
+      this.devices.update(deviceId, { lastSeenAt: new Date(this.now()).toISOString() });
+    } catch {
+      // The row is still right in memory.
+    }
   }
 
   /** The row goes first: from here the phone cannot start a session, whatever the relay does. */

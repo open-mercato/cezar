@@ -99,6 +99,7 @@ export class TunnelStream {
         this.grant(next.length);
         return;
       }
+      if (this.finished) return;
       if (this.requestEnded) {
         try { controller.close(); } catch { /* already errored by a reset */ }
         return;

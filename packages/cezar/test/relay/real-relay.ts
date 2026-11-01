@@ -53,6 +53,9 @@ log('PUT /workspace/ui-state with a body', posted.status, posted.body.toString('
 const read = await phone.fetch('GET', '/api/v1/workspace/ui-state');
 log('read back', read.status, JSON.parse(read.body.toString('utf8')).relayProbe);
 
+const started2 = await phone.fetch('POST', '/api/v1/runs', [['content-type', 'application/json']], JSON.stringify({ workflow: 'quick-task', task: 'started from the phone' }));
+log('POST /runs with a body', started2.status, JSON.parse(started2.body.toString('utf8')).task);
+
 const refused = await phone.fetch('GET', '/api/v1/workspace/phones');
 log('GET /workspace/phones from the phone', refused.status);
 const agentConfig = await phone.fetch('POST', '/api/v1/workspace/phones/pairing');

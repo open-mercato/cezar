@@ -62,6 +62,7 @@ export class RendezvousChannel {
   private handshakeTimer: NodeJS.Timeout | undefined;
   private ended = false;
   private joined = false;
+  private turn = 0;
   private opened: { resolve(): void; reject(error: Error): void } | undefined;
 
   constructor(
@@ -157,8 +158,6 @@ export class RendezvousChannel {
       this.finish({ kind: 'failed', reason: 'handshake' });
     }
   }
-
-  private turn = 0;
 
   private onFirst(message: Buffer): void {
     if (message.length !== XX_FIRST_BYTES) throw new Error('first pairing message size');

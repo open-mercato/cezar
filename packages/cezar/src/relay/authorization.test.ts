@@ -424,6 +424,16 @@ describe('a relay request is a hosted request', () => {
       expect(index).toContain('trimPaths: () => !narrowForRelay(resolveCapabilities(process.env, bindHost)).localHandoff');
     });
 
+    it('the sites a behaviour test cannot reach leave the scope too', () => {
+      const server = readFileSync(join(root, 'server/server.ts'), 'utf8');
+      expect(server).toContain('outsideRelayScope(() => deps.automationsChanged?.())');
+      expect(server).toContain('createWebhookRoutes(context => outsideRelayScope(async () => {');
+      expect(readFileSync(join(root, 'server/ws.ts'), 'utf8')).toContain('outsideRelayScope(() => state.publisher.start(');
+      const engine = readFileSync(join(root, 'managers/engine.ts'), 'utf8');
+      expect(engine).toContain('this.timer = outsideRelayScope(() => setTimeout(');
+      expect(engine).toContain('const timer = outsideRelayScope(() => setTimeout(');
+    });
+
     it('every run start leaves the scope', () => {
       const run = readFileSync(join(root, 'workflows/run.ts'), 'utf8');
       const starts = run.match(/.*this\.(?:execute|runContinuation)\(.*/g) ?? [];
