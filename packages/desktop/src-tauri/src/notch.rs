@@ -487,6 +487,18 @@ fn pointer_loop(app: AppHandle, notch: Arc<Notch>) {
     }
 }
 
+/// WebKit leaves a crashed page blank, and its last shapes would keep catching clicks. The reload
+/// ends in `notch_ready`. Every other webview keeps WebKit's default.
+pub fn on_page_crashed(webview: &tauri::Webview) {
+    if webview.label() != LABEL {
+        return;
+    }
+    if let Some(notch) = webview.try_state::<Arc<Notch>>() {
+        notch.view().rects.clear();
+    }
+    let _ = webview.reload();
+}
+
 /// `setup` calls this. With the toggle off the threads wait and no panel is ever made.
 pub fn start(app: &AppHandle, shell: Arc<Shell>) {
     let notch = Arc::new(Notch {
