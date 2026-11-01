@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Date;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
@@ -20,6 +21,8 @@ public final class OkHttpTransport implements SocketTransport {
             .followRedirects(false)
             .followSslRedirects(false)
             .retryOnConnectionFailure(false)
+            // A refused upgrade leaves its connection pooled, and the next socket would fail on it once it goes stale.
+            .connectionPool(new ConnectionPool(0, 1, TimeUnit.SECONDS))
             // OkHttp always offers permessage-deflate, and § 3 forbids it. WebSocket calls skip network interceptors.
             .addInterceptor(chain -> chain.proceed(chain.request().newBuilder().removeHeader("Sec-WebSocket-Extensions").build()))
             .build();

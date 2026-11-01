@@ -16,6 +16,7 @@ public final class RelayConnections implements ShellConnector.RelayPort {
     private final DeviceKeyStore keys;
     private final String userAgent;
     private String serverId;
+    private String deviceId;
     private RelayLink link;
     private LoopbackProxy proxy;
 
@@ -27,7 +28,8 @@ public final class RelayConnections implements ShellConnector.RelayPort {
 
     /** The link for this server. Asking for another closes the first, listener included. */
     public synchronized RelayLink link(ServerRecord server) {
-        if (link != null && server.id.equals(serverId)) return link;
+        // Pairing the same cezar again keeps the row but changes the device, so the old link holds dead keys.
+        if (link != null && server.id.equals(serverId) && server.relay.deviceId.equals(deviceId)) return link;
         release();
         DeviceKeys deviceKeys = keys.get(server.id);
         if (deviceKeys == null) return null;
@@ -35,6 +37,7 @@ public final class RelayConnections implements ShellConnector.RelayPort {
         byte[] pinned = Bytes.fromBase64url(relay.cezarKey, 32);
         link = new RelayLink(transport, new RelayLink.Target(socketOrigin(relay.origin), relay.cezarId, relay.deviceId, pinned, deviceKeys), System::currentTimeMillis);
         serverId = server.id;
+        deviceId = relay.deviceId;
         return link;
     }
 
@@ -60,9 +63,10 @@ public final class RelayConnections implements ShellConnector.RelayPort {
     public synchronized void release() {
         if (proxy != null) proxy.close();
         proxy = null;
-        if (link != null) link.stop();
+        if (link != null) link.dispose();
         link = null;
         serverId = null;
+        deviceId = null;
     }
 
     @Override

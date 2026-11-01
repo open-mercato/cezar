@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONException;
@@ -127,10 +128,15 @@ public final class PairingClient {
         post(() -> finish(Phase.FAILED, "cancelled"));
     }
 
+    /** The socket's last callback lands after {@link #finish}, when the actor is already gone. */
     private void post(Runnable event) {
-        actor.execute(() -> {
-            if (!finished) event.run();
-        });
+        try {
+            actor.execute(() -> {
+                if (!finished) event.run();
+            });
+        } catch (RejectedExecutionException e) {
+            // Finished.
+        }
     }
 
     private void ping() {

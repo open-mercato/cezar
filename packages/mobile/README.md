@@ -1,7 +1,8 @@
 # Cezar mobile shell
 
-A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit.
-Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. Version 0.1.0, debug builds only: no
+A thin iOS and Android app that connects to a hosted cezar and shows that server's own cockpit, or,
+on Android, pairs with a cezar through the relay. Design: `.ai/specs/2026-10-31-mobile-apps-manager-first.md`
+and `.ai/specs/2026-11-01-relay-qr-pairing.md`; the wire contract is `RELAY_PROTOCOL.md`. Version 0.1.0, debug builds only: no
 signing, push, quick actions or CI yet.
 
 > **iOS status:** none of the iOS code has been compiled for iOS. It was written on a Mac without
@@ -20,6 +21,39 @@ Capacitor is not finally accepted (spec Q2), so everything that matters would su
 Server pages get their **own** webview. Capacitor's webview shows only the connect page, because
 Capacitor 8 on iOS injects its bridge into every main frame and its message handler checks no
 origin. Page script reaches native code only by navigating to `cezar://servers`.
+
+## The relay client (Android)
+
+`android/…/mobile/shell/relay/` is plain Java over BouncyCastle's lightweight API and OkHttp's
+WebSocket. iOS has none of it yet, so it keeps the URL form as its first screen.
+
+| Class | Job |
+| --- | --- |
+| `RelayCrypto` | Every primitive, each one a direct BouncyCastle call |
+| `NoiseHandshake`, `NoiseCipher` | `XXpsk3`, `KK`, `Rekey` |
+| `PairSecret`, `RelayOrigin`, `PairingClient`, `PairingFlow` | QR and typed code, one rendezvous |
+| `RelayLink` | One phone socket and its session: proof, `hello`, ping, reconnect, close codes |
+| `TunnelSession`, `TunnelStream`, `TunnelFrame`, `TunnelRecord` | The tunnel |
+| `LoopbackProxy`, `ProxyRequest` | The plain-HTTP face under the webview |
+| `RelayConnections` | One link and one listener per process |
+
+> **The Noise state machine is unaudited.** No maintained library has `XXpsk3`, `KK` and `Rekey`, so
+> it is thin code over audited primitives (spec QR8). It passes Noise's published vectors and every
+> file in `test-vectors/relay/`, which the JVM tests read in place.
+
+Test it on an emulator with a dev relay on the host. `10.0.2.2` is refused on purpose, so use the
+same loopback address on both sides:
+
+```bash
+adb reverse tcp:8787 tcp:8787         # CEZ_RELAY_URL=http://127.0.0.1:8787 on the computer
+```
+
+Debug builds also accept `http` for `127.0.0.1`, `localhost` and `[::1]`, and have one way to pair
+without a camera. It does not exist in a release build:
+
+```bash
+adb shell "am start --activity-clear-task -n com.openmercato.cezar.mobile/.shell.DebugPairActivity --es qr '<qr string>'"
+```
 
 ## Build the debug APK
 

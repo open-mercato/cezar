@@ -366,6 +366,7 @@ The mobile shell ships on its own version through app stores and loads each serv
 - **`GET /api/v1/health`** with `version` and an object `capabilities`, readable with no same-origin check. `capabilities.managers === true` opens `/manager`; `false` or absent opens `/`. Capability, not version number, decides. A local-mode refusal stays a `403` whose `error` names the Host header.
 - **`/manager`** as a cockpit route.
 - **The `CezarMobile/<version> (ios|android)` User-Agent token**, the only thing a page learns about the shell, and **`cezar://servers`**, which a page navigates to in the main frame to ask for the server list. No other `cezar://` URL does anything, and the scheme is not registered with either OS.
+- **The tunnel protocol version (`RELAY_PROTOCOL.md` §14)**, for a relay server. The rule that any shell works with any cezar holds through negotiation: each side states `{ min, max }`, the highest shared version is used, and a shell keeps `min` until older peers have aged out (§6c). With no shared version the shell shows "Update the app" or "Update cezar", and the Manual path is unaffected.
 - **Basic auth answered at the HTTP layer**, by the proxy in front of cezar: a `401` with `WWW-Authenticate: Basic` and a stable realm. The shell answers only the exact origin and realm saved with a server, so changing the realm re-asks for the password.
 
 Breaking: renaming or removing any of these. Required path: the cockpit keeps both shapes until a shell that needs only the new one has been in the stores for a full release.

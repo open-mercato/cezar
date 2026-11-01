@@ -33,7 +33,8 @@ public final class TunnelStream {
         }
     }
 
-    private static final int CREDIT_EVERY = 32768;
+    /** Near the § 12.2 limit of 131,072: each `WINDOW` counts against the relay's `framesPerSecond`. */
+    private static final int CREDIT_EVERY = 120000;
 
     private final TunnelSession session;
     private final LinkedBlockingQueue<Event> events = new LinkedBlockingQueue<>();

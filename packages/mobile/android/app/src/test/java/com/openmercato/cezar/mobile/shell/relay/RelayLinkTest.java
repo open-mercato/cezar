@@ -306,6 +306,13 @@ public class RelayLinkTest {
         waitFor(RelayStatus.Kind.DEVICE_REMOVED);
     }
 
+    /** On the emulator this read IDLE, which the start table took for a relay outage. */
+    @Test
+    public void awaitSettledAfterStartWaitsForARealAnswer() throws Exception {
+        link.start();
+        assertEquals(RelayStatus.Kind.CONNECTING, link.awaitSettled(150).kind);
+    }
+
     @Test
     public void stopClosesWith1000() throws Exception {
         link.start();

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
@@ -105,11 +106,12 @@ public final class RelayLink {
     }
 
     public void start() {
+        // Set here, not on the actor: a caller's awaitSettled must not read the old IDLE as an answer.
+        if (status.kind == RelayStatus.Kind.IDLE) setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
         actor.execute(() -> {
             if (running) return;
             running = true;
             attempts = 0;
-            setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
             connect();
         });
     }
@@ -132,6 +134,12 @@ public final class RelayLink {
             setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
             connect();
         });
+    }
+
+    /** Stops for good. This link is never started again. */
+    public void dispose() {
+        stop();
+        actor.execute(actor::shutdown);
     }
 
     /** Forget server: `CLOSE` `goodbye` if a session is live (§ 10.1), then the socket closes. */
@@ -203,9 +211,13 @@ public final class RelayLink {
 
     /** Drops an event from a socket this link has already left. */
     private void post(int mine, Runnable event) {
-        actor.execute(() -> {
-            if (mine == epoch) event.run();
-        });
+        try {
+            actor.execute(() -> {
+                if (mine == epoch) event.run();
+            });
+        } catch (RejectedExecutionException e) {
+            // Disposed: the socket's last callback lands after it.
+        }
     }
 
     private void later(long delayMs, Runnable event) {
