@@ -41,7 +41,7 @@ export function trackerRunBody(
   item: TrackerItem,
   workflow: string | null,
   skills: readonly string[],
-  backend: Pick<CreateRunInput, 'model' | 'runner' | 'agentProfile'>,
+  backend: Pick<CreateRunInput, 'model' | 'reasoningEffort' | 'runner' | 'agentProfile'>,
   options: TrackerPromptOptions & { acknowledgeLoss?: boolean },
 ): CreateRunInput {
   if (!workflow && skills.length > MAX_CHAIN_STEPS) {

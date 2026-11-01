@@ -14,6 +14,7 @@ import {
   type AgentSession,
   type AgentToolCallRecord,
   type ContentBlock,
+  assertReasoningEffortSupported,
   type SessionOptions,
 } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
@@ -83,6 +84,7 @@ export class CopilotAcpRunner implements AgentRunner {
   }
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
+    assertReasoningEffortSupported('copilot', spec.reasoningEffort);
     const session = new CopilotAcpSession(this.bin, this.backend, spec, spec.timeoutMs ?? this.timeoutMs, onEvent, opts);
     this.lastSession = session;
     return session;

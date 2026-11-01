@@ -9,7 +9,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 import { readNdjson } from './ndjson.ts';
 import type { UiEvent } from './ui-events.ts';
@@ -96,6 +96,7 @@ export class JunieRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('junie', spec.reasoningEffort);
     const session = new JunieSession(this.bin, this.timeoutMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
