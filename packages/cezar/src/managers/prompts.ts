@@ -43,8 +43,11 @@ Rules:
 - Dispatched tasks read as a tree: report the root, and open it with \`cez-manager task\` when the user asks.${manager.instructions.trim() ? `\n\nWhat the user wants from you:\n${manager.instructions.trim()}` : ''}`;
 }
 
-export function chatPrompt(text: string, notes: string[]): string {
-  return `${notesBlock(notes)}${turnMarker('chat')}\n${text}`;
+export function chatPrompt(text: string, notes: string[], attachments: string[] = []): string {
+  const files = attachments.length > 0
+    ? `${text ? '\n\n' : 'The user sent these files without a message: work out what they need.\n'}Attached files, which you can open with Read:\n${attachments.map((path) => `- ${path}`).join('\n')}`
+    : '';
+  return `${notesBlock(notes)}${turnMarker('chat')}\n${text}${files}`;
 }
 
 export function jobPrompt(name: string, prompt: string): string {

@@ -1,6 +1,8 @@
 import {
   managerChangeEventSchema,
   managerMessageEventSchema,
+  apiPath,
+  type AttachmentEntry,
   type CreateManagerInput,
   type ManagerActionDecisionInput,
   type ManagerListResponse,
@@ -60,9 +62,13 @@ export async function getManagerMessages(
   )
 }
 
-export async function sendManagerMessage(id: string, text: string) {
-  return unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json: { text } }), managerPath(id, '/messages'))
+export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[]) {
+  const json = { text, ...(images?.length ? { images } : {}) }
+  return unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
 }
+
+export const managerAttachmentUrl = (id: string, file: string): string =>
+  apiPath(managerPath(id, `/attachments/${encodeURIComponent(file)}`))
 
 export async function stopManager(id: string) {
   return unwrap(await managers()[':id'].stop.$post({ param: managerParam(id) }), managerPath(id, '/stop'))

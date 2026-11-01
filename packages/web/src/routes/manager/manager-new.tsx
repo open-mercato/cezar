@@ -5,7 +5,7 @@ import { sendManagerMessage, useCreateManager, useManagers } from '@/api/manager
 import { useHealth } from '@/api/queries'
 import { Composer } from '@/components/composer/composer'
 import { toast } from '@/components/ui/toaster'
-import type { CreateManagerInput, ManagerAccess, ManagerEffort, ManagerProjects } from '@open-mercato/cezar-api-client'
+import type { AttachmentEntry, CreateManagerInput, ManagerAccess, ManagerEffort, ManagerProjects } from '@open-mercato/cezar-api-client'
 
 import { AccountPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
@@ -81,12 +81,12 @@ export function ManagerNewRoute() {
   // Only a loaded list can say "first": a pasted /manager/new must not flash it.
   const first = managers.data?.managers.length === 0
 
-  const submit = async (text: string) => {
+  const submit = async (text: string, attachments: AttachmentEntry[]) => {
     const name = managerNameFrom(text)
     const input: CreateManagerInput = { instructions: text, ...(name ? { name } : {}), ...setup }
     const manager = await create.mutateAsync(input)
     // The manager exists now, so a failed first message is a toast in its chat, not a lost setup.
-    await sendManagerMessage(manager.id, text).catch((error: unknown) =>
+    await sendManagerMessage(manager.id, text, attachments).catch((error: unknown) =>
       toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
     navigate(`/manager/${encodeURIComponent(manager.id)}`, { replace: true })
   }
@@ -100,7 +100,6 @@ export function ManagerNewRoute() {
           onValueChange={setPrompt}
           onSubmit={submit}
           autoFocus
-          attachments={false}
           autocompleteSkills={false}
           placeholder="What should this manager do?"
           ariaLabel="What should this manager do?"

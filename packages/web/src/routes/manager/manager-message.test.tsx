@@ -102,6 +102,22 @@ describe('ManagerMessageRow', () => {
     expect(meta?.querySelector('time')?.getAttribute('datetime')).toBeTruthy()
   })
 
+  it('shows a sent screenshot and offers a file for download, with no empty bubble', () => {
+    renderMessage({
+      ...userMessage(1, ''),
+      attachments: [
+        { file: 'pasted-1-a.png', mediaType: 'image/png' },
+        { file: 'pasted-1-b.pdf', mediaType: 'application/pdf', name: 'plan.pdf' },
+      ],
+    } as ManagerMessage)
+    const row = document.querySelector('[data-slot="manager-user"]') as HTMLElement
+    expect(row.querySelector('p')).toBeNull()
+    expect(row.querySelector('img')?.getAttribute('src')).toContain('/workspace/managers/global/attachments/pasted-1-a.png')
+    const file = row.querySelector('[data-slot="manager-file"]') as HTMLAnchorElement
+    expect(file.textContent).toBe('plan.pdf')
+    expect(file.getAttribute('download')).toBe('plan.pdf')
+  })
+
   it('marks what the manager judged important, with its headline', () => {
     renderMessage(assistantMessage(2, { text: 'It asks which shell.', important: true, headline: 'Blocked on you' }))
     expect(document.querySelector('[data-slot="manager-important"]')?.textContent).toBe('Blocked on you')

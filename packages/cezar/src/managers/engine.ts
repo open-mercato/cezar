@@ -1,12 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { chmodSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
+  isImageMediaType,
   managerAccessOf,
   MANAGER_DEFAULT_CRON_MINUTES,
   type CreateManagerInput,
   type Manager,
+  type AttachmentInput,
   type ManagerActionRequest,
   type ManagerAsk,
   type ManagerActionStatus,
@@ -26,7 +28,7 @@ import {
 import type { AutomationDefinition } from '@open-mercato/cezar-contract';
 import { agentModelsLocked } from '../core/agent-model-policy.ts';
 import { parseAskMarker, stripAskMarker } from '../core/ask.ts';
-import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type RunnerId } from '../core/agent-runner.ts';
+import { isRunnerId, type AgentEvent, type AgentRunner, type AgentRunSpec, type AgentSession, type ContentBlock, type RunnerId } from '../core/agent-runner.ts';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -64,12 +66,14 @@ export interface ManagerEngineDeps {
 }
 
 type QueueItem =
-  | { kind: 'chat'; text: string }
+  | { kind: 'chat'; text: string; images: ContentBlock[]; paths: string[] }
   | { kind: 'watch'; forced: boolean }
   | { kind: 'job'; jobId: string };
 
 interface ActiveTurn {
   kind: ManagerTurnKind;
+  /** Screenshots the user sent with this message, for the model to see. */
+  images?: ContentBlock[];
   /** False while a watch check is still deciding whether a model call is needed at all. */
   started: boolean;
   stopped: boolean;
@@ -398,7 +402,9 @@ export class ManagerEngine {
     const lastTalk = newestFirst.find((message) => message.kind !== 'action' && (message.kind !== 'assistant' || message.text));
     const lastAssistant = newestFirst.find((message) => message.kind === 'assistant');
     const working = runtime?.active?.started === true || (runtime?.queue.length ?? 0) > 0;
-    const preview = lastTalk && 'text' in lastTalk ? onePlainLine(lastTalk.text) : '';
+    const preview = lastTalk && 'text' in lastTalk
+      ? onePlainLine(lastTalk.text) || (lastTalk.kind === 'user' ? 'Sent attachments' : '')
+      : '';
     const dueAt = this.checkDueAt(manager, state);
     const important = messages.flatMap((message) =>
       message.kind === 'assistant' && message.important && !message.streaming && message.seq > state.readSeq ? [message] : []);
@@ -573,16 +579,28 @@ export class ManagerEngine {
 
   // ---- chat --------------------------------------------------------------------------------
 
-  send(id: string, text: string): boolean {
+  send(id: string, text: string, attachments: AttachmentInput[] = []): boolean {
     if (!this.deps.store.get(id)) return false;
     // Picked on the card or typed in the composer: either way the card has its answer.
     for (const message of this.deps.store.messages(id).filter(openAsk)) {
-      this.publish(id, { ...message, askAnswer: text }, true);
+      this.publish(id, { ...message, askAnswer: text || 'Sent attachments' }, true);
       // Asked from a session the chat never saw: `Header: choice` alone answers nothing.
       if (message.turn !== 'chat') this.addNote(id, askNote(message));
     }
-    this.publish(id, { id: randomUUID(), seq: this.deps.store.nextSeq(id), at: this.iso(), kind: 'user', text }, true);
-    this.enqueue(id, { kind: 'chat', text });
+    const seq = this.deps.store.nextSeq(id);
+    const files = attachments.map((attachment) => this.deps.store.saveAttachment(id, attachment, seq));
+    this.publish(id, {
+      id: randomUUID(),
+      seq,
+      at: this.iso(),
+      kind: 'user',
+      text,
+      ...(files.length > 0 ? { attachments: files.map((file) => file.saved) } : {}),
+    }, true);
+    const images: ContentBlock[] = attachments.flatMap((attachment) => (isImageMediaType(attachment.mediaType)
+      ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: attachment.mediaType, data: attachment.data } }]
+      : []));
+    this.enqueue(id, { kind: 'chat', text, images, paths: files.map((file) => file.path) });
     return true;
   }
 
@@ -624,7 +642,12 @@ export class ManagerEngine {
     const chats = runtime.queue.filter((item): item is Extract<QueueItem, { kind: 'chat' }> => item.kind === 'chat');
     if (chats.length > 0) {
       runtime.queue = runtime.queue.filter((item) => item.kind !== 'chat');
-      return { kind: 'chat', text: chats.map((item) => item.text).join('\n\n') };
+      return {
+        kind: 'chat',
+        text: chats.map((item) => item.text).filter(Boolean).join('\n\n'),
+        images: chats.flatMap((item) => item.images),
+        paths: chats.flatMap((item) => item.paths),
+      };
     }
     return runtime.queue.shift();
   }
@@ -657,7 +680,7 @@ export class ManagerEngine {
       release();
       return;
     }
-    const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false };
+    const turn: ActiveTurn = { kind: item.kind, started: false, stopped: false, ...(item.kind === 'chat' && item.images.length > 0 ? { images: item.images } : {}) };
     runtime.active = turn;
     const running = this.runTurn(id, item, turn)
       .catch((error) => console.warn(`[cezar] manager ${id}: ${error instanceof Error ? error.message : String(error)}`))
@@ -699,7 +722,7 @@ export class ManagerEngine {
     if (item.kind === 'chat') {
       // Only the session the user talks to needs them, and only a turn that landed has heard them.
       const { notes } = store.state(id);
-      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes), 'chat', turn);
+      const heard = await this.visibleTurn(id, manager, chatPrompt(item.text, notes, item.paths), 'chat', turn);
       if (heard && notes.length > 0) store.updateState(id, (state) => ({ ...state, notes: state.notes.slice(notes.length) }));
       return;
     }
@@ -876,7 +899,12 @@ export class ManagerEngine {
       cwd: store.workdir(id),
       allowedTools: MANAGER_ALLOWED_TOOLS,
       bashAllowlist: MANAGER_BASH_ALLOWLIST,
-      additionalDirectories: sources.filter((source) => source.available).map((source) => source.root),
+      // Attachments stay readable: "that screenshot" can come a few turns later.
+      additionalDirectories: [
+        ...sources.filter((source) => source.available).map((source) => source.root),
+        ...(existsSync(store.attachmentsDir(id)) ? [store.attachmentsDir(id)] : []),
+      ],
+      ...(turn.images ? { images: turn.images } : {}),
       env: {
         ...profile.env,
         CEZ_MANAGER_ID: id,

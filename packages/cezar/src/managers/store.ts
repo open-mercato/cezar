@@ -10,10 +10,21 @@ import {
   readSync,
   renameSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { managerMessageSchema, managerSchema, type Manager, type ManagerMessage } from '@open-mercato/cezar-contract';
+import {
+  managerMessageSchema,
+  managerSchema,
+  sanitizeAttachmentName,
+  storedAttachmentExtension,
+  type AttachmentInput,
+  type Manager,
+  type ManagerAttachment,
+  type ManagerMessage,
+} from '@open-mercato/cezar-contract';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { assertCezarHomeWriteIsSandboxed, managersDir, managersPath } from '../paths.ts';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
@@ -207,6 +218,22 @@ export class ManagerStore {
 
   dir(id: string): string {
     return join(managersDir(), id);
+  }
+
+  attachmentsDir(id: string): string {
+    return join(this.dir(id), 'attachments');
+  }
+
+  /** Keeps the bytes on disk; the chat file only names them. */
+  saveAttachment(id: string, attachment: AttachmentInput, seq: number): { saved: ManagerAttachment; path: string } {
+    const dir = this.attachmentsDir(id);
+    assertCezarHomeWriteIsSandboxed(dir);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
+    const file = `pasted-${seq}-${randomBytes(4).toString('hex')}.${storedAttachmentExtension(attachment.mediaType, name ?? undefined)}`;
+    const path = join(dir, file);
+    writeFileSync(path, Buffer.from(attachment.data, 'base64'), { mode: 0o600 });
+    return { saved: { file, mediaType: attachment.mediaType, ...(name ? { name } : {}) }, path };
   }
 
   /** The agent's cwd. Created on demand: deleting the directory loses history, never a turn. */

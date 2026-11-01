@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { attachmentListSchema } from './runs.ts';
 
 /**
  * Managers (spec `.ai/specs/2026-10-31-managers.md`): global, long-lived agents the user talks to
@@ -9,6 +10,11 @@ import { z } from 'zod';
 const managerIdSchema = z.string().regex(/^[a-z0-9-]{1,64}$/);
 
 export const managerIdParamSchema = z.object({ id: managerIdSchema });
+/** `pasted-<seq>-<nonce>.<ext>`: the engine's own names, so a path param cannot climb out. */
+export const managerAttachmentParamSchema = z.object({
+  id: managerIdSchema,
+  file: z.string().regex(/^pasted-[a-z0-9-]+\.[a-z0-9]+$/),
+});
 export const managerActionParamSchema = z.object({ id: managerIdSchema, actionId: z.string().min(1).max(64) });
 export const managerJobParamSchema = z.object({ id: managerIdSchema, jobId: z.string().min(1).max(64) });
 
@@ -212,11 +218,20 @@ export const managerAskSchema = z.object({
 });
 export type ManagerAsk = z.infer<typeof managerAskSchema>;
 
+/** A file the user sent, served by `GET …/attachments/:file`. */
+export const managerAttachmentSchema = z.object({
+  file: z.string(),
+  mediaType: z.string(),
+  /** The user's own filename; a pasted screenshot has none. */
+  name: z.string().optional(),
+});
+export type ManagerAttachment = z.infer<typeof managerAttachmentSchema>;
+
 const managerMessageBase = { id: z.string(), seq: z.number().int().min(0), at: z.string() };
 
 /** Messages are replaced in place by `id`, newest write wins; `seq` orders the chat. */
 export const managerMessageSchema = z.discriminatedUnion('kind', [
-  z.object({ ...managerMessageBase, kind: z.literal('user'), text: z.string() }),
+  z.object({ ...managerMessageBase, kind: z.literal('user'), text: z.string(), attachments: z.array(managerAttachmentSchema).optional() }),
   z.object({
     ...managerMessageBase,
     kind: z.literal('assistant'),
@@ -262,8 +277,13 @@ export const managerMessagesResponseSchema = z.object({
 });
 export type ManagerMessagesResponse = z.infer<typeof managerMessagesResponseSchema>;
 
-export const sendManagerMessageInputSchema = z.object({ text: z.string().trim().min(1).max(100_000) });
-export type SendManagerMessageInput = z.infer<typeof sendManagerMessageInputSchema>;
+export const sendManagerMessageInputSchema = z
+  .object({ text: z.string().trim().max(100_000), images: attachmentListSchema.optional() })
+  .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
+    message: 'write a message or attach a file',
+    path: ['text'],
+  });
+export type SendManagerMessageInput = z.input<typeof sendManagerMessageInputSchema>;
 
 export const managerActionDecisionInputSchema = z.object({ decision: z.enum(['approve', 'reject']) });
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;

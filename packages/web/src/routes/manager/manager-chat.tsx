@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon, PlusIcon } from 'lucide-react'
+import { ArrowDownIcon, ArrowLeftIcon, BotIcon, LoaderCircleIcon } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router'
 
@@ -16,10 +16,10 @@ import {
   useUpdateManager,
 } from '@/api/managers'
 import { useHealth, useProjects } from '@/api/queries'
+import type { AttachmentEntry } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Composer } from '@/components/composer/composer'
 import { Button } from '@/components/ui/button'
-import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { toast } from '@/components/ui/toaster'
 import { MANAGER_COMMANDS, parseManagerCommand } from '@/lib/managers'
 import { isNearBottom } from '@/routes/task-thread/thread-scroll'
@@ -146,8 +146,9 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
     void stopManager(id).catch((error: unknown) => toast(error instanceof Error ? error.message : String(error), { tone: 'danger' }))
   }, [id])
 
-  const submit = async (text: string) => {
-    const command = parseManagerCommand(text)
+  const submit = async (text: string, attachments: AttachmentEntry[]) => {
+    // A command takes no files, so a message that has them is a message.
+    const command = attachments.length > 0 ? null : parseManagerCommand(text)
     scroll.jump()
     lastSent.current = Date.now()
     if (command?.name === 'stop') return stopManager(id)
@@ -156,7 +157,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
       toast('Check started')
       return undefined
     }
-    return sendManagerMessage(id, command?.prompt ?? text)
+    return sendManagerMessage(id, command?.prompt ?? text, attachments)
   }
 
   return (
@@ -210,21 +211,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         <Composer
           key={id}
           compact
-          footerStart={
-            // Drawn in the frame, and the spec keeps it inert until a runner path can take files.
-            <IconTooltip label="Attachments aren't available for managers yet" side="top">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-disabled="true"
-                aria-label="Attach files"
-                className="size-10 shrink-0 cursor-not-allowed rounded-full bg-muted text-muted-foreground opacity-60 hover:bg-muted md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent md:hover:bg-transparent"
-              >
-                <PlusIcon aria-hidden="true" className="size-4" />
-              </Button>
-            </IconTooltip>
-          }
           footerEnd={<ModelPicker {...pickModel(manager)} onChange={onPatch} pill />}
           value={draft}
           onValueChange={(text) => {
@@ -232,7 +218,6 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
             drafts.set(id, text)
           }}
           onSubmit={submit}
-          attachments={false}
           slashCommands={MANAGER_COMMANDS}
           placeholder="Type / for commands"
           ariaLabel={`Message ${manager.name}`}

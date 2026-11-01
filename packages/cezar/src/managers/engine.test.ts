@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -618,6 +618,59 @@ describe('ManagerEngine', () => {
       engine.send(id, 'hi');
       await settled(engine);
       expect(backend.specs[0]?.systemPrompt).toContain('READ-ONLY');
+    });
+  });
+
+  describe('attachments', () => {
+    const png = { mediaType: 'image/png', data: Buffer.from('fake-png').toString('base64'), name: 'shot.png' };
+    const pdf = { mediaType: 'application/pdf', data: Buffer.from('fake-pdf').toString('base64'), name: 'plan.pdf' };
+
+    it('keeps the bytes on disk, lets the model see images and hands it every path', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('Got them'));
+      engine.send(id, 'Look at these', [png, pdf]);
+      await settled(engine);
+      const [user] = store.messages(id).filter((message) => message.kind === 'user');
+      const attachments = user?.kind === 'user' ? user.attachments ?? [] : [];
+      expect(attachments.map((attachment) => attachment.name)).toEqual(['shot.png', 'plan.pdf']);
+      const spec = backend.specs[0]!;
+      expect(spec.images).toHaveLength(1);
+      expect(spec.userPrompt).toContain(join(store.attachmentsDir(id), attachments[1]!.file));
+      expect(spec.additionalDirectories).toContain(store.attachmentsDir(id));
+      expect(readFileSync(join(store.attachmentsDir(id), attachments[0]!.file), 'utf8')).toBe('fake-png');
+      expect(JSON.stringify(store.messages(id))).not.toContain(png.data);
+    });
+
+    it('takes attachments with no text, and a later turn can still read them', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push(say('Seen'));
+      engine.send(id, '', [png]);
+      await settled(engine);
+      expect(backend.specs[0]?.userPrompt).toContain('without a message');
+      expect((await engine.summary(id))?.preview).toBe('Seen');
+      backend.scripts.push(say('Still here'));
+      engine.send(id, 'And that screenshot?');
+      await settled(engine);
+      expect(backend.specs[1]?.images).toBeUndefined();
+      expect(backend.specs[1]?.additionalDirectories).toContain(store.attachmentsDir(id));
+    });
+
+    it('folds the files of messages sent during a turn into the next one', async () => {
+      const engine = makeEngine();
+      const id = await create(engine, 0);
+      backend.scripts.push({ hold: true });
+      engine.send(id, 'first');
+      await vi.waitFor(() => expect(backend.open).toHaveLength(1));
+      backend.scripts.push(say('both'));
+      engine.send(id, 'second', [png]);
+      engine.send(id, 'third', [png]);
+      backend.open[0]?.finish();
+      await settled(engine);
+      expect(backend.specs[1]?.images).toHaveLength(2);
+      expect(backend.specs[1]?.userPrompt).toContain('second');
+      expect(backend.specs[1]?.userPrompt).toContain('third');
     });
   });
 

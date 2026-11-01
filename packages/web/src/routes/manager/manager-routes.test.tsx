@@ -170,8 +170,7 @@ describe('/manager/:id', () => {
     expect(screen.getByRole('button', { name: 'Connected projects' }).textContent).toContain('All projects access')
     expect(screen.getByRole('button', { name: 'Watch check cadence' }).textContent).toContain('Refresh: 15 min')
     expect(screen.queryByRole('status')).toBeNull()
-    // Drawn in the frame, inert until a runner can take files (spec § Not in v1).
-    expect(screen.getByRole('button', { name: 'Attach files' }).getAttribute('aria-disabled')).toBe('true')
+    expect((screen.getByRole('button', { name: 'Attach files' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('renders the composer as one row, with Send only once there is a draft', async () => {

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, SquareIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, PlusIcon, SquareIcon, XIcon } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -781,6 +781,7 @@ export function Composer({
 
           {compact ? (
             <div data-slot="composer-compact-row" className="flex flex-wrap items-end gap-1.5 p-2 md:flex-nowrap md:gap-1 md:px-1.5 md:py-1">
+              {attachments ? <AttachButton disabled={disabled} onFiles={addFiles} compact /> : null}
               {footerStart}
               {footerEnd ? <div className="min-w-0 md:hidden">{footerEnd}</div> : null}
               {field}
@@ -904,9 +905,11 @@ export function Composer({
 function AttachButton({
   disabled,
   onFiles,
+  compact = false,
 }: {
   disabled: boolean
   onFiles: (files: readonly File[]) => void
+  compact?: boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   return (
@@ -918,10 +921,12 @@ function AttachButton({
         aria-label="Attach files"
         title="Attach images or files (or paste a screenshot)"
         disabled={disabled}
-        className="size-8 text-muted-foreground"
+        className={compact
+          ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
+          : 'size-8 text-muted-foreground'}
         onClick={() => inputRef.current?.click()}
       >
-        <PaperclipIcon aria-hidden="true" className="size-[15px]" />
+        {compact ? <PlusIcon aria-hidden="true" className="size-4" /> : <PaperclipIcon aria-hidden="true" className="size-[15px]" />}
       </Button>
       {/* No `accept`: every file is taken (telemetry 48850f4a), and a filter greyed out ones the
           composer would have accepted anyway (#950). */}

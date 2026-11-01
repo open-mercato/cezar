@@ -135,6 +135,10 @@ Merging, enabling an automation and adding a job happen only when you approve. T
 
 Approving a merge goes through the same merge route as the GitHub tab, with the method the manager proposed or the repository's default. The card is tied to the commit you were shown. If someone pushes after the proposal, the merge fails instead of landing code you never saw. An automation card shows the definition and is tied to it the same way, so an edit after the proposal fails too.
 
+## Send screenshots and files
+
+Paste a screenshot, drop a file on the chat, or select **+** in the composer, including on the setup screen. The manager sees images directly and gets every file as a path it can read, then and in later messages. Deleting a manager deletes its attachments.
+
 ## Answer a manager's questions
 
 When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. A reply typed in the chat answers the card too.
@@ -175,4 +179,4 @@ On every agent, Cezar's own routes still refuse what they should: out-of-scope p
 > - `CEZ_MANAGERS=0` turns managers off. It removes the Manager mode, stops the timers, and makes the API answer `409`. Cezar reads it at boot, only the exact value `0` opts out, and your managers stay in `~/.cezar/` for when you turn the feature back on.
 > - Definitions live in `~/.cezar/managers.json` and chats in `~/.cezar/managers/`. Deleting a manager removes its chat and jobs. Tasks it started stay where they are.
 > - The effort picker applies to Claude only.
-> - Managers have no autonomous merges, no per-manager budget, and no file attachments in the composer.
+> - Managers have no autonomous merges and no per-manager budget.

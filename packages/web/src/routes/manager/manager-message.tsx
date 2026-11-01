@@ -1,10 +1,11 @@
-import { BellRingIcon, ChevronRightIcon, CircleAlertIcon } from 'lucide-react'
+import { BellRingIcon, ChevronRightIcon, CircleAlertIcon, PaperclipIcon } from 'lucide-react'
 import { memo, useContext, createContext, useEffect, useState, useMemo, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
-import { sendManagerMessage } from '@/api/managers'
+import { managerAttachmentUrl, sendManagerMessage } from '@/api/managers'
 import { useProjects } from '@/api/queries'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ZoomableImage } from '@/components/zoomable-image'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -27,7 +28,14 @@ import { cn } from '@/lib/utils'
 import { Markdown, TranscriptLink } from '@/routes/task-thread/markdown'
 import { AskForm } from '@/routes/task-thread/ask-card'
 import { forgetAskSelections } from '@/routes/task-thread/ask-selections'
-import type { ManagerActionStatus, ManagerAsk, ManagerCommand, ManagerMessage } from '@open-mercato/cezar-api-client'
+import {
+  isImageAttachmentName,
+  type ManagerActionStatus,
+  type ManagerAsk,
+  type ManagerAttachment,
+  type ManagerCommand,
+  type ManagerMessage,
+} from '@open-mercato/cezar-api-client'
 
 import { SessionCard, TaskChipLabel, taskPath } from './manager-session-card'
 
@@ -97,6 +105,30 @@ export function CommandsRow({ commands }: { commands: readonly ManagerCommand[] 
         </ul>
       </CollapsibleContent>
     </Collapsible>
+  )
+}
+
+function UserAttachments({ managerId, attachments }: { managerId: string; attachments: readonly ManagerAttachment[] }) {
+  return (
+    <div data-slot="manager-attachments" className="flex max-w-[80%] flex-wrap items-center justify-end gap-1.5">
+      {attachments.map(({ file, name }) => {
+        const url = managerAttachmentUrl(managerId, file)
+        return isImageAttachmentName(file) ? (
+          <ZoomableImage key={file} src={url} alt={name ?? 'attached'} className="max-h-40 max-w-[220px] rounded-md border border-border object-contain" />
+        ) : (
+          <a
+            key={file}
+            href={url}
+            download={name ?? file}
+            data-slot="manager-file"
+            className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-muted px-2.5 py-1.5 text-xs no-underline hover:bg-muted/70"
+          >
+            <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="truncate">{name ?? file}</span>
+          </a>
+        )
+      })}
+    </div>
   )
 }
 
@@ -277,8 +309,11 @@ export const ManagerMessageRow = memo(function ManagerMessageRow({
   switch (message.kind) {
     case 'user':
       return (
-        <div data-slot="manager-user" className="flex justify-end">
-          <p className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
+        <div data-slot="manager-user" className="flex flex-col items-end gap-2">
+          {message.text ? (
+            <p className="max-w-[80%] rounded-xl bg-muted px-4 py-2.5 text-sm break-words whitespace-pre-wrap">{message.text}</p>
+          ) : null}
+          {message.attachments ? <UserAttachments managerId={origin.id} attachments={message.attachments} /> : null}
         </div>
       )
     case 'assistant':
