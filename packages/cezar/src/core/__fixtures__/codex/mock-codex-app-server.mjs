@@ -210,6 +210,15 @@ rl.on('line', (line) => {
       } });
       return;
     }
+    // Observed before any assistant output; failure frame follows
+    // https://learn.chatgpt.com/docs/app-server#turn-events.
+    if (turnText.includes('mock:workspace-routing-unauthorized')) {
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: turnId, status: 'failed', error: { message: 'workspace routing discovery unauthorized (401)', codexErrorInfo: 'other' } },
+      } });
+      return;
+    }
     if (turnText.includes('mock:turn-completed-failed')) {
       emit({ method: 'turn/completed', params: {
         threadId: 'th_mock_1',
