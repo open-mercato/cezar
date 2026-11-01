@@ -81,12 +81,12 @@ out['qr.json'] = {
     accepted('http://127.0.0.1:8787', 'ws://127.0.0.1:8787', false, true),
     accepted('http://localhost:8787', 'ws://localhost:8787', false, true),
     accepted('http://[::1]:8787', 'ws://[::1]:8787', false, true),
-    accepted('http://10.0.2.2:8787', 'ws://10.0.2.2:8787', false, true),
   ],
   refused: [
     ['unsupported version', `https://relay.example.test/p#2.${w.b64u(secret)}.${pinned}`, 'version'],
     ['cleartext to a public host', `http://relay.example.test/p${qrTail}`, 'cleartext'],
     ['cleartext to another private address', `http://192.168.1.10:8787/p${qrTail}`, 'cleartext'],
+    ['cleartext to the emulator alias', `http://10.0.2.2:8787/p${qrTail}`, 'cleartext'],
     ['other scheme', `ftp://relay.example.test/p${qrTail}`, 'grammar'],
     ['uppercase scheme', `HTTPS://relay.example.test/p${qrTail}`, 'grammar'],
     ['uppercase host', `https://Relay.example.test/p${qrTail}`, 'grammar'],
