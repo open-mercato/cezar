@@ -248,7 +248,7 @@ export type ForgePrDiffResult =
 export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 
 export type DraftPrOutcome =
-  | { ok: true; url: string; dryRun: boolean }
+  | { ok: true; url: string; dryRun: boolean; /** the branch already had an open PR; the push updated it */ updated?: boolean }
   | { ok: false; error: string };
 
 export interface DraftPrInput {

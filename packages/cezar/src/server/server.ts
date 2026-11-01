@@ -5876,7 +5876,7 @@ export function createApp(deps: ServerDeps) {
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       let result;
-      try { result = await withWorktreeMutation(c.get('project'), run.id, () => pushCurrentBranch(worktree)); }
+      try { result = await withWorktreeMutation(c.get('project'), run.id, () => pushCurrentBranch(worktree, { leaseRewrites: true })); }
       catch (error) { return lifecycleError(c, error); }
       if (!result.ok) return c.json({ error: result.error }, 409);
       // A push is the event that changes what the chips say about this task's pull requests —
@@ -5965,7 +5965,7 @@ export function createApp(deps: ServerDeps) {
           });
           store.appendEvent(id, {
             type: 'note',
-            message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
+            message: `${outcome.updated ? 'PR updated' : draft ? 'draft PR created' : 'PR created'}: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
           });
           return outcome;
         })()
@@ -5981,7 +5981,7 @@ export function createApp(deps: ServerDeps) {
       if (!outcome.ok) {
         return c.json({ error: outcome.error, manual: `git merge ${branch}` }, 409);
       }
-      return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
+      return c.json({ url: outcome.url, dryRun: outcome.dryRun, ...(outcome.updated ? { updated: true as const } : {}) }, 201);
     })
 
     // Create PR by the task's agent: once its turn ends, the PR it opened is found by branch and

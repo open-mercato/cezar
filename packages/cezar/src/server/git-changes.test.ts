@@ -1413,6 +1413,88 @@ describe('commitAll / pushCurrentBranch — direct degradation paths', () => {
   });
 });
 
+describe('pushCurrentBranch — a rebased branch (#1758)', () => {
+  function setup() {
+    const remote = mkdtempSync(join(tmpdir(), 'cez-lease-remote-'));
+    const dir = mkdtempSync(join(tmpdir(), 'cez-lease-'));
+    execFileSync('git', ['init', '--bare', '-q', remote]);
+    initRepo(dir);
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(dir, 'remote', 'add', 'origin', remote);
+    g(dir, 'checkout', '-q', '-b', 'cez/x');
+    writeFileSync(join(dir, 'b.txt'), 'b\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'work');
+    return { remote, dir };
+  }
+
+  it('force-with-leases after the branch was amended, so the PR gets the rewritten commits', async () => {
+    const { remote, dir } = setup();
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      const res = await pushCurrentBranch(dir, { leaseRewrites: true });
+      expect(res.ok).toBe(true);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('work, rewritten');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('the repo-root push, without the option, still refuses a rewritten branch', async () => {
+    const { remote, dir } = setup();
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      expect((await pushCurrentBranch(dir)).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('never rewrites a default branch, even with the option', async () => {
+    const { remote, dir } = setup();
+    try {
+      g(dir, 'checkout', '-q', '-B', 'main');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true })).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'main, rewritten');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true })).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'main').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('never overwrites a remote tip this branch never held', async () => {
+    const { remote, dir } = setup();
+    const other = mkdtempSync(join(tmpdir(), 'cez-lease-other-'));
+    try {
+      expect((await pushCurrentBranch(dir)).ok).toBe(true);
+      execFileSync('git', ['clone', '-q', '-b', 'cez/x', remote, join(other, 'c')]);
+      const c = join(other, 'c');
+      writeFileSync(join(c, 'theirs.txt'), 't\n');
+      g(c, 'add', '-A');
+      g(c, '-c', 'user.name=test', '-c', 'user.email=test@local', 'commit', '-m', 'theirs');
+      g(c, 'push', '-q', 'origin', 'cez/x');
+      g(dir, 'fetch', '-q', 'origin');
+      g(dir, 'commit', '--amend', '-m', 'work, rewritten');
+      const res = await pushCurrentBranch(dir, { leaseRewrites: true });
+      expect(res.ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'cez/x').trim()).toBe('theirs');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('worktreeGitStatus — what has not left the worktree', () => {
   it('counts uncommitted files (untracked and renamed included) and reports no upstream as null', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-'));

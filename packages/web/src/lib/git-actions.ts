@@ -117,7 +117,8 @@ function pushAction(state: GitActionState): GitAction {
     return disabled('Push unavailable — the agent is still working in this worktree')
   }
   if (state.unpushed === 0) return disabled('Push unavailable — the remote already has every commit')
-  return { id: 'push', label: 'Push', enabled: true }
+  // With a PR the push updates it; the label says so.
+  return { id: 'push', label: state.prUrl ? 'Push update' : 'Push', enabled: true }
 }
 
 function createPrAction(state: GitActionState): GitAction {
