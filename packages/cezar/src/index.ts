@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { sweepOrphanedServers } from './core/opencode-server-registry.ts';
 import { WebhookCoordinator } from './webhooks/coordinator.ts';
 import { webhooksEnabled } from './webhooks/service.ts';
 import { allocateProjectSlug, listProjects, shouldRegisterProject } from './workspace/projects.ts';
@@ -515,6 +516,14 @@ async function serveCommand(
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = apiOrigin(bindHost, port);
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
+  // #1498: reap `opencode serve` processes a dead cezar left behind (provable ones only).
+  if (process.env.CEZ_DRY_RUN !== '1') {
+    try {
+      sweepOrphanedServers();
+    } catch {
+      // best effort
+    }
+  }
   httpServer = startServer({
     repoRoot,
     store,
