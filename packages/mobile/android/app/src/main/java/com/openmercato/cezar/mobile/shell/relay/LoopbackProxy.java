@@ -38,7 +38,7 @@ public final class LoopbackProxy implements Closeable {
     private static final long ACCEPT_BACKOFF_MS = 250;
     private static final int HEAD_TIMEOUT_MS = 30000;
     private static final int KEEP_ALIVE_MS = 60000;
-    private static final int READ_CHUNK = 16384;
+    private static final int READ_CHUNK = 65536;
     /** Added beside the server's own policy, which still applies: the cookie must not reach another loopback port. */
     private static final String CONTENT_SECURITY_POLICY = "content-security-policy: connect-src 'self'\r\n";
     private static final Set<String> DROPPED_REQUEST = new HashSet<>(Arrays.asList(
