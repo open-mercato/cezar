@@ -12,6 +12,7 @@ import {
   type NotificationSupport,
 } from '@/lib/notifications'
 import { CardNote, FormRow, SettingsCard, useSavedFlash } from './form-row'
+import { NotchToggle, shellHasNotch } from './notch-toggle'
 
 /**
  * Settings → Notifications (R6 Step 1.7, spec §"Cross-cutting").
@@ -135,6 +136,8 @@ export function NotificationsSection() {
           />
         </FormRow>
       </SettingsCard>
+
+      {shellHasNotch() ? <NotchToggle /> : null}
     </div>
   )
 }
