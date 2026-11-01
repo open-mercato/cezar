@@ -195,4 +195,46 @@ public class PairingClientTest {
         assertEquals(64, Bytes.utf8(safe).length);
         assertEquals("Android phone", PairingClient.safeName("\n\t"));
     }
+
+    /** cezar already holds this phone, so the page must end rather than wait on Confirm for ever. */
+    @Test
+    public void aSaveThatFailsEndsThePairing() throws Exception {
+        String qr = "https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + Bytes.base64url(RelayCrypto.x25519Public(cezarSecret));
+        PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> {
+            throw new IllegalStateException("disk full");
+        });
+        PairingFlow.Snapshot seen = flow.startQr(qr);
+        for (int i = 0; i < 200 && fake.events == null; i++) Thread.sleep(5);
+        NoiseHandshake.Keys cezar = handshake(PairSecret.fromQr(qr, false), new NoiseHandshake[1], new JSONObject[1]);
+        deliver(cezar, pending());
+        deliver(cezar, "{\"t\":\"approved\"}");
+        for (int i = 0; i < 50 && seen.phase != PairingClient.Phase.FAILED; i++) seen = flow.next(seen.seq, 100);
+        assertEquals(PairingClient.Phase.FAILED, seen.phase);
+        assertEquals("internal", seen.reason);
+    }
+
+    @Test
+    public void aReplacedPairingCannotReportOverTheNewOne() throws Exception {
+        PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> { });
+        String pin = Bytes.base64url(RelayCrypto.x25519Public(cezarSecret));
+        flow.startQr("https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + pin);
+        for (int i = 0; i < 200 && fake.events == null; i++) Thread.sleep(5);
+        PairingFlow.Snapshot second = flow.startQr("https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + pin);
+        PairingFlow.Snapshot after = second;
+        for (int i = 0; i < 4; i++) after = flow.next(after.seq, 100);
+        assertEquals(PairingClient.Phase.CONNECTING, after.phase);
+    }
+
+    /** Only the first `pending` names the cezar the six digits were shown for. */
+    @Test
+    public void aSecondPendingCannotRenameTheComputer() throws Exception {
+        PairSecret secret = qrSecret(RelayCrypto.x25519Public(cezarSecret));
+        client(secret);
+        NoiseHandshake.Keys cezar = handshake(secret, new NoiseHandshake[1], new JSONObject[1]);
+        deliver(cezar, pending());
+        assertEquals(PairingClient.Phase.CONFIRM, states.poll(2, TimeUnit.SECONDS).phase);
+        deliver(cezar, pending().replace("Test Mac", "Other"));
+        deliver(cezar, "{\"t\":\"approved\"}");
+        assertEquals("Test Mac", states.poll(2, TimeUnit.SECONDS).label);
+    }
 }

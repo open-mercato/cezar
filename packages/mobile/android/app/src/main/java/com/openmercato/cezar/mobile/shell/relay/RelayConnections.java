@@ -59,7 +59,11 @@ public final class RelayConnections implements ShellConnector.RelayPort {
         return next;
     }
 
-    /** Called when the server view goes away. */
+    /** Called when a server view goes away. A newer view may hold the connection by then, and it stays. */
+    public synchronized void release(LoopbackProxy opened) {
+        if (opened == proxy) release();
+    }
+
     public synchronized void release() {
         if (proxy != null) proxy.close();
         proxy = null;

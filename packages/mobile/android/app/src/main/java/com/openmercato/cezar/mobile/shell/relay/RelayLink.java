@@ -108,7 +108,7 @@ public final class RelayLink {
     public void start() {
         // Set here, not on the actor: a caller's awaitSettled must not read the old IDLE as an answer.
         if (status.kind == RelayStatus.Kind.IDLE) setStatus(RelayStatus.of(RelayStatus.Kind.CONNECTING));
-        actor.execute(() -> {
+        run(() -> {
             if (running) return;
             running = true;
             attempts = 0;
@@ -117,7 +117,7 @@ public final class RelayLink {
     }
 
     public void stop() {
-        actor.execute(() -> {
+        run(() -> {
             running = false;
             dropSocket();
             setStatus(RelayStatus.of(RelayStatus.Kind.IDLE));
@@ -126,7 +126,7 @@ public final class RelayLink {
 
     /** A Retry button: skips the wait, and leaves any terminal state. */
     public void retryNow() {
-        actor.execute(() -> {
+        run(() -> {
             running = true;
             attempts = 0;
             proofRetried = false;
@@ -139,12 +139,12 @@ public final class RelayLink {
     /** Stops for good. This link is never started again. */
     public void dispose() {
         stop();
-        actor.execute(actor::shutdown);
+        run(actor::shutdown);
     }
 
     /** Forget server: `CLOSE` `goodbye` if a session is live (§ 10.1), then the socket closes. */
     public void goodbye() {
-        actor.execute(() -> {
+        run(() -> {
             TunnelSession live = session;
             if (live != null) live.close(TunnelFrame.CLOSE_GOODBYE);
             running = false;
@@ -211,20 +211,29 @@ public final class RelayLink {
 
     /** Drops an event from a socket this link has already left. */
     private void post(int mine, Runnable event) {
+        run(() -> {
+            if (mine == epoch) event.run();
+        });
+    }
+
+    /** A caller can outlive the link: a probe holds it while the server view releases it. */
+    private void run(Runnable event) {
         try {
-            actor.execute(() -> {
-                if (mine == epoch) event.run();
-            });
+            actor.execute(event);
         } catch (RejectedExecutionException e) {
-            // Disposed: the socket's last callback lands after it.
+            // Disposed, and so is whatever this event was for.
         }
     }
 
     private void later(long delayMs, Runnable event) {
         int mine = epoch;
-        actor.schedule(() -> {
-            if (mine == epoch) event.run();
-        }, delayMs, TimeUnit.MILLISECONDS);
+        try {
+            actor.schedule(() -> {
+                if (mine == epoch) event.run();
+            }, delayMs, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // Disposed.
+        }
     }
 
     private void onOpen() {

@@ -34,6 +34,7 @@ public final class LoopbackProxy implements Closeable {
 
     public static final String COOKIE = "cezar_gate";
     private static final int MAX_CONNECTIONS = 64;
+    private static final long ACCEPT_BACKOFF_MS = 250;
     private static final int HEAD_TIMEOUT_MS = 30000;
     private static final int KEEP_ALIVE_MS = 60000;
     private static final int READ_CHUNK = 16384;
@@ -153,6 +154,12 @@ public final class LoopbackProxy implements Closeable {
                 });
             } catch (IOException e) {
                 if (closed) return;
+                // Out of file descriptors, say: accept fails at once, and this must not spin.
+                try {
+                    Thread.sleep(ACCEPT_BACKOFF_MS);
+                } catch (InterruptedException interrupted) {
+                    return;
+                }
             }
         }
     }
@@ -204,6 +211,7 @@ public final class LoopbackProxy implements Closeable {
         if (!TunnelFrame.validMethod(request.method)) return 405;
         if (request.target.length() > TunnelFrame.MAX_TARGET_BYTES) return 431;
         if (!TunnelFrame.validTarget(request.target)) return 400;
+        for (TunnelFrame.Header header : request.headers) if (header.name.length() > TunnelFrame.MAX_NAME_BYTES) return 431;
         return 0;
     }
 

@@ -85,8 +85,19 @@ public final class TunnelSession {
         return clock.getAsLong() - leaseAt >= LEASE_DEADLINE_MS;
     }
 
-    /** Sends one frame, under the key the rekey rule says. The lock keeps nonce order equal to wire order. */
-    synchronized void sendFrame(byte[] content) throws IOException {
+    /** Sends one frame, under the key the rekey rule says. */
+    void sendFrame(byte[] content) throws IOException {
+        try {
+            encryptAndSend(content);
+        } catch (IOException e) {
+            // The nonce moved and the frame did not: nothing later could be decrypted.
+            end();
+            throw e;
+        }
+    }
+
+    /** The lock keeps nonce order equal to wire order. */
+    private synchronized void encryptAndSend(byte[] content) throws IOException {
         if (ended) throw new IOException("session ended");
         rekeyIfDue();
         wire.send(send.encrypt(TunnelRecord.pad(content)));

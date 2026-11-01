@@ -164,6 +164,7 @@ public final class ServerActivity extends AppCompatActivity {
         try {
             proxy = relayConnections.openProxy(server);
         } catch (IOException e) {
+            relayConnections.release();
             leave(ShellConnector.CONNECTION_ERROR);
             return false;
         }
@@ -368,7 +369,7 @@ public final class ServerActivity extends AppCompatActivity {
         openCount--;
         background.shutdown();
         if (webView != null) webView.destroy();
-        if (relayConnections != null) relayConnections.release();
+        if (proxy != null) relayConnections.release(proxy);
         super.onDestroy();
     }
 

@@ -7,7 +7,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.security.GeneralSecurityException;
 import java.util.regex.Pattern;
 
@@ -24,11 +23,15 @@ public final class DeviceKeyStore {
     }
 
     public void put(String id, DeviceKeys keys) {
-        try (OutputStream out = new FileOutputStream(file(id))) {
+        File target = file(id);
+        File partial = new File(directory, id + ".relaykey.tmp");
+        try (FileOutputStream out = new FileOutputStream(partial)) {
             out.write(cipher.seal(keys.toBytes()));
+            out.getFD().sync();
         } catch (IOException | GeneralSecurityException e) {
             throw new IllegalStateException("cannot save the device keys", e);
         }
+        if (!partial.renameTo(target)) throw new IllegalStateException("cannot save the device keys");
     }
 
     /** Null when absent or unreadable: a lost key reads as a phone that must pair again. */

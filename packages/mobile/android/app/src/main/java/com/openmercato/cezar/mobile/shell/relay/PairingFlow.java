@@ -32,6 +32,8 @@ public final class PairingFlow {
     private final Saver saver;
     private PairingClient client;
     private int seq;
+    /** Which pairing is current: a replaced client still reports its own end. */
+    private int generation;
     private Snapshot latest = new Snapshot(0, PairingClient.Phase.FAILED, null, null, "cancelled");
 
     public PairingFlow(SocketTransport transport, String phoneName, boolean debugBuild, Saver saver) {
@@ -71,7 +73,8 @@ public final class PairingFlow {
     private synchronized Snapshot start(PairSecret secret) {
         if (client != null) client.cancel();
         DeviceKeys keys = DeviceKeys.generate();
-        Consumer<PairingClient.State> onState = state -> update(secret, keys, state);
+        int mine = ++generation;
+        Consumer<PairingClient.State> onState = state -> update(mine, secret, keys, state);
         PairingClient next = new PairingClient(transport, secret, keys, phoneName, onState::accept);
         client = next;
         Snapshot snapshot = publish(PairingClient.Phase.CONNECTING, null, null, null);
@@ -79,11 +82,23 @@ public final class PairingFlow {
         return snapshot;
     }
 
-    private void update(PairSecret secret, DeviceKeys keys, PairingClient.State state) {
-        // Saved before the page hears of it, so a poll that reads APPROVED finds the server.
-        if (state.phase == PairingClient.Phase.APPROVED) saver.save(secret.relay, state, keys);
+    private void update(int mine, PairSecret secret, DeviceKeys keys, PairingClient.State state) {
         synchronized (this) {
-            publish(state.phase, state.digits, state.label, state.reason);
+            if (mine != generation) return;
+        }
+        boolean saved = true;
+        // Saved before the page hears of it, so a poll that reads APPROVED finds the server.
+        if (state.phase == PairingClient.Phase.APPROVED) {
+            try {
+                saver.save(secret.relay, state, keys);
+            } catch (RuntimeException e) {
+                saved = false;
+            }
+        }
+        synchronized (this) {
+            if (mine != generation) return;
+            if (saved) publish(state.phase, state.digits, state.label, state.reason);
+            else publish(PairingClient.Phase.FAILED, null, null, "internal");
         }
     }
 

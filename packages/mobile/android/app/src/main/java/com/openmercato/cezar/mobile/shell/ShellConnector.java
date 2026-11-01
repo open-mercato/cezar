@@ -126,10 +126,15 @@ public final class ShellConnector {
         }
     }
 
-    /** Pairing succeeded: one row per cezar, whose old keys the new ones replace. */
-    public String saveRelayServer(String label, RelayFields fields) {
-        ServerRecord existing = servers.findByCezarId(fields.cezarId);
-        String id = existing != null ? existing.id : UUID.randomUUID().toString();
+    /** One row per cezar, so pairing again keeps it. Known before the row is saved: the keys go first. */
+    public String relayServerId(String cezarId) {
+        ServerRecord existing = servers.findByCezarId(cezarId);
+        return existing != null ? existing.id : UUID.randomUUID().toString();
+    }
+
+    /** Pairing succeeded: the new keys replace any old ones under this row. */
+    public String saveRelayServer(String id, String label, RelayFields fields) {
+        ServerRecord existing = servers.get(id);
         int port = existing != null ? existing.relay.port : 0;
         servers.put(new ServerRecord(id, label, fields.withPort(port), existing == null ? null : existing.noteShown));
         servers.markUsed(id);
