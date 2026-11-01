@@ -59,7 +59,7 @@ for (const post of proofs.posts) {
 }
 
 // QR grammar.
-const DEBUG_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '10.0.2.2'])
+const DEBUG_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 function parseQr(qr) {
   const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/p#([0-9]+)\.([^.]*)\.([^.]*)$/.exec(qr)
   if (!match) return { refused: 'grammar' }

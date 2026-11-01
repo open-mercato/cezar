@@ -305,7 +305,7 @@ generates its device key before its first grant. Only the X25519 keys protect co
    the row and both screens say the pairing failed, naming a full list for `device-limit`.
 7. Deny, a timeout or a closed tab discards everything. No device row exists until step 6.
 
-**Typed code.** The Connect a phone screen also shows a code such as `QRFX-7KMD-2NVB`: 12 Crockford
+**Typed code.** The Connect a phone screen also shows, after a click, a code such as `QRFX-7KMD-2NVB`: 12 Crockford
 base32 characters, 60 bits, same 2-minute life. The app runs PBKDF2-HMAC-SHA256 with 200,000 iterations
 over it, and splits the output into locator and pre-shared key. A QR secret uses HKDF instead, because
 it is already 256 bits. Steps 3 to 7 are identical, except that no key can be pinned in step 4, so the
@@ -534,7 +534,7 @@ it anyway.
 Settings › Connect a phone
 ┌──────────────────────────────────────────┐
 │ ▓▓▓▓▓▓▓▓    Scan with the Cezar app      │
-│ ▓▓ QR ▓▓    Or type: QRFX-7KMD-2NVB      │
+│ ▓▓ QR ▓▓    Or show a typed code         │
 │ ▓▓▓▓▓▓▓▓    Expires in 1:42              │
 ├──────────────────────────────────────────┤
 │ Your phones                              │
@@ -917,7 +917,7 @@ acceptable only for a relay the user runs. It changes QR bytes, so decide before
 - 2026-11-01: R1 review. `device-add` is idempotent for a listed device, a failed pairing also sends
   `device-remove`, a `failure` in place of `pending` uses nonce 0, and a phone with no shared tunnel version
   closes and waits. Protocol version stays 1.
-- 2026-11-01: R1 review fixes, text only, no vector byte changed. Corrected the claim that nothing depends on
+- 2026-11-01: R1 review fixes. `qr.json` moved `10.0.2.2` from accepted to refused. Corrected the claim that nothing depends on
   the relay for authorization and the "photographed" row for a system-camera scan, and opened QR9. Added
   frame pacing, stale-frame handling, `RESET` after `END`, `device-removed` reconnects, the 60-a-minute command
   limit, `bytesPerDay` closing cezar, the rendezvous kill-switch exception, absent `hello` keys, public keys
