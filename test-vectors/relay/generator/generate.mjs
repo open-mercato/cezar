@@ -128,6 +128,7 @@ out['code.json'] = {
     ['eleven characters', 'QRFX-7KMD-2NV'],
     ['thirteen characters', 'QRFX-7KMD-2NVBB'],
     ['a non-ASCII letter', 'QRFX-7KMD-2NVÉ'],
+    ['a dotless i, which only Unicode uppercasing turns into I', 'QRFX-7KMD-2NVı'],
     ['punctuation', 'QRFX.7KMD.2NVB'],
     ['empty', ''],
   ].map(([name, input]) => ({ name, input })),
@@ -171,8 +172,12 @@ const outcomes = [
   ['approved', { t: 'approved' }],
   ['denied', { t: 'denied' }],
   ['failure device-limit', { t: 'failure', reason: 'device-limit' }],
-  ['failure tunnel-unsupported', { t: 'failure', reason: 'tunnel-unsupported', tunnel: { min: 2, max: 3 } }],
 ].map(([name, value]) => pairMessage(Object.assign(new CipherState(pairCezar.send.k), { n: 1n }), value, name))
+// Sent in place of `pending`, so nonce 0 (RELAY_PROTOCOL.md § 9.4).
+const withoutPending = [
+  ['failure bad-payload', { t: 'failure', reason: 'bad-payload' }],
+  ['failure tunnel-unsupported', { t: 'failure', reason: 'tunnel-unsupported', tunnel: { min: 2, max: 3 } }],
+].map(([name, value]) => pairMessage(new CipherState(pairCezar.send.k), value, name))
 const pairDigits = w.sas(pairHash)
 out['handshake-xxpsk3.json'] = {
   description: 'One full pairing. Phone is initiator. Every `frame` is the rendezvous data frame.',
@@ -185,7 +190,7 @@ out['handshake-xxpsk3.json'] = {
   handshakeHash: hex(pairHash),
   sas: pairDigits,
   transportKeys: pairKeys,
-  afterHandshake: { pending: pendingWire, outcomesAtNonce1: outcomes },
+  afterHandshake: { pending: pendingWire, outcomesAtNonce1: outcomes, failuresWithoutPending: withoutPending },
 }
 
 // --- six digits
