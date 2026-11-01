@@ -1,0 +1,127 @@
+{
+  "about": "What the notch shows for a ManagerSummary list: `shape` in src/notch_model.rs. Replay these in any port of the rules (the iOS widgets). `expected: null` is the third state: nothing active.",
+  "cases": [
+    { "name": "nothing at all", "errorSince": "2026-11-01T11:30:00.000Z", "managers": [], "expected": null },
+    {
+      "name": "idle managers stay out of the way",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [{ "id": "a", "name": "A", "avatar": 0, "status": "idle", "pendingActions": 0, "pendingQuestions": 0, "preview": "done", "createdAt": "2026-10-01T00:00:00.000Z" }],
+      "expected": null
+    },
+    {
+      "name": "one working manager fills pill 1 and leaves pill 2 out",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [{ "id": "a", "name": "A", "avatar": 7, "status": "working", "pendingActions": 0, "pendingQuestions": 0, "preview": "Reviewing PR #12", "createdAt": "2026-10-01T00:00:00.000Z" }],
+      "expected": {
+        "primary": { "id": "a", "name": "A", "avatar": 7, "face": "working", "text": "Reviewing PR #12" },
+        "minis": [],
+        "overflow": 0,
+        "active": [{ "id": "a", "name": "A", "avatar": 7, "face": "working", "text": "Reviewing PR #12" }]
+      }
+    },
+    {
+      "name": "a pending question on an idle manager is active and carries a badge",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [{ "id": "a", "name": "A", "avatar": 1, "status": "idle", "pendingActions": 0, "pendingQuestions": 1, "createdAt": "2026-10-01T00:00:00.000Z" }],
+      "expected": {
+        "primary": { "id": "a", "name": "A", "avatar": 1, "face": "needs-you", "text": "Waiting for you", "badge": "1 question" },
+        "minis": [],
+        "overflow": 0,
+        "active": [{ "id": "a", "name": "A", "avatar": 1, "face": "needs-you", "text": "Waiting for you", "badge": "1 question" }]
+      }
+    },
+    {
+      "name": "needs-you takes pill 1 even from an older working manager",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 0, "status": "working", "pendingActions": 0, "pendingQuestions": 0, "preview": "Working on it", "createdAt": "2026-01-01T00:00:00.000Z" },
+        { "id": "b", "name": "B", "avatar": 1, "status": "working", "pendingActions": 1, "pendingQuestions": 0, "preview": "Merge #12?", "createdAt": "2026-10-01T00:00:00.000Z" }
+      ],
+      "expected": {
+        "primary": { "id": "b", "name": "B", "avatar": 1, "face": "needs-you", "text": "Merge #12?", "badge": "1 approval" },
+        "minis": [{ "id": "a", "name": "A", "avatar": 0, "face": "working" }],
+        "overflow": 0,
+        "active": [
+          { "id": "b", "name": "B", "avatar": 1, "face": "needs-you", "text": "Merge #12?", "badge": "1 approval" },
+          { "id": "a", "name": "A", "avatar": 0, "face": "working", "text": "Working on it" }
+        ]
+      }
+    },
+    {
+      "name": "a fresh error counts, a stale one does not, and it ranks above working",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 0, "status": "working", "pendingActions": 0, "pendingQuestions": 0, "createdAt": "2026-01-01T00:00:00.000Z" },
+        { "id": "b", "name": "B", "avatar": 2, "status": "error", "pendingActions": 0, "pendingQuestions": 0, "lastActivityAt": "2026-11-01T11:45:00.000Z", "createdAt": "2026-10-01T00:00:00.000Z" },
+        { "id": "c", "name": "C", "avatar": 3, "status": "error", "pendingActions": 0, "pendingQuestions": 0, "lastActivityAt": "2026-11-01T02:00:00.000Z", "createdAt": "2026-10-01T00:00:00.000Z" }
+      ],
+      "expected": {
+        "primary": { "id": "b", "name": "B", "avatar": 2, "face": "error", "text": "Something went wrong" },
+        "minis": [{ "id": "a", "name": "A", "avatar": 0, "face": "working" }],
+        "overflow": 0,
+        "active": [
+          { "id": "b", "name": "B", "avatar": 2, "face": "error", "text": "Something went wrong" },
+          { "id": "a", "name": "A", "avatar": 0, "face": "working", "text": "Working…" }
+        ]
+      }
+    },
+    {
+      "name": "five active: pill 1 plus four minis, no count",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 0, "status": "working", "createdAt": "2026-01-01T00:00:00.000Z", "preview": "a" },
+        { "id": "b", "name": "B", "avatar": 1, "status": "working", "createdAt": "2026-02-01T00:00:00.000Z", "preview": "b" },
+        { "id": "c", "name": "C", "avatar": 2, "status": "working", "createdAt": "2026-03-01T00:00:00.000Z", "preview": "c" },
+        { "id": "d", "name": "D", "avatar": 3, "status": "working", "createdAt": "2026-04-01T00:00:00.000Z", "preview": "d" },
+        { "id": "e", "name": "E", "avatar": 4, "status": "working", "createdAt": "2026-05-01T00:00:00.000Z", "preview": "e" }
+      ],
+      "expected": {
+        "primary": { "id": "a", "name": "A", "avatar": 0, "face": "working", "text": "a" },
+        "minis": [
+          { "id": "b", "name": "B", "avatar": 1, "face": "working" },
+          { "id": "c", "name": "C", "avatar": 2, "face": "working" },
+          { "id": "d", "name": "D", "avatar": 3, "face": "working" },
+          { "id": "e", "name": "E", "avatar": 4, "face": "working" }
+        ],
+        "overflow": 0,
+        "active": [
+          { "id": "a", "name": "A", "avatar": 0, "face": "working", "text": "a" },
+          { "id": "b", "name": "B", "avatar": 1, "face": "working", "text": "b" },
+          { "id": "c", "name": "C", "avatar": 2, "face": "working", "text": "c" },
+          { "id": "d", "name": "D", "avatar": 3, "face": "working", "text": "d" },
+          { "id": "e", "name": "E", "avatar": 4, "face": "working", "text": "e" }
+        ]
+      }
+    },
+    {
+      "name": "six active: the fifth other becomes the count",
+      "errorSince": "2026-11-01T11:30:00.000Z",
+      "managers": [
+        { "id": "a", "name": "A", "avatar": 0, "status": "working", "createdAt": "2026-01-01T00:00:00.000Z", "preview": "a" },
+        { "id": "b", "name": "B", "avatar": 1, "status": "working", "createdAt": "2026-02-01T00:00:00.000Z", "preview": "b" },
+        { "id": "c", "name": "C", "avatar": 2, "status": "working", "createdAt": "2026-03-01T00:00:00.000Z", "preview": "c" },
+        { "id": "d", "name": "D", "avatar": 3, "status": "working", "createdAt": "2026-04-01T00:00:00.000Z", "preview": "d" },
+        { "id": "e", "name": "E", "avatar": 4, "status": "working", "createdAt": "2026-05-01T00:00:00.000Z", "preview": "e" },
+        { "id": "f", "name": "F", "avatar": 5, "status": "working", "createdAt": "2026-06-01T00:00:00.000Z", "preview": "f" }
+      ],
+      "expected": {
+        "primary": { "id": "a", "name": "A", "avatar": 0, "face": "working", "text": "a" },
+        "minis": [
+          { "id": "b", "name": "B", "avatar": 1, "face": "working" },
+          { "id": "c", "name": "C", "avatar": 2, "face": "working" },
+          { "id": "d", "name": "D", "avatar": 3, "face": "working" },
+          { "id": "e", "name": "E", "avatar": 4, "face": "working" }
+        ],
+        "overflow": 1,
+        "active": [
+          { "id": "a", "name": "A", "avatar": 0, "face": "working", "text": "a" },
+          { "id": "b", "name": "B", "avatar": 1, "face": "working", "text": "b" },
+          { "id": "c", "name": "C", "avatar": 2, "face": "working", "text": "c" },
+          { "id": "d", "name": "D", "avatar": 3, "face": "working", "text": "d" },
+          { "id": "e", "name": "E", "avatar": 4, "face": "working", "text": "e" },
+          { "id": "f", "name": "F", "avatar": 5, "face": "working", "text": "f" }
+        ]
+      }
+    }
+  ]
+}

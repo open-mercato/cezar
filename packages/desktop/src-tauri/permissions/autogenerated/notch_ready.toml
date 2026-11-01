@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notch-ready"
+description = "Enables the notch_ready command without any pre-configured scope."
+commands.allow = ["notch_ready"]
+
+[[permission]]
+identifier = "deny-notch-ready"
+description = "Denies the notch_ready command without any pre-configured scope."
+commands.deny = ["notch_ready"]

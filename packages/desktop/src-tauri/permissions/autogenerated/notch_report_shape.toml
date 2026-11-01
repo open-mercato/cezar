@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notch-report-shape"
+description = "Enables the notch_report_shape command without any pre-configured scope."
+commands.allow = ["notch_report_shape"]
+
+[[permission]]
+identifier = "deny-notch-report-shape"
+description = "Denies the notch_report_shape command without any pre-configured scope."
+commands.deny = ["notch_report_shape"]
