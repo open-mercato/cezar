@@ -61,11 +61,14 @@ for (const post of proofs.posts) {
 // QR grammar.
 const DEBUG_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 function parseQr(qr) {
-  const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/p#([0-9]+)\.([^.]*)\.([^.]*)$/.exec(qr)
+  const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/p#([0-9]+)\.(.*)$/.exec(qr)
   if (!match) return { refused: 'grammar' }
-  const [, scheme, host, port, version, secret, key] = match
+  const [, scheme, host, port, version, rest] = match
   if (port && Number(port) > 65535) return { refused: 'grammar' }
   if (version !== '1') return { refused: 'version' }
+  const fields = rest.split('.')
+  if (fields.length !== 2) return { refused: 'grammar' }
+  const [secret, key] = fields
   const secretBytes = unb64(secret, 32)
   const keyBytes = unb64(key, 32)
   if (!secretBytes || !keyBytes) return { refused: 'grammar' }
@@ -160,7 +163,7 @@ function parseFrame(content) {
       out.method = reader.take(reader.u8()).toString('latin1')
       out.target = reader.take(reader.u16()).toString('latin1')
       out.headers = readHeaders(reader)
-      if (!METHODS.has(out.method) || !/^\/(?!\/)/.test(out.target)) throw new Error('open')
+      if (!METHODS.has(out.method) || !/^\/(?!\/)[\x21-\x5b\x5d-\x7e]*$/.test(out.target)) throw new Error('open')
       break
     case 2:
       out.stream = stream(reader)
@@ -257,6 +260,8 @@ for (const item of session.transcript) {
   same(item.from === 'phone' ? item.phoneToRelay : item.relayToPhone, `01${item.ciphertext}`, `${item.name}: bare`)
 }
 same(parseFrame(bytes(session.transcript[0].content)), { min: 1, max: 1 }, 'HELLO comes first')
+same(session.second.bytes % 256, 48, 'a KK reply has its own length class')
+for (const item of session.transcript) same(bytes(item.ciphertext).length % 256, 16, `${item.name}: transport length class`)
 
 // Rekey: Noise's REKEY by hand.
 function rekeyed(key) {
