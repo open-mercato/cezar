@@ -233,8 +233,7 @@ export class RelayService {
       return true;
     }
     if (!removal) return false;
-    session?.close(CLOSE.deviceRemoved);
-    this.sessions.delete(deviceId);
+    endSession();
     void this.sendRemoval(removal);
     this.onChange();
     return true;
