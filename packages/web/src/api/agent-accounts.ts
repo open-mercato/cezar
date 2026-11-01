@@ -1,7 +1,8 @@
-import { useQueryClient } from '@tanstack/react-query'
-import { agentAccountRouteId, type Runner } from '@open-mercato/cezar-api-client'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { agentAccountRouteId, type ApiRun, type Runner } from '@open-mercato/cezar-api-client'
 
-import { getAgentAccountStatus } from '@/api/client'
+import { getAgentAccountDetails, getAgentAccountStatus } from '@/api/client'
+import { useHostTransport } from '@/api/host-usage'
 import { useAgentAccountStatus, useAgentProfiles, useRepo, workspaceQueryKeys } from '@/api/queries'
 import type { RunnerAccountChoice } from '@/components/picker-pill'
 import { PROVIDER_LABELS } from '@/lib/provider-auth-alert'
@@ -123,4 +124,28 @@ export function hasAccountChoice(
   runner: Runner,
 ): boolean {
   return accounts.filter((choice) => choice.provider === runner).length > 1
+}
+
+/**
+ * Who a Claude run's account is signed in as, for the header gauges: the run's own account, else
+ * the project's selection, else the discovered login (the order `agentEnvForStep` resolves in).
+ * Read on demand through the localHandoff-gated details route and never stored on the run
+ * (`account-identity.ts` rule 2); a hosted cockpit asks nothing.
+ */
+export function useRunClaudeAccount(run: Pick<ApiRun, 'runner' | 'agentProfile'>, enabled: boolean) {
+  const profiles = useAgentProfiles()
+  const { repoAccount } = useAgentAccounts()
+  const local = useHostTransport() === 'local'
+  const accountId = ((run.runner ?? 'claude') === 'claude' ? run.agentProfile : undefined) ?? repoAccount?.claude
+  const profile = profiles.data?.profiles.find(
+    (p) => p.provider === 'claude' && (accountId ? p.id === accountId : p.isDefault),
+  )
+  const routeId = profile ? agentAccountRouteId(profile) : ''
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentAccountDetails(routeId),
+    queryFn: ({ signal }) => getAgentAccountDetails(routeId, { signal }),
+    enabled: enabled && local && routeId !== '',
+    staleTime: 5 * 60_000,
+    retry: false,
+  }).data
 }

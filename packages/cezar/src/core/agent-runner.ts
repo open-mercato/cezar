@@ -166,6 +166,9 @@ export type AgentEvent =
   | { type: 'image'; mediaType: string; data: string }
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
+  /** Live session gauges (context fill, plan usage windows) for the run header. Folded onto the
+   *  run record, never persisted as a transcript line. Each field is the latest reading. */
+  | { type: 'usage-status'; status: AgentUsageStatus }
   /** The backend's real session id, once known — codex threads and opencode
    *  sessions mint their own id, so the run manager persists this to enable
    *  resume ("Continue") and "open in CLI". Claude's equals `spec.sessionId`. */
@@ -174,6 +177,23 @@ export type AgentEvent =
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
+
+/** A plan usage window as the backend reports it (Claude: `rate_limit_event.unifiedWindows`). */
+export interface AgentUsageWindow {
+  /** Backend window key, e.g. `five_hour`, `seven_day`. */
+  window: string;
+  /** Fraction used, 0..1. */
+  utilization: number;
+  /** ISO-8601 instant the window resets. */
+  resetsAt: string;
+}
+
+export interface AgentUsageStatus {
+  /** Tokens in the main agent's context after its latest message. */
+  contextTokens?: number;
+  contextWindow?: number;
+  limits?: AgentUsageWindow[];
+}
 
 export interface AgentToolCallRecord {
   id: string;

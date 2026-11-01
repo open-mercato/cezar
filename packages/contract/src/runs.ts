@@ -156,6 +156,18 @@ export const processUsageSchema = z.object({
 });
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
 
+/** Live session gauges for the run header (context fill, plan usage windows), the latest
+ *  reading the agent reported. Claude only today; absent on every other run. */
+export const runLiveUsageSchema = z.object({
+  contextTokens: usageCounterSchema.optional(),
+  contextWindow: usageCounterSchema.optional(),
+  limits: z
+    .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+    .optional(),
+  at: z.string(),
+});
+export type RunLiveUsage = z.infer<typeof runLiveUsageSchema>;
+
 /**
  * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
  *
@@ -329,6 +341,7 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  liveUsage: runLiveUsageSchema.optional(),
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407) — auto-discovered from conversation references. Display
    *  tier only: `pullRequestUrl` (the PR this task CREATED) wins, and the action gates ignore it. */

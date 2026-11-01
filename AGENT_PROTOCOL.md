@@ -156,12 +156,19 @@ type AgentEvent =
   | { type: 'image'; mediaType: string; data: string }        // base64; run manager re-emits a URL
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
+  | { type: 'usage-status'; status: AgentUsageStatus }        // live gauges; folded onto the run record, never persisted
   | { type: 'session'; sessionId: string }                    // backend's real session id, once known
   | { type: 'turn-end'; reason?: 'context-compaction' }       // optional, additive (#955)
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 ```
+
+`usage-status` carries the latest context fill (`contextTokens`, `contextWindow`) and plan
+usage windows (`limits`: `window`, `utilization` 0..1, ISO `resetsAt`) for the run header. The
+run manager merges it onto `RunRecord.liveUsage` and never writes it to the NDJSON transcript.
+Claude emits it from the main agent's message usage, `result.modelUsage[model].contextWindow`
+and `rate_limit_event.unifiedWindows`; a runner without those signals never emits it.
 
 `turn-end.reason` is optional and additive (#955), in the same shape as `note.tone`
 (#936): a runner emits the bare event unless it knows something the turn's text

@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
 import { renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+import type { AgentUsageStatus } from '../core/agent-runner.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
 import { deleteRunLayouts, pruneOrphanLayouts } from './layouts.ts';
@@ -367,6 +368,18 @@ export const runRecordSchema = z.object({
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
   costUsd: z.number().optional(),
+  /** Latest context fill and plan usage windows the agent reported (the header's live gauges). */
+  liveUsage: z
+    .object({
+      contextTokens: usageCounterSchema.optional(),
+      contextWindow: usageCounterSchema.optional(),
+      limits: z
+        .array(z.object({ window: z.string(), utilization: z.number(), resetsAt: z.string() }))
+        .optional(),
+      at: z.string(),
+    })
+    .optional()
+    .catch(undefined),
   /** First GitHub PR URL spotted in the transcript (the janitor trick). */
   pullRequestUrl: z.string().optional(),
   /** The PR this task is ABOUT (#407, spec 2026-07-16-pr-autodiscovery):
@@ -1564,6 +1577,21 @@ export class RunStore extends EventEmitter {
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
     // A reported zero is still a measurement; an unreported run is not free.
     run.costUsd = run.steps.some((s) => s.costUsd !== undefined) ? cost : undefined;
+    this.touch(run);
+  }
+
+  /** Merge a live gauge reading (`usage-status`) onto the record; each field is the latest. */
+  setLiveUsage(runId: string, status: AgentUsageStatus): void {
+    const run = this.runs.get(runId);
+    if (!run) return;
+    run.liveUsage = { ...run.liveUsage, ...status, at: new Date().toISOString() };
+    this.touch(run);
+  }
+
+  clearLiveUsage(runId: string): void {
+    const run = this.runs.get(runId);
+    if (!run || run.liveUsage === undefined) return;
+    delete run.liveUsage;
     this.touch(run);
   }
 
