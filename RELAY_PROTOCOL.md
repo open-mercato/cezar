@@ -14,9 +14,9 @@ webview ─ loopback proxy ─ Noise ═══ relay ═══ Noise ─ dispatc
 ```
 
 The relay is assumed hostile. It is trusted for availability and nothing else: it can drop, delay and
-inject, and every injected byte fails decryption. Nothing here depends on it for confidentiality or
-for authorization of cezar's API. The relay implementation is private; this document describes its
-behaviour only.
+inject, and every injected byte fails decryption. Nothing here depends on it for confidentiality of the
+tunnel. For authorization, one path does: a system-camera scan of the QR code (§9.1). The relay
+implementation is private; this document describes its behaviour only.
 
 Terms: a **room** is the relay's per-cezar state, one per `cezarId`. A **rendezvous** is a short-lived
 pipe between two parties with no allowlist entry yet. A **session** is one Noise `KK` run on one phone
@@ -41,7 +41,8 @@ a session.
 | Command `id` | Any string of 1 to 64 characters chosen by cezar | Yes |
 
 Ids are self-certifying, so no account or registry exists. Ed25519 keys are for the relay only. X25519
-keys are end-to-end, and the relay never receives one in the clear or as an identifier. A phone
+keys are end-to-end, and the relay never receives one as an identifier. A relay that joins a rendezvous
+sees public static keys in the handshake (§9), never a private one. A phone
 SHOULD generate a fresh pair of each for each server it pairs with, so that two cezars cannot
 correlate it.
 
@@ -63,8 +64,8 @@ there and removed.
 | `POST /v1/push` | cezar or a hosted server | The key sealed in the grant | Request |
 | `GET /p` | Anyone | Nothing | A static page with no script saying how to get the app. Clients never call it |
 
-One WebSocket message is one frame. There is no subprotocol, and clients MUST NOT offer
-`permessage-deflate`. A client sends nothing until it has read `hello`.
+One WebSocket message is one frame. There is no subprotocol, and clients MUST NOT use
+`permessage-deflate`, and a client that cannot stop its library offering it MUST NOT accept it. A client sends nothing until it has read `hello`.
 
 ### 3.1 Proofs
 
@@ -171,8 +172,8 @@ Text that is not a JSON object with a string `t` closes with 4400.
 | Direction | Frame | Meaning |
 | --- | --- | --- |
 | relay → any | `{"t":"hello","protocol":1,"limits":{…}}` | First frame on a socket. Keys of `limits` are the [limit names](#8-limits), and their live values override the table. An absent `limits` or key falls back to the table |
-| relay → cezar | `hello` also carries `"phones":["<deviceId>"]` | Phones connected now |
-| relay → phone | `hello` also carries `"cezar":"online"\|"offline"` | Whether a cezar socket is present |
+| relay → cezar | `hello` also carries `"phones":["<deviceId>"]` | Phones connected now. Room sockets only: a rendezvous `hello` and the 4430 `hello` have no `phones` |
+| relay → phone | `hello` also carries `"cezar":"online"\|"offline"` | Whether a cezar socket is present. Room sockets only: a rendezvous `hello` and the 4430 `hello` have no `cezar` key |
 | relay → cezar | `{"t":"phone-joined","device":"<deviceId>"}` | A phone socket opened |
 | relay → cezar | `{"t":"phone-left","device":"<deviceId>"}` | A phone socket closed, or a frame had no live target |
 | relay → phone | `{"t":"cezar-online"}`, `{"t":"cezar-offline"}` | The cezar socket opened or closed, or a frame had no live target |
@@ -255,9 +256,14 @@ reconnected, whatever the close code says elsewhere.
    checked on the next frame from either side or the next connect. Over `phoneSecondsPerDay`, phones
    close with 4430 and cezar stays connected. A fully silent phone overruns only while the room
    sleeps, which costs nothing. `framesPerSecond` counts text frames too, since they wake the room.
-   `bytesPerDay` counts each data frame once, on the way in.
+   `bytesPerDay` counts each data frame once, on the way in. Over `bytesPerDay` the sender is closed with
+   4430, cezar included, after `closing`. A 4430 `hello` has no `phones` and no `cezar` key.
+   **Commands are limited too:** at most 60 control commands a minute per room, then the sender gets
+   `closing` with `retryAfter` 60 and a 4429 close. This is not in the limits table, so cezar keeps its
+   own `device-sync` and `device-remove` traffic well under it.
 8. **Kill switch.** New requests are refused with 503 `relay-disabled`. A live socket gets `closing` and
-   4503 on its next frame.
+   4503 on its next frame. **Exception:** a rendezvous does not check the switch today, so it keeps
+   working while the room side is refused. A client must not rely on that.
 
 ## 7. Push
 
@@ -382,24 +388,33 @@ cezarkey = 43base64url                       ; cezar's X25519 public key
 String literals in this grammar are case-sensitive, unlike plain ABNF. There is no user info, no other
 path and no query. The parser is strict, and anything else is
 refused. A browser never sends the fragment, so a system camera that opens the link reaches `GET /p`
-with no secret. A hostile relay could serve script there, so a system-camera scan counts as a
-photographed code. Any `version` other than 1 shows "Update the app".
+with no secret. **A hostile relay can serve script there that reads the fragment.** With the secret and
+cezar's key it runs `XXpsk3` itself, pairs as a phone and shows cezar's Approve dialog the same six
+digits, so the digits warn nobody. This is not the same as a photographed code, where the attacker
+lacks the relay: only the user's attention at Approve stands against it, and Approve adds a device
+that can start tasks as the user. A system-camera scan is therefore safe only with a relay the user
+runs. See the spec's QR9. Any `version` other than 1 shows "Update the app".
 
 | Scheme | Host | Release app | Debug app |
 | --- | --- | --- | --- |
 | `https` | Any | Yes | Yes |
-| `http` | Exactly `127.0.0.1`, `localhost`, `[::1]` or `10.0.2.2` | **No** | Yes |
+| `http` | Exactly `127.0.0.1`, `localhost` or `[::1]` | **No** | Yes |
 | `http` | Anything else | No | No |
 
-`http` means `ws`. cezar applies the host rows to `CEZ_RELAY_URL` too. With `CEZ_RELAY_URL` unset or
+`http` means `ws`. cezar applies the host rows to `CEZ_RELAY_URL` too. An emulator reaches a relay on the
+host through `http://127.0.0.1:<port>` and `adb reverse tcp:<port> tcp:<port>`: `10.0.2.2` is not
+allowed, because cezar on the host cannot reach that emulator-only alias and one `CEZ_RELAY_URL`
+is both its address and the QR's. With `CEZ_RELAY_URL` unset or
 invalid, `capabilities.phonePairing` is false. No relay host is built in.
 
 ### 9.2 Secrets
 
 A pairing has two independent credentials, and each opens its own rendezvous. Whichever gets
 `peer-joined` first wins, and cezar closes the other with 1000. So one pairing costs two of
-`rendezvousPerHour`, and cezar's limit of 5 pairings an hour fits it exactly. If the second rendezvous
-is refused, cezar shows the QR code alone.
+`rendezvousPerHour`, and cezar's limit of 5 pairings an hour fits it exactly. cezar opens the typed-code
+rendezvous only when the user asks for the code, so an expired code nobody asked for costs one, not
+two. If the QR's own rendezvous is refused, cezar shows the error with its `retryAfter` and no code.
+If only the second is refused, it shows the QR code alone.
 
 **QR.** `secret` is 32 random bytes. With HKDF-SHA256 (RFC 5869), salt the 24 ASCII bytes
 `cezar-relay-pair-salt-v1`, and output 32 bytes each:
@@ -545,7 +560,11 @@ with `"cezar":"online"`, or `cezar-online`. cezar answers one first message per 
 `phone-joined` or per entry in `hello.phones`, and it stays used until `phone-left`. A first message
 from a device with no saved row, or with no open slot, is dropped with no answer. The phone waits 10 s
 for the reply. On timeout, it closes the socket and reconnects with jitter. Frames that arrive from a
-device with no session and no open slot are dropped.
+device with no session and no open slot are dropped. A stale frame from an ended session can reach a new
+socket, because the relay routes by `deviceId`. A phone drops any data frame while it has no session.
+A phone that gets a frame that fails to decrypt as the reply drops it and keeps the 10 s timer
+running. A stale frame arriving at cezar on a new socket with an open slot MUST NOT use the slot up: a
+first message is only consumed when it is exactly 48 bytes and decrypts under `KK`.
 
 Tunnel records then flow as Noise transport messages, in data frames. Vector: `session-kk.json`.
 
@@ -563,7 +582,7 @@ ends every stream in it. In-flight proxy requests fail with [502](#132-errors).
 | Any decryption failure, or a malformed record or frame | Sends `CLOSE` `protocol-error` if it can, ends the session | Sends `CLOSE` `protocol-error` if it can, then closes the socket with 1000 and reconnects with jitter |
 | No `LEASE` for 60 s | Sends `CLOSE` `lease-expired`, ends the session | |
 | No `LEASE` from cezar for 45 s | | Closes the socket with 1000 and reconnects with jitter |
-| `CLOSE` received | Ends the session. `goodbye` also deletes the device row, then sends `device-remove` | Ends the session and closes the socket with 1000. `device-removed` shows nothing yet: 4403 decides. Otherwise it reconnects with jitter |
+| `CLOSE` received | Ends the session. `goodbye` also deletes the device row, then sends `device-remove` | Ends the session and closes the socket with 1000. `device-removed` shows nothing yet. It reconnects with jitter like any other `CLOSE`, and the 403 or 4403 that follows decides. A relay that still admits the phone gives a silent `KK` timeout loop, so after 3 timeouts in a row the phone shows a visible "cezar is not answering" state |
 | Remove on desktop | Deletes the row, sends `CLOSE` `device-removed`, ends the session, sends `device-remove` | |
 | App leaves the foreground | | Closes the socket with 1000 |
 | Forget server | | Sends `CLOSE` `goodbye` if a session is live, then revokes grants and deletes keys |
@@ -668,6 +687,11 @@ holds at most 256 KiB. There is no session window.
 in order. A sender MUST NOT send an empty `DATA`, and a receiver ignores one. A proxy forwards bytes as
 they arrive and never waits to fill a frame, which is what keeps SSE live.
 
+**Pace the frames.** The relay counts every inbound frame per room against `framesPerSecond`, and closes
+the sender with 4429 past it, which drops every phone. cezar's dispatcher therefore coalesces the bytes
+of a stream that are ready into one `DATA` and paces its sends well under `framesPerSecond`. An SSE
+replay is written as one frame per burst, never one per event.
+
 ### 12.3 Lease
 
 The phone sends `LEASE` right after `HELLO`, then every 20 s. cezar answers each `LEASE` with one
@@ -699,7 +723,7 @@ The proxy and the dispatcher both remove these request headers, so a modified ap
 
 | Group | Headers |
 | --- | --- |
-| Identity | `host`, `origin`, `cookie`, `authorization` |
+| Identity | `host`, `origin`, `cookie`, `authorization`, `x-cezar-runtime-handoff` |
 | Forwarding | every `x-forwarded-*`, `forwarded`, `x-real-ip` |
 | Fetch metadata | every `sec-fetch-*` |
 | Hop-by-hop | `connection`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade` |
@@ -728,7 +752,7 @@ chunked encoding. A 204 or 304 is `HEAD`, then `END`.
 | No session | 503 with `retry-after: 1` |
 | `RESET` or a lost session before `HEAD` | 502 |
 | `RESET` `too-many-streams` before `HEAD` | 503 with `retry-after: 1` |
-| `RESET` or a lost session after `HEAD` | The connection is aborted, so the read fails |
+| `RESET` before cezar's `END`, or a lost session, after `HEAD` | The connection is aborted, so the read fails. A `RESET` that follows cezar's `END` is ignored (§12) |
 
 **The proxy never retries a write.** A lost connection during a `POST` is a 502, and the `decision`
 route's pins cover a user's second tap. A `GET` is not retried by the proxy either.

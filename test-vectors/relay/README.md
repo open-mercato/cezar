@@ -67,3 +67,5 @@ do not cover `Rekey`, so that rests on `snow` and on `verify.mjs`, which derives
 reproduce every committed byte.
 Nothing in this directory ships: it is outside every npm workspace, and the published CLI does not
 depend on it.
+
+The R1 review fixes (spec changelog, 2026-11-01) are text only: no vector byte changed, and `verify.mjs` and `generate.mjs` give the same results.
