@@ -61,10 +61,9 @@ function QrCode({ value }: { value: string }) {
     }
     return { path: d, size: count + 8 }
   }, [value])
-  // White in both themes: a scanner needs the quiet zone and the contrast.
   return (
-    <svg role="img" aria-label="QR code to scan with the Cezar app" viewBox={`0 0 ${size} ${size}`} className="size-56 rounded-md bg-white" shapeRendering="crispEdges">
-      <path d={path} fill="#000" />
+    <svg role="img" aria-label="QR code to scan with the Cezar app" viewBox={`0 0 ${size} ${size}`} className="size-56 rounded-md bg-qr-ground" shapeRendering="crispEdges">
+      <path d={path} className="fill-qr-module" />
     </svg>
   )
 }

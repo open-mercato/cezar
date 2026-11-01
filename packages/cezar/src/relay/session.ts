@@ -213,6 +213,10 @@ export class PhoneSession implements StreamHost {
   }
 
   private refuseOpen(refused: OpenRefused): void {
+    if (this.phase !== 'ready') {
+      this.fail();
+      return;
+    }
     try {
       this.claimStream(refused.stream);
     } catch {

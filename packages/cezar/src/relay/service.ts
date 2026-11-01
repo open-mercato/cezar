@@ -219,7 +219,19 @@ export class RelayService {
    */
   private dropDevice(deviceId: string): boolean {
     const session = this.sessions.get(deviceId);
-    const removal = this.devices.remove(deviceId);
+    const endSession = () => {
+      session?.close(CLOSE.deviceRemoved);
+      this.sessions.delete(deviceId);
+    };
+    let removal: PendingRemoval | undefined;
+    try {
+      removal = this.devices.remove(deviceId);
+    } catch {
+      // No caller can answer a failed write. The removal stays in memory for the next connect.
+      endSession();
+      this.onChange();
+      return true;
+    }
     if (!removal) return false;
     session?.close(CLOSE.deviceRemoved);
     this.sessions.delete(deviceId);
@@ -229,9 +241,10 @@ export class RelayService {
   }
 
   private async sendRemoval(removal: PendingRemoval): Promise<void> {
-    const connection = this.connection ?? (this.identity ? this.ensureConnection(this.identity) : undefined);
-    if (!connection) return;
+    let connection: RelayConnection | undefined;
     try {
+      connection = this.connection ?? (this.identity ? this.ensureConnection(this.identity) : undefined);
+      if (!connection) return;
       await connection.whenReady(SOCKET_READY_MS);
       const undenied: string[] = [];
       for (const frame of removalFrames(removal, connection.limits.controlBytes)) {
@@ -378,7 +391,21 @@ export class RelayService {
 
   /** cezar first, complete from that moment: then the session, then the relay, § Removal. */
   remove(deviceId: string): boolean {
-    return outsideRelayScope(() => this.dropDevice(deviceId));
+    return outsideRelayScope(() => {
+      if (!this.devices.get(deviceId)) return false;
+      const session = this.sessions.get(deviceId);
+      let removal: PendingRemoval | undefined;
+      try {
+        removal = this.devices.remove(deviceId);
+      } finally {
+        // A failed write still ends the session: the row is gone from memory either way.
+        session?.close(CLOSE.deviceRemoved);
+        this.sessions.delete(deviceId);
+      }
+      if (removal) void this.sendRemoval(removal);
+      this.onChange();
+      return true;
+    });
   }
 }
 
