@@ -155,6 +155,7 @@ class OpencodeSession implements AgentSession {
   private closed!: Promise<void>;
   private stderrChunks: string[] = [];
   private serverOpen = true;
+  private stopped = false;
   private baseUrl: string | undefined;
   private sessionId: string | undefined;
   private ready!: Promise<void>;
@@ -305,6 +306,7 @@ class OpencodeSession implements AgentSession {
   }
 
   end(): void {
+    this.stopped = true;
     if (!this.serverOpen) return;
     this.serverOpen = false;
     this.finishTurn();
@@ -313,6 +315,7 @@ class OpencodeSession implements AgentSession {
   }
 
   interrupt(): void {
+    this.stopped = true;
     this.serverOpen = false;
     if (this.baseUrl && this.sessionId) {
       void this.http('POST', `/session/${this.sessionId}/abort`, undefined).catch(() => undefined);
@@ -376,6 +379,9 @@ class OpencodeSession implements AgentSession {
     this.child = child;
     this.serverPort = port;
     this.hasExited = trackChildExit(child);
+    child.once('exit', () => {
+      this.serverOpen = false;
+    });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = wrapSpawnError(err, this.bin);
@@ -412,13 +418,14 @@ class OpencodeSession implements AgentSession {
         return await this.waitForServerUrl(this.serverPort);
       } catch (err) {
         const retry = attempt < SERVER_PORT_ATTEMPTS && this.hasExited() && (await this.lostPort());
-        if (!retry || !this.serverOpen) {
+        if (!retry || this.stopped) {
           // Local transcript only: the stderr tail can name paths, so it stays
           // out of the error message that telemetry groups on.
           const tail = this.stderrChunks.join('').trim().slice(-800);
           if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
           throw err;
         }
+        this.serverOpen = true;
         this.spawnServer(randomServerPort());
       }
     }
