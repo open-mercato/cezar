@@ -142,6 +142,9 @@ fn read_enabled() -> bool {
 
 fn write_enabled(enabled: bool) {
     let path = settings_path();
+    if let Some(home) = path.parent() {
+        let _ = std::fs::create_dir_all(home);
+    }
     let temporary = path.with_extension("json.tmp");
     let body = serde_json::json!({ "enabled": enabled }).to_string();
     if std::fs::write(&temporary, body).is_ok() {
@@ -248,6 +251,8 @@ fn publish(app: &AppHandle, notch: &Arc<Notch>, model: Option<NotchModel>) {
     }
     if model.is_some() && app.get_webview_window(LABEL).is_none() && build_panel(app).is_err() {
         eprintln!("[notch] the panel could not be created");
+        // Forgotten, or the next poll would see no change and never try again.
+        notch.view().model = None;
         return;
     }
     let (app, notch) = (app.clone(), notch.clone());
@@ -259,7 +264,8 @@ fn apply(app: &AppHandle, notch: &Arc<Notch>) {
     let Some(window) = app.get_webview_window(LABEL) else { return };
     let Some(mtm) = MainThreadMarker::new() else { return };
     if notch.view().model.is_some() {
-        reposition(&window, notch, mtm, true);
+        let hidden = !notch.view().shown;
+        reposition(&window, notch, mtm, hidden);
         push(&window, notch);
         if let Some(panel) = panel_of(&window) {
             panel.orderFrontRegardless();
@@ -446,12 +452,18 @@ fn pointer_loop(app: AppHandle, notch: Arc<Notch>) {
         {
             let mut view = notch.view();
             let Some(placement) = view.placement else { continue };
-            let on_shape = pointer_on_shape(&view.rects, &placement, size, at.x, at.y);
-            if on_shape != view.interactive {
-                view.interactive = on_shape;
-                interactive = Some(on_shape);
+            let on_any = pointer_on_shape(&view.rects, &placement, size, at.x, at.y);
+            if on_any != view.interactive {
+                view.interactive = on_any;
+                interactive = Some(on_any);
             }
-            expanded = view.hover.step(on_shape, notch.now_ms());
+            // Pill 1 alone opens on hover: the list does not cover pill 2, so hovering there would
+            // open it, leave it and close it again, over and over. Pill 2 takes clicks.
+            let on_island = pointer_on_shape(&view.rects[..view.rects.len().min(1)], &placement, size, at.x, at.y);
+            expanded = view.hover.step(on_island, notch.now_ms());
+            if expanded == Some(false) {
+                view.pointer = None;
+            }
             if view.hover.expanded && view.pointer != Some((at.x, at.y)) {
                 view.pointer = Some((at.x, at.y));
                 pointer = Some((at.x - placement.origin_x, placement.origin_y + size.height - at.y));
@@ -520,7 +532,8 @@ pub fn notch_report_shape(window: WebviewWindow, notch: tauri::State<'_, Arc<Not
 #[tauri::command]
 pub fn notch_expand(window: WebviewWindow, notch: tauri::State<'_, Arc<Notch>>) {
     if caller_is_notch(&window) {
-        notch.view().hover.open();
+        let now = notch.now_ms();
+        notch.view().hover.open(now);
         let _ = window.eval("window.__notch && window.__notch.setExpanded(true)");
     }
 }
@@ -542,7 +555,7 @@ pub fn notch_open_manager(app: AppHandle, window: WebviewWindow, shell: tauri::S
         return;
     }
     let Some(script) = open_manager_script(&id) else { return };
-    notch.view().hover.close();
+    notch.view().hover.dismiss();
     let _ = window.eval("window.__notch && window.__notch.setExpanded(false)");
     let Some(main) = app.get_webview_window("main") else { return };
     let _ = main.unminimize();
@@ -598,7 +611,7 @@ mod tests {
 
     #[test]
     fn the_render_call_carries_the_layout_and_no_raw_text() {
-        let script = render_script(None, &Placement { origin_x: 0.0, origin_y: 0.0, housing: crate::notch_geometry::Housing { width: 200.0, height: 37.0, top: 0.0 } });
+        let script = render_script(None, &Placement { origin_x: 0.0, origin_y: 0.0, housing: crate::notch_geometry::Housing { width: 200.0, height: 37.0, top: 0.0, centre: 500.0 } });
         assert!(script.contains("model: null"));
         assert!(script.contains("\"maxRows\""));
     }
