@@ -1,5 +1,5 @@
 // Noise (revision 34) for 25519_ChaChaPoly_SHA256, over node:crypto (OpenSSL) only.
-// Unaudited state machine, thin on purpose: every primitive is OpenSSL's. See RELAY_PROTOCOL.md § Noise.
+// Unaudited state machine, thin on purpose: every primitive is OpenSSL's. See RELAY_PROTOCOL.md § 16.
 import {
   createCipheriv,
   createDecipheriv,

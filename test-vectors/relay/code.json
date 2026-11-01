@@ -61,6 +61,10 @@
       "input": "QRFX-7KMD-2NVÉ"
     },
     {
+      "name": "a dotless i, which only Unicode uppercasing turns into I",
+      "input": "QRFX-7KMD-2NVı"
+    },
+    {
       "name": "punctuation",
       "input": "QRFX.7KMD.2NVB"
     },
