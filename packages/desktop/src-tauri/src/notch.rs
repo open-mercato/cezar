@@ -489,17 +489,17 @@ fn pointer_loop(app: AppHandle, notch: Arc<Notch>) {
     }
 }
 
-/// WebKit leaves a crashed page blank, and its last shapes would keep catching clicks. The reload
-/// ends in `notch_ready`. Every other webview keeps WebKit's default.
+/// This hook replaces the runtime's own reload for every webview, the cockpit included, so it must
+/// reload them all. On the notch its last shapes would keep catching clicks; that reload ends in
+/// `notch_ready`.
 pub fn on_page_crashed(webview: &tauri::Webview) {
-    if webview.label() != LABEL {
-        return;
-    }
-    if let Some(notch) = webview.try_state::<Arc<Notch>>() {
-        let mut view = notch.view();
-        view.rects.clear();
-        // The reloaded page starts closed; a shell still counting the list as open would never reopen it.
-        view.hover.close();
+    if webview.label() == LABEL {
+        if let Some(notch) = webview.try_state::<Arc<Notch>>() {
+            let mut view = notch.view();
+            view.rects.clear();
+            // The reloaded page starts closed; a shell still counting the list as open would never reopen it.
+            view.hover.close();
+        }
     }
     let _ = webview.reload();
 }

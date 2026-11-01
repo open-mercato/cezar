@@ -111,6 +111,11 @@ describe('the panel', () => {
   it('stays when the app is hidden', () => {
     expect(read('../src-tauri/src/notch.rs')).toContain('panel.setCanHide(false)')
   })
+
+  it('reloads every crashed webview, because its hook replaces the default for all of them', () => {
+    const hook = read('../src-tauri/src/notch.rs').match(/pub fn on_page_crashed[\s\S]*?webview\.reload\(\)/)[0]
+    expect(hook).not.toContain('return')
+  })
 })
 
 describe('the capability', () => {
