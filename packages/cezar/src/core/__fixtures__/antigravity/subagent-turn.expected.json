@@ -1,0 +1,306 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": "6a4639a3-38ea-4281-a4cf-cf0c29f9d777",
+    "model": "gemini-3.8-flash-high",
+    "cwd": "/repo",
+    "tools": [
+      "invoke_subagent",
+      "manage_subagents",
+      "manage_task",
+      "replace_file_content",
+      "run_command",
+      "view_file",
+      "write_to_file"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_2",
+      "name": "Read",
+      "title": "Read /repo/edit.txt",
+      "toolKind": "read",
+      "status": "running",
+      "input": {
+        "AbsolutePath": "/repo/edit.txt",
+        "path": "/repo/edit.txt"
+      },
+      "locations": [
+        {
+          "path": "/repo/edit.txt"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_2",
+      "name": "Read",
+      "title": "Read /repo/edit.txt",
+      "toolKind": "read",
+      "status": "completed",
+      "input": {
+        "AbsolutePath": "/repo/edit.txt",
+        "path": "/repo/edit.txt"
+      },
+      "locations": [
+        {
+          "path": "/repo/edit.txt"
+        }
+      ],
+      "output": "3 lines, 18 bytes"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_4",
+      "name": "manage_task",
+      "title": "manage_task",
+      "toolKind": "other",
+      "status": "running",
+      "input": {
+        "Action": "list"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_4",
+      "name": "manage_task",
+      "title": "manage_task",
+      "toolKind": "other",
+      "status": "completed",
+      "input": {
+        "Action": "list"
+      },
+      "output": "No background tasks are currently running."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_6",
+      "name": "Edit",
+      "title": "Edit /repo/edit.txt",
+      "toolKind": "edit",
+      "status": "running",
+      "input": {
+        "TargetFile": "/repo/edit.txt",
+        "path": "/repo/edit.txt"
+      },
+      "locations": [
+        {
+          "path": "/repo/edit.txt"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_6",
+      "name": "Edit",
+      "title": "Edit /repo/edit.txt",
+      "toolKind": "edit",
+      "status": "completed",
+      "input": {
+        "TargetFile": "/repo/edit.txt",
+        "path": "/repo/edit.txt"
+      },
+      "locations": [
+        {
+          "path": "/repo/edit.txt"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_7",
+      "role": "assistant",
+      "text": "Spawning a subagent to count the lin"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_7",
+    "field": "text",
+    "delta": "es:\n- **Role"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_7",
+    "field": "text",
+    "delta": "**: Line"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_7",
+    "field": "text",
+    "delta": " Counter\n- **Model Tier**: inherit\n- **Model Ver"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_7",
+    "field": "text",
+    "delta": "sion**: Gemini 3.8 Flash\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_7",
+      "role": "assistant",
+      "text": "Spawning a subagent to count the lines:\n- **Role**: Line Counter\n- **Model Tier**: inherit\n- **Model Version**: Gemini 3.8 Flash\n"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_8",
+      "name": "Task",
+      "title": "Task: Line Counter",
+      "toolKind": "task",
+      "status": "running",
+      "input": {
+        "description": "Line Counter",
+        "subagent_type": "research",
+        "prompt": "Count the number of lines in /repo/edit.txt and report the count."
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_8",
+      "name": "Task",
+      "title": "Task: Line Counter",
+      "toolKind": "task",
+      "status": "completed",
+      "input": {
+        "description": "Line Counter",
+        "subagent_type": "research",
+        "prompt": "Count the number of lines in /repo/edit.txt and report the count."
+      },
+      "output": "Line Counter: conversation 901f0a74-7065-4397-a542-90bad6bc8e86"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_10",
+      "name": "manage_subagents",
+      "title": "manage_subagents",
+      "toolKind": "other",
+      "status": "running",
+      "input": {
+        "Action": "list"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_10",
+      "name": "manage_subagents",
+      "title": "manage_subagents",
+      "toolKind": "other",
+      "status": "completed",
+      "input": {
+        "Action": "list"
+      },
+      "output": "You have 1 active subagent(s):\n[{\"role\":\"Line Counter\",\"type\":\"research\",\"conversationId\":\"901f0a74-7065-4397-a542-90bad6bc8e86\",\"transcript\":\"file:///home/user/.gemini/antigravity-cli/brain/901f0a74-7065-4397-a542-90bad6bc8e86/.system_generated/logs/transcript.jsonl\",\"state\":\"running\"}]"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_11",
+      "role": "assistant",
+      "text": "Waiting for the subagent to report the line count..."
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_11",
+    "field": "text",
+    "delta": "\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_11",
+      "role": "assistant",
+      "text": "Waiting for the subagent to report the line count...\n"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_13",
+      "role": "assistant",
+      "text": "FINISHED"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_13",
+    "field": "text",
+    "delta": "\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_13",
+      "role": "assistant",
+      "text": "FINISHED\n"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 57839,
+      "output": 3496,
+      "total": 61335,
+      "reasoning": 3139,
+      "cacheRead": 63450
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 57839,
+      "output": 3496,
+      "total": 61335,
+      "reasoning": 3139,
+      "cacheRead": 63450
+    }
+  }
+]

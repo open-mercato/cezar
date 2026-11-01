@@ -18,13 +18,17 @@ export function SubtaskToggle({
   expanded,
   onToggle,
   className,
+  wordClassName,
 }: {
   /** `subtaskLabel(childCount)` — the caller only renders the handle when it is non-null. */
   label: string
   expanded: boolean
   onToggle: () => void
   className?: string
+  /** On the word after the count, so a narrow row can keep just the count (#979). */
+  wordClassName?: string
 }) {
+  const [count, ...word] = label.split(' ')
   return (
     <button
       type="button"
@@ -41,7 +45,8 @@ export function SubtaskToggle({
         className={cn('size-3 transition-transform', expanded && 'rotate-90')}
         aria-hidden="true"
       />
-      {label}
+      {count}
+      <span className={wordClassName}>{` ${word.join(' ')}`}</span>
     </button>
   )
 }

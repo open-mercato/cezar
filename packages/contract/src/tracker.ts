@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-/** Jira Cloud, Linear and ClickUp are the read-only tracker providers supported by this contract. */
+/** Jira Cloud, Linear and ClickUp are the tracker providers supported by this contract. */
 export const trackerKindSchema = z.enum(['jira', 'linear', 'clickup']);
 export type TrackerKind = z.infer<typeof trackerKindSchema>;
 

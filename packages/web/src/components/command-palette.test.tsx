@@ -102,6 +102,7 @@ function project(overrides: Partial<ProjectListEntry> & { id: string }): Project
 function health(forgeAvailable: boolean | 'cold', automations = false): HealthResponse {
   return {
     version: '0.0.0-test',
+    runtimeId: '00000000-0000-4000-8000-000000000001',
     projects: [],
     bootProject: 'default',
     repoRoot: '/repo',

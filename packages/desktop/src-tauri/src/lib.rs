@@ -39,6 +39,7 @@ pub use disclaim::disclaim_exec_if_asked;
 use telemetry::Failure;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 /// Exit status the sidecar uses to say "relaunch me" after a self-update (EX_TEMPFAIL).
 const RESTART_EXIT_CODE: i32 = 75;
@@ -48,6 +49,8 @@ const LOG_TAIL: usize = 60;
 /// beside the app whenever it can; a busy one falls through to the next few, then to any.
 const PREFERRED_PORTS: std::ops::Range<u16> = 4321..4331;
 const PACKAGE: &str = "@open-mercato/cezar";
+/// System-wide: bring the cockpit forward on its new-task composer from any app.
+const NEW_TASK_SHORTCUT: &str = "CmdOrCtrl+Alt+N";
 
 /// Everything the supervisor thread and the menu handler share.
 struct Shell {
@@ -238,6 +241,23 @@ const FRAME_SCRIPT: &str = r#"
   })();
 "#;
 
+/// Client-side navigation to the active project's `/new` (react-router follows `popstate`), so
+/// the cockpit keeps its state instead of reloading. A legacy flat `/new` redirects to the boot
+/// project. The composer focuses itself on mount.
+const OPEN_NEW_TASK_SCRIPT: &str = r#"
+  (function () {
+    var scope = location.pathname.match(/^\/p\/[^/]+/);
+    var to = (scope ? scope[0] : '') + '/new';
+    if (location.pathname === to) {
+      var box = document.querySelector('[data-slot="composer"] textarea');
+      if (box) box.focus();
+      return;
+    }
+    history.pushState(null, '', to);
+    dispatchEvent(new PopStateEvent('popstate', { state: null }));
+  })();
+"#;
+
 fn platform_name() -> &'static str {
     if cfg!(target_os = "macos") {
         "macos"
@@ -328,6 +348,22 @@ fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<Webvi
         });
     }
     Ok(window)
+}
+
+/// The global shortcut lands here: the main window comes forward, on the new-task composer once
+/// the cockpit is up (before that, on the splash that says why it is not).
+fn open_new_task(app: &AppHandle, shell: &Shell) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    let on_cockpit = window
+        .url()
+        .map(|url| url.scheme() == "http" && is_own_origin(&url, shell.port.load(Ordering::SeqCst)))
+        .unwrap_or(false);
+    if on_cockpit {
+        let _ = window.eval(OPEN_NEW_TASK_SCRIPT);
+    }
 }
 
 fn build_menu(app: &AppHandle, shell: &Shell) -> tauri::Result<()> {
@@ -616,6 +652,42 @@ fn offer_update(window: &WebviewWindow, version: &str) {
     ));
 }
 
+/// The chords that reach the window from ANY app: ⌃⌥↑ / ⌃⌥↓ step to the previous / next task
+/// that needs you (spec 2026-10-17-task-palette § Switching by arrow). ⌃⌥ because ⌥-arrows alone
+/// are every text field's paragraph jump, and a global registration takes them from every app.
+const TASK_SWITCH_SHORTCUTS: [(Code, &str); 2] = [(Code::ArrowUp, "previous"), (Code::ArrowDown, "next")];
+
+/// What the shell runs in the page on a press: the cockpit does the stepping
+/// (`use-task-switch-shortcut.ts` listens); a cockpit that predates the event ignores it.
+fn task_switch_script(direction: &str) -> String {
+    format!(
+        "window.dispatchEvent(new CustomEvent('cezar:switch-task', {{ detail: {} }}))",
+        js_string(direction)
+    )
+}
+
+/// Registers the global task-switch chords. Another app may already own one — then that chord
+/// is logged and skipped; the in-window ⌥-arrows still work.
+fn register_task_switch_shortcuts(app: &AppHandle) {
+    for (code, direction) in TASK_SWITCH_SHORTCUTS {
+        let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), code);
+        let registered = app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+            if event.state != ShortcutState::Pressed {
+                return;
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+                let _ = window.eval(&task_switch_script(direction));
+            }
+        });
+        if let Err(error) = registered {
+            eprintln!("[shortcut] ctrl+alt+{direction} task switch not registered: {error}");
+        }
+    }
+}
+
 pub fn run() {
     telemetry::install_panic_hook();
     let shell = Arc::new(Shell {
@@ -657,6 +729,7 @@ pub fn run() {
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
+            register_global_shortcuts(&handle, &shell_for_setup);
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -771,6 +844,25 @@ pub fn run() {
             }
             _ => {}
         });
+}
+
+/// The shell's system-wide chords: new task and the task switch. Another app may already own a
+/// combination; the shell then runs without it rather than failing to start.
+fn register_global_shortcuts(app: &AppHandle, shell: &Arc<Shell>) {
+    if let Err(error) = app.plugin(tauri_plugin_global_shortcut::Builder::new().build()) {
+        eprintln!("[shortcut] global shortcuts unavailable: {error}");
+        return;
+    }
+    let shell = shell.clone();
+    let registered = app.global_shortcut().on_shortcut(NEW_TASK_SHORTCUT, move |app, _shortcut, event| {
+        if event.state == ShortcutState::Pressed {
+            open_new_task(app, &shell);
+        }
+    });
+    if let Err(error) = registered {
+        eprintln!("[shortcut] {NEW_TASK_SHORTCUT} is taken by another app: {error}");
+    }
+    register_task_switch_shortcuts(app);
 }
 
 /// Silent self-update of the shell. `CEZ_DESKTOP_NO_UPDATE=1` disables it (development builds
@@ -2180,6 +2272,16 @@ mod tests {
         let failure = stopped_failure(1).expect("a non-zero exit is reported");
         assert_eq!(failure.code, "sidecar_exited");
         assert_eq!(failure.message, "The cockpit process exited with status 1.");
+    }
+
+    /// The cockpit listens for exactly this event name and detail (`use-task-switch-shortcut.ts`).
+    #[test]
+    fn a_global_chord_dispatches_the_switch_event_the_cockpit_listens_for() {
+        assert_eq!(
+            task_switch_script("next"),
+            "window.dispatchEvent(new CustomEvent('cezar:switch-task', { detail: \"next\" }))"
+        );
+        assert_eq!(TASK_SWITCH_SHORTCUTS.map(|(_, direction)| direction), ["previous", "next"]);
     }
 
     #[test]

@@ -32,38 +32,27 @@ copied when a repository is copied or moved to a new path.
 ### Storage and isolation
 
 Secrets are write-only through the API: read responses expose only connection ID/provider.
-They are stored as managed dotenv files in
-`~/.cezar/tracker-connections/<sha256(canonical-project-path)>.env` (or the selected
-`CEZ_HOME`), outside repositories by default, with directory mode `0700` and file mode `0600` on POSIX. A managed `.gitignore` excludes all files in the credential directory from ordinary Git staging,
-including when `CEZ_HOME` is inside a repository; it does not untrack files already committed or
-prevent forced staging. Storage uses atomic
-replacement, no backups, and a hash of the canonical repository path. Repository state keeps
-only a non-secret connection ID and scope identity. Form secrets are cleared after save,
-failure, cancellation or project change; no browser storage is used. The API never forwards
-these credentials into ordinary manual handoff agent environments. Enabled tracker automation
-workflows have a deliberate exception: they receive only the captured connection’s credentials,
-after its project, source and revision have been revalidated.
+They are stored as encrypted managed records in
+`~/.cezar/tracker-connections/<sha256(canonical-project-path)>.vault` (or the selected
+`CEZ_HOME`), with directory mode `0700` and file mode `0600` on POSIX. The whole credential
+record is encrypted with the vault's AES-256-GCM data key, held in the OS keychain or the
+private `secrets/.key` fallback. Possession of both the fallback key and ciphertext allows
+decryption; this is not isolation from another process running as the same OS user.
+Tracker credentials are not editable as generic Secrets and cannot be assigned to checks.
 
-The form writes these files automatically; do not create or source a repository `.env`.
-The dotenv values are parsed into a project-local object, never loaded into `process.env`.
-The file contains provider credentials plus a format version, canonical `PROJECT_ROOT`, opaque connection UUID and
-private consistency digest. The digest detects accidental edits; it is not encryption or a
-security boundary against someone who can edit the file. Use Settings to replace credentials:
-manual token edits without matching metadata fail closed, preventing use of an old cached key.
+Credential replacement through Settings still rotates the connection identity. Missing storage
+never prevents boot; invalid storage reports a recoverable error. The form clears its secret
+fields after saving; read APIs expose only connection metadata. No repository `.env` is loaded.
+A managed `.gitignore` excludes connection files from ordinary staging, including with a local
+`CEZ_HOME`; already committed files and forced staging are not protected.
 
-One managed dotenv format is supported. Unreleased prototype JSON/root-less dotenv records are
-not automatically migrated or used as fallback. Stop prototype processes and reconnect through
-Settings; remove obsolete records explicitly. Invalid records produce a controlled local-storage
-error instead of silently appearing as an absent connection. Missing storage never prevents boot.
-
-Removing credentials unlinks the selected record; no disabled marker or credential backup remains.
 Mutations for the same record are serialized across processes. Unsupported future formats are not
 automatically overwritten. Explicitly replacing credentials in Settings or removing a listed
 record is a user-requested mutation; inspect the local inventory before doing so.
 Local deletion does not revoke the vendor token.
 
-Files are **not encrypted at rest**. OS permissions protect against other OS users, not agents
-or processes with the same user's filesystem privileges. Project scoping is an application
+Tracker credentials are encrypted at rest. Task history and fetched issue-context files are not.
+OS permissions protect against other OS users, not agents or processes with the same user's filesystem privileges. Project scoping is an application
 boundary, not a tenant sandbox or a compliance certification. Hosted access must use the
 existing authenticated HTTPS deployment. Ticket descriptions enter local run history and
 the selected AI backend when you launch; follow your organization's data/retention policies.
@@ -76,8 +65,8 @@ project where it was explicitly configured. Separate narrowly scoped tokens are 
 ### Existing environment-based connections
 
 `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` and `LINEAR_API_KEY` in the server
-environment or a repository `.env` are not read by this integration. These names are used only
-inside the managed per-project credential file. Existing saved scopes stay visible, but reads fail closed until you configure
+environment or a repository `.env` are not read by this integration. They appear only in
+legacy per-project `.env` connection files, which migrate to encrypted `.vault` records. Existing saved scopes stay visible, but reads fail closed until you configure
 credentials and reconnect in that project's Settings. There is no silent migration or fallback
 to a global key. `CEZ_DRY_RUN=1` remains an explicitly selected credential-free demo; it cannot
 save real credentials and never contacts vendors.
@@ -91,7 +80,7 @@ tries the scoped-token gateway first, with one site-origin fallback on authoriza
 failure. [Create, expire and revoke Atlassian tokens](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/).
 
 The account needs **Browse projects** and any applicable issue-security access.
-The four reads below use the recommended classic **`read:jira-work`** scope. When
+The reads below use the recommended classic **`read:jira-work`** scope. When
 choosing granular scopes instead, the endpoint requirements are:
 
 | Read | Granular scopes |
@@ -99,6 +88,8 @@ choosing granular scopes instead, the endpoint requirements are:
 | Project search and direct project lookup | `read:issue-type:jira`, `read:project:jira`, `read:project.property:jira`, `read:user:jira`, `read:application-role:jira`, `read:avatar:jira`, `read:group:jira`, `read:issue-type-hierarchy:jira`, `read:project-category:jira`, `read:project-version:jira`, `read:project.component:jira` |
 | Enhanced issue search | `read:issue-details:jira`, `read:field.default-value:jira`, `read:field.option:jira`, `read:field:jira`, `read:group:jira` |
 | Direct issue lookup | `read:issue-meta:jira`, `read:issue-security-level:jira`, `read:issue.vote:jira`, `read:issue.changelog:jira`, `read:avatar:jira`, `read:issue:jira`, `read:status:jira`, `read:user:jira`, `read:field-configuration:jira` |
+| Issue comments (required for task context) | `read:comment:jira`, `read:comment.property:jira`, `read:group:jira`, `read:project:jira`, `read:project-role:jira`, `read:user:jira`, `read:avatar:jira` |
+| Available transitions (required for task context) | `read:issue.transition:jira`, `read:status:jira`, `read:field-configuration:jira` |
 
 These are the declared endpoint scopes in Atlassian's [OpenAPI contract](https://dac-static.atlassian.com/cloud/jira/platform/swagger-v3.v3.json);
 see [project reads](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-projects/),
@@ -108,11 +99,27 @@ Browsing does not call `/myself`. Enabled Jira automations read the account time
 `GET /rest/api/3/myself`, which additionally requires classic **`read:jira-user`**. Its granular
 scopes are `read:application-role:jira`, `read:group:jira`, `read:user:jira`, and `read:avatar:jira`
 (already included in the aggregate table above). See [current-user permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/#api-rest-api-3-myself-get).
-These reads require no write scope; agent-requested status updates need suitable vendor write permissions.
+These reads require no write scope. Task context always reads comments and available
+transitions, even for a read-only automation; granular tokens need those scopes too.
+For explicitly authorized writes, retain the read scopes and additionally grant classic
+`write:jira-work`, or the relevant granular write scopes:
+
+| Authorized action | Additional granular scopes |
+| --- | --- |
+| Post comment | `write:comment:jira` (the comment read scopes above are also required) |
+| Change status | `write:issue:jira`, `write:issue.property:jira` |
+
+See [comment endpoint permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-comments/)
+and [transition endpoint permissions](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issues/).
+Provider project permissions and workflow restrictions still apply. Granting token scopes
+does not enable automation writes: select those separately in the cockpit editor.
 
 For Linear, create a personal API key with **Read** permission and access to the desired
 team. It reads organization identity, team discovery/direct lookup, issue search/list/detail
-and the issue's state, creator and labels. No create/update/admin permission is needed.
+and the issue's state, creator, labels, comments and team workflow states. Reading needs no
+create/update/admin permission. If an automation is allowed to post comments or change status,
+the key also needs write access to that team's issues and comments (a **Read**-only key makes
+such an operation fail; cezar reports it and does not retry).
 [Create, restrict and revoke Linear keys](https://linear.app/docs/api-and-webhooks).
 The [GraphQL API](https://linear.app/developers/graphql) describes key authentication and
 [rate limits](https://linear.app/developers/rate-limiting).
@@ -142,8 +149,28 @@ Comments, attachments and custom fields are not fetched. Previews are capped at 
 characters and detail descriptions at 60,000. If conversion drops unsupported content or
 the description reaches its cap, the composer discloses the limitation and requires
 acknowledgment; you can add supplemental context. Final prompts over 100,000 characters
-must be edited before launch. Tracker credentials are not forwarded to agents by default:
+must be edited before launch. Tracker credentials are never forwarded to agents:
 a source link does not grant the agent access to omitted context.
+
+### Credential migration
+
+On first connection read, managed `.env` records migrate to encrypted `.vault` records,
+preserving connection IDs and project associations. Plaintext is deleted only after
+successful encrypted readback. If the home is read-only or the key is unavailable,
+a valid legacy record can remain readable without migration. Authoritative ciphertext
+never falls back to stale plaintext.
+
+A non-secret `.migrated` marker survives removal, including an interrupted migration,
+so this version will not accept stale plaintext written by an older process. Settings
+can replace malformed legacy data but refuses unreadable authoritative ciphertext.
+Stop old cezar processes before upgrading. Older versions cannot read migrated records;
+use a separate home and reconfigure credentials when downgrading. See
+[secret recovery](reference.md#secret-storage-and-recovery) for key compatibility.
+
+Both record formats have a 32 KiB limit. Encryption overhead can push an unusually
+large legacy credential past that limit; migration then reports unavailable and keeps
+the plaintext unchanged. Disconnect retains credentials; explicit removal deletes them
+locally without revoking the vendor token.
 
 ## Recovery
 
@@ -158,6 +185,7 @@ a source link does not grant the agent access to omitted context.
 | Expired result page | Restart the search; cursors are bound to the source, scope, query and server process. |
 | Cannot save/disconnect scope | Restore write access to the project's `.ai/cezar` directory and retry. |
 | Cannot save/remove credentials | Restore owner-only write access to `CEZ_HOME/tracker-connections` (default `~/.cezar/tracker-connections`) and retry. |
+| Secrets data key unavailable | Unlock the keychain or follow [secret recovery](reference.md#secret-storage-and-recovery); do not delete values merely because the keychain is locked. |
 
 Deleting `.ai/cezar/tracker.json` removes only the non-secret connection. Ticket content
 is not mirrored there, and already-created run snapshots remain in run history.
@@ -238,9 +266,11 @@ Jira automation discovery reads the authenticated account’s timezone through `
 timezone cannot be read, the scan retries without advancing its checkpoint. Around daylight
 saving changes, discovery includes a wider window; exact event timestamps still control matches.
 
-Before working on an automation, the agent is instructed to fetch the full current issue through
-the vendor API and stop if that read fails or is incomplete. This is an agent instruction, not a
-server-enforced fetch; event metadata alone is not the complete issue description.
+At agent launch and continuation, cezar fetches current issue details and accessible comments
+through the vendor API and saves the context for the agent. Missing or incomplete context is
+reported explicitly; if it is required for the task, the agent is instructed to stop and report
+the blocker. The agent can refresh its bound issue with `cez tracker read`. Event metadata
+alone is not the complete issue description.
 
 Long history scans can span multiple polling intervals. Completed pages are checkpointed when
 the scan yields near its time budget, so a slow sequence of successful reads does not restart
@@ -254,16 +284,17 @@ cez automation check '<automation-id>'
 cez automation enable '<automation-id>'
 ```
 
-Use IDs from the project options picker/API, not display names. Copy as CLI preserves the exact
-association and trigger as JSON. Credentials remain project-bound; rotation or a changed source
+Use IDs from the project options picker/API, not display names. Copy as CLI preserves the association and event filters as JSON. Tracker exports with write
+grants or unreviewed legacy access are created paused and read-only; review the prompt and grant
+required writes in the cockpit editor before enabling. The existing automation is unchanged. Credentials remain project-bound; rotation or a changed source
 requires updating the automation with the new connection. A legacy status-only definition stays
 visible but must be configured with an explicit event before it runs.
 
 An automation launches an ordinary agent workflow. The agent can follow instructions to prepare
 a PR or update a vendor status; the scheduler itself does not guarantee these outcomes or merge
-PRs. Tracker automation agents receive the captured project's credentials; those are never
-substituted with credentials from a later connection. Cezar redacts known secrets from run output,
-but does not sandbox a trusted agent against reading local files or sending network requests.
+PRs. Tracker automation agents receive issue context and limited operation capabilities, never
+the vendor token. Connection changes invalidate the captured binding. Cezar redacts known secrets
+from run output, but does not sandbox a trusted agent against reading local files or sending network requests.
 
 Delivery receipts for tracker events are retained while the automation definition exists, including
 when paused. This protects resuming an unfinished historical scan from launching old events twice,
@@ -292,3 +323,59 @@ looked up directly first. Connecting a folder or list keeps searches short.
 
 A task launched from ClickUp carries the description only, as with the other providers. Automation
 events are not available for ClickUp.
+
+## Tracker automation access
+
+Tracker automation agents no longer receive Jira/Linear tokens. New automations explicitly
+record `trackerTrigger.access: { "version": 1, "writes": [] }` for read-only access. In the
+editor, comments and status transitions can be authorized individually. Those checkboxes permit
+the agent to execute that operation on the bound issue without another approval. Vendor token
+permissions must also allow the operation; prefer the smallest scopes and team/project access.
+
+Automations created before this change show **Needs review** in the automations list and log
+one error; they stop polling (keeping their checkpoint) until you open the editor, check the
+prompt for unsupported operations, confirm read-only access, tick any writes you want and save.
+Polling then resumes where it stopped; when its last successful poll is older than the
+automation's lookback (`lookbackDays`, 7 by default) it starts from a current-time baseline
+instead, so the backlog is not launched. Tasks started before the change still start and continue,
+with a note that tracker commands are unavailable to them. Labels, assignees and arbitrary vendor
+API writes are not supported by this interface. No keyword matching infers old prompt permissions.
+Write grants are given only in the cockpit editor: `cez automation create|update` (the agent's
+CLI) keeps or narrows them and refuses to add one.
+
+At actual agent launch and continuation cezar fetches the description, status, labels and
+accessible comment pages, writes them to `.ai/cezar/runs/<run>.tracker-context.json` and points
+the agent at that file. Content it cannot render exactly (Jira mentions, media, panels, smart
+links), a description over 200,000 characters, comments past 100 pages or over the 500,000
+character budget (the oldest are dropped) are listed in the context's `limitations` instead of
+blocking the run. If the tracker cannot be read at all, the agent still starts and is told the
+context is unavailable. Attachments, linked issues and Jira custom fields are not included. The
+agent must stop and report when missing data matters. Jira comments are posted as plain text.
+The browser's existing issue preview remains a separate, smaller read described above.
+
+A tracker task can use `node "$CEZ_BIN" tracker read` to refresh its issue. Authorized writes:
+
+```sh
+node "$CEZ_BIN" tracker comment --id <stable-UUID> --body-file comment.md
+node "$CEZ_BIN" tracker transition --id <stable-UUID> --transition <id-from-context> --expected-status <current-status-id>
+```
+
+The session capability binds these commands to one run/project/issue. It is issued for an active execution, replaced on continuation/restart,
+rejected for terminal runs and not delegated to children; only the first parallel variant has
+write access. Connection rotation/removal invalidates subsequent operations. Local management
+API and same-user filesystem access remain trusted; this is not a hostile-process sandbox.
+The commands require the local cockpit and never fall back to exposing a vendor token.
+
+Persist the operation UUID before calling. Retry with the same UUID and identical payload:
+completed receipts replay without resending, different payloads are rejected, and uncertain
+outcomes stay `unknown`. A failure before the request was sent (status changed, expired task,
+connection changed) is `rejected` and frees the UUID for a retry. Writes to one issue queue for
+up to 20 seconds. A recorded result replays even after the connection was rotated. Receipts live
+beside run state and are deleted with the run. Inspect the issue after an unknown result; do not
+invent a new UUID to retry blindly. A dead process's lock can be reclaimed, but its unknown
+receipt is retained. Status preconditions detect intervening changes observed
+before sending; there is no claim of atomic compare-and-set at the vendor. Transitions requiring
+additional Jira fields are unavailable. Neither comments nor transitions promise exactly-once
+remote effects.
+
+Pausing or editing an automation governs future launches. Already started runs retain their captured operation permissions; cancel a run to stop new operations from it, or disconnect/rotate the connection to revoke all old bindings. An already submitted vendor request may still finish.

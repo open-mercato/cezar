@@ -543,3 +543,12 @@ export function compareGroups(runs: readonly RunRecord[], view: ListView): Compa
     return [{ groupId, title: groupTitle(first), count: members.length }]
   })
 }
+
+/** Width of one nesting step in the Task cell — the sidebar's own step. */
+export const TASK_INDENT_PX = 14
+
+/** Floor of the Task column for a row at `depth`: the indent is added on top of the 220px a root
+ *  gets, so a nested title keeps the room it would have had unindented (#979). */
+export function taskCellMinWidth(depth: number): number {
+  return 220 + Math.max(0, depth) * TASK_INDENT_PX
+}

@@ -299,7 +299,7 @@ describe('task detail', () => {
 
 describe('failures stay distinct and carry no secret', () => {
   it.each([
-    [401, 'unauthorized'], [403, 'unauthorized'], [429, 'rate_limited'], [503, 'unavailable'], [400, 'invalid_response'],
+    [401, 'unauthorized'], [403, 'unauthorized'], [429, 'rate_limited'], [503, 'unavailable'], [400, 'unavailable'],
   ])('maps a list HTTP%s to %s', async (status, code) => {
     const { client } = mock(() => json({ err: 'pk_secret' }, status));
     const result = await client.driver(association).listIssues(list);
@@ -331,4 +331,11 @@ it('forgets the workspace and cached results on clearCache', async () => {
   client.clearCache();
   await driver.listIssues(list);
   expect(requests).toHaveLength(4);
+});
+
+it('offers no mediated task access, so a task can neither read through nor write with the token', () => {
+  const { client, requests } = mock(() => undefined);
+  const driver = client.driver(association);
+  expect(driver.context).toBeUndefined();
+  expect(requests).toHaveLength(0);
 });

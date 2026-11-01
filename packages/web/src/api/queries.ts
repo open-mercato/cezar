@@ -7,7 +7,10 @@ import { mergeRun } from './events'
 import {
   ApiError,
   browseFs,
+  cancelAgentSetup,
   cancelGithubLogin,
+  getAgentSetup,
+  startAgentSetup,
   getGithubLogin,
   getRepoSuggestions,
   initProjectGit,
@@ -25,6 +28,8 @@ import {
   getAgentAccountDetails,
   getAgentAccountStatus,
   getAgentProfiles,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
   getConfig,
   getGithub,
   getGithubChecks,
@@ -131,9 +136,13 @@ import type {
   ProjectsResponse,
   GithubLoginState,
   GithubRefStatusData,
+  AgentSetupAction,
+  AgentSetupProvider,
+  AgentSetupState,
   ProviderStatusResponse,
   ReferenceStatus,
   RunRecord,
+  AgentFallbackCandidate,
   SelectAgentProfileInput,
   SetAgentConfigInput,
   TaskActionSurface,
@@ -432,6 +441,7 @@ export const workspaceQueryKeys = {
   dashboard: ['workspace', 'dashboard'] as const,
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
+  agentSetup: ['workspace', 'providers', 'setup'] as const,
   projects: ['workspace', 'projects'] as const,
   /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
   githubOwners: ['workspace', 'github-owners'] as const,
@@ -458,6 +468,7 @@ export const workspaceQueryKeys = {
   /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
    *  Workspace-led like the registry: an account describes the machine, not a repo. */
   agentProfiles: ['workspace', 'agent-profiles'] as const,
+  agentFallbackPolicy: (projectId: string) => ['workspace', 'agent-profiles', 'fallback-policy', projectId] as const,
   /** One account's identity, keyed by its route id. A child of `agentProfiles` so removing an
    *  account drops any details cached for it in the same invalidation. */
   agentAccountDetails: (routeId: string) =>
@@ -527,7 +538,8 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot }
+  const antigravity = useRunnerModels('antigravity', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, antigravity }
 }
 
 export function useProviderStatus() {
@@ -565,6 +577,51 @@ export function useRefreshProviderStatus() {
       workspaceQueryKeys.providerStatus,
       (cached) => mergeProviderStatusResponse(requestStart, cached, result),
     ),
+  })
+}
+
+/** While a setup terminal runs, its exit code is the page's only signal: read it often, in a hidden
+ *  tab too, because the server forgets an exited session after a minute. Nothing is kept for a later
+ *  visit: a session remembered as running would read as one that vanished. */
+export function useAgentSetup() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentSetup,
+    queryFn: ({ signal }) => getAgentSetup({ signal }),
+    retry: false,
+    gcTime: 0,
+    refetchInterval: (state) => {
+      const data = state.state.data
+      return data?.available && data.session?.exitCode === null ? AGENT_SETUP_POLL_MS : false
+    },
+    refetchIntervalInBackground: true,
+  })
+}
+
+const AGENT_SETUP_POLL_MS = 1_000
+
+/** An install changes which runners the composer can offer. */
+export function useInvalidateHealth() {
+  const queryClient = useQueryClient()
+  return useCallback(() => void queryClient.invalidateQueries({ queryKey: queryKeys.health }), [queryClient])
+}
+
+export function useStartAgentSetup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ provider, action }: { provider: AgentSetupProvider; action: AgentSetupAction }) => startAgentSetup(provider, action),
+    retry: false,
+    // Written straight in: the polling above starts from this, even if the next read fails.
+    onSuccess: (session) => queryClient.setQueryData<AgentSetupState>(workspaceQueryKeys.agentSetup, (state) => (state?.available ? { ...state, session } : state)),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
+  })
+}
+
+export function useCancelAgentSetup() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (sessionId: string) => cancelAgentSetup(sessionId),
+    retry: false,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.agentSetup }),
   })
 }
 
@@ -1695,6 +1752,25 @@ export function useAgentProfiles() {
   return useQuery({
     queryKey: workspaceQueryKeys.agentProfiles,
     queryFn: ({ signal }) => getAgentProfiles({ signal }),
+  })
+}
+
+export function useAgentFallbackPolicy(projectId: string | null) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'),
+    queryFn: ({ signal }) => getAgentFallbackPolicy({ projectId: projectId ?? 'default' }, { signal }),
+    enabled: projectId !== null,
+    retry: false,
+  })
+}
+
+export function useSaveAgentFallbackPolicy(projectId: string | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { expectedRevision: number; expectedIncarnation: string | null; enabled: boolean; candidates: AgentFallbackCandidate[] }) =>
+      putAgentFallbackPolicy({ projectId: projectId ?? 'default', ...input }),
+    retry: false,
+    onSuccess: (data) => queryClient.setQueryData(workspaceQueryKeys.agentFallbackPolicy(projectId ?? 'default'), data),
   })
 }
 
