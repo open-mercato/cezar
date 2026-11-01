@@ -1,0 +1,20 @@
+{
+  "description": "The six digits, from the final handshake hash.",
+  "cases": [
+    {
+      "name": "the XXpsk3 vector",
+      "handshakeHash": "6047eac6ab9d41c4fcd645174bdaab31f66648a8d1e6f24a4d23c0f30d4e3f7d",
+      "sas": "518255"
+    },
+    {
+      "name": "leading zero 1",
+      "handshakeHash": "f1e805ca82a5506dfcd00c473603244e01a3eecc918a8e34800d5b1b05e3c51c",
+      "sas": "027145"
+    },
+    {
+      "name": "leading zero 2",
+      "handshakeHash": "d6dac9716eb91f758002d716ec16fb5b835f9bd096cac97d6f22687bc0c65e6c",
+      "sas": "028762"
+    }
+  ]
+}
