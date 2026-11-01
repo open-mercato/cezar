@@ -161,6 +161,8 @@ relay server has no password.
 | New cockpit features | Capabilities, as the parent spec requires |
 | A cezar older than this feature | Has no Connect a phone screen, so it cannot be paired. Manual still works |
 
+## Relay contract
+
 Protocol version 1. The relay is built in the private repository `patzick/rome`. This section is the
 whole interface between that relay and the public clients. It describes behaviour only.
 
