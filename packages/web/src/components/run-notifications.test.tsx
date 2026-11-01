@@ -1,5 +1,6 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, render } from '@testing-library/react'
+import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
@@ -44,9 +45,14 @@ function run(over: Partial<RunRecord> = {}): RunRecord {
 
 /** A Notification stand-in: records constructions, throws never. */
 function stubNotification(permission: NotificationPermission = 'granted') {
-  const constructed: Array<{ title: string; options?: NotificationOptions }> = []
-  function FakeNotification(this: unknown, title: string, options?: NotificationOptions) {
-    constructed.push({ title, options })
+  const constructed: Array<{ title: string; options?: NotificationOptions; onclick?: () => void; closed?: boolean }> = []
+  function FakeNotification(this: { onclick?: () => void; close: () => void }, title: string, options?: NotificationOptions) {
+    const entry: (typeof constructed)[number] = { title, options }
+    constructed.push(entry)
+    Object.defineProperty(entry, 'onclick', { get: () => this.onclick, enumerable: false })
+    this.close = () => {
+      entry.closed = true
+    }
   }
   ;(FakeNotification as unknown as { permission: string }).permission = permission
   vi.stubGlobal('Notification', FakeNotification)
@@ -61,6 +67,10 @@ function hideTab(hidden = true) {
   })
 }
 
+function Where() {
+  return <output data-testid="where">{useLocation().pathname}</output>
+}
+
 /** Mount the trigger, seed the run list, then apply the same patch the SSE layer would. */
 function mount(uiState: WorkspaceUiState, seed: RunRecord[]) {
   // Queries would otherwise fire real fetches for ui-state/runs — keep them honestly pending.
@@ -69,11 +79,15 @@ function mount(uiState: WorkspaceUiState, seed: RunRecord[]) {
   client.setQueryData(queryKeys.runs.list(), seed)
   render(
     <QueryClientProvider client={client}>
-      <RunNotifications />
+      <MemoryRouter initialEntries={['/p/x/queue']}>
+        <RunNotifications />
+        <Where />
+      </MemoryRouter>
     </QueryClientProvider>,
   )
+  const where = () => document.querySelector('[data-testid=where]')?.textContent
   const patch = (runs: RunRecord[]) => act(() => client.setQueryData(queryKeys.runs.list(), runs))
-  return { client, patch }
+  return { client, patch, where }
 }
 
 afterEach(() => {
@@ -87,6 +101,20 @@ afterEach(() => {
 })
 
 describe('RunNotifications', () => {
+  it('clicking a notification focuses the window, opens that run and closes it (#1761)', () => {
+    const constructed = stubNotification('granted')
+    const focus = vi.spyOn(window, 'focus').mockImplementation(() => {})
+    hideTab()
+    const { patch, where } = mount({ notifications: { enabled: true } }, [run({ status: 'running' })])
+    patch([run({ status: 'review' })])
+
+    act(() => constructed[0]?.onclick?.())
+
+    expect(focus).toHaveBeenCalled()
+    expect(where()).toBe('/tasks/r1')
+    expect(constructed[0]?.closed).toBe(true)
+  })
+
   it('notifies when a run enters waiting while the tab is hidden', () => {
     const constructed = stubNotification('granted')
     hideTab()
