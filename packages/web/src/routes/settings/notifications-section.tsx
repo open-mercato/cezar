@@ -10,6 +10,7 @@ import {
   notificationSupport,
   type NotificationSupport,
 } from '@/lib/notifications'
+import { NotchToggle, shellHasNotch } from './notch-toggle'
 
 /**
  * Settings → Notifications (R6 Step 1.7, spec §"Cross-cutting").
@@ -121,6 +122,8 @@ export function NotificationsSection() {
           </p>
         ) : null}
       </section>
+
+      {shellHasNotch() ? <NotchToggle /> : null}
     </div>
   )
 }
