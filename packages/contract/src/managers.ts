@@ -278,7 +278,7 @@ export const managerMessagesResponseSchema = z.object({
 export type ManagerMessagesResponse = z.infer<typeof managerMessagesResponseSchema>;
 
 export const sendManagerMessageInputSchema = z
-  .object({ text: z.string().trim().max(100_000), images: attachmentListSchema.optional() })
+  .strictObject({ text: z.string().trim().max(100_000), images: attachmentListSchema.optional() })
   .refine((input) => input.text !== '' || (input.images?.length ?? 0) > 0, {
     message: 'write a message or attach a file',
     path: ['text'],
@@ -289,6 +289,9 @@ export const managerActionDecisionInputSchema = z.object({ decision: z.enum(['ap
 export type ManagerActionDecisionInput = z.infer<typeof managerActionDecisionInputSchema>;
 
 export const managerOkResponseSchema = z.object({ ok: z.literal(true) });
+
+/** `attachments` is what the server kept: the client's proof that nothing was dropped on the way. */
+export const managerSendResponseSchema = z.object({ ok: z.literal(true), attachments: z.number().int().min(0) });
 
 // ---- what the manager sees --------------------------------------------------
 

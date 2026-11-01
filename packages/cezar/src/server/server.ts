@@ -8461,7 +8461,9 @@ export function createApp(deps: ServerDeps) {
       const { text, images } = c.req.valid('json');
       const attachments = readAttachments(images ?? []);
       if (typeof attachments === 'string') return c.json({ error: attachments }, 400);
-      return managerEngine.send(c.req.valid('param').id, text, attachments) ? c.json({ ok: true as const }) : c.json(MANAGER_NOT_FOUND, 404);
+      return managerEngine.send(c.req.valid('param').id, text, attachments)
+        ? c.json({ ok: true as const, attachments: attachments.length })
+        : c.json(MANAGER_NOT_FOUND, 404);
     })
     .get('/workspace/managers/:id/attachments/:file', paramZodValidator(managerAttachmentParamSchema), (c) => {
       const { id, file } = c.req.valid('param');

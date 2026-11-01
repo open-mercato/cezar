@@ -223,4 +223,12 @@ esac
   it('a watch with nothing new is quiet', async () => {
     expect((await turn('[cez-manager:watch]\nNew attention items: 0.')).text).toBe('MANAGER:QUIET');
   });
+
+  it('says how many attachments it kept, and refuses a key it does not know', async () => {
+    const { id } = await createManager({ instructions: '', projects: 'all', cronMinutes: 0 });
+    const path = `${BASE}/${id}/messages`;
+    const sent = await request(path, { method: 'POST', body: { text: 'look', images: [{ mediaType: 'image/png', data: 'aGk=', name: 'a.png' }] } });
+    expect(await sent.json()).toEqual({ ok: true, attachments: 1 });
+    expect((await request(path, { method: 'POST', body: { text: 'look', pictures: [] } })).status).toBe(400);
+  });
 });

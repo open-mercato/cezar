@@ -64,7 +64,13 @@ export async function getManagerMessages(
 
 export async function sendManagerMessage(id: string, text: string, images?: AttachmentEntry[]) {
   const json = { text, ...(images?.length ? { images } : {}) }
-  return unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
+  const sent = await unwrap(await managers()[':id'].messages.$post({ param: managerParam(id), json }), managerPath(id, '/messages'))
+  // A server older than this page drops what it does not know and still answers ok. Rejecting
+  // hands the draft back; a silent success would lose the user's files.
+  if ((images?.length ?? 0) > 0 && sent.attachments !== images?.length) {
+    throw new Error('This cezar server dropped your attachments because it is older than this page. Restart cezar and send again.')
+  }
+  return sent
 }
 
 export const managerAttachmentUrl = (id: string, file: string): string =>

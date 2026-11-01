@@ -8,6 +8,7 @@ import {
   applyManagerMessage,
   createManager,
   decideManagerAction,
+  sendManagerMessage,
   getManagerMessages,
   managerChat,
   managerKeys,
@@ -129,6 +130,19 @@ describe('client', () => {
 
   const answer = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+
+  it('refuses a send whose attachments the server did not keep, so the composer restores the draft', async () => {
+    const images = [{ uploadId: 'a'.repeat(24) }]
+    fetchMock.mockResolvedValueOnce(answer({ ok: true }))
+    await expect(sendManagerMessage('g', 'look', images)).rejects.toThrow('Restart cezar')
+    fetchMock.mockResolvedValueOnce(answer({ ok: true, attachments: 1 }))
+    await expect(sendManagerMessage('g', 'look', images)).resolves.toMatchObject({ attachments: 1 })
+  })
+
+  it('needs no proof for a message with no files', async () => {
+    fetchMock.mockResolvedValueOnce(answer({ ok: true }))
+    await expect(sendManagerMessage('g', 'hi')).resolves.toBeTruthy()
+  })
 
   it('posts a create and validates the summary', async () => {
     fetchMock.mockResolvedValue(answer(managerFixture()))
