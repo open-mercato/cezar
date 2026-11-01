@@ -46,3 +46,9 @@ it('maps a bound Linear connection', async () => {
   await writeTrackerAssociation(join(project, '.ai/cezar'), linear);
   expect(await resolveTrackerAgentEnv(project, linear, env)).toEqual({ LINEAR_API_KEY: 'synthetic-linear-key' });
 });
+it('never hands a ClickUp token to an agent', async () => {
+  const record = await new TrackerConnections(env).write(project, { kind: 'clickup', token: 'pk_synthetic' });
+  const clickup = { ...association, kind: 'clickup' as const, connectionId: record!.id };
+  await writeTrackerAssociation(join(project, '.ai/cezar'), clickup);
+  expect(await resolveTrackerAgentEnv(project, clickup, env)).toEqual({});
+});

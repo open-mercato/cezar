@@ -35,7 +35,7 @@ export function requestFailure(error: unknown): TrackerFailure | TrackerNotFound
 /** Never retain/log HTTP bodies or request headers in errors. */
 export class TrackerHttp {
   private cooldownUntil = 0;
-  constructor(private readonly fetcher: typeof fetch = fetch) {}
+  constructor(private readonly fetcher: typeof fetch = fetch, private readonly maxBytes = 2 * 1024 * 1024) {}
 
   rateLimit(seconds = 60): never {
     const bounded = Number.isFinite(seconds) ? Math.max(1, Math.min(86_400, Math.ceil(seconds))) : 60;
@@ -65,7 +65,7 @@ export class TrackerHttp {
       await response.body?.cancel();
       throw new TrackerRequestError('unavailable', 'Tracker request failed. Try again later.');
     }
-    const cap = 2 * 1024 * 1024;
+    const cap = this.maxBytes;
     if (Number(response.headers.get('content-length') ?? 0) > cap) {
       await response.body?.cancel();
       throw new TrackerRequestError('invalid_response', 'Tracker response exceeded the size limit. Narrow the request.');

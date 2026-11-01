@@ -1056,12 +1056,12 @@ export async function getTrackerAssociation(opts?: ReadOptions): Promise<Tracker
 
 export async function getTrackerCandidates(
   kind: TrackerKind,
-  params: { q?: string; cursor?: string; limit?: number } = {},
+  params: { q?: string; parent?: string; cursor?: string; limit?: number } = {},
   opts?: ReadOptions,
 ): Promise<TrackerCandidatesResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].tracker.candidates.$get(
-      { param: { projectId: queryScope() }, query: { kind, q: params.q, cursor: params.cursor, limit: params.limit === undefined ? undefined : String(params.limit) } },
+      { param: { projectId: queryScope() }, query: { kind, q: params.q, parent: params.parent, cursor: params.cursor, limit: params.limit === undefined ? undefined : String(params.limit) } },
       init(opts),
     ),
     '/tracker/candidates',

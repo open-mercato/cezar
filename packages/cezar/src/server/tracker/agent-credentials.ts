@@ -21,6 +21,8 @@ export async function resolveTrackerAgentEnv(
     || current.source.id !== expected.source.id || current.source.webUrl !== expected.source.webUrl
     || current.connectionId !== expected.connectionId || record.id !== expected.connectionId
     || record.credentials.kind !== expected.kind) throw new TrackerAgentBindingError();
+  // ClickUp has no automations, and its token may carry full account access: agents never get it.
+  if (record.credentials.kind === 'clickup') return {};
   return record.credentials.kind === 'jira'
     ? { JIRA_BASE_URL: record.credentials.origin, JIRA_EMAIL: record.credentials.email, JIRA_API_TOKEN: record.credentials.token }
     : { LINEAR_API_KEY: record.credentials.key };

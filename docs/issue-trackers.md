@@ -1,4 +1,4 @@
-# Jira Cloud and Linear
+# Jira Cloud, Linear and ClickUp
 
 Cezar can browse a Jira Cloud project or a Linear team and hand a selected issue to an
 agent. Each local project has one saved tracker connection. GitHub remains independent.
@@ -270,3 +270,25 @@ when paused. This protects resuming an unfinished historical scan from launching
 but disk usage and receipt lookup cost grow with the number of distinct events. Deleting the
 automation lets receipts older than 90 days expire through normal compaction. This is a conservative
 interim retention policy; GitHub and schedule receipt retention is unchanged.
+
+## ClickUp
+
+Open **Settings → Issue tracker → Configure ClickUp credentials** and paste a personal API token
+(`pk_…`, from ClickUp's **Settings → Apps**). If the token reaches more than one workspace, cezar
+lists them and asks you to save the connection again with a **Workspace ID**, the number in
+`app.clickup.com/<id>`.
+
+ClickUp's docs mention no read-only or scoped tokens, so assume a personal token carries your full
+account access and prefer a low-privilege account. Cezar only reads with it and never passes it to
+agents.
+
+Each project connects one **space, folder or list**. Choose **Browse ClickUp**, open a row to go a
+level deeper, select the row you want and choose **Connect**. A folder holds only the tasks directly
+in it: a subfolder is a separate scope. Tasks living in several lists count as members of each.
+
+ClickUp has no task text search, so cezar checks up to three pages (300 tasks, most recently updated
+first) per request and offers **Load more** to continue. A term shaped like a task ID or custom ID is
+looked up directly first. Connecting a folder or list keeps searches short.
+
+A task launched from ClickUp carries the description only, as with the other providers. Automation
+events are not available for ClickUp.
