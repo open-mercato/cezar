@@ -33,6 +33,12 @@ use std::time::{Duration, Instant};
 
 mod disclaim;
 mod node_runtime;
+#[cfg(target_os = "macos")]
+mod notch;
+#[cfg(any(target_os = "macos", test))]
+mod notch_geometry;
+#[cfg(any(target_os = "macos", test))]
+mod notch_model;
 mod telemetry;
 pub use disclaim::disclaim_exec_if_asked;
 
@@ -87,7 +93,8 @@ const INIT_SCRIPT: &str = r#"
     var platform = "__PLATFORM__";
     // `microphone`: this shell is entitled to it — an older macOS one refuses every dictation
     // (telemetry c55c7b0b), so the cockpit disables the mic there instead.
-    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true };
+    // `notch`: this shell has the Manager notch, so Settings offers its toggle.
+    window.__CEZ_DESKTOP__ = { platform: platform, microphone: true, notch: platform === "macos" };
     // At document start the root element may not exist yet; the flag is a convenience, the
     // rest of this script is not.
     if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
@@ -723,13 +730,32 @@ pub fn run() {
     let shell_for_state = shell.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![update_cezar_command, restart_app, show_versions_menu, send_error_report])
+        .invoke_handler(tauri::generate_handler![
+            update_cezar_command,
+            restart_app,
+            show_versions_menu,
+            send_error_report,
+            #[cfg(target_os = "macos")]
+            notch::notch_ready,
+            #[cfg(target_os = "macos")]
+            notch::notch_report_shape,
+            #[cfg(target_os = "macos")]
+            notch::notch_expand,
+            #[cfg(target_os = "macos")]
+            notch::notch_open_manager,
+            #[cfg(target_os = "macos")]
+            notch::notch_enabled,
+            #[cfg(target_os = "macos")]
+            notch::set_notch_enabled,
+        ])
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
             build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
             register_global_shortcuts(&handle, &shell_for_setup);
+            #[cfg(target_os = "macos")]
+            notch::start(&handle, shell_for_setup.clone());
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
             std::thread::spawn(move || supervise(supervisor_handle, shell));
@@ -788,6 +814,10 @@ pub fn run() {
             _ => {}
         })
         .on_window_event(move |window, event| {
+            // Everything below is the main window's; the notch panel never moves on its own account.
+            if window.label() != "main" {
+                return;
+            }
             match event {
                 WindowEvent::Moved(position) => {
                     if cfg!(debug_assertions) {

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-notch-enabled"
+description = "Enables the set_notch_enabled command without any pre-configured scope."
+commands.allow = ["set_notch_enabled"]
+
+[[permission]]
+identifier = "deny-set-notch-enabled"
+description = "Denies the set_notch_enabled command without any pre-configured scope."
+commands.deny = ["set_notch_enabled"]
