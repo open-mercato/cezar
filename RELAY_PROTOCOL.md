@@ -562,8 +562,8 @@ from a device with no saved row, or with no open slot, is dropped with no answer
 for the reply. On timeout, it closes the socket and reconnects with jitter. Frames that arrive from a
 device with no session and no open slot are dropped. A stale frame from an ended session can reach a new
 socket, because the relay routes by `deviceId`. A phone drops any data frame while it has no session.
-A phone that gets a frame that fails to decrypt as the reply drops it and keeps the 10 s timer
-running. A stale frame arriving at cezar on a new socket with an open slot MUST NOT use the slot up: a
+A phone that gets a frame that fails to decrypt as the reply drops it, restores the handshake state from
+before that read, since a failed read has already mixed its bytes, and keeps the 10 s timer running. A stale frame arriving at cezar on a new socket with an open slot MUST NOT use the slot up: a
 first message is only consumed when it is exactly 48 bytes and decrypts under `KK`.
 
 Tunnel records then flow as Noise transport messages, in data frames. Vector: `session-kk.json`.
