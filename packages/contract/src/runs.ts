@@ -333,6 +333,8 @@ export const runRecordSchema = z.object({
   /** The PR this task is ABOUT (#407) — auto-discovered from conversation references. Display
    *  tier only: `pullRequestUrl` (the PR this task CREATED) wins, and the action gates ignore it. */
   referencedPullRequestUrl: z.string().optional(),
+  /** The GitHub item this task was handed from (#1601) — the GitHub page's queued marker key. */
+  sourceUrl: z.string().optional(),
   /** The PR/issue number this task is ABOUT (task auto-naming spec) — display tier only. */
   prNumber: z.number().optional(),
   prRefs: z.array(runPrRefSchema).max(8).optional(),
@@ -1236,6 +1238,9 @@ export const createRunInputBaseSchema = z
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    /** The GitHub item this task was handed from (#1601): the cockpit rebuilds its "queued" marker by matching
+     *  this URL against the runs list. Provenance only, never read by the engine. */
+    sourceUrl: z.string().url().max(2048, 'must be at most 2048 characters').optional(),
     /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this task as the root of
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
