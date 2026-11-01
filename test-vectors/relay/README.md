@@ -28,6 +28,8 @@ Bytes are lowercase hex unless a field is a wire string, which stays `base64url`
 - **Handshakes.** Replay `messages` from both roles. Compare each message, `handshakeHash`, the digits
   and `transportKeys`, then decrypt what follows.
 - **`transportKeys`.** `phoneToCezar` is Noise's first split key. Each transcript entry gives its `nonce`.
+- **Pairing failures.** `failuresWithoutPending` replace `pending`, so they use nonce 0. `outcomesAtNonce1`
+  follow it.
 - **`negative.json`.**
   - `transport`: start one receiver at `key`, nonce 0, and deliver in order. `fail` must be a decryption
     failure, which ends the session.
@@ -61,5 +63,7 @@ transport frames and rekey through the `snow` crate, byte for byte.
 maintained JavaScript library has `XXpsk3`, `KK` and `Rekey` together. It passes the published vectors
 for `KK`, `XX` and `XXpsk3`, and `snow` agrees with it, but `snow` is unaudited too. Published vectors
 do not cover `Rekey`, so that rests on `snow` and on `verify.mjs`, which derives each new key by hand.
+`packages/cezar/test/unit/relay-vectors.test.ts` runs the three Node checks in CI, and regenerating must
+reproduce every committed byte.
 Nothing in this directory ships: it is outside every npm workspace, and the published CLI does not
 depend on it.

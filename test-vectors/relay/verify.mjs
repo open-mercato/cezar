@@ -91,7 +91,7 @@ for (const item of qrs.refused) same(parseQr(item.qr).refused, item.reason, item
 // Typed code.
 const codes = load('code.json')
 function normalize(input) {
-  const stripped = input.replace(/[ \-‐-―]/g, '').toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1')
+  const stripped = input.replace(/[ \-‐-―]/g, '').replace(/[a-z]/g, (letter) => letter.toUpperCase()).replace(/O/g, '0').replace(/[IL]/g, '1')
   return /^[0-9A-HJKMNP-TV-Z]{12}$/.test(stripped) ? stripped : null
 }
 for (const item of codes.cases) {
@@ -237,6 +237,10 @@ const pending = pair.afterHandshake.pending
 same(unpad(open(pair.transportKeys.cezarToPhone, 0, bytes(pending.ciphertext))).toString('utf8'), pending.text, 'pending')
 for (const item of pair.afterHandshake.outcomesAtNonce1) {
   same(unpad(open(pair.transportKeys.cezarToPhone, 1, bytes(item.ciphertext))).toString('utf8'), item.text, item.name)
+}
+for (const item of pair.afterHandshake.failuresWithoutPending) {
+  same(item.nonce, 0, `${item.name}: nonce`)
+  same(unpad(open(pair.transportKeys.cezarToPhone, 0, bytes(item.ciphertext))).toString('utf8'), item.text, item.name)
 }
 const session = load('session-kk.json')
 same(session.prologue, Buffer.concat([Buffer.from('cezar-session-v1'), unb64(session.cezarId, 16), unb64(session.deviceId, 16)]).toString('hex'), 'session prologue')
