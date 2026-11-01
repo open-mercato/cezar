@@ -1688,7 +1688,8 @@ export class RunManager {
       ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
       // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
       // `cez` that happens to be on its PATH without the command (observed on the first live run).
-      ...(apiUrl && process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
+      // Not gated on dispatch: `node "$CEZ_BIN" handoff …` needs no cockpit, only this binary.
+      ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
@@ -2788,8 +2789,8 @@ export class RunManager {
 
   /**
    * Can a task actually REACH the dispatch routes? The flag being on is not enough: `CEZ_API_URL`
-   * and `CEZ_BIN` are set by `serveCommand`, so a headless `cezar run` has neither — no cockpit to
-   * call, and no entrypoint to call it with.
+   * is set by `serveCommand` only, so a headless `cezar run` has no cockpit to call (it does set
+   * `CEZ_BIN`, for `cez handoff`).
    *
    * The gate for everything an agent is TOLD about dispatch (the prompt), as opposed to what the
    * engine does with a `dispatch` record it already has. A headless run that was taught the CLI
