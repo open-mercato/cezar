@@ -83,6 +83,7 @@ const health = (terminal: boolean): HealthResponse => ({
     tokenUsageMetrics: true,
     costMetrics: true,
     followups: false,
+    phonePairing: false,
     singleProject: false,
     automations: false,
     webhooks: false,

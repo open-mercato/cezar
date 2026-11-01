@@ -340,6 +340,9 @@
  */
 
 @theme inline {
+  /* A QR code stays black on white in both themes: a scanner needs the contrast and the quiet zone. */
+  --color-qr-ground: #fff;
+  --color-qr-module: #000;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

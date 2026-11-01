@@ -25,6 +25,7 @@ const HEALTH: HealthResponse = {
     terminal: false,
     designMode: false,
     followups: true,
+    phonePairing: false,
     singleProject: false,
     automations: false, webhooks: false,
     dispatch: false,
