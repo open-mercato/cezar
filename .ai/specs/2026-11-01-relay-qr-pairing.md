@@ -686,7 +686,7 @@ that this phone can run tasks on this computer. The list stays usable from any n
 
 Connecting a cezar to a relay widens exposure, so it needs a recorded decision under AGENTS.md
 § Zero config. Nothing leaves the machine until the user clicks **Connect a phone**. The socket exists
-from the first Approve, only while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
+from the first Approve, while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
 all of it. `CEZ_RELAY_URL` overrides the host for development. Both go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
 the same commit. See [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule).
