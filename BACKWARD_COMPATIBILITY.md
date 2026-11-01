@@ -271,7 +271,7 @@ Written by one version, read by the next, and hand-editable by design:
   `lifecycle/output/<operationId>.ndjson`, and private mutation locks retain
   identity, generation, pending intent and outcomes outside removable worktrees
   and task records. Optional `RunRecord.worktreeLifecycle` is a rebuildable
-  projection; no existing run-status enum value is renamed or added. Completed
+  projection (additive: optional `revision`, the operation's revision); no existing run-status enum value is renamed or added. Completed
   history expires after 7 days only when safe; unresolved operations/retained
   directories remain. Identity persists while the task exists, including through
   reclamation and later recreation. A corrupt independent record is retained and

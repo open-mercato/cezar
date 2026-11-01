@@ -96,10 +96,11 @@ export function taskAttention(projectId: string, runs: RunRecord[], now: number)
     const base = { projectId, title, runId: run.id };
     const gate = run.worktreeLifecycle;
     if (gate?.needsAttention) {
-      // Keyed on the operation: a retry that fails again is a new wait, and a finished task keeps its outcome.
-      const operation = gate.activeOperationId ?? `${gate.worktreeId}:${gate.generation}`;
+      // A retry reuses the operation, so the revision is what makes its next failure a new wait.
+      const operation = gate.activeOperationId ? `${gate.activeOperationId}:${gate.revision ?? 0}` : `${gate.worktreeId}:${gate.generation}`;
       items.push({ ...base, key: `task-needs-you:${projectId}:${run.id}:worktree:${operation}`, kind: 'task-needs-you', detail: WORKTREE_RECOVERY, ...(run.waitingSince ? { since: run.waitingSince } : {}) });
-      if (run.status === 'waiting') continue;
+      // A finished task keeps its outcome; an open wait comes back once the worktree is sorted.
+      if (run.status === 'waiting' || run.awaitingAnswerSince !== undefined) continue;
     } else if ((run.status === 'waiting' && !lifecycleBusy(gate)) || (run.status === 'failed' && run.awaitingAnswerSince !== undefined)) {
       const since = run.waitingSince ?? run.awaitingAnswerSince ?? lastActivityAt(run);
       const detail = waitDetail(run);

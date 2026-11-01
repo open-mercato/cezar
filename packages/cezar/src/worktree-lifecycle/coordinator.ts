@@ -80,7 +80,7 @@ export class WorktreeLifecycleCoordinator {
       worktreeLifecycle: {
         worktreeId: record.worktreeId, generation: record.generation,
         ...(record.activeOperationId ? {activeOperationId: record.activeOperationId} : {}),
-        ...(operation ? {phase: operation.phase, state: operation.state} : {}),
+        ...(operation ? {phase: operation.phase, state: operation.state, revision: operation.revision} : {}),
         needsAttention: operation ? attention.has(operation.state) : false,
       },
     });
