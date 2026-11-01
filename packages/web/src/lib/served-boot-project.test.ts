@@ -5,6 +5,7 @@ import { withServedBootProject } from './served-boot-project'
 
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'repob',
   repoRoot: '/home/me/dev/repoB',

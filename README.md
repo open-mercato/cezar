@@ -55,7 +55,7 @@
 ## Features
 
 - 💯&nbsp;Free and open source.
-- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `junie`, `opencode` or `pi` login. No API key needed.
+- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `agy` (Antigravity), `junie`, `opencode` or `pi` login. No API key needed.
 - ☁️&nbsp;Easy to set up on a VPS, so your agents keep working when your laptop is closed.
 - 📱&nbsp;Fully responsive. Start and review tasks from your phone.
 - 🔀&nbsp;Every task gets its own git worktree, so several agents can work at the same time. Extra tasks wait in a queue.
@@ -125,7 +125,7 @@
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
 [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
-[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli) or [pi](https://github.com/badlogic/pi-mono).
+[Cursor Agent](https://cursor.com/docs/cli/overview), [Google Antigravity CLI](https://antigravity.google/docs/cli), [Junie](https://junie.jetbrains.com/cli) or [pi](https://github.com/badlogic/pi-mono).
 `git` and `gh` are optional.
 
 ```bash
@@ -133,7 +133,10 @@ cd your-repo
 npx cezar-run
 ```
 
-This opens the cockpit at `http://localhost:4321`. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli` still works too — it's the same package under its older name.
+This opens the cockpit at `http://localhost:4321`. If a compatible cockpit is already running,
+the command reuses it, adds the current project when needed, and opens that project's page instead
+of starting a duplicate server. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli`
+still works too — it's the same package under its older name.
 
 ```bash
 npx cezar-run run "add a --json flag to the export command"   # headless, no browser
@@ -228,6 +231,8 @@ npm run dev
 ## License
 
 **MIT** © Patryk Lewczuk. Full text in [LICENSE](LICENSE).
+
+Windows installers are covered by the [code signing policy](docs/code-signing-policy.md).
 
 ## Jira and Linear
 

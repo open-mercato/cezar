@@ -9,12 +9,15 @@ import {
   trackerWatchInputSchema, trackerWatchParamsSchema, trackerWatchQuerySchema,
   trackerCandidatesQuerySchema, trackerListQuerySchema, trackerSearchQuerySchema, trackerItemQuerySchema, trackerReadScope,
   trackerCredentialsSchema, trackerItemParamsSchema, trackerAssociationInputSchema, type TrackerChangedEvent,
+  trackerContextSchema, trackerOperationInputSchema, trackerOperationResultSchema,
   secretParamsSchema, secretValueInputSchema, type SecretsList, type SecretValueInput,
   e2eSetupInputSchema, type E2eStatus, taskActionSurfaceSchema,
 } from '@open-mercato/cezar-contract';
 import { SecretStore, SecretsError, type SecretScopeRef } from '../workspace/secrets.ts';
 import { E2E_SETUP_TASK, e2eCredentialsAmong, e2eSetupWorkflow, latestE2eSetupRun, readE2eStatus, setupInFlight } from '../e2e-setup.ts';
 import { createTrackerService } from './tracker/index.ts';
+import { trackerTaskContext, executeTrackerOperation } from './tracker/task-access.ts';
+import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
 import { existsSync, readFileSync, statSync } from 'node:fs';
@@ -34,7 +37,7 @@ import { processSnapshot } from './terminal/foreground.ts';
 import { loadPty } from './terminal/pty-module.ts';
 import { discoverShells } from './terminal/shells.ts';
 import { TerminalSessions, type TerminalSessionInfo } from './terminal/sessions.ts';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
 import { GithubPoller } from '../automations/github-poller.ts';
@@ -68,6 +71,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, multipartZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
+import { getAgentFallbackPolicyQuerySchema, putAgentFallbackPolicySchema } from '@open-mercato/cezar-contract';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 import {
@@ -107,11 +111,13 @@ import {
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   startTodoInputSchema,
+  registerProjectInputSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
+import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -119,6 +125,7 @@ import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-mode
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
+import { discoverAntigravityModels } from '../core/antigravity-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
@@ -203,7 +210,7 @@ import {
   repoFileQuerySchema,
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
-import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import {
   foldedLength,
   imageChars,
@@ -290,6 +297,13 @@ import {
   type ProjectListEntry,
 } from '../workspace/projects.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import {
+  candidateKey,
+  FallbackPolicyBusyError,
+  FallbackPolicyInputError,
+  getAgentFallbackPolicy,
+  putAgentFallbackPolicy,
+} from '../workspace/agent-fallback.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { createProjectInputSchema } from '@open-mercato/cezar-contract';
@@ -314,6 +328,8 @@ import { isGithubHost } from '../github-hosts.ts';
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX, forgetGithubListCache } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
+import { agentSetupRoutes } from './agent-setup-routes.ts';
+import type { InstallEnv } from './agent-setup.ts';
 import {
   agentCliRunner,
   detectOpenTargets,
@@ -369,6 +385,10 @@ export interface ServerDeps {
   store: RunStore;
   manager: RunManager;
   version: string;
+  /** Random identity of this exact server process, used by safe CLI handoff. */
+  runtimeId?: string;
+  /** Private token from the `0600` runtime lease; authorizes same-user CLI project delivery. */
+  runtimeHandoffToken?: string;
   /** Mutable holder for the async npm-registry update check (#368) —
    *  `latest` appears once the registry answers with a newer version. */
   update?: { latest?: string };
@@ -469,12 +489,21 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** The task terminal's session registry. Injectable so route tests drive a fake PTY. */
   terminalSessions?: TerminalSessions;
+  /** What the first-run page's install commands are chosen from. Injectable so a route test probes nothing. */
+  agentSetupProbeEnv?: () => Promise<InstallEnv>;
   /** The host-telemetry sampler behind the `host` topic and the `/workspace/host-usage` route.
    *  Defaults to the process-wide singleton; injectable so tests can drive a frame shape (a
    *  container object, for instance) that CI machines do not have. */
   hostSampler?: HostSampler;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
+}
+
+function matchesPrivateToken(received: string | undefined, expected: string | undefined): boolean {
+  if (received === undefined || expected === undefined) return false;
+  const receivedBytes = Buffer.from(received);
+  const expectedBytes = Buffer.from(expected);
+  return receivedBytes.length === expectedBytes.length && timingSafeEqual(receivedBytes, expectedBytes);
 }
 
 /** Legacy destructive callers must opt into the recoverable operation API before mutation. */
@@ -1311,6 +1340,7 @@ async function probeWritableDir(dir: string, create: boolean): Promise<string | 
 // with nothing to offer. See the `routed` assembly at the end of the function.
 export function createApp(deps: ServerDeps) {
   const { version, update, bindHost, bootProjectId } = deps;
+  const runtimeId = deps.runtimeId ?? randomUUID();
   // Boot singletons keep DELIBERATELY distinct names (`boot*`): every
   // project-scoped handler must resolve its `{store, manager, root, dataDir,
   // launchKey}` from `c.get('project')` — a bare `store`/`repoRoot` in a
@@ -1325,6 +1355,7 @@ export function createApp(deps: ServerDeps) {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
+      antigravity: { discover: () => discoverAntigravityModels() },
     },
   });
   const providerAuth = deps.providerAuth
@@ -1385,6 +1416,9 @@ export function createApp(deps: ServerDeps) {
     if (disabled) return message;
     return unavailableProviderMessage(required, await judged(true));
   };
+  // Fallback admission asks the same gate a human Continue meets (spec 2026-10-20-agent-usage-limit-fallback).
+  setFallbackProviderCheck((provider, profileId, repoRoot) =>
+    providerActionError([provider], { repoRoot, profileFor: () => profileId }));
   const openTerminal = deps.openTerminal ?? openInTerminal;
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
@@ -1407,13 +1441,12 @@ export function createApp(deps: ServerDeps) {
   const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
-  // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
+  // The serve boot flow (`initServeWorkspace` in src/index.ts) registers the boot repo
   // and plumbs its registry id in via `deps.bootProjectId`. Legacy callers and
   // tests construct the app without one — then it is derived lazily from the
   // registry by realpath and cached on a hit. A boot repo that is not in the
-  // registry — a task worktree, `$HOME`, an unreadable workspace, or (since
-  // boot registration became seed-once) any folder started in while the user
-  // already has projects — falls back to its would-be slug, so `bootProject`
+  // registry — a task worktree, `$HOME`, an unreadable workspace, or a legacy
+  // caller that did not supply the id — falls back to its would-be slug, so `bootProject`
   // always names the repo this server was started in. Strictly non-fatal,
   // zero-config: every failure path degrades to the slug fallback, never an
   // error.
@@ -1859,6 +1892,7 @@ export function createApp(deps: ServerDeps) {
     const caps = capabilities();
     return {
       version,
+      runtimeId,
       // Spread rather than `latestVersion: update?.latest`: an `undefined` VALUE is dropped by
       // JSON.stringify, so the key is absent on the wire — but writing it unconditionally types
       // the key as always-present, which is a shape no client ever receives. The contract schema
@@ -2044,7 +2078,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, or antigravity' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -2196,7 +2230,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, junie, copilot, or antigravity' }), async (c) => {
       const body = { data: c.req.valid('json') };
       const sid = deviceSid(c.req.header('x-cezar-sid'));
 
@@ -2464,6 +2498,45 @@ export function createApp(deps: ServerDeps) {
   };
 
   const agentProfilesRoutes = new Hono<ProjectApiEnv>()
+    .get('/workspace/agent-profiles/fallback-policy', queryZodValidator(getAgentFallbackPolicyQuerySchema), async (c) => {
+      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      const { projectId } = c.req.valid('query');
+      const root = await projectRootFor(projectId);
+      if (root === null) return c.json({ error: `unknown project: ${projectId}` }, 404);
+      if (!(await stat(root).catch(() => null))?.isDirectory()) {
+        return c.json({ error: `project folder not found: ${projectId}` }, 409);
+      }
+      return c.json(await getAgentFallbackPolicy(root));
+    })
+    .put('/workspace/agent-profiles/fallback-policy', jsonZodValidator(putAgentFallbackPolicySchema), async (c) => {
+      if (!capabilities().localHandoff) return c.json({ error: 'agent fallback is local-only' }, 409);
+      const body = c.req.valid('json');
+      const root = await projectRootFor(body.projectId);
+      if (root === null) return c.json({ error: `unknown project: ${body.projectId}` }, 404);
+      if (!(await stat(root).catch(() => null))?.isDirectory()) {
+        return c.json({ error: `project folder not found: ${body.projectId}` }, 409);
+      }
+      // Only rows the user is ADDING must name a live account: a row whose account was removed
+      // later is skipped at run time, and must never block switching fallback off or removing it.
+      const stored = new Set((await getAgentFallbackPolicy(root)).candidates.map(candidateKey));
+      const accountStore = await loadAgentAccounts().catch(() => null);
+      const unavailable = body.candidates.find((candidate) =>
+        !stored.has(candidateKey(candidate)) &&
+        candidate.profileId !== DEFAULT_AGENT_ACCOUNT_ID &&
+        !accountStore?.accounts.some((account) => account.id === candidate.profileId && account.provider === candidate.provider),
+      );
+      if (unavailable) return c.json({ error: `agent account '${unavailable.profileId}' is unavailable for ${unavailable.provider}` }, 400);
+      let result;
+      try {
+        result = await putAgentFallbackPolicy(root, body);
+      } catch (error) {
+        if (error instanceof FallbackPolicyInputError) return c.json({ error: error.message }, 400);
+        if (error instanceof FallbackPolicyBusyError) return c.json({ error: error.message }, 409);
+        return c.json({ error: 'could not save fallback policy' }, 500);
+      }
+      if ('conflict' in result) return c.json({ error: 'fallback policy changed; reload and try again' }, 409);
+      return c.json(result);
+    })
     .get('/workspace/agent-profiles', async (c) => {
       const editable = agentAccountsEnabled(process.env, bindHost);
       // Hosted mode without the explicit permission withholds the listing entirely rather than
@@ -2880,21 +2953,18 @@ export function createApp(deps: ServerDeps) {
       }
       const bootProject = await resolveBootProject(projects);
       // The folder this server was started in, when the registry does not hold
-      // it — listed ONLY while the registry is empty, which is the same "seed
-      // once" rule `shouldAutoRegisterProject` applies to the registry write
-      // (#774 follow-up). With no projects the launch folder IS the cockpit's
+      // it — listed ONLY while the registry is empty (#774 follow-up). With no
+      // projects the launch folder IS the cockpit's
       // project, and a cockpit showing the one folder it can definitely serve
       // beats an empty sidebar — that also covers the unreadable workspace,
       // where nothing is registered as far as this process can tell.
       //
-      // Once the user HAS projects, starting cezar somewhere else is opening
-      // the cockpit from a folder, not adding it: listing that folder put a row
-      // in the sidebar, the ⌘K palette and Settings that the user never asked
-      // for and has to clean up. The folder is still served — the boot context
-      // answers `/p/<bootProject>/…` and the unscoped alias, and the scope gate
-      // treats `bootProject` as known — so a legacy bookmark still resolves; it
-      // simply is not a project. Saving it stays the explicit gesture it is
-      // everywhere else: Settings → Add project, or `cezar projects add`.
+      // Once the registry HAS projects, an unregistered boot root can still
+      // exist for guarded roots, registry failures, and legacy/non-serve app
+      // constructors. Omitting that synthetic row keeps an internal worktree
+      // out of the sidebar, ⌘K palette and Settings. The folder remains served:
+      // the boot context answers `/p/<bootProject>/…` and the unscoped alias,
+      // and the scope gate treats `bootProject` as known.
       //
       // It is marked `unregistered` rather than merged in silently, so Settings
       // offers to add it instead of offering Remove/Max parallel it cannot
@@ -2924,7 +2994,12 @@ export function createApp(deps: ServerDeps) {
 
     .post('/projects', jsonZodValidator(() => registerProjectSchema, { message: 'root must be a non-empty path' }), async (c) => {
       const parsed = { data: c.req.valid('json') };
-      const registered = await registerFolder(parsed.data.root, 'local');
+      const registered = await registerFolder(parsed.data.root, 'local', {
+        trustedLocalHandoff: matchesPrivateToken(
+          c.req.header('x-cezar-runtime-handoff'),
+          deps.runtimeHandoffToken,
+        ),
+      });
       if (registered.status !== 200) return c.json(registered.body, registered.status);
       // Only a genuinely new project: a re-add answers 409 above and is not an event.
       track('project_added', { label: 'local' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
@@ -3214,9 +3289,7 @@ export function createApp(deps: ServerDeps) {
   // folder-browser dialog's commit step, step 4.2). Workspace-level like its
   // GET twin. Everything here is a guard; the registry write itself is one
   // idempotent `registerProject` call.
-  const registerProjectSchema = z.object({
-    root: z.string().trim().min(1).max(4096),
-  });
+  const registerProjectSchema = registerProjectInputSchema;
 
   /**
    * The register-a-folder half of `POST /api/projects`, factored out so the
@@ -3227,6 +3300,7 @@ export function createApp(deps: ServerDeps) {
   const registerFolder = async (
     spelled: string,
     source: 'local' | 'checkout',
+    opts: { trustedLocalHandoff?: boolean } = {},
   ): Promise<
     // Discriminated on `status`, not one object with a union `body`: a flat
     // `{ status: 200 | 400 | 409 | 500; body: RegisterProjectResponse | { error } }` made
@@ -3264,7 +3338,7 @@ export function createApp(deps: ServerDeps) {
     // `false` for a path that IS inside the root and merely absent — which
     // would tell a hosted user who typo'd a folder under their own checkout
     // root that it is "outside the browsable root".
-    const hostedBrowseRoot = capabilities().localHandoff
+    const hostedBrowseRoot = capabilities().localHandoff || opts.trustedLocalHandoff
       ? null
       : resolveBrowseRoot(await workspaceBrowseRoot());
     if (hostedBrowseRoot !== null) {
@@ -4132,6 +4206,9 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /** The run a `cez tracker` session capability belongs to; never another project's. */
+  const trackerTaskRun = (project: ProjectContext, authorization: string | undefined) =>
+    project.manager.trackerTaskForCapability(authorization?.match(/^Bearer (\S+)$/)?.[1]);
   /**
    * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
    * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
@@ -4139,6 +4216,7 @@ export function createApp(deps: ServerDeps) {
    */
   const trackerTriggerIssue = async (project: ProjectContext, trigger: AutomationEditableBody['trackerTrigger']): Promise<string | null> => {
     if (!trigger) return 'Choose an event to finish configuring this automation';
+    if (!trigger.access) return 'Review tracker access in the automation editor before saving or enabling this automation.';
     const driver = await trackers.driver(project.root, project.dataDir);
     if ('available' in driver) return driver.reason;
     if (JSON.stringify(driver.association) !== JSON.stringify(trigger.association)) return 'Tracker connection or scope changed; reload the event options';
@@ -4449,12 +4527,17 @@ export function createApp(deps: ServerDeps) {
         ]);
         const trackerSourceChanged = kind === 'tracker'
           && trackerScanIdentity(current.trackerTrigger) !== trackerScanIdentity(input.trackerTrigger);
+        // Confirming a pre-mediation definition's access resumes its checkpoint, unless it sat in
+        // review past its lookback: then, like rebaselineIdleAutomations, the backlog is dropped.
+        const lastSuccess = Date.parse(automationStore.state(current.id)?.lastSuccessAt ?? '');
+        const staleMigration = kind === 'tracker' && !current.trackerTrigger?.access && Boolean(input.trackerTrigger?.access)
+          && !(Date.now() - lastSuccess <= (current.filters?.lookbackDays ?? 7) * 86_400_000);
         const automation = automationStore.update(
           c.req.param('id'), expectedRevision,
           { ...input, kind, enabled: input.enabled ?? false },
           definition => {
             // Publish the new baseline and definition under the same mutation lease.
-            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged)) armAutomation(automationStore, definition);
+            if (kind === 'tracker' && definition.enabled && (!current.enabled || trackerSourceChanged || staleMigration)) armAutomation(automationStore, definition);
             else if (trackerSourceChanged) {
               // A paused definition still needs a compatible read-only preview. Clear source-bound
               // progress without arming a timer; Enable will establish its own current-time baseline.
@@ -5069,6 +5152,18 @@ export function createApp(deps: ServerDeps) {
       if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
       const cancelled = manager.cancel(id);
       return c.json({ cancelled });
+    })
+
+    // "Run First" (brief 2026-09-23-queued-task-run-next): move a queued run to the front of its
+    // queue so it takes the first free slot — never past a cap. Answers the updated record, like
+    // pin; the change rides the existing `run` SSE. 409 when the run is not waiting in the queue.
+    .post('/runs/:id/promote', paramZodValidator(runIdParamSchema), (c) => {
+      const { store, manager } = c.get('project');
+      const { id } = c.req.valid('param');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      if (!manager.promote(id)) return c.json({ error: 'run is not queued' }, 409);
+      const run = store.getRun(id);
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
     // "Start now": jump a queued run past the `maxParallel` cap.
@@ -6759,6 +6854,33 @@ export function createApp(deps: ServerDeps) {
     });
 
   const trackerRoutes = new Hono<ProjectApiEnv>()
+    .get('/tracker/task', async c => {
+      const project = c.get('project');
+      const run = trackerTaskRun(project, c.req.header('Authorization'));
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      try {
+        return c.json(trackerContextSchema.parse(await trackerTaskContext(project.root, run.automationTracker)));
+      } catch (error) {
+        const reason = error instanceof TrackerAgentBindingError ? error.message : 'Tracker context unavailable. Check connection and task binding.';
+        return c.json({ error: reason }, 409);
+      }
+    })
+    .post('/tracker/task', jsonZodValidator(trackerOperationInputSchema), async c => {
+      const project = c.get('project');
+      const authorization = c.req.header('Authorization');
+      const run = trackerTaskRun(project, authorization);
+      if (!run?.automationTracker) return c.json({ error: 'Tracker task access denied.' }, 403);
+      c.header('Cache-Control', 'no-store');
+      const stillBound = () => trackerTaskRun(project, authorization)?.id === run.id;
+      try {
+        const result = await executeTrackerOperation(project.root, project.dataDir, run.id, run.automationTracker, c.req.valid('json'), stillBound);
+        return c.json(trackerOperationResultSchema.parse(result));
+      } catch (error) {
+        const reason = error instanceof TrackerAgentBindingError ? error.message : 'Tracker operation unavailable.';
+        return c.json({ error: `${reason} Reuse its operation ID after checking the connection.` }, 409);
+      }
+    })
     .get('/tracker/automation-options', queryZodValidator(trackerAutomationOptionsQuerySchema), async c => {
       const project = c.get('project');
       const driver = await trackers.driver(project.root, project.dataDir);
@@ -6796,7 +6918,7 @@ export function createApp(deps: ServerDeps) {
       const project = c.get('project');
       return mutateTracker(project.dataDir, async () => {
         const result = await trackers.saveConnection(project.root, c.req.valid('json'));
-        if (!result) return c.json({ error: 'Could not save project credentials. Check local storage permissions. Demo mode cannot save credentials.' }, 409);
+        if ('saveFailure' in result) return c.json({ error: result.saveFailure ?? 'Could not save project credentials. Check local storage permissions. Demo mode cannot save credentials.' }, 409);
         await trackerChanged(project);
         return c.json(result, 200);
       });
@@ -7777,6 +7899,30 @@ export function createApp(deps: ServerDeps) {
       return c.json({ stopped: true });
     });
 
+  // Installing an agent changes the host and signing in changes its credentials, so setup follows
+  // the provider login and the GitHub sign-in: never hosted, never in a single-project workspace.
+  const agentSetupFamily = agentSetupRoutes({
+    sessions: terminalSessions,
+    loadPty,
+    refusal: () => {
+      const caps = capabilities();
+      if (caps.singleProject) return 'This workspace runs one fixed project, so agents are set up on the host.';
+      if (!caps.localHandoff) return 'Set up agents on the machine hosting cezar.';
+      return terminalPolicyRefusal(caps);
+    },
+    status: () => providerAuth.status({ refresh: true }),
+    loginCommand: (provider) => providerAuth.loginCommand(provider),
+    installHint: (provider) => providerAuth.installHint(provider),
+    registerTopic: registerTerminalTopic,
+    topic: terminalTopic,
+    onLoginOpened: (provider, status, sid) => {
+      trackLoginOpened(provider, status, sid);
+      watchOpenedLogin(provider, { id: DEFAULT_AGENT_ACCOUNT_ID, isDefault: true, path: null }, sid);
+    },
+    deviceSid,
+    ...(deps.agentSetupProbeEnv ? { probeEnv: deps.agentSetupProbeEnv } : {}),
+  });
+
   const v1 = new Hono<ProjectApiEnv>()
     .use('*', resolveProjectScope)
     .route('/', launchKeyRoutes)
@@ -8096,6 +8242,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', healthRoutes)
     .route('/', modelsRoutes)
     .route('/', providersRoutes)
+    .route('/', agentSetupFamily)
     .route('/', projectsRoutes)
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
@@ -8149,8 +8296,8 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
   const bootProjectId = deps.bootProjectId ?? 'default';
-  // `pinned`: the boot project is served whether or not the registry holds it,
-  // and since boot registration became seed-once it usually does NOT — then
+  // `pinned`: the boot project is served whether or not the registry holds it.
+  // Guarded roots and legacy callers may still leave it unregistered — then
   // `bootProjectId` is the `'default'` alias, which `listProjects()` can never
   // name, so the coordinator's own refresh sweep would evict the store opened
   // one line below and the boot folder's automations would silently stop being
@@ -8482,6 +8629,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     case 'cursor': {
       const bin = quoteResumeBin(resolveCursorAgentBin());
       return bin === null ? null : `${bin} --resume ${sessionId}`;
+    }
+    case 'antigravity': {
+      const bin = quoteResumeBin(resolveAntigravityBin());
+      return bin === null ? null : `${bin} --conversation ${sessionId}`;
     }
     case 'pi':
       return `pi --session ${sessionId}`;
