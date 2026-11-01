@@ -33,6 +33,7 @@ public final class TunnelSession {
     public static final int TUNNEL_MIN = 1;
     public static final int TUNNEL_MAX = 1;
     public static final int MAX_STREAMS = 32;
+    public static final int FRAMES_PER_SECOND_DEFAULT = 500;
     public static final long LEASE_EVERY_MS = 20000;
     public static final long LEASE_DEADLINE_MS = 45000;
     private static final long REKEY_AFTER_MS = 3600000;
@@ -44,6 +45,7 @@ public final class TunnelSession {
     private final int maxData;
     private final Listener listener;
     private final LongSupplier clock;
+    private final FramePacer pacer;
     private final ConcurrentHashMap<Integer, TunnelStream> streams = new ConcurrentHashMap<>();
     private long highest;
     private long keyedAt;
@@ -52,10 +54,15 @@ public final class TunnelSession {
     private volatile boolean ended;
 
     public TunnelSession(Wire wire, NoiseHandshake.Keys keys, int frameBytes, Listener listener, LongSupplier clock) {
+        this(wire, keys, frameBytes, new FramePacer(FRAMES_PER_SECOND_DEFAULT, clock, Thread::sleep), listener, clock);
+    }
+
+    TunnelSession(Wire wire, NoiseHandshake.Keys keys, int frameBytes, FramePacer pacer, Listener listener, LongSupplier clock) {
         this.wire = wire;
         this.send = keys.send;
         this.receive = keys.receive;
         this.maxData = TunnelRecord.maxData(frameBytes);
+        this.pacer = pacer;
         this.listener = listener;
         this.clock = clock;
         this.keyedAt = clock.getAsLong();
@@ -87,6 +94,12 @@ public final class TunnelSession {
 
     /** Sends one frame, under the key the rekey rule says. */
     void sendFrame(byte[] content) throws IOException {
+        try {
+            pacer.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("interrupted");
+        }
         try {
             encryptAndSend(content);
         } catch (IOException e) {
