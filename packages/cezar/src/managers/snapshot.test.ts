@@ -28,7 +28,7 @@ describe('attention', () => {
     const dispatch = { rootRunId: 'root', parentRunId: 'root' } as RunRecord['dispatch'];
     const finishedAt = '2026-10-31T11:00:00.000Z';
     expect(taskAttention('p', [run({ id: 'c', status: 'failed', finishedAt, dispatch })], NOW)).toEqual([]);
-    const asked = taskAttention('p', [run({ id: 'c', status: 'waiting', awaitingAnswerSince: finishedAt, dispatch })], NOW);
+    const asked = taskAttention('p', [run({ id: 'c', status: 'failed', finishedAt, awaitingAnswerSince: finishedAt, dispatch })], NOW);
     expect(asked.map((item) => item.kind)).toEqual(['task-needs-you']);
   });
 
@@ -65,6 +65,75 @@ describe('taskAttention', () => {
   });
 });
 
+describe('task-needs-you', () => {
+  const at = '2026-10-31T11:00:00.000Z';
+  const question = { requestId: 'q1', askedAt: at, questions: [{ question: 'Ship it?' }] } as RunRecord['attentionRequest'];
+  const dispatch = { rootRunId: 'root', parentRunId: 'root' } as RunRecord['dispatch'];
+  const needsYou = (record: RunRecord) => taskAttention('p', [record], NOW).filter((item) => item.kind === 'task-needs-you');
+
+  it.each<[string, Partial<RunRecord>]>([
+    ['a CEZ:ASK or gate node', { askParked: true, attentionRequest: question }],
+    ['a native question', { attentionRequest: question }],
+    ['a monitor handed back', { askParked: true }],
+    ['a turn that ended', {}],
+    ['a child that asked', { askParked: true, attentionRequest: question, dispatch }],
+    ['a child over budget', { dispatch: { ...dispatch, overBudget: true } as RunRecord['dispatch'] }],
+  ])('reports a live park on %s', (_name, over) => {
+    expect(needsYou(run({ id: 'r', status: 'waiting', waitingSince: at, ...over }))).toMatchObject([{ since: at, runId: 'r' }]);
+  });
+
+  it('says what is being asked', () => {
+    expect(needsYou(run({ id: 'r', status: 'waiting', waitingSince: at, attentionRequest: question }))[0]?.detail).toBe('Ship it?');
+  });
+
+  it('reports a question whose session closed instead of filing it as a failure', () => {
+    const closed = run({ id: 'r', status: 'failed', finishedAt: at, awaitingAnswerSince: at });
+    expect(taskAttention('p', [closed], NOW).map((item) => item.kind)).toEqual(['task-needs-you']);
+  });
+
+  it('keeps one key for one wait, across checks and the session closing, and a new one for the next wait', () => {
+    const live = run({ id: 'r', status: 'waiting', waitingSince: at, askParked: true });
+    const [key] = needsYou(live).map((item) => item.key);
+    expect(needsYou(live)[0]?.key).toBe(key);
+    const closed = run({ id: 'r', status: 'failed', finishedAt: '2026-10-31T11:30:00.000Z', awaitingAnswerSince: '2026-10-31T11:30:00.000Z', waitingSince: at });
+    expect(needsYou(closed)[0]?.key).toBe(key);
+    expect(needsYou({ ...live, waitingSince: '2026-10-31T11:45:00.000Z' })[0]?.key).not.toBe(key);
+  });
+
+  it('a record with no stamp still has a stable key', () => {
+    const legacy = run({ id: 'r', status: 'waiting', askParked: true, startedAt: at });
+    expect(taskAttention('p', [legacy], NOW + 60_000)[0]?.key).toBe(needsYou(legacy)[0]?.key);
+  });
+
+  it.each<[string, Partial<RunRecord>]>([
+    ['monitoring its own work', { status: 'running', activity: 'monitoring', startedAt: '2026-10-31T11:59:00.000Z' }],
+    ['queued', { status: 'queued' }],
+    ['waiting on worktree scripts still at work', { status: 'waiting', worktreeLifecycle: { worktreeId: 'w', generation: 1, activeOperationId: 'op', state: 'running', phase: 'setup', needsAttention: false } as RunRecord['worktreeLifecycle'] }],
+    ['archived', { status: 'waiting', archived: true }],
+  ])('stays quiet about a run %s', (_name, over) => {
+    expect(taskAttention('p', [run({ id: 'r', ...over })], NOW)).toEqual([]);
+  });
+
+  it('reports worktree recovery once per operation, with what to do about it', () => {
+    const gate = { worktreeId: 'w', generation: 1, activeOperationId: 'op1', state: 'needs_attention', needsAttention: true } as RunRecord['worktreeLifecycle'];
+    const blocked = run({ id: 'r', status: 'waiting', worktreeLifecycle: gate, dispatch });
+    const [item] = taskAttention('p', [blocked], NOW);
+    expect(item).toMatchObject({ kind: 'task-needs-you', key: 'task-needs-you:p:r:worktree:op1' });
+    expect(item?.detail).toContain('Worktrees settings');
+    const retried = { ...gate, activeOperationId: 'op2' } as RunRecord['worktreeLifecycle'];
+    expect(taskAttention('p', [{ ...blocked, worktreeLifecycle: retried }], NOW)[0]?.key).not.toBe(item?.key);
+  });
+
+  it('a finished task held for worktree recovery keeps its own outcome too', () => {
+    const gate = { worktreeId: 'w', generation: 2, needsAttention: true } as RunRecord['worktreeLifecycle'];
+    const kept = taskAttention('p', [run({ id: 'r', status: 'done', finishedAt: at, worktreeLifecycle: gate })], NOW);
+    expect(kept.map((item) => [item.kind, item.key])).toEqual([
+      ['task-needs-you', 'task-needs-you:p:r:worktree:w:2'],
+      ['task-finished', `task-finished:p:r:${at}`],
+    ]);
+  });
+});
+
 describe('buildSnapshot', () => {
   it('a missing PR status blinds the project, so the check keeps its keys', async () => {
     const source = { id: 'p', name: 'p', root: '/p', available: true, runs: () => [], automationFailures: () => [] } as unknown as ManagerProjectSource;
@@ -87,6 +156,19 @@ describe('gateAttention', () => {
   it('passes only unreported keys', () => {
     const { fresh } = gateAttention(snapshot(['a', 'b']), { a: 'then' });
     expect(fresh.map((item) => item.key)).toEqual(['b']);
+  });
+
+  it('reports one wait once, and the next wait on the same run again', () => {
+    const at = (waitingSince: string): ManagerSnapshot => ({
+      generatedAt: '',
+      projects: [],
+      attention: taskAttention('p', [run({ id: 'r', status: 'waiting', waitingSince })], NOW),
+    });
+    const first = at('2026-10-31T11:00:00.000Z');
+    expect(gateAttention(first, {}).fresh).toHaveLength(1);
+    const reported = Object.fromEntries(first.attention.map((item) => [item.key, 'then']));
+    expect(gateAttention(first, reported).fresh).toEqual([]);
+    expect(gateAttention(at('2026-10-31T11:30:00.000Z'), reported).fresh).toHaveLength(1);
   });
 
   it('forgets a key that went away, so a second occurrence is news again', () => {
