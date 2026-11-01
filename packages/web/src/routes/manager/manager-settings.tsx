@@ -230,7 +230,7 @@ export function ManagerSettings({ manager, onPatch }: { manager: ManagerSummary;
           </Button>
         </PopoverTrigger>
         <PopoverContent align="end" className="flex w-64 flex-col items-start gap-0.5 p-2" data-slot="manager-settings-menu">
-          <ProjectsPicker value={manager.projects} onChange={(projects) => onPatch({ projects })} />
+          <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
           <ModelPicker {...pickModel(manager)} onChange={onPatch} />
           <AccountPicker
             {...(manager.runner ? { runner: manager.runner } : {})}

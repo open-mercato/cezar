@@ -5,7 +5,7 @@ import { sendManagerMessage, useCreateManager, useManagers } from '@/api/manager
 import { useHealth } from '@/api/queries'
 import { Composer } from '@/components/composer/composer'
 import { toast } from '@/components/ui/toaster'
-import type { CreateManagerInput, ManagerEffort, ManagerProjects } from '@open-mercato/cezar-api-client'
+import type { CreateManagerInput, ManagerAccess, ManagerEffort, ManagerProjects } from '@open-mercato/cezar-api-client'
 
 import { AccountPicker, ModelPicker, ProjectsPicker, type ManagerPatch } from './manager-pickers'
 
@@ -44,6 +44,8 @@ export function managerNameFrom(prompt: string): string {
 
 interface Setup {
   projects: ManagerProjects
+  access?: ManagerAccess
+  projectAccess?: Record<string, ManagerAccess>
   runner?: string
   model?: string
   effort?: ManagerEffort
@@ -54,6 +56,8 @@ interface Setup {
 export function applySetupPatch(setup: Setup, patch: ManagerPatch): Setup {
   const next: Setup = { ...setup }
   if (patch.projects !== undefined) next.projects = patch.projects
+  if (patch.access !== undefined) next.access = patch.access
+  if (patch.projectAccess !== undefined) next.projectAccess = patch.projectAccess
   if (patch.runner === null) delete next.runner
   else if (patch.runner !== undefined) next.runner = patch.runner
   if (patch.model === null) delete next.model
@@ -118,7 +122,7 @@ export function ManagerNewRoute() {
         ))}
       </div>
       <div className="flex flex-col items-center gap-1">
-        <ProjectsPicker value={setup.projects} onChange={(projects) => onChange({ projects })} />
+        <ProjectsPicker value={setup.projects} access={setup.access} projectAccess={setup.projectAccess} onAccess={onChange} onChange={(projects) => onChange({ projects })} />
         <ModelPicker {...setup} onChange={onChange} />
         <AccountPicker {...setup} onChange={onChange} />
       </div>

@@ -15,17 +15,17 @@ function renderSwitch(entry: string, manager: boolean, attention = false) {
 }
 
 describe('ModeSwitch', () => {
-  it('marks Code current and stays put in Code mode', () => {
+  it('marks Tasks current and stays put in Tasks mode', () => {
     renderSwitch('/p/alpha/git?x=1', false)
-    const code = screen.getByRole('link', { name: 'Code' })
+    const code = screen.getByRole('link', { name: 'Tasks' })
     expect(code.getAttribute('aria-current')).toBe('page')
     expect(code.getAttribute('href')).toBe('/p/alpha/git?x=1')
     expect(screen.getByRole('link', { name: 'Manager' }).getAttribute('href')).toBe('/manager')
   })
 
-  it('leads Code to the bare root, which restores the last project page', () => {
+  it('leads Tasks to the bare root, which restores the last project page', () => {
     renderSwitch('/manager/global', true)
-    expect(screen.getByRole('link', { name: 'Code' }).getAttribute('href')).toBe('/')
+    expect(screen.getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/')
     expect(screen.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
   })
 

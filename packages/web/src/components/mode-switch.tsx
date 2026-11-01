@@ -8,7 +8,7 @@ const ACTIVE = 'bg-foreground text-background'
 const IDLE = 'text-foreground hover:bg-background/60'
 
 /**
- * The Code | Manager switch (spec 2026-10-31-managers). The mode IS the URL: Code goes to the bare
+ * The Tasks | Manager switch (spec 2026-10-31-managers). The mode IS the URL: Tasks goes to the bare
  * root, which restores the last project page this browser was on.
  */
 export function ModeSwitch({
@@ -29,7 +29,7 @@ export function ModeSwitch({
         onClick={onNavigate}
         className={cn(SEGMENT, manager ? IDLE : ACTIVE)}
       >
-        Code
+        Tasks
       </Link>
       <Link
         to="/manager"

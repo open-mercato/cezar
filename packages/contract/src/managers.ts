@@ -20,6 +20,20 @@ const modelInput = z.string().max(200);
 export const managerProjectsSchema = z.union([z.literal('all'), z.array(z.string().min(1).max(200)).min(1).max(200)]);
 export type ManagerProjects = z.infer<typeof managerProjectsSchema>;
 
+/** What a manager may do to a repository. `read` starts only read-only tasks and proposes nothing. */
+export const managerAccessSchema = z.enum(['read', 'write']);
+export type ManagerAccess = z.infer<typeof managerAccessSchema>;
+
+export const managerProjectAccessSchema = z.record(z.string().min(1).max(200), managerAccessSchema);
+
+/** One project's access: its own, else the manager's, else write. */
+export function managerAccessOf(
+  manager: { access?: ManagerAccess | undefined; projectAccess?: Record<string, ManagerAccess> | undefined },
+  projectId: string,
+): ManagerAccess {
+  return manager.projectAccess?.[projectId] ?? manager.access ?? 'write';
+}
+
 export const managerEffortSchema = z.enum(['low', 'medium', 'high']);
 export type ManagerEffort = z.infer<typeof managerEffortSchema>;
 
@@ -54,6 +68,9 @@ export const managerSchema = z.object({
   /** Index into the cockpit's avatar set; stable across renames. */
   avatar: z.number().int().min(0).max(63),
   projects: managerProjectsSchema,
+  /** Every connected project's access unless `projectAccess` names it. Absent = write. */
+  access: managerAccessSchema.optional(),
+  projectAccess: managerProjectAccessSchema.optional(),
   runner: z.string().optional(),
   model: z.string().optional(),
   effort: managerEffortSchema.optional(),
@@ -100,6 +117,8 @@ export const createManagerInputSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   instructions: z.string().max(20_000),
   projects: managerProjectsSchema,
+  access: managerAccessSchema.optional(),
+  projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.optional(),
   model: modelInput.optional(),
   effort: managerEffortSchema.optional(),
@@ -114,6 +133,9 @@ export const updateManagerInputSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   instructions: z.string().max(20_000).optional(),
   projects: managerProjectsSchema.optional(),
+  access: managerAccessSchema.optional(),
+  /** Replaces the whole map. */
+  projectAccess: managerProjectAccessSchema.optional(),
   runner: runnerInput.nullable().optional(),
   model: modelInput.nullable().optional(),
   effort: managerEffortSchema.nullable().optional(),

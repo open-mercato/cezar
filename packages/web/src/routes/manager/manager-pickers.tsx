@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cronLabel, effortLabel, projectsLabel } from '@/lib/managers'
+import { accessLabel, cronLabel, effortLabel, projectsLabel } from '@/lib/managers'
 import { usableRunners } from '@/lib/provider-status'
 import { cn } from '@/lib/utils'
 import { modelsForRunner } from '@/routes/new-task-form'
@@ -27,12 +27,14 @@ import {
   type ManagerProjects,
   type Runner,
   type UpdateManagerInput,
+  managerAccessOf,
+  type ManagerAccess,
 } from '@open-mercato/cezar-api-client'
 
 /** What a picker edits. `null` clears, as in the update route; the setup screen maps it to absent. */
 export type ManagerPatch = Pick<
   UpdateManagerInput,
-  'projects' | 'runner' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
+  'projects' | 'access' | 'projectAccess' | 'runner' | 'model' | 'effort' | 'agentProfile' | 'cronMinutes'
 >
 
 export const PICKER_TRIGGER =
@@ -52,13 +54,52 @@ function Check({ on }: { on: boolean }) {
   return on ? <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" /> : null
 }
 
-export function ProjectsPicker({ value, onChange }: { value: ManagerProjects; onChange: (next: ManagerProjects) => void }) {
+/** Inside a command row, so its own click and Enter must not also tick the row. */
+function AccessToggle({ access, label, onChange }: { access: ManagerAccess; label: string; onChange: (next: ManagerAccess) => void }) {
+  return (
+    <button
+      type="button"
+      data-slot="manager-access-toggle"
+      data-access={access}
+      aria-label={`${label}: ${access === 'read' ? 'read-only' : 'write access'}. Switch.`}
+      className={cn(
+        'shrink-0 rounded-full border px-2 py-0.5 text-meta font-medium outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        access === 'read' ? 'border-pending-strong/45 text-pending-strong' : 'border-border text-muted-foreground',
+      )}
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation()
+        onChange(access === 'read' ? 'write' : 'read')
+      }}
+    >
+      {access === 'read' ? 'Read-only' : 'Write'}
+    </button>
+  )
+}
+
+export function ProjectsPicker({
+  value,
+  access,
+  projectAccess,
+  onChange,
+  onAccess,
+}: {
+  value: ManagerProjects
+  access?: ManagerAccess | undefined
+  projectAccess?: Record<string, ManagerAccess> | undefined
+  onChange: (next: ManagerProjects) => void
+  onAccess: (patch: ManagerPatch) => void
+}) {
   const registry = useProjects().data?.projects
   const projects = registry ?? []
   const nameOf = (id: string) => projects.find((project) => project.id === id)?.name
   // A project removed from cezar stays in the definition, where no option could untick it.
   const selected = value === 'all' ? [] : registry ? value.filter((id) => nameOf(id) !== undefined) : value
   const allRemoved = value !== 'all' && registry !== undefined && selected.length === 0
+  const accessOf = (id: string) => managerAccessOf({ access, projectAccess }, id)
+  const reached = value === 'all' ? projects.map((project) => project.id) : selected
+  const label = allRemoved ? 'Project removed' : projectsLabel(value === 'all' ? value : selected, nameOf)
   const toggle = (id: string) => {
     const next = selected.includes(id) ? selected.filter((entry) => entry !== id) : [...selected, id]
     // The contract refuses an empty list, and no project at all is not a manager.
@@ -68,7 +109,7 @@ export function ProjectsPicker({ value, onChange }: { value: ManagerProjects; on
     <Popover>
       <PopoverTrigger asChild>
         <button type="button" data-slot="manager-projects-picker" aria-label="Connected projects" className={PICKER_TRIGGER}>
-          <TriggerLabel>{allRemoved ? 'Project removed' : projectsLabel(value === 'all' ? value : selected, nameOf)}</TriggerLabel>
+          <TriggerLabel>{[label, accessLabel(reached.map(accessOf))].filter(Boolean).join(' · ')}</TriggerLabel>
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-72 max-w-[calc(100vw-2rem)] p-0">
@@ -79,7 +120,11 @@ export function ProjectsPicker({ value, onChange }: { value: ManagerProjects; on
             <CommandGroup>
               <CommandItem value="all projects" data-slot="manager-project-all" onSelect={() => onChange('all')}>
                 All projects
-                <Check on={value === 'all'} />
+                <span className="ml-auto flex items-center gap-2">
+                  <Check on={value === 'all'} />
+                  {/* Everything at once, so it clears each project's own setting. */}
+                  <AccessToggle access={access ?? 'write'} label="All projects" onChange={(next) => onAccess({ access: next, projectAccess: {} })} />
+                </span>
               </CommandItem>
               {projects.map((project) => (
                 <CommandItem
@@ -90,7 +135,16 @@ export function ProjectsPicker({ value, onChange }: { value: ManagerProjects; on
                   onSelect={() => toggle(project.id)}
                 >
                   <span className="truncate">{project.name}</span>
-                  <Check on={selected.includes(project.id)} />
+                  <span className="ml-auto flex items-center gap-2">
+                    <Check on={selected.includes(project.id)} />
+                    {reached.includes(project.id) ? (
+                      <AccessToggle
+                        access={accessOf(project.id)}
+                        label={project.name}
+                        onChange={(next) => onAccess({ projectAccess: { ...projectAccess, [project.id]: next } })}
+                      />
+                    ) : null}
+                  </span>
                 </CommandItem>
               ))}
             </CommandGroup>

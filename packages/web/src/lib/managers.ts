@@ -1,4 +1,5 @@
 import type {
+  ManagerAccess,
   ManagerActionRequest,
   ManagerCommand as ContractManagerCommand,
   ManagerProjects,
@@ -205,6 +206,13 @@ export function cronLabel(minutes: number): string {
   if (minutes === 60) return '1 hour'
   if (minutes < 1440) return `${minutes / 60} hours`
   return minutes === 1440 ? '1 day' : `${minutes / 1440} days`
+}
+
+/** Said only when it differs from the default: write access needs no caption. */
+export function accessLabel(access: readonly ManagerAccess[]): string {
+  const read = access.filter((entry) => entry === 'read').length
+  if (read === 0) return ''
+  return read === access.length ? 'Read-only' : `${read} read-only`
 }
 
 export function projectsLabel(projects: ManagerProjects, nameOf: (id: string) => string | undefined): string {

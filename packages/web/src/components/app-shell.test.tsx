@@ -1148,10 +1148,10 @@ describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
     expect(document.querySelector('[data-slot="manager-sidebar"]')).toBeNull()
   })
 
-  it('keeps the Code sidebar on any other URL', () => {
+  it('keeps the Tasks sidebar on any other URL', () => {
     renderShell('/p/alpha/', manager)
     expect(document.querySelector('[data-slot="mode-switch"]')).not.toBeNull()
-    expect(screen.getByRole('link', { name: 'Code' }).getAttribute('aria-current')).toBe('page')
+    expect(within(document.querySelector('[data-slot="mode-switch"]') as HTMLElement).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
     expect(screen.getAllByText('New task').length).toBeGreaterThan(0)
     expect(screen.getAllByText('host glance').length).toBeGreaterThan(0)
     expect(screen.queryByText('manager rows')).toBeNull()
@@ -1167,7 +1167,7 @@ describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
     expect(document.querySelector('[data-slot="global-settings-link"]')).not.toBeNull()
   })
 
-  it('puts the dot on the switch and, in Code mode, on the phone menu', () => {
+  it('puts the dot on the switch and, in Tasks mode, on the phone menu', () => {
     renderShell('/p/alpha/', { ...manager, managerAttention: true })
     expect(document.querySelector('[data-slot="manager-attention"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="mobile-manager-attention"]')).not.toBeNull()

@@ -46,13 +46,13 @@ A manager is a global, long-lived agent you chat with instead of visiting each r
 
 ## Where to find it
 
-Sidebar → Code | Manager switch → Manager
+Sidebar → Tasks | Manager switch → Manager
 
 The switch sits under the brand in the sidebar, and the mode comes from the URL:
 
 | Mode | What the sidebar shows |
 | --- | --- |
-| Code | Your projects and tasks. |
+| Tasks | Your projects and tasks. |
 | Manager | One row per manager with its latest message, and **New manager**. |
 
 A dot on **Manager** means a manager has an unread message or an approval waiting. The command palette also lists **Manager**, **New manager**, and each manager by name.
@@ -138,6 +138,12 @@ Approving a merge goes through the same merge route as the GitHub tab, with the 
 ## Answer a manager's questions
 
 When a manager needs a decision from you, it shows a question card with clickable choices, its recommended choice first. Every question also offers **Other…** and **Need more info**. A reply typed in the chat answers the card too.
+
+## Choose read-only or write access
+
+Each repository a manager connects to has its own access, which you set in the projects picker. **All projects** sets it for everything the manager reaches, and a project's own setting overrides that. New managers have write access.
+
+On a read-only repository, the manager still sees its tasks and pull requests, and can start tasks that answer questions. Those tasks always run on Claude, can't change files and can't open pull requests. The manager can't dispatch, merge, enable or set up automations there, and an approval card already waiting fails once you lower access. Tasks already running keep the access they started with.
 
 ## Notifications
 

@@ -5,6 +5,7 @@
  */
 import { parseArgs } from 'node:util';
 import type { ManagerSnapshot, ManagerSnapshotProject } from '@open-mercato/cezar-contract';
+import { managerAccessOf, type Manager } from '@open-mercato/cezar-contract';
 import { runAutomationCommand } from '../automations/automation-cli.ts';
 import { missingCockpitMessage } from '../cockpit-address.ts';
 
@@ -242,6 +243,9 @@ export async function runManagerCommand(
         if (forwarded.includes('--enable')) fail('a manager creates automations paused: drop --enable, then propose it with `cez manager automation enable <id>`');
         if (forwarded.includes('--execute') || (sub && REFUSED_AUTOMATION.has(sub))) fail('a manager cannot launch or delete automations: ask the user to do it in the cockpit');
         if (env.CEZ_MANAGER_TURN === 'watch' && !(sub && READ_ONLY_AUTOMATION.has(sub))) fail('a watch check is read-only: ask the user instead');
+        if (!(sub && READ_ONLY_AUTOMATION.has(sub)) && managerAccessOf(await call<Manager>(''), project.projectId) === 'read') {
+          fail(`${project.projectId} is read-only for this manager: it cannot set up automations there`);
+        }
         return runAutomationCommand(forwarded, { ...env, CEZ_PROJECT_ID: project.projectId }, io, { neverEnable: true });
       }
 

@@ -169,7 +169,7 @@ function ManagerChat({ manager }: { manager: ManagerSummary }) {
         </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-2xl font-semibold tracking-tight">{manager.name}</h1>
-          <ProjectsPicker value={manager.projects} onChange={(projects) => onPatch({ projects })} />
+          <ProjectsPicker value={manager.projects} access={manager.access} projectAccess={manager.projectAccess} onAccess={onPatch} onChange={(projects) => onPatch({ projects })} />
         </div>
         <ManagerSettings manager={manager} onPatch={onPatch} />
       </header>

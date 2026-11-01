@@ -3,6 +3,7 @@ import { chmodSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, rea
 import { delimiter, join } from 'node:path';
 import lockfile from 'proper-lockfile';
 import {
+  managerAccessOf,
   MANAGER_DEFAULT_CRON_MINUTES,
   type CreateManagerInput,
   type Manager,
@@ -481,6 +482,8 @@ export class ManagerEngine {
       // The first character nobody wears: two managers must never look alike by accident.
       avatar: input.avatar ?? firstFreeAvatar(this.deps.store.list()),
       projects: input.projects,
+      ...(input.access !== undefined ? { access: input.access } : {}),
+      ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
       ...(input.runner !== undefined ? { runner: input.runner } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
@@ -518,6 +521,8 @@ export class ManagerEngine {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.instructions !== undefined ? { instructions: input.instructions } : {}),
       ...(input.projects !== undefined ? { projects: input.projects } : {}),
+      ...(input.access !== undefined ? { access: input.access } : {}),
+      ...(input.projectAccess !== undefined ? { projectAccess: input.projectAccess } : {}),
       ...(input.cronMinutes !== undefined ? { cronMinutes: input.cronMinutes } : {}),
       ...(input.avatar !== undefined ? { avatar: input.avatar } : {}),
       ...(input.notify !== undefined ? { notify: input.notify } : {}),
@@ -866,7 +871,7 @@ export class ManagerEngine {
     }
     const locked = agentModelsLocked();
     const base: AgentRunSpec = {
-      systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name }))),
+      systemPrompt: managerSystemPrompt(manager, sources.map((source) => ({ id: source.id, name: source.name, access: managerAccessOf(manager, source.id) }))),
       userPrompt: prompt,
       cwd: store.workdir(id),
       allowedTools: MANAGER_ALLOWED_TOOLS,
@@ -1067,6 +1072,15 @@ export class ManagerEngine {
   async createTask(id: string, input: ManagerCreateTaskInput): Promise<{ projectId: string; runId: string } | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
+    const readOnly = managerAccessOf(scope.manager, input.projectId) === 'read';
+    if (readOnly) {
+      if (input.dispatch || (input.workflow && input.workflow !== 'quick-task')) {
+        return { error: `${input.projectId} is read-only for this manager: only a plain read-only task can start there`, status: 403 };
+      }
+      if (input.runner && input.runner !== 'claude') {
+        return { error: 'a read-only task runs on Claude, the only backend that enforces it (#430)', status: 403 };
+      }
+    }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     const response = await this.forward(`${prefix}/runs`, {
       method: 'POST',
@@ -1074,7 +1088,7 @@ export class ManagerEngine {
         workflow: input.workflow ?? 'quick-task',
         task: input.task,
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
-        ...(input.runner ? { runner: input.runner } : {}),
+        ...(readOnly ? { readOnly: true, runner: 'claude' } : input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
       },
@@ -1091,6 +1105,10 @@ export class ManagerEngine {
   async taskMessage(id: string, input: ManagerTaskMessageInput): Promise<{ ok: true } | ManagerRefusal> {
     const scope = await this.toolScope(id, input.projectId, true);
     if ('error' in scope) return scope;
+    // A write task told what to do next would be write access by proxy.
+    if (managerAccessOf(scope.manager, input.projectId) === 'read' && !scope.source?.runs().find((run) => run.id === input.runId)?.readOnly) {
+      return { error: `${input.projectId} is read-only for this manager: it can only message read-only tasks`, status: 403 };
+    }
     const path = `/p/${encodeURIComponent(input.projectId)}/runs/${encodeURIComponent(input.runId)}`;
     const delivered = await this.forward(`${path}/messages`, { method: 'POST', body: { text: input.text } });
     if (delivered.ok) return { ok: true as const };
@@ -1124,6 +1142,8 @@ export class ManagerEngine {
   async propose(id: string, input: ManagerProposeActionInput): Promise<{ actionId: string; status: ManagerActionStatus } | ManagerRefusal> {
     const scope = await this.toolScope(id, actionProject(input.action), true);
     if ('error' in scope) return scope;
+    const refused = accessRefusal(scope.manager, input.action);
+    if (refused) return { error: refused, status: 403 };
     const action = await this.stampAction(input.action);
     if ('error' in action) return action;
     const same = (other: ManagerActionRequest) => actionKey(other) === actionKey(action);
@@ -1166,9 +1186,13 @@ export class ManagerEngine {
     let outcome: { ok: boolean; result: string };
     try {
       const connected = projectId === undefined || (await this.sources(manager)).some((source) => source.id === projectId);
-      outcome = connected
-        ? await this.perform(id, message.action)
-        : { ok: false, result: `This manager is no longer connected to ${projectId}.` };
+      // Read fresh: access may have been lowered while the card waited.
+      const refused = accessRefusal(this.deps.store.get(id) ?? manager, message.action);
+      outcome = !connected
+        ? { ok: false, result: `This manager is no longer connected to ${projectId}.` }
+        : refused
+          ? { ok: false, result: refused }
+          : await this.perform(id, message.action);
     } catch (cause) {
       // `running` has no other exit but a restart.
       outcome = { ok: false, result: cause instanceof Error ? cause.message : String(cause) };
@@ -1251,6 +1275,13 @@ const askNote = (message: Extract<ManagerMessage, { kind: 'assistant' }>): strin
 
 const actionProject = (action: ManagerActionRequest): string | undefined =>
   action.type === 'add-job' ? undefined : action.projectId;
+
+const accessRefusal = (manager: Manager, action: ManagerActionRequest): string | undefined => {
+  const projectId = actionProject(action);
+  return projectId !== undefined && managerAccessOf(manager, projectId) === 'read'
+    ? `${projectId} is read-only for this manager: it cannot merge or enable anything there.`
+    : undefined;
+};
 
 const actionKey = (action: ManagerActionRequest): string => {
   // The stamped facts count: a stale card must not stand in for what changed since.

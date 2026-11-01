@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GithubData, ManagerMessage } from '@open-mercato/cezar-contract';
+import { managerAccessOf, type GithubData, type ManagerMessage } from '@open-mercato/cezar-contract';
 import type { AgentEvent, AgentRunner, AgentRunSpec, AgentSession, RunnerId } from '../core/agent-runner.ts';
 import { ManagerEngine, type ManagerEngineDeps } from './engine.ts';
 import { MANAGER_QUIET } from './prompts.ts';
@@ -556,6 +556,70 @@ describe('ManagerEngine', () => {
       avatars.push(created.avatar);
     }
     expect(avatars).toEqual([0, 1, 2, 3]);
+  });
+
+  describe('access', () => {
+    const readOnly = async (engine: ReturnType<typeof makeEngine>) => {
+      const created = await engine.create({ instructions: '', projects: ['alpha'], access: 'read' });
+      if ('error' in created) throw created;
+      return created.id;
+    };
+
+    it('defaults to write and lets a project override the manager', () => {
+      expect(managerAccessOf({}, 'alpha')).toBe('write');
+      expect(managerAccessOf({ access: 'read' }, 'alpha')).toBe('read');
+      expect(managerAccessOf({ access: 'read', projectAccess: { alpha: 'write' } }, 'alpha')).toBe('write');
+    });
+
+    it('starts only a read-only task, on Claude', async () => {
+      const engine = makeEngine();
+      const id = await readOnly(engine);
+      await engine.createTask(id, { projectId: 'alpha', task: 'What does this do?' });
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ readOnly: true, runner: 'claude' });
+    });
+
+    it('refuses dispatch, other workflows and other runners', async () => {
+      const engine = makeEngine();
+      const id = await readOnly(engine);
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true })).toMatchObject({ status: 403 });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', workflow: 'fix-ci' })).toMatchObject({ status: 403 });
+      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'codex' })).toMatchObject({ status: 403 });
+      expect(requests).toEqual([]);
+    });
+
+    it('proposes nothing on a read-only project', async () => {
+      const engine = makeEngine();
+      const id = await readOnly(engine);
+      expect(await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } })).toMatchObject({ status: 403 });
+      expect(await engine.propose(id, { action: { type: 'enable-automation', projectId: 'alpha', automationId: 'a1' } })).toMatchObject({ status: 403 });
+    });
+
+    it('will not steer a write task', async () => {
+      const engine = makeEngine();
+      const id = await readOnly(engine);
+      expect(await engine.taskMessage(id, { projectId: 'alpha', runId: 'unknown', text: 'push it' })).toMatchObject({ status: 403 });
+      expect(requests).toEqual([]);
+    });
+
+    it('fails a card that waited through a downgrade', async () => {
+      const engine = makeEngine();
+      const id = await create(engine);
+      const proposed = await engine.propose(id, { action: { type: 'merge-pr', projectId: 'alpha', number: 7 } });
+      if ('error' in proposed) throw proposed;
+      await engine.update(id, { access: 'read' });
+      await engine.decide(id, proposed.actionId, 'approve');
+      expect(store.message(id, proposed.actionId)).toMatchObject({ status: 'failed' });
+      expect(requests.some((request) => request.path.endsWith('/merge'))).toBe(false);
+    });
+
+    it('tells the agent which projects are read-only', async () => {
+      const engine = makeEngine();
+      const id = await readOnly(engine);
+      backend.scripts.push(say('ok'));
+      engine.send(id, 'hi');
+      await settled(engine);
+      expect(backend.specs[0]?.systemPrompt).toContain('READ-ONLY');
+    });
   });
 
   describe('questions', () => {

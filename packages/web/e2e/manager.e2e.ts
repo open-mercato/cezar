@@ -186,8 +186,8 @@ describe('Managers', () => {
     browser.waitForFunction(`document.querySelector(${JSON.stringify(`${row} [data-slot="manager-unread"]`)}) === null`)
   }, 90_000)
 
-  it('switches between Code and Manager from the URL alone', () => {
-    clickText('Code', '[data-slot="sidebar"]')
+  it('switches between Tasks and Manager from the URL alone', () => {
+    clickText('Tasks', '[data-slot="mode-switch"]')
     browser.waitForFunction(`location.pathname.startsWith('/p/')`)
     expect(browser.count('[data-slot="manager-row"]')).toBe(0)
     clickText('Manager', '[data-slot="sidebar"]')

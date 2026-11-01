@@ -7,7 +7,7 @@ const snapshot = {
   projects: [{ projectId: 'alpha', name: 'alpha', available: true, tasks: [{ runId: 'r1', title: 't', status: 'running', workflow: 'w', childCount: 2 }], prs: [{ number: 4, title: 'Ship it', status: 'ready' }] }],
 };
 
-function harness(env: Record<string, string> = {}) {
+function harness(env: Record<string, string> = {}, manager: Record<string, unknown> = {}) {
   const calls: Array<{ url: string; method: string; body?: unknown }> = [];
   const logs: string[] = [];
   const errors: string[] = [];
@@ -18,6 +18,7 @@ function harness(env: Record<string, string> = {}) {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
       calls.push({ url: String(url), method: init?.method ?? 'GET', ...(body !== undefined ? { body } : {}) });
       if (String(url).endsWith('/snapshot')) return Response.json(snapshot);
+      if (String(url).endsWith('/managers/m1')) return Response.json({ id: 'm1', ...manager });
       if (String(url).endsWith('/actions')) return Response.json({ actionId: 'a1', status: 'pending' }, { status: 201 });
       if (String(url).endsWith('/tasks')) return Response.json({ projectId: 'alpha', runId: 'new' }, { status: 201 });
       if (/\/automations\/[^/]+$/.test(String(url))) return Response.json({ automation: { id: 'a1', name: 'n', revision: 1, enabled: true } });
@@ -96,6 +97,13 @@ describe('cez manager', () => {
     const watching = harness({ CEZ_MANAGER_TURN: 'watch' });
     expect(await watching.run('rename', 'Pwned')).toBe(1);
     expect(watching.calls).toEqual([]);
+  });
+
+  it('refuses to set up automations on a read-only project, and still reads them', async () => {
+    const { run, calls } = harness({}, { access: 'read' });
+    expect(await run('automation', '--project', 'alpha', 'create', '--json', '{"name":"n"}')).toBe(1);
+    expect(calls.filter((call) => call.method === 'POST')).toEqual([]);
+    expect(await run('automation', '--project', 'alpha', 'list')).toBe(0);
   });
 
   it('job add only proposes', async () => {

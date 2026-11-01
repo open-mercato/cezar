@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  accessLabel,
   actionTitle,
   clearManagerOrigins,
   cronLabel,
@@ -42,6 +43,15 @@ describe('managerMessageTime', () => {
 
   it('stays silent on a time it cannot read', () => {
     expect(managerMessageTime('nonsense', now)).toBe('')
+  })
+})
+
+describe('accessLabel', () => {
+  it('stays quiet at the default and counts a mix', () => {
+    expect(accessLabel(['write', 'write'])).toBe('')
+    expect(accessLabel(['read', 'read'])).toBe('Read-only')
+    expect(accessLabel(['read', 'write', 'write'])).toBe('1 read-only')
+    expect(accessLabel([])).toBe('')
   })
 })
 
