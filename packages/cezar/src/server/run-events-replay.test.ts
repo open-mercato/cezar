@@ -62,4 +62,37 @@ describe('per-run SSE replay without a live cursor', () => {
 
     expect(await replayedIds(`/api/v1/runs/${run.id}/events`)).toEqual([]);
   });
+
+  /** Raw body bytes of the stream up to the `run` snapshot. */
+  async function replayBody(path: string, headers?: Record<string, string>): Promise<string> {
+    const res = await apiRequest(app, path, { headers });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let text = '';
+    while (!/^event: run$/m.test(text)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+    }
+    await reader.cancel();
+    return text;
+  }
+
+  it('bounds a cursorless replay of a long transcript and flags the gap (#882)', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    for (let i = 0; i < 1_200; i += 1) store.appendEvent(run.id, { type: 'note', message: 'x'.repeat(4_000) }); // ~4.8 MB
+    store.flush();
+
+    const fresh = await replayBody(`/api/v1/runs/${run.id}/events`);
+    expect(fresh.length).toBeLessThan(1_800_000);
+    expect(fresh).toMatch(/^event: history-truncated$/m);
+    expect(fresh).toContain(`id: 1200\n`);
+    expect(fresh).not.toContain(`id: 1\n`);
+
+    // A reconnect with Last-Event-ID near the end must cost a few events, not the history.
+    const resumed = await replayBody(`/api/v1/runs/${run.id}/events`, { 'Last-Event-ID': '1198' });
+    expect(resumed.length).toBeLessThan(20_000);
+    expect(resumed).not.toMatch(/^event: history-truncated$/m);
+    expect([...resumed.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([1199, 1200]);
+  });
 });

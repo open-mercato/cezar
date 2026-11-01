@@ -182,7 +182,7 @@ import {
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
   readRunHistoryPage,
-  streamRunEvents,
+  readEventsTail,
   validateLiveCursor,
 } from '../runs/event-history.ts';
 import { byLastActivityDesc, compareIsoDesc, lastActivityAt, readRunIndexFromDisk } from '../runs/run-index.ts';
@@ -203,6 +203,7 @@ import {
   draftSurfaceParamSchema,
   DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
+  type RunEventsTruncatedFrame,
   runHistoryQuerySchema,
   runIdParamSchema,
   setRunDraftInputSchema,
@@ -1192,6 +1193,9 @@ const pinSchema = z.object({
 // localhost request from being unbounded (the largest legit body is one message's
 // attachments, ≤ MAX_ATTACHMENTS_TOTAL_BASE64 in total); the ui-state PUT gets a much tighter cap since
 // it only ever carries small GUI prefs.
+/** Cap on a cursorless SSE replay; older events stay reachable through `history` (#882). */
+const INITIAL_REPLAY_MAX_BYTES = 1_500_000;
+
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
 // JSON like every other refusal (#1735): the bare "Payload Too Large" text told the cockpit nothing.
 const bodyTooLarge = (c: Context) =>
@@ -6583,9 +6587,18 @@ export function createApp(deps: ServerDeps) {
           offRun();
         });
 
-        const replay = query.cursor
-          ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
-          : { events: streamRunEvents(eventsPath), boundarySeq: 0 };
+        // Cursorless: read only the newest INITIAL_REPLAY_MAX_BYTES, newest-first from the file end,
+        // and say so when older events were left out (#882). The cockpit pages `history` instead.
+        let replay: { events: AsyncIterable<RunEvent> | RunEvent[]; boundarySeq: number };
+        if (query.cursor) replay = await readEventsAfterLiveCursor(eventsPath, query.cursor);
+        else {
+          const tail = await readEventsTail(eventsPath, { afterSeq: requestedAfter, maxBytes: INITIAL_REPLAY_MAX_BYTES });
+          if (tail.truncated) {
+            const frame: RunEventsTruncatedFrame = { firstSeq: tail.events[0]?.seq ?? 0, afterSeq: requestedAfter };
+            await stream.writeSSE({ event: 'history-truncated', data: JSON.stringify(frame) });
+          }
+          replay = { events: tail.events, boundarySeq: 0 };
+        }
         maxSeq = Math.max(maxSeq, replay.boundarySeq);
         for await (const event of replay.events) {
           if (stream.aborted) break;

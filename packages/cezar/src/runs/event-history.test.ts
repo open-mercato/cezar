@@ -10,6 +10,7 @@ import {
   canonicalSessionItems,
   deriveRunContextEvents,
   readEventsAfterLiveCursor,
+  readEventsTail,
   readRunHistoryPage,
   streamRunEvents,
 } from './event-history.ts';
@@ -525,5 +526,37 @@ describe('streamRunEvents', () => {
     const seqs: number[] = [];
     for await (const event of streamRunEvents(join(tmpdir(), 'cez-missing-transcript.ndjson'))) seqs.push(event.seq);
     expect(seqs).toEqual([]);
+  });
+});
+
+describe('readEventsTail', () => {
+  const big = (seq: number) => ({ seq, type: 'note' as const, message: 'm'.repeat(2_000) });
+  const events = Array.from({ length: 600 }, (_, i) => big(i + 1)); // ~1.2 MB, spans several chunks
+
+  it('returns everything past afterSeq and no gap when the file is small enough', async () => {
+    const file = fixture(events);
+    const tail = await readEventsTail(file, { afterSeq: 0, maxBytes: 10_000_000 });
+    expect(tail.truncated).toBe(false);
+    expect(tail.events.map((e) => e.seq)).toEqual(events.map((e) => e.seq));
+  });
+
+  it('resumes after afterSeq reading only the newest bytes', async () => {
+    const file = fixture(events);
+    const tail = await readEventsTail(file, { afterSeq: 597, maxBytes: 10_000_000 });
+    expect(tail).toEqual({ events: [expect.objectContaining({ seq: 598 }), expect.objectContaining({ seq: 599 }), expect.objectContaining({ seq: 600 })], truncated: false });
+  });
+
+  it('keeps the newest events and reports a gap once the byte budget is spent', async () => {
+    const file = fixture(events);
+    const tail = await readEventsTail(file, { afterSeq: 0, maxBytes: 300_000 });
+    expect(tail.truncated).toBe(true);
+    const seqs = tail.events.map((e) => e.seq);
+    expect(seqs.at(-1)).toBe(600);
+    expect(seqs[0]).toBeGreaterThan(300);
+    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => seqs[0]! + i));
+  });
+
+  it('is empty and complete for a missing transcript', async () => {
+    expect(await readEventsTail(join(tmpdir(), 'cez-missing-tail.ndjson'), { afterSeq: 0, maxBytes: 10 })).toEqual({ events: [], truncated: false });
   });
 });
