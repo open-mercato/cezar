@@ -736,7 +736,7 @@ repository.
 | R2 | **Relay in `patzick/rome`.** Contract, conformance against R1's vectors, hibernation test, metric, staging. Confirms Cloudflare pricing and limits | Staging relay | R1. Already started on the contract above | L |
 | R3 | **cezar client.** `narrowForRelay`, keys, device store, dispatcher, routes, Settings UI, quiet tests | Desktop half, behind `capabilities.phonePairing` until R4 | R1. Stubbed sockets until R2 | L |
 | R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds | R0, R2, R3, M7 | L |
-| R5 | **Push through the relay.** Replaces M11's relay half | Native notifications | R2, R4, M10 | M |
+| R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10, QR10 | M |
 | R6 | **Public release additions.** Demo code, privacy policy, export answers. Extends M12 | Reviewable build | R5, Q10, QR7 | M |
 
 **Ships before the relay, unchanged:** M1 installable PWA, M4 phone chat, M5 approvals, M6 Manager first,
@@ -900,6 +900,17 @@ so someone with no app gets no "how to get the app" page, and the code works onl
 scanner. Until decided, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
 acceptable only for a relay the user runs. It changes QR bytes, so decide before the public relay.
 
+### QR10: How does a genuine revoke survive a full stranger denial pool?
+
+**Recommended: drop the 1,000 cap on the stranger pool before R5, and keep 8 per key, the per-IP limit and
+expiry with the grant as its bounds.** Today a hostile Manual server, or anyone who knows its key, can mint
+and revoke grants under 125 throwaway keys, about 2,000 `POST`s, and fill the pool. A real phone's revoke
+then answers 503 until the grant expires, so that server keeps sending `Cezar needs you` for up to 90 days,
+against the parent spec's rule that it must stop once the user says so. Harm is limited to generic text.
+Displacing old denials is worse: it silently revives a revoked grant. Cost of the fix: storage per room is
+bounded only by the rate limits, and that is `patzick/rome`'s to accept. R5 depends on this answer, and no
+wire shape changes either way.
+
 ## Changelog
 
 - 2026-11-01: Relay contract, protocol version 1. Relay repository is `patzick/rome`.
@@ -923,3 +934,8 @@ acceptable only for a relay the user runs. It changes QR bytes, so decide before
   limit, `bytesPerDay` closing cezar, the rendezvous kill-switch exception, absent `hello` keys, public keys
   seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
   and "MUST NOT use" `permessage-deflate`.
+- 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
+  parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol
+  errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone
+  has its own timer after message 3, Approve closes 15 s before the hard lifetime, and a revoke's retry has an
+  exit. Opened QR10. Protocol version stays 1.

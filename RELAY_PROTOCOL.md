@@ -28,7 +28,8 @@ a session.
 - All integers are unsigned big-endian, except Noise's own nonce.
 - `base64url` means RFC 4648 §5 with no padding. Decoders MUST refuse padding, the `+` and `/`
   alphabet, and non-canonical trailing bits. A 32-byte value is 43 characters, a 16-byte value is 22.
-- Control frames and JSON payloads are UTF-8. Readers ignore unknown keys.
+- Control frames and JSON payloads are UTF-8. Readers ignore unknown keys, except the relay reading a
+  `POST` body ([§7](#7-push)).
 - Hashes and keys are raw bytes before encoding.
 
 | Name | Value | Relay sees it |
@@ -111,7 +112,7 @@ status, using the first name listed for it that applies to that endpoint.
 | 409 | `pair-taken` | A second phone or a second cezar on a rendezvous | As 4410. cezar picks a new secret |
 | 426 | `protocol-unsupported` | Path version other than `v1` | As 4426 |
 | 429 | `rate-limited` | A limit, with `Retry-After` | Reconnect after it. On a rendezvous, do not reconnect: see [§5](#5-rendezvous) |
-| 503 | `relay-disabled` | Kill switch, on any `/v1` route, with `Retry-After: 300` | As 4503 |
+| 503 | `relay-disabled` | Kill switch, on any `/v1` room or `POST` route, with `Retry-After: 300` | As 4503 |
 
 A `POST` also answers 503 with no body when the relay cannot do the work, with a `Retry-After` when it
 has one.
@@ -250,8 +251,8 @@ reconnected, whatever the close code says elsewhere.
    reply to a first message. Only `ping`, the one `device-sync` after connecting, and device commands
    from the user cross an idle socket.
 6. **Storage expiry.** The daily cron deletes a room's storage 90 days after its last authenticated
-   cezar socket closed or its last signed `POST /v1/push`, and never while a denylist entry is still
-   live. A Manual server never opens a socket, and losing its denylist would revive a revoked grant.
+   cezar socket closed or its last signed `POST /v1/push`, and never while a cezar socket is open or a denylist entry
+   is still live. A Manual server never opens a socket, and losing its denylist would revive a revoked grant.
 7. **Quotas are event-driven.** A timer is forbidden, so `phoneSecondsPerDay` and `bytesPerDay` are
    checked on the next frame from either side or the next connect. Over `phoneSecondsPerDay`, phones
    close with 4430 and cezar stays connected. A fully silent phone overruns only while the room
@@ -262,7 +263,7 @@ reconnected, whatever the close code says elsewhere.
    `closing` with `retryAfter` 60 and a 4429 close. This is not in the limits table, so cezar keeps its
    own `device-sync` and `device-remove` traffic well under it.
 8. **Kill switch.** New requests are refused with 503 `relay-disabled`. A live socket gets `closing` and
-   4503 on its next frame. **Exception:** a rendezvous does not check the switch today, so it keeps
+   4503 on its next frame. **Exception:** a rendezvous does not check the switch, so it may keep
    working while the room side is refused. A client must not rely on that.
 
 ## 7. Push
@@ -284,7 +285,8 @@ rate-limited even though any key may call it.
 `platform` is `ios` or `android`. `token` is 1 to 1,024 characters. The answer is
 `200 { "grant": "…", "grantId": "…", "expiresAt": 1801267200 }`. A grant lasts 90 days, and the phone
 renews on app open once under 30 days remain. The phone hands it to cezar as an HTTP request inside
-the session, so no tunnel frame exists for it.
+the session, so no tunnel frame exists for it. R5 names that route in the spec and in
+BACKWARD_COMPATIBILITY.md §2 before any app build calls it.
 
 **Send.** `POST /v1/push`, signed with the key sealed in the grant:
 
@@ -329,13 +331,19 @@ the card stays in the chat.
 | 429 with `Retry-After` | Over a limit, including `newRoomsPerHour` for a revoke that creates a room | **Retries** after `Retry-After` |
 | 503, with `Retry-After` when stored state failed | Not stored | **Retries** after `Retry-After`, or with full jitter |
 
+A phone keeps a grant and its device key until the revoke ends in 204, 400, 401 or 410, or the grant's
+`expiresAt` passes, when nothing is left to deny. Forget server retries on each app open until then, and
+lists the server as still being removed, because notifications can still arrive.
+
 The same grant can be denied by `device-remove`, where the denial lasts the full 90 days because that
 command does not know the grant's expiry. A revoke's denial expires with the grant.
 
 A room holds two pools of 1,000 live denials. cezar and allowlisted phones share one. Keys not on the
 allowlist share the other, because any key can mint a grant for a room, and each such key holds at
 most 8, where a ninth displaces its own oldest. A Manual server's phones are always in the second pool,
-so its revokes can answer 503 while that pool is full.
+so its revokes can answer 503 while that pool is full. That lets a hostile Manual server, or anyone who
+knows its key, delay a revoke until the grant expires, by filling the pool. See the spec's QR10, which R5
+must settle.
 
 ## 8. Limits
 
@@ -393,7 +401,8 @@ cezar's key it runs `XXpsk3` itself, pairs as a phone and shows cezar's Approve 
 digits, so the digits warn nobody. This is not the same as a photographed code, where the attacker
 lacks the relay: only the user's attention at Approve stands against it, and Approve adds a device
 that can start tasks as the user. A system-camera scan is therefore safe only with a relay the user
-runs. See the spec's QR9. Any `version` other than 1 shows "Update the app".
+runs. See the spec's QR9. A parser reads `version` first, as the digits between `/p#` and the next `.`, and any `version` other than
+1 shows "Update the app" whatever follows it.
 
 | Scheme | Host | Release app | Debug app |
 | --- | --- | --- | --- |
@@ -528,6 +537,8 @@ An unknown `reason` reads as `internal`. `bad-payload` and `tunnel-unsupported` 
 
 **Flow on Approve.** cezar saves the device, opens its relay socket if it has none, waits for `hello`,
 sends `device-sync`, sends `device-add`, and waits for its `ack`, at most 10 s. Then it sends `approved`.
+With under 15 s of the hard lifetime left, Approve is refused and cezar sends `failure` `timeout`, so the
+`ack` wait cannot outlive the rendezvous.
 On failure, it deletes the row, sends `device-remove` because `device-sync` may have listed the phone,
 and sends `failure`. No device row exists before Approve.
 
@@ -561,10 +572,15 @@ with `"cezar":"online"`, or `cezar-online`. cezar answers one first message per 
 from a device with no saved row, or with no open slot, is dropped with no answer. The phone waits 10 s
 for the reply. On timeout, it closes the socket and reconnects with jitter. Frames that arrive from a
 device with no session and no open slot are dropped. A stale frame from an ended session can reach a new
-socket, because the relay routes by `deviceId`. A phone drops any data frame while it has no session.
-A phone that gets a frame that fails to decrypt as the reply drops it, restores the handshake state from
-before that read, since a failed read has already mixed its bytes, and keeps the 10 s timer running. A stale frame arriving at cezar on a new socket with an open slot MUST NOT use the slot up: a
+socket, because the relay routes by `deviceId`. A phone drops any data frame while it has no session and
+is not waiting for a reply. While waiting, it drops any frame whose ciphertext is a transport message's
+length, `(length − 16) mod 256 = 0`, before touching Noise, since a failed read destroys the handshake
+state. A reply is `(length − 48) mod 256 = 0`, so the two cannot collide, and any other failure is a
+decryption failure. A stale frame arriving at cezar on a new socket with an open slot MUST NOT use the slot up: a
 first message is only consumed when it is exactly 48 bytes and decrypts under `KK`.
+
+After 3 `KK` timeouts in a row, whatever the cause, the phone shows "cezar is not answering" and keeps
+retrying. A sleeping laptop can leave a half-open cezar socket that `hello` still reports as `online`.
 
 Tunnel records then flow as Noise transport messages, in data frames. Vector: `session-kk.json`.
 
@@ -582,7 +598,7 @@ ends every stream in it. In-flight proxy requests fail with [502](#132-errors).
 | Any decryption failure, or a malformed record or frame | Sends `CLOSE` `protocol-error` if it can, ends the session | Sends `CLOSE` `protocol-error` if it can, then closes the socket with 1000 and reconnects with jitter |
 | No `LEASE` for 60 s | Sends `CLOSE` `lease-expired`, ends the session | |
 | No `LEASE` from cezar for 45 s | | Closes the socket with 1000 and reconnects with jitter |
-| `CLOSE` received | Ends the session. `goodbye` also deletes the device row, then sends `device-remove` | Ends the session and closes the socket with 1000. `device-removed` shows nothing yet. It reconnects with jitter like any other `CLOSE`, and the 403 or 4403 that follows decides. A relay that still admits the phone gives a silent `KK` timeout loop, so after 3 timeouts in a row the phone shows a visible "cezar is not answering" state |
+| `CLOSE` received | Ends the session. `goodbye` also deletes the device row, then sends `device-remove` | Ends the session and closes the socket with 1000. `device-removed` shows nothing yet. It reconnects with jitter like any other `CLOSE`, and the 403 or 4403 that follows decides. A relay that still admits the phone gives `KK` timeouts, see [§10](#10-session) |
 | Remove on desktop | Deletes the row, sends `CLOSE` `device-removed`, ends the session, sends `device-remove` | |
 | App leaves the foreground | | Closes the socket with 1000 |
 | Forget server | | Sends `CLOSE` `goodbye` if a session is live, then revokes grants and deletes keys |
@@ -645,6 +661,8 @@ Vector: `tunnel-frames.json`.
   invalid. An `OPEN` with any other id is a protocol error. Running out of ids ends the session.
 - At most 32 streams are open in a session. One more is answered with `RESET` `too-many-streams`, which
   does not end the session.
+- A second `HELLO`, a `HELLO` with `min` over `max`, a second `HEAD` on a stream, `DATA` before `HEAD`, and
+  a frame after that direction's `END` other than `WINDOW` or `RESET` are protocol errors.
 - A frame for an id above the highest opened is a protocol error. A frame for a finished or reset stream
   is ignored, because it crossed in flight.
 - A stream is finished when both directions have sent `END`, or when either side sends `RESET`. A `GET`
@@ -712,12 +730,13 @@ Vector: `rekey.json`.
 ### 13.1 Requests
 
 `method` is one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`. `target` is origin-form,
-path and query, at most 8,192 bytes of ASCII. It starts with exactly one `/`. An `OPEN` or `HEAD` frame
+path and query, at most 8,192 bytes of printable ASCII, 0x21 to 0x7E, with no `\`. It starts with exactly
+one `/`, so no URL parser can read it as another authority. An `OPEN` or `HEAD` frame
 is at most 16,000 bytes of content, which fits in any legal `frameBytes`. Beyond that, the proxy answers
 431 itself, and cezar sends `RESET` `head-too-large`.
 
-Header names are lowercase. Repeats are allowed, and order is kept. Values MUST NOT contain CR, LF or
-NUL. cezar answers any `OPEN` that breaks these with `RESET` `bad-request`. Vectors: `negative.json`.
+Header names are lowercase RFC 9110 tokens. Values are bytes, which a reader keeps as they are. Repeats are
+allowed, and order is kept. Values MUST NOT contain CR, LF or NUL. cezar answers any `OPEN` that breaks these with `RESET` `bad-request`. Vectors: `negative.json`.
 
 The proxy and the dispatcher both remove these request headers, so a modified app cannot look local:
 
@@ -789,6 +808,7 @@ session negotiates afresh, since either side may update later.
 | `device-add` `ack` | 10 s | cezar | `failure` `relay-error` |
 | Rendezvous close after an outcome | 5 s | cezar | Close 1000 |
 | `XXpsk3` completion | 30 s from `peer-joined` | Both | Close 1000. The code ends |
+| `pending` and an outcome | 300 s from `peer-joined` | Phone | Close 1000, report the pairing as failed |
 | `KK` reply | 10 s | Phone | Close socket, reconnect |
 | `LEASE` send | Every 20 s | Phone | |
 | `LEASE` from phone | 60 s | cezar | `CLOSE` `lease-expired` |
