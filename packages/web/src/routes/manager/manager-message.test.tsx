@@ -95,6 +95,13 @@ describe('ManagerMessageRow', () => {
     })
   })
 
+  it('dates every reply, a watch check included', () => {
+    renderMessage(assistantMessage(2, { text: 'Hi', turn: 'watch' }))
+    const meta = document.querySelector('[data-slot="manager-message-meta"]')
+    expect(meta?.textContent).toContain('Watch check')
+    expect(meta?.querySelector('time')?.getAttribute('datetime')).toBeTruthy()
+  })
+
   it('marks what the manager judged important, with its headline', () => {
     renderMessage(assistantMessage(2, { text: 'It asks which shell.', important: true, headline: 'Blocked on you' }))
     expect(document.querySelector('[data-slot="manager-important"]')?.textContent).toBe('Blocked on you')

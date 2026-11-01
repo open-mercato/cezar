@@ -218,6 +218,15 @@ export function effortLabel(effort: string | undefined): string {
 }
 
 /** The sidebar's time column: a clock today, then a day, then a date. */
+/** A chat message's clock: unlike the sidebar's label, an older day keeps its hour too. */
+export function managerMessageTime(iso: string, now: Date = new Date()): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ''
+  const time = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  if (at.toDateString() === now.toDateString()) return time
+  return `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`
+}
+
 export function managerTimeLabel(iso: string | undefined, now: Date = new Date()): string {
   if (!iso) return ''
   const at = new Date(iso)

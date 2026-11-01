@@ -13,6 +13,7 @@ import { StatusDot, type StatusDotTone } from '@/components/status-dot'
 import {
   actionTitle,
   ISSUE_LINK_PREFIX,
+  managerMessageTime,
   managerReferences,
   parseManagerText,
   parseReferenceLink,
@@ -167,10 +168,11 @@ function AssistantMessage({
   const references = useMemo(() => managerReferences(segments), [segments])
   return (
     <article data-slot="manager-assistant" className="min-w-0">
-      {message.turn === 'job' && message.jobName ? (
-        <p className="mb-1 text-xs font-medium text-soft-foreground">Job: {message.jobName}</p>
-      ) : null}
-      {message.turn === 'watch' ? <p className="mb-1 text-xs font-medium text-soft-foreground">Watch check</p> : null}
+      <p data-slot="manager-message-meta" className="mb-1 flex items-baseline gap-2 text-xs text-soft-foreground">
+        {message.turn === 'job' && message.jobName ? <span className="font-medium">Job: {message.jobName}</span> : null}
+        {message.turn === 'watch' ? <span className="font-medium">Watch check</span> : null}
+        <time dateTime={message.at} title={new Date(message.at).toLocaleString()}>{managerMessageTime(message.at)}</time>
+      </p>
       {message.important ? (
         <p data-slot="manager-important" className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <BellRingIcon aria-hidden="true" className="size-3.5 text-pending-strong" />

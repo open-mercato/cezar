@@ -6,6 +6,7 @@ import {
   cronLabel,
   isManagerPathname,
   managerRowPreview,
+  managerMessageTime,
   managerTimeLabel,
   parseManagerCommand,
   parseManagerText,
@@ -28,6 +29,20 @@ describe('isManagerPathname', () => {
     ['/p/manager', false],
     ['/', false],
   ])('%s → %s', (path, expected) => expect(isManagerPathname(path)).toBe(expected))
+})
+
+describe('managerMessageTime', () => {
+  const now = new Date(2026, 9, 31, 12, 0)
+
+  it('shows the hour today, and the day with it before that', () => {
+    expect(managerMessageTime(new Date(2026, 9, 31, 7, 34).toISOString(), now)).toMatch(/7:34/)
+    expect(managerMessageTime(new Date(2026, 9, 31, 7, 34).toISOString(), now)).not.toMatch(/Oct/)
+    expect(managerMessageTime(new Date(2026, 9, 30, 23, 5).toISOString(), now)).toMatch(/Oct 30.*11:05|Oct 30.*23:05/)
+  })
+
+  it('stays silent on a time it cannot read', () => {
+    expect(managerMessageTime('nonsense', now)).toBe('')
+  })
 })
 
 describe('parseManagerText', () => {
