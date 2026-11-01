@@ -127,12 +127,18 @@ public final class ShellConnector {
     }
 
     /**
-     * Pairing succeeded. A row is reused only for the same pinned key: nothing binds `cezarId` to it, so an
-     * id alone could take over a saved server's port, and with it that origin's storage.
+     * The row pairing saves into, known before it is saved: the keys go first. Reused only for the same
+     * pinned key: nothing binds `cezarId` to it, so an id alone could take over a saved server's port, and
+     * with it that origin's storage.
      */
-    public String saveRelayServer(String label, RelayFields fields) {
-        ServerRecord existing = servers.findPaired(fields.cezarId, fields.cezarKey);
-        String id = existing != null ? existing.id : UUID.randomUUID().toString();
+    public String relayServerId(String cezarId, String cezarKey) {
+        ServerRecord existing = servers.findPaired(cezarId, cezarKey);
+        return existing != null ? existing.id : UUID.randomUUID().toString();
+    }
+
+    /** Pairing succeeded: the new keys replace any old ones under this row. */
+    public String saveRelayServer(String id, String label, RelayFields fields) {
+        ServerRecord existing = servers.get(id);
         int port = existing != null ? existing.relay.port : 0;
         servers.put(new ServerRecord(id, label, fields.withPort(port), existing == null ? null : existing.noteShown));
         servers.markUsed(id);

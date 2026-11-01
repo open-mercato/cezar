@@ -160,9 +160,12 @@ public final class PairingClient {
         if (finished) return;
         finished = true;
         if (socket != null) socket.close(1000);
-        updates.state(state(phase, reason));
-        // Now, not after the 300 s timer.
-        actor.shutdownNow();
+        try {
+            updates.state(state(phase, reason));
+        } finally {
+            // Now, not after the 300 s timer.
+            actor.shutdownNow();
+        }
     }
 
     private void onText(String text) {
@@ -274,6 +277,8 @@ public final class PairingClient {
     }
 
     private void onPending(JSONObject message) throws JSONException {
+        // The six digits on screen were shown for this cezar.
+        if (cezarId != null) return;
         byte[] relayKey = Bytes.fromBase64url(message.optString("relayKey"), 32);
         String named = message.optString("label");
         JSONObject tunnel = message.getJSONObject("tunnel");

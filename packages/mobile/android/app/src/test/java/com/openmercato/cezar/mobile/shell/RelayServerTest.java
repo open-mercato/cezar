@@ -61,9 +61,13 @@ public class RelayServerTest {
         });
     }
 
+    private String save(String label, RelayFields fields) {
+        return connector.saveRelayServer(connector.relayServerId(fields.cezarId, fields.cezarKey), label, fields);
+    }
+
     @Test
     public void aRelayServerRoundTripsWithNoUrlOrPassword() throws IOException {
-        String id = connector.saveRelayServer("Laptop", fields);
+        String id = save("Laptop", fields);
         connector.saveRelayPort(id, 4242);
         ServerRecord server = new ServerListStore(folder.getRoot()).get(id);
         assertNull(server.url);
@@ -76,9 +80,9 @@ public class RelayServerTest {
 
     @Test
     public void pairingTheSameCezarAgainKeepsItsRowAndPort() {
-        String id = connector.saveRelayServer("Laptop", fields);
+        String id = save("Laptop", fields);
         connector.saveRelayPort(id, 4242);
-        assertEquals(id, connector.saveRelayServer("Renamed", new RelayFields("https://other.example.test", "cezar-id", "key", "device-2", 0)));
+        assertEquals(id, save("Renamed", new RelayFields("https://other.example.test", "cezar-id", "key", "device-2", 0)));
         ServerRecord server = servers.get(id);
         assertEquals("Renamed", server.label);
         assertEquals(4242, server.relay.port);
@@ -88,9 +92,9 @@ public class RelayServerTest {
 
     @Test
     public void aCezarIdWithAnotherPinCannotTakeOverASavedServer() {
-        String id = connector.saveRelayServer("Laptop", fields);
+        String id = save("Laptop", fields);
         connector.saveRelayPort(id, 4242);
-        String other = connector.saveRelayServer("Hostile", new RelayFields("https://evil.example.test", "cezar-id", "attacker-key", "device-2", 0));
+        String other = save("Hostile", new RelayFields("https://evil.example.test", "cezar-id", "attacker-key", "device-2", 0));
         assertNotEquals(id, other);
         ServerRecord saved = servers.get(id);
         assertEquals("Laptop", saved.label);
@@ -102,7 +106,7 @@ public class RelayServerTest {
 
     @Test
     public void aManualServerStaysFindableBesideARelayOne() {
-        connector.saveRelayServer("Laptop", fields);
+        save("Laptop", fields);
         servers.put(new ServerRecord("m", "Box", "https://box.example.com", null, null, null));
         assertEquals("m", servers.findByUrl("https://box.example.com").id);
         assertNull(servers.findPaired("nope", "key"));
@@ -111,7 +115,7 @@ public class RelayServerTest {
 
     @Test
     public void theStartTableOpensThePathNotAUrl() throws Exception {
-        String id = connector.saveRelayServer("Laptop", fields);
+        String id = save("Laptop", fields);
         nextHealth = HealthClassifier.classify(CEZAR);
         ShellConnector.Outcome outcome = connector.open(id, null);
         assertEquals(ShellConnector.OPEN, outcome.screen);
@@ -120,7 +124,7 @@ public class RelayServerTest {
 
     @Test
     public void relayRoutes() {
-        String id = connector.saveRelayServer("Laptop", fields);
+        String id = save("Laptop", fields);
         Object[][] rows = {
             {HealthAnswer.Kind.CEZAR_OFFLINE, ShellConnector.CEZAR_OFFLINE}, {HealthAnswer.Kind.NOT_ANSWERING, ShellConnector.NOT_ANSWERING}, {HealthAnswer.Kind.RELAY_DOWN, ShellConnector.RELAY_DOWN},
             {HealthAnswer.Kind.QUOTA, ShellConnector.QUOTA}, {HealthAnswer.Kind.DEVICE_REMOVED, ShellConnector.DEVICE_REMOVED},
@@ -144,7 +148,7 @@ public class RelayServerTest {
 
     @Test
     public void forgetSaysGoodbyeBeforeTheKeysGo() {
-        String id = connector.saveRelayServer("Laptop", fields);
+        String id = save("Laptop", fields);
         connector.forget(id);
         assertEquals("[goodbye, forgetKeys]", calls.toString());
         assertNull(servers.get(id));

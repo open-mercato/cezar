@@ -88,4 +88,31 @@ public class RelayConnectionsTest {
         keys.delete("a");
         assertEquals(HealthAnswer.Kind.DEVICE_REMOVED, connections.probe(server).kind);
     }
+
+    /** A finishing view's onDestroy can land after the next view opened. */
+    @Test
+    public void aFinishedViewLeavesTheNewerViewsConnection() throws Exception {
+        ServerRecord server = paired("a", DeviceKeys.generate());
+        LoopbackProxy first = connections.openProxy(server);
+        LoopbackProxy second = connections.openProxy(server);
+        RelayLink link = connections.link(server);
+        connections.release(first);
+        assertSame(link, connections.link(server));
+        new java.net.Socket("127.0.0.1", second.port()).close();
+        connections.release(second);
+        assertNotSame(link, connections.link(server));
+        connections.release();
+    }
+
+    /** A probe holds its link for seconds, and the view may release it meanwhile. */
+    @Test
+    public void aDisposedLinkIgnoresEveryCall() {
+        RelayLink link = connections.link(paired("a", DeviceKeys.generate()));
+        connections.release();
+        link.dispose();
+        link.start();
+        link.stop();
+        link.retryNow();
+        link.goodbye();
+    }
 }

@@ -42,9 +42,11 @@ public final class ShellServices {
         if (pairing == null) {
             Context app = context.getApplicationContext();
             pairing = new PairingFlow(transport(), Build.MODEL, BuildConfig.DEBUG, (origin, state, keys) -> {
-                String id = connector(app).saveRelayServer(state.label, new RelayFields(origin.origin, state.cezarId,
-                        com.openmercato.cezar.mobile.shell.relay.Bytes.base64url(state.cezarStatic), keys.deviceId(), 0));
+                ShellConnector shell = connector(app);
+                String id = shell.relayServerId(state.cezarId, com.openmercato.cezar.mobile.shell.relay.Bytes.base64url(state.cezarStatic));
                 deviceKeys(app).put(id, keys);
+                shell.saveRelayServer(id, state.label, new RelayFields(origin.origin, state.cezarId,
+                        com.openmercato.cezar.mobile.shell.relay.Bytes.base64url(state.cezarStatic), keys.deviceId(), 0));
                 setLastPaired(id);
             });
         }
@@ -65,7 +67,7 @@ public final class ShellServices {
         return transport;
     }
 
-    private static DeviceKeyStore deviceKeys(Context context) {
+    private static synchronized DeviceKeyStore deviceKeys(Context context) {
         if (deviceKeys == null) deviceKeys = new DeviceKeyStore(context.getApplicationContext().getNoBackupFilesDir(), new KeystoreCipher());
         return deviceKeys;
     }

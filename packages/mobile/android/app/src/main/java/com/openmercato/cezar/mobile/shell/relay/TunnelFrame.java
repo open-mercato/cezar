@@ -18,6 +18,7 @@ public final class TunnelFrame {
     /** An `OPEN` or `HEAD` frame's content limit, § 13.1. */
     public static final int MAX_HEAD_BYTES = 16000;
     public static final int MAX_TARGET_BYTES = 8192;
+    /** A header name's length is one byte on the wire. */
     public static final int MAX_NAME_BYTES = 255;
 
     private static final List<String> METHODS = Arrays.asList("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
@@ -130,6 +131,7 @@ public final class TunnelFrame {
     }
 
     private static void str8(ByteArrayOutputStream out, byte[] bytes) {
+        if (bytes.length > MAX_NAME_BYTES) throw new IllegalArgumentException("over 255 bytes");
         out.write(bytes.length);
         out.write(bytes, 0, bytes.length);
     }

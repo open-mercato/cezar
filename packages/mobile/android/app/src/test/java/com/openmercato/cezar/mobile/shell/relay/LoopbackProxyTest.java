@@ -81,7 +81,8 @@ public class LoopbackProxyTest {
             }
         }
 
-        void reply(byte[] content) {
+        /** Two threads reply here, and the real link receives on one: nonce order must hold. */
+        synchronized void reply(byte[] content) {
             session.receive(send.encrypt(TunnelRecord.pad(content)));
         }
 
@@ -375,7 +376,8 @@ public class LoopbackProxyTest {
         peer.reply(TunnelFrame.reset(open.stream, TunnelFrame.RESET_CANCELLED));
         send(socket, "de");
         InputStream in = socket.getInputStream();
-        assertTrue(readHead(in).startsWith("HTTP/1.1 413"));
+        String head = readHead(in);
+        assertTrue(head, head.startsWith("HTTP/1.1 413"));
         assertEquals('n', in.read());
         assertEquals('o', in.read());
     }
@@ -485,5 +487,13 @@ public class LoopbackProxyTest {
         socket.setSoTimeout(300);
         send(socket, "GET / HTTP/1.1\r\n");
         socket.getInputStream().read();
+    }
+
+    /** Its length is one byte in `OPEN`, so a longer name would corrupt the frame and drop the session. */
+    @Test
+    public void aHeaderNameThatCannotFitIsRefused() throws Exception {
+        refused(gated("GET", "/x", "X".repeat(256) + ": 1\r\n"), "431");
+        org.junit.Assert.assertThrows(IllegalArgumentException.class,
+                () -> TunnelFrame.open(1, "GET", "/", java.util.List.of(new TunnelFrame.Header("X".repeat(256), "1"))));
     }
 }
