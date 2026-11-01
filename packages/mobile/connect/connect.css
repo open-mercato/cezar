@@ -109,3 +109,7 @@ li .open span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.stack { display: grid; gap: 12px; margin: 16px 0; }
+details { margin-top: 24px; }
+.digits { font-size: 40px; letter-spacing: 6px; text-align: center; font-variant-numeric: tabular-nums; }
