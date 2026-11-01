@@ -313,6 +313,7 @@ steps:
     # model: opus                # optional per-step model override
     # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
+    # timeoutMs: 5400000         # optional time limit for this agent step (90 min of silence; 0 = none)
   - id: verify
     name: Verify
     command: "npm test"          # a check step: exit 0 passes
@@ -400,6 +401,34 @@ naming the code. See [browser and mobile e2e as a verification
 step](e2e-verification.md) for the worked chains, including an independent QA
 exploration as the gate.
 
+### Agent step time limit
+
+An agent step that is not the workflow's last step runs under a time limit:
+**30 minutes** without any output unless you say otherwise, on every backend,
+with a hard ceiling of 8x that limit (4 hours at the default) behind it, so a
+step that never stops streaming is still bounded. A step that needs longer (a
+slow test suite, monitoring sub-agents, a skill that does several things in
+one go) does not have to be split - raise its limit instead:
+
+1. `timeoutMs` on the step in the workflow YAML (above) wins;
+2. otherwise `"agentTimeoutMs"` in `.ai/cezar/config.json` applies to every
+   agent step in the repo;
+3. otherwise the built-in 30 minutes.
+
+Both take milliseconds, at most 24 hours (`86400000`); the ceiling is always
+8x the value you set. `0` removes both bounds and leaves the step bounded only
+by the idle timer - which does not run while the agent is actively working or
+monitoring, so `0` does not guarantee an inactivity bound in those states.
+`timeoutMs` is an agent-step field - a check step (`command`) rejects it. An
+agent that is the workflow's final step is interactive and never had a time
+limit: its session stays open for follow-ups and the idle timer closes it.
+
+When the limit fires, the step fails with `... timed out after Nm without any
+output and was killed` (or `... timed out after Nh and was killed` at the
+ceiling). Anything the agent committed before that stays on the task's
+`cez/<id8>` branch in its worktree - `git log <base>..cez/<id8>` lists it, and
+**Continue** resumes the same session from there.
+
 Prefer skills over steps? A workflow can also be written in the portable
 shorthand — an ordered list of skill names, each becoming one agent step:
 
@@ -452,7 +481,7 @@ whose counter never resets within a run, so every run is finite.
 | --- | --- | --- |
 | `start` / `end` | `next` / — (`status: success\|failed`) | — |
 | `loop` (`max`) | `repeat`, `exhausted` | `iteration`, `max` |
-| `agent` (`prompt`, `skill`, `runner`, `model`, `session.continue`, `verdicts`; after a fork also `review`, `budgetUsd`) | `done`, `failed` — or one port per verdict | `summary`, `verdict`, `costUsd` (a fork branch: `runId`, `status`, `summary`) |
+| `agent` (`prompt`, `skill`, `runner`, `model`, `session.continue`, `verdicts`, `timeoutMs`; after a fork also `review`, `budgetUsd`) | `done`, `failed` — or one port per verdict | `summary`, `verdict`, `costUsd` (a fork branch: `runId`, `status`, `summary`) |
 | `check` (`command`) | `pass`, `fail` | `exitCode`, `output` |
 | `gate.human` (`message`, `timeoutMs?`) | `approve`, `reject` (+`timeout`) | `comment` |
 | `ask-user` (`question`, `options?`, `timeoutMs?`) | `answered` (+`timeout`) | `answer` |
@@ -851,6 +880,7 @@ never blocks startup; configured lifecycle transitions pause on malformed config
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "agentTimeoutMs": 5400000, // time limit per agent step in ms (default 30 min of silence; 0 = none; a step's timeoutMs wins)
   "branchNaming": "your branch naming preferences",
                              // optional: task branches are named from the first prompt under these
                              // instructions (Settings → Instructions); absent = cez/<id8>

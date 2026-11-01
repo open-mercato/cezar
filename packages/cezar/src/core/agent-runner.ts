@@ -39,6 +39,15 @@ export function isRunnerId(value: string): value is RunnerId {
   return (RUNNER_IDS as readonly string[]).includes(value);
 }
 
+/**
+ * Upper bound for a configured agent time limit (#880): 24 hours. Node's `setTimeout`
+ * fires AT ONCE for any delay above 2^31-1 ms (~24.8 days), so an unbounded value would turn
+ * "a very long limit" into "killed on spawn"; the hard ceiling behind it (8x, `HARD_CEILING_FACTOR`)
+ * stays under that too, at 8 days. `0` stays the way to say "no time limit at all".
+ * `AGENT_STEP_TIMEOUT_MAX_MS` in packages/contract/src/workflows.ts repeats this value.
+ */
+export const AGENT_TIMEOUT_MAX_MS = 24 * 60 * 60_000;
+
 export interface AgentRunSpec {
   /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
   onUsageWindows?: (observation: UsageWindowsObservation) => void;
