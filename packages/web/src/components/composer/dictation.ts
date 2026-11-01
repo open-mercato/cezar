@@ -160,7 +160,9 @@ export function resetDictationAvailability(): void {
   serviceRefused = false
 }
 
-export function useDictation(onNotice: (notice: DictationNotice) => void): Dictation {
+/** `language` is read at start: a recognizer's `lang` cannot change mid-session, and restarting
+ *  would drop the interim tail — a change made while recording applies to the next recording. */
+export function useDictation(onNotice: (notice: DictationNotice) => void, language?: string): Dictation {
   const [recording, setRecording] = React.useState<DictationState | null>(null)
   const recognitionRef = React.useRef<SpeechRecognitionLike | null>(null)
   const finalRef = React.useRef('')
@@ -196,7 +198,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
     let recognition: SpeechRecognitionLike
     try {
       recognition = new Ctor()
-      recognition.lang = navigator.language || 'en-US'
+      recognition.lang = language || navigator.language || 'en-US'
       recognition.continuous = true
       recognition.interimResults = true
       const startedAt = Date.now()
@@ -221,7 +223,7 @@ export function useDictation(onNotice: (notice: DictationNotice) => void): Dicta
       onNotice({ message: 'Dictation failed — the microphone could not be started', failure: 'start-threw' })
       teardown()
     }
-  }, [onNotice, teardown, unavailable])
+  }, [language, onNotice, teardown, unavailable])
 
   const cancel = React.useCallback(() => teardown(), [teardown])
 
