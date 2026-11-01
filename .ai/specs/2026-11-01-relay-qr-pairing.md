@@ -18,7 +18,7 @@ Traffic crosses a Cloudflare relay as ciphertext. The relay can drop traffic. It
 | How the cockpit loads | **A small decrypting proxy inside the app, on `127.0.0.1`**, under the same plain webview #1883 built. Each cezar serves its own cockpit through the tunnel, so app and cockpit cannot drift. Bundling is rejected |
 | Encryption | Noise over X25519, ChaCha20-Poly1305 and SHA-256. Each phone has its own keys |
 | Pairing | One flow for QR and typed code, confirmed on desktop with a 6-digit match |
-| Authorization | A relay request is a **hosted** request inside cezar, even on a laptop. A phone never gets local-only powers, a shell or the right to pair another phone |
+| Authorization | A relay request is a **hosted** request inside cezar, even on a laptop. A phone's requests never get local-only powers, a shell or the right to pair another phone. A task it starts still runs as the user |
 | Sleep | cezar sends only runtime-answered pings while no phone is connected. Everything else starts from a phone's request |
 | Push | One signed, text-free signal through the same relay. Replaces the separate relay in M11 |
 | Cost | About $0.18 per cezar per month at 1 hour a day, from memory. Staying awake by mistake makes it $4 |
@@ -113,17 +113,28 @@ Android. If both fail, stop and return this decision to the maintainer.
 ### The proxy's rules
 
 - Binds `127.0.0.1` only, on a port saved per server, so each server keeps its own origin, storage and
-  HTTP cache across launches. A busy port picks a new one and loses only that storage.
-- Before loading, native code puts a random 256-bit `HttpOnly`, `SameSite=Strict` cookie in the webview
-  store. A request without it gets 403, which keeps other apps out. It never appears in a URL.
+  HTTP cache across launches.
+- **Only the server on screen has a listener.** Opening another server closes the first. Cookies and
+  `SameSite` ignore ports, so two listeners would share one cookie and each could be reached from the
+  other's page.
+- Each time a listener opens, native code puts a new random 256-bit `HttpOnly`, `SameSite=Strict` cookie
+  in the webview store. A request without it gets 403, which keeps other apps out. It never appears in a
+  URL.
 - `Host` must be exactly `127.0.0.1:<port>`, which stops DNS rebinding.
-- `Origin`, if present, must be that same authority, and `Sec-Fetch-Site: cross-site` is refused. This
-  is where CSRF is stopped, because the only browser involved is on the phone.
+- `Origin`, if present, must be that same authority, and `Sec-Fetch-Site`, if present, must be
+  `same-origin` or `none`. A page on another loopback port sends `same-site`, not `cross-site`
+  (`server.ts:1798`) [V]. iOS 15 may not send the header [M], so the single listener is what holds
+  there. This is where CSRF is stopped, because the only browser involved is on the phone.
 - The proxy then **drops** `Host`, `Origin`, `Cookie`, `Authorization`, `Sec-Fetch-*` and `X-Forwarded-*`
   and adds only the `CezarMobile/` User-Agent. It refuses `Upgrade`. No WebSocket crosses the tunnel:
   in the hosted view the cockpit uses HTTP and SSE already (`global-events.tsx`) [V].
-- It closes when the app leaves the foreground and reopens on the same port on return. SSE dies with it,
-  which is already the normal phone case and the existing reconnect path handles it.
+- When the app leaves the foreground, the listener stops serving, and SSE dies with it, which is already
+  the normal phone case and the existing reconnect path handles it. On Android it keeps the port bound
+  and answers 503, so no other app can take it while the process lives. iOS suspends the app, so it
+  closes the port and reopens it on return, before the webview resumes.
+- **A taken port is hostile, not busy.** The page in the webview would send its cookie and request bodies,
+  approvals included, to whoever holds that port. So a failed rebind tears the page down first, then loads
+  a new port with a new cookie. Only that origin's storage is lost.
 
 ### What changes in #1883
 
@@ -440,23 +451,28 @@ once. Any other close or network loss is treated like 1001.
 | Device Ed25519 | One phone | Keychain or Keystore-wrapped, `WhenUnlockedThisDeviceOnly`, no backup | `deviceId`, relay proofs |
 | Device X25519 | One phone | Same | End-to-end handshakes |
 
-Keys are generated on the first Connect a phone click, and on the phone at pairing. Only the X25519
-keys protect content. If the relay learned every Ed25519 public key, it would learn nothing new.
+Keys are generated on the first Connect a phone click, and on the phone at pairing. On the Manual path,
+cezar generates its Ed25519 key when the shell registers for push (parent Decision 5), and the phone
+generates its device key before its first grant. Only the X25519 keys protect content. If the relay learned every Ed25519 public key, it would learn nothing new.
 
 ### Pairing
 
 1. The user opens **Settings > Connect a phone**. cezar generates a 32-byte secret and a code, and
    opens a [rendezvous](#rendezvous). The QR code lasts 2 minutes, and it does not rotate by itself. When
    it expires the screen offers **Show a new code**, so a forgotten tab shows nothing usable.
-2. The QR holds `https://<relay host>/p#1.<secret>.<cezar X25519 key>`. The fragment never leaves the
-   phone, and a system camera that opens the link reaches a page explaining how to get the app.
+2. The QR holds `https://<relay host>/p#1.<secret>.<cezar X25519 key>`. A browser does not send the
+   fragment, and a system camera that opens the link reaches a page explaining how to get the app. That
+   page has no script, but a hostile relay could serve one that reads the fragment, so a system-camera
+   scan counts as a [photo](#what-if-the-qr-code-is-photographed).
 3. The app scans it, derives the locator and pre-shared key, and joins the rendezvous.
 4. The two run `Noise_XXpsk3_25519_ChaChaPoly_SHA256`, with the phone as initiator. The phone checks
    that the key from the handshake equals the one in the QR.
 5. Both screens show a 6-digit number from the handshake hash. Desktop shows the phone's name and
    platform, labelled as reported by the phone, with **Approve** and **Deny**.
-6. On Approve, cezar saves the device, sends `device-add`, waits for `ack`, then tells the phone inside
-   the encrypted channel. The phone connects to `/v1/phone`, and the normal start table opens Manager.
+6. On Approve, cezar saves the device, opens its relay socket if it has none, sends `device-add`, waits
+   for `ack`, then tells the phone inside the encrypted channel. The phone connects to `/v1/phone`, and
+   the normal start table opens Manager. If `device-add` fails or no `ack` arrives in 10 s, cezar deletes
+   the row and both screens say the pairing failed, naming a full list for `device-limit`.
 7. Deny, a timeout or a closed tab discards everything. No device row exists until step 6.
 
 **Typed code.** The Connect a phone screen also shows a code such as `QRFX-7KMD-2NVB`: 12 Crockford
@@ -484,6 +500,7 @@ grants access.**
 | Photo plus a hostile relay, QR flow | Cannot impersonate cezar: the phone pins the key, and the attacker lacks its private half |
 | Typed code read in time, plus a hostile relay | **Residual risk.** No pinned key, and an attacker on both legs could grind ephemeral keys until the 6 digits match. It needs the code within 2 minutes and control of the relay. Accepted for a fallback, and the UI says to prefer the QR code |
 | Screen recording or screen share | Same as a photo |
+| System camera opens the link, hostile relay reads the fragment | Same as a photo plus a hostile relay: the phone-side pin holds, and Approve still decides |
 
 A code is shown only after a click, and never appears in a notification, log or `.ai/cezar/`. At most one
 pairing is pending, and cezar allows 5 per hour, below the relay's `rendezvousPerHour`.
@@ -504,12 +521,13 @@ another room.
 | Lost connection during a `POST` | The proxy answers 502. It **never retries a write**. The `decision` route's pins cover a user's second tap |
 | Traffic analysis | Frames are padded to a multiple of 256 bytes. Timing and volume stay visible, and the privacy policy says so |
 
-Rekey after 1 hour or 2^32 messages. A session ends with its socket.
+Rekey after 1 hour or 2^32 messages. Each direction rekeys on its own: the sender sends `REKEY` as its
+last frame under the old key, then calls Noise's `Rekey`. A session ends with its socket.
 
 ### Inside the tunnel
 
 The encrypted payload is a small stream protocol, published in `RELAY_PROTOCOL.md` with test vectors:
-`OPEN` (id, method, path, headers), `DATA`, `END`, `RESET`, `WINDOW`, `LEASE`, `CLOSE`.
+`OPEN` (id, method, path, headers), `DATA`, `END`, `RESET`, `WINDOW`, `LEASE`, `REKEY`, `CLOSE`.
 
 | Rule | Value |
 | --- | --- |
@@ -531,8 +549,8 @@ creates it, and it exists only for a request from an authenticated session.
 
 The design rule is short: **a relay request is a hosted request.** That matters on a laptop, where
 cezar runs in local mode and `localHandoff` is true. Routes use `localHandoff` as a security boundary.
-It is what closes the agent-config hooks RCE path (`server.ts:3608`), and it gates the open-in routes,
-filesystem browsing and full paths. Had the phone arrived as a loopback request, every one of those would
+It is what closes the agent-config hooks RCE path (`server.ts:7662`), and it gates the open-in routes,
+filesystem browsing and some path trimming. Had the phone arrived as a loopback request, every one of those would
 open to it, and `CEZ_TERMINAL` follows the same value (`capabilities.ts:233`) [V], which would mean an
 interactive shell.
 
@@ -543,8 +561,15 @@ const capabilities = () => narrowForRelay(resolveCapabilities(process.env, bindH
 ```
 
 `narrowForRelay` returns the input outside a relay scope. Inside one it sets `localHandoff`, `terminal`,
-Design Mode, system notifications and `phonePairing` to false. That covers the health payload and all 69
-`capabilities()` reads in `server.ts` [V] in one line, and `CEZ_TERMINAL=1` on a hosted server does not reach phones either.
+Design Mode, system notifications and `phonePairing` to false. That covers the 69 lines reading
+`capabilities()` in `server.ts` [V] in one line, and `CEZ_TERMINAL=1` on a hosted server does not reach phones either.
+
+**Two local-only reads do not pass through that closure** [V], and each needs its own change:
+
+| Read | Why the closure misses it | Change |
+| --- | --- | --- |
+| Agent accounts | `agentAccountsEnabled(process.env, bindHost)` reads the boundary directly, at eight checks in the agent-profile routes (`server.ts:2331` to `:2907`). A phone could otherwise create an account with any `configDir` | One closure that answers false in a relay scope, even with `CEZ_REMOTE_AGENT_ACCOUNTS=1`. Account management needs the machine |
+| Health | `GET /health` answers from the process-wide `healthCache` (`:2037`), and `healthSnapshot` computes `capabilities` and `repoRoot` once (`:1976`, `:1992`). A phone would read the desktop's local view and full path, and a phone's refresh would publish the narrowed view to the desktop | The cache keeps only fields that do not depend on scope. The route and the topic snapshot add `capabilities` and `repoRoot` when they read, and `refreshHealth` runs outside any relay scope |
 
 ### Host and origin guards
 
@@ -561,9 +586,12 @@ Design Mode, system notifications and `phonePairing` to false. That covers the h
 headers as the proxy, so a modified app cannot send `Host: 127.0.0.1` to look local. That would not help
 it anyway, because the scope decides.
 
-`server.ts:8421`, `:8472` and `:8533` call `resolveCapabilities` directly, but only for process-level
-state and not per request. `index.ts:378` also does, for self-update path trimming, and must move to the
-narrowed value. A test walks the source so that any new direct call in a request path fails.
+`server.ts:8421`, `:8472`, `:8533` and `:8609`, `index.ts:346` and `:349`, `workflows/run.ts:2664` and
+`automations/builtin-skill.ts:26` call `resolveCapabilities` directly, but none is in a relay request
+path: they are process-level state, the WebSocket upgrade, or fields `narrowForRelay` leaves alone.
+`index.ts:378` also does, for self-update path trimming, and must move to the narrowed value. A test
+walks the source so that any new direct call to `resolveCapabilities`, `agentAccountsEnabled` or
+`localHandoffEnabled` in a request path fails.
 
 **The scope follows the async chain, not the subscriber.** A `RunStore` listener runs in the context of
 whoever emitted the event (`onRunEvent`, `server.ts:6511`) [V for the call site, M for Node's behaviour].
@@ -571,15 +599,32 @@ So code inside a stream's event callback must not call `capabilities()`: it woul
 scope, showing a phone's stream the local view or a desktop stream the narrowed one. A stream captures the
 value once when it opens, and R3 audits every SSE handler for this.
 
+**The scope must end with the request.** Work a request starts keeps its async context for life, and that
+includes runs, timers, Manager turns and lazily started publishers. Left alone, an `alert` timer armed
+under a phone's message would read the narrowed value at `server.ts:8265` and silently drop the desktop
+notification, and `ManagerEngine.forward` would run narrowed or local depending on who started the turn.
+So every point where work leaves a request calls `outsideRelayScope(fn)`, a thin
+`AsyncLocalStorage.exit`: starting a run, `ManagerEngine.enqueue`, `refreshHealth`, and topic publishers.
+Work that outlives a request therefore reads the unscoped value, as it would had the desktop started it.
+
 ### What a phone can do
 
-| Can | Cannot |
+| A phone's requests can | A phone's requests cannot |
 | --- | --- |
-| Everything a hosted cockpit can: Manager, approvals, start and answer tasks, read diffs | Open a shell, edit agent config, use open-in routes, browse outside the browse root, see full local paths |
-| | Pair, approve or remove a phone. Those routes answer 403 in a relay scope, so a stolen phone cannot add a second device |
+| Everything a hosted cockpit can: Manager, approvals, start and answer tasks, read diffs | Open a shell, edit agent config or agent accounts, use open-in routes, browse outside the browse root |
+| | Pair, approve or remove a phone. Those routes answer 403 in a relay scope |
 
-**Starting a task is running code as the user**, as the guard's own comment says. A paired phone is
-powerful, and this narrowing limits the blast radius but does not remove it. See [QR3](#qr3-does-a-phone-need-its-own-lock).
+**These limits bind a phone's requests, not what a task does.** Starting a task is running code as the
+user, as the guard's own comment says, and a default task has unrestricted `Bash`. So a stolen unlocked
+phone can ask a task to open a shell, edit agent config, write `~/.cezar/relay/devices.json` or call the
+pairing routes over loopback. The narrowing stops a compromised page or a bug from reaching local powers
+directly. It does not contain a phone in the wrong hands. Only Remove does that, and a lock would. See
+[QR3](#qr3-does-a-phone-need-its-own-lock).
+
+**Full local paths are not hidden.** Hosted mode trims `repoRoot` and self-update paths, but `worktreePath`
+and a project's `root` are always sent, because a hosted reader was never on that machine. A phone will see
+them. That is accepted for v1, since those paths belong to the phone's owner, and no privacy claim may say
+otherwise.
 
 ### Device store and routes
 
@@ -641,7 +686,7 @@ that this phone can run tasks on this computer. The list stays usable from any n
 
 Connecting a cezar to a relay widens exposure, so it needs a recorded decision under AGENTS.md
 § Zero config. Nothing leaves the machine until the user clicks **Connect a phone**. The socket exists
-only while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
+from the first Approve, only while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
 all of it. `CEZ_RELAY_URL` overrides the host for development. Both go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
 the same commit. See [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule).
@@ -698,7 +743,7 @@ navigated away, so a half-written reply is not lost.
 | cezar offline | "Your computer is asleep or cezar isn't running." | Retry, Servers |
 | Quota | "Too much traffic today. Back in N minutes." | Servers |
 | Protocol mismatch | "Update the app" or "Update cezar" | Store link |
-| Device removed | Full screen: "This phone was removed from cezar." | Pair again, Forget |
+| Device removed | Full screen: "This phone was removed from cezar." | Try again, Pair again, Forget |
 
 On a cold launch, the same states are native screens from `StartDecision`. **A relay outage must never
 read as a problem with the user's computer**, so the app distinguishes "no relay" from `cezar-offline`.
@@ -746,7 +791,8 @@ incoming on its socket. Duration is over 90% of the cost, and traffic volume bar
 | Paired, phone never opened | About $0 | Hibernated socket, `ping` only |
 | 1 hour a day | $0.18 | Base case |
 | 4 hours a day | $0.70 | |
-| At `phoneSecondsPerDay`, 8 hours a day | $1.35 | The most one room can cost by design |
+| At `phoneSecondsPerDay`, 8 hours a day | $1.35 | Normal traffic |
+| At every limit at once | About $3.10 | 8 hours awake plus `bytesPerDay` in minimum-size frames, about 12 million billed requests. The most one room can cost by design |
 | **Hibernation broken, awake all month** | **$4.05** | 24 times the base case. Also what a 5-second keepalive frame would cause |
 
 Scale: about 28 cezars at the base case fit in the included 400,000 GB-s, so the first bill is the flat $5.
@@ -800,8 +846,9 @@ A reviewer has no desktop cezar to scan from, so the parent spec's demo VPS (Q10
    approves automatically, without the 2-minute limit. Its devices expire after 24 hours and are capped,
    and the nightly reset clears the rest.
 3. Review notes hold the code, plus a QR image the reviewer can scan from another screen.
-4. The demo reopens its rendezvous each time it expires, so `patzick/rome` raises `rendezvousPerHour`
-   for that one `cezarId` through its `hello` limits. The contract does not change.
+4. The demo reopens its rendezvous each time it expires, 12 times an hour, so `patzick/rome` raises
+   `rendezvousPerHour` for that one `cezarId` through its `hello` limits, and cezar skips its own limit of 5
+   an hour under the demo code. The contract does not change.
 5. Notes also include a short video of a real desktop pairing, since the desktop half cannot be seen.
 6. As a backup, Advanced with the demo's URL and throwaway Basic login still works, and already exists.
 
@@ -841,6 +888,7 @@ listing.
 6. How long does a first cockpit load take over a real relay on mobile data?
 7. Does `ws` stay connected to a hibernating room for 24 hours with `ping` alone?
 8. Does App Transport Security accept the loopback exception in a release build?
+9. On return from the background, does the iOS listener rebind before the webview's first request?
 
 | Answer | Then |
 | --- | --- |
@@ -852,6 +900,7 @@ listing.
 | 6 over 10 s | Pre-cache assets natively by hash. Do not bundle |
 | No on 7 | Change `ping` per `patzick/rome`'s finding, keeping the test |
 | No on 8 | Fall back as for 1 |
+| No on 9 | Hold the page with a native cover until the rebind result, and reload it |
 
 ## Risks
 
@@ -860,7 +909,7 @@ listing.
 | Loopback proxy fails on iOS | Medium | Decision 1 changes | R0 first, fallback named |
 | A change wakes rooms | Medium | Bill rises 24 times | Test plus metric |
 | New route reads `localHandoff` outside the closure | Medium | Phone gains a local power | Source-walking test |
-| Stolen unlocked phone | Medium | Tasks run on the user's computer | Remove, narrowing, [QR3](#qr3-does-a-phone-need-its-own-lock) |
+| Stolen unlocked phone | Medium | Tasks run on the user's computer, with everything a task can do | Remove, [QR3](#qr3-does-a-phone-need-its-own-lock) |
 | Hand-written Noise has a bug | Medium | Loss of confidentiality | Published vectors, Noise test vectors, external review before public listing |
 | Relay becomes a free tunnel | Low | Cost | Daily quotas, kill switch |
 | One private key across all relay users | Low | Generic push spam, not content | Cloudflare secrets, rotation in `patzick/rome` |
@@ -906,13 +955,17 @@ so that it stays one spec.
 - **Authorization:** each narrowed capability inside a relay scope. An agent-config `PUT`, open-in, terminal
   and phone routes refused. A forged `Host: 127.0.0.1` over the tunnel stays hosted. A concurrent loopback
   request stays local, and an event emitted from a relay request reaches a desktop SSE stream with desktop
-  capabilities, proving that the scope does not leak. The source-walking test. Prove each fails
-  without `narrowForRelay`, by the AGENTS.md rule.
+  capabilities, proving that the scope does not leak. Agent-profile routes are refused, with and without
+  `CEZ_REMOTE_AGENT_ACCOUNTS=1`. `/health` in a relay scope is narrowed when the cache holds the desktop's
+  view, and a refresh from a relay scope changes nothing a desktop reads or receives on the `health` topic.
+  A run, timer or Manager turn started from a relay request reads the unscoped value. The source-walking
+  test. Prove each fails without its change, by the AGENTS.md rule.
 - **Empty input:** no devices means no socket, an empty `device-sync`, and absent `hello` limits fall back
   to the table.
 - **Sleep:** the [guards](#keeping-the-relay-asleep).
-- **Proxy:** missing cookie, wrong `Host`, foreign `Origin`, cross-site, `Upgrade` refused, headers dropped,
-  no write retried.
+- **Proxy:** missing cookie, wrong `Host`, foreign `Origin`, cross-site, same-site from another port,
+  `Upgrade` refused, headers dropped, no write retried. Opening a second server closes the first listener,
+  and a taken port tears the page down before a request goes out.
 - **Push:** no text field reaches the request. A live session skips the sink.
 - **Contract:** `contract-parity`, `typed-bodies`, `route-parity` and `bc-route-inventory` for the new routes.
 - **Relay double:** tests here use a plain fake socket. No relay implementation enters this repository.
@@ -954,7 +1007,7 @@ Otherwise Manual users have no native push at all, and the parent spec requires 
 
 ### QR6: Are these quotas right for a free service?
 
-**Recommended: keep 2 GiB and 8 hours a day, with no paid tier.** They cost at most $1.35 per room per month.
+**Recommended: keep 2 GiB and 8 hours a day, with no paid tier.** They cost at most about $3.10 per room per month.
 The `hello` frame lets them change without a release.
 
 ### QR7: Who owns export compliance?
@@ -973,3 +1026,5 @@ promise of this feature, and the claim that anyone can check it is only as good 
 - 2026-11-01: Added the design around the contract. The contract text did not change.
 - 2026-11-01: Contract additions from review, protocol version still 1: one socket per `deviceId`, `GET /p`,
   named `error` codes, `Date` on `bad-proof`, 4403 keeps the keys, and room expiry counts `POST /v1/push`.
+- 2026-11-01: Review corrections outside the contract: authorization reads the closure misses, scope ending
+  with the request, proxy listener and port rules, and the worst-case cost.
