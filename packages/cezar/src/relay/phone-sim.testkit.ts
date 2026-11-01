@@ -30,11 +30,13 @@ const EMPTY = Buffer.alloc(0);
 const WAIT_MS = 10_000;
 
 export function parseQr(qr: string): { origin: string; secret: Buffer; key: Buffer } | { refused: string } {
-  const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/p#([0-9]+)\.([^.]*)\.([^.]*)$/.exec(qr);
+  // `version` first, whatever follows it, § 9.1.
+  const version = /\/p#([0-9]+)(?:\.|$)/.exec(qr)?.[1];
+  if (version !== undefined && version !== '1') return { refused: 'version' };
+  const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/p#1\.([^.]*)\.([^.]*)$/.exec(qr);
   if (!match) return { refused: 'grammar' };
-  const [, scheme, host, port, version, secretText, keyText] = match as unknown as [string, string, string, string | undefined, string, string, string];
+  const [, scheme, host, port, secretText, keyText] = match as unknown as [string, string, string, string | undefined, string, string];
   if (port && Number(port) > 65535) return { refused: 'grammar' };
-  if (version !== '1') return { refused: 'version' };
   const secret = fromB64u(secretText, 32);
   const key = fromB64u(keyText, 32);
   if (!secret || !key) return { refused: 'grammar' };
@@ -129,10 +131,12 @@ export interface OpenStream {
 }
 
 export class PhoneSim {
-  readonly edSeed = randomBytes(32);
+  readonly edSeed: Buffer;
   readonly x25519 = generateX25519();
-  readonly relayKey = edPublic(this.edSeed);
-  readonly deviceId = relayId(this.relayKey);
+  readonly relayKey: Buffer;
+  readonly deviceId: string;
+  /** What the first `HELLO` offers, for the tests that lie. */
+  hello = { min: 1, max: 1 };
   cezarId = '';
   cezarNoiseKey: Buffer | undefined;
   origin = '';
@@ -151,7 +155,11 @@ export class PhoneSim {
   closes: number[] = [];
   lastFirstMessage: Buffer | undefined;
 
-  constructor(private readonly open: SocketFactory, private readonly identity = { name: 'Sim phone', platform: 'android' }) {}
+  constructor(private readonly open: SocketFactory, private readonly identity = { name: 'Sim phone', platform: 'android' }, edSeed = randomBytes(32)) {
+    this.edSeed = edSeed;
+    this.relayKey = edPublic(edSeed);
+    this.deviceId = relayId(this.relayKey);
+  }
 
   async pairWithQr(qr: string): Promise<{ digits: string; pending: Record<string, unknown> }> {
     const parsed = parseQr(qr);
@@ -230,7 +238,7 @@ export class PhoneSim {
     const { send, receive } = noise.split();
     this.sender = send;
     this.inbound = receive;
-    this.frame({ type: 'hello', min: 1, max: 1 });
+    this.frame({ type: 'hello', ...this.hello });
     this.frame({ type: 'lease' });
   }
 

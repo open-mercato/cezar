@@ -28,6 +28,8 @@ export class FakeRelay {
   /** Answer per command `t`: `ack`, an error code, or `silent`. */
   commands: Record<string, 'ack' | 'silent' | string> = {};
   refuse: ((url: string) => SocketRefusal | undefined) | undefined;
+  /** A hostile relay: `device-remove` is acked and does nothing. */
+  swallowRemovals = false;
   allowlist = new Set<string>();
   private cezar: End | undefined;
   private readonly phones = new Map<string, End>();
@@ -119,7 +121,7 @@ export class FakeRelay {
     const frame = JSON.parse(data) as { t: string; id: string; device?: string; devices?: { device: string }[] };
     if (frame.t === 'device-sync') this.allowlist = new Set(frame.devices?.map((row) => row.device));
     if (frame.t === 'device-add' && frame.device) this.allowlist.add(frame.device);
-    if (frame.t === 'device-remove' && frame.device) {
+    if (frame.t === 'device-remove' && frame.device && !this.swallowRemovals) {
       this.allowlist.delete(frame.device);
       const phone = this.phones.get(frame.device);
       if (phone) phone.socket.close(4403);

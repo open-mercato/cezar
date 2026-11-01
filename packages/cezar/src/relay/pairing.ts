@@ -7,7 +7,7 @@ import { deriveFromCode, deriveFromSecret, displayCode, generateCode, qrString }
 
 /** The 2-minute QR life and claim window, § 15. */
 export const PAIRING_LIFE_MS = 120_000;
-/** Decide before the 300 s rendezvous ends, so the phone hears `timeout` rather than a close. */
+/** Counted from the rendezvous' creation, so the phone hears `timeout` rather than a 4408, § 9.4. */
 export const PAIRING_DECISION_LIMIT_MS = 285_000;
 export const PAIRING_CLOSE_AFTER_OUTCOME_MS = 5_000;
 
@@ -29,6 +29,8 @@ export interface PairingDeps {
   label: string;
   open: SocketFactory;
   onChange(): void;
+  /** False refuses the phone with `bad-payload`, before the user is asked anything. */
+  accepts(phone: PairedPhone): boolean;
   /** Saves the device, reaches the relay, sends `device-add`. Throws a failure reason. */
   commit(phone: PairedPhone): Promise<void>;
   rollback(phone: PairedPhone): void;
@@ -98,6 +100,7 @@ export class Pairing {
       identity: this.deps.identity,
       label: this.deps.label,
       open: this.deps.open,
+      accepts: (phone) => this.deps.accepts(phone),
       events: {
         onPeerJoined: (channel) => this.onPeerJoined(channel),
         onPhone: (channel, phone, digits) => this.onPhone(channel, phone, digits),
@@ -116,7 +119,7 @@ export class Pairing {
     this.lifeTimer = undefined;
     for (const other of this.channels) if (other !== channel) other.close();
     this.channels = [channel];
-    this.decisionTimer = setTimeout(() => this.fail('timeout'), PAIRING_DECISION_LIMIT_MS);
+    this.decisionTimer = setTimeout(() => this.fail('timeout'), channel.openedAt + PAIRING_DECISION_LIMIT_MS - Date.now());
     this.decisionTimer.unref?.();
     this.set('handshaking');
   }
@@ -210,6 +213,8 @@ export class Pairing {
 
   approve(): boolean {
     if (this.settled || this.status !== 'confirm' || !this.phone) return false;
+    if (this.decisionTimer) clearTimeout(this.decisionTimer);
+    this.decisionTimer = undefined;
     this.set('approving');
     void this.commit(this.phone);
     return true;

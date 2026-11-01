@@ -28,6 +28,8 @@ export interface SessionDeps {
   frameBytes(): number;
   dataSlot(): Promise<void>;
   fetch(request: Request): Promise<Response>;
+  /** The first frame only the phone could have sealed arrived. */
+  onProven(): void;
   onEnd(reason: 'closed' | 'goodbye'): void;
 }
 
@@ -77,6 +79,11 @@ export class PhoneSession implements StreamHost {
 
   get live(): boolean {
     return !this.ended;
+  }
+
+  /** False while this may be a replayed first message: it has no replay protection. */
+  get proven(): boolean {
+    return this.phase !== 'hello';
   }
 
   dataSlot(): Promise<void> {
@@ -160,11 +167,13 @@ export class PhoneSession implements StreamHost {
   }
 
   private negotiate(frame: { min: number; max: number }): void {
+    if (frame.min > frame.max) throw new Error('HELLO with min over max');
     if (Math.min(frame.max, TUNNEL_RANGE.max) < Math.max(frame.min, TUNNEL_RANGE.min)) {
       this.close(CLOSE.tunnelUnsupported);
       return;
     }
     this.phase = 'lease';
+    this.deps.onProven();
   }
 
   private handle(frame: TunnelFrame): void {

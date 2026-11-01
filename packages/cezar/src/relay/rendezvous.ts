@@ -64,11 +64,13 @@ export class RendezvousChannel {
   private joined = false;
   private turn = 0;
   private opened: { resolve(): void; reject(error: Error): void } | undefined;
+  /** The relay's 300 s hard life counts from about here, § 5. */
+  openedAt = 0;
 
   constructor(
     readonly kind: 'qr' | 'code',
     private readonly keys: PairingKeys,
-    private readonly deps: { origin: string; identity: RelayIdentity; label: string; open: SocketFactory; events: ChannelEvents },
+    private readonly deps: { origin: string; identity: RelayIdentity; label: string; open: SocketFactory; accepts(phone: PairedPhone): boolean; events: ChannelEvents },
   ) {
     this.handshake = new HandshakeState({
       pattern: 'XXpsk3',
@@ -85,6 +87,7 @@ export class RendezvousChannel {
     const locator = b64u(this.keys.locator);
     const time = Math.floor(Date.now() / 1000);
     const proof = socketProof('pair', locator, '-', time);
+    this.openedAt = Date.now();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.opened = undefined;
@@ -175,6 +178,10 @@ export class RendezvousChannel {
     this.handshakeTimer = undefined;
     const phone = this.parsePhone(payload);
     if (!phone) return;
+    if (!this.deps.accepts(phone)) {
+      this.endWith({ t: 'failure', reason: 'bad-payload' }, { kind: 'failed', reason: 'bad-payload' });
+      return;
+    }
     this.sendJson({ t: 'pending', relayKey: b64u(this.deps.identity.edPublic), tunnel: TUNNEL_RANGE, label: this.deps.label });
     this.deps.events.onPhone(this, phone, sas(this.handshake.h));
   }

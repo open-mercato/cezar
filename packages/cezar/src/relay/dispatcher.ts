@@ -48,6 +48,7 @@ export class TunnelStream {
   private credit = 0;
   private finished = false;
   private requestEnded = false;
+  private endReceived = false;
   private responseEnded = false;
   private received = 0;
   private readonly expectedLength: number | undefined;
@@ -222,12 +223,12 @@ export class TunnelStream {
   }
 
   private onData(data: Buffer): void {
+    if (this.endReceived) throw new Error('DATA after END');
     if (data.length === 0) return;
     if (!this.bodyController) {
       this.reset(RESET.badRequest);
       return;
     }
-    if (this.requestEnded) throw new Error('DATA after END');
     if (data.length > this.recvWindow) {
       this.reset(RESET.flowControl);
       return;
@@ -238,13 +239,18 @@ export class TunnelStream {
       this.reset(RESET.badRequest);
       return;
     }
+    if (this.requestEnded) {
+      this.grant(data.length); // The handler stopped reading; the phone cannot know yet.
+      return;
+    }
     this.chunks.push(data);
     this.wakeBody();
   }
 
   private onEnd(): void {
+    if (this.endReceived) throw new Error('END twice');
+    this.endReceived = true;
     if (!this.bodyController) return;
-    if (this.requestEnded) throw new Error('END twice');
     if (this.expectedLength !== undefined && this.received !== this.expectedLength) {
       this.reset(RESET.badRequest);
       return;

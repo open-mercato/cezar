@@ -172,11 +172,16 @@ export class RelayService {
       frameBytes: () => this.connection?.limits.frameBytes ?? 0,
       dataSlot: () => this.connection?.dataSlot() ?? Promise.resolve(),
       fetch: (request) => this.dispatch(deviceId, request),
+      onProven: () => this.onSessionProven(deviceId),
       onEnd: (reason) => this.onSessionEnd(deviceId, reason),
     });
     if (!accepted) return;
     this.slots.delete(deviceId);
     this.sessions.set(deviceId, accepted);
+  }
+
+  /** `KK` message 1 can be replayed, so only a decrypted `HELLO` counts as the phone being there. */
+  private onSessionProven(deviceId: string): void {
     this.touch(deviceId);
     this.onChange();
   }
@@ -188,11 +193,13 @@ export class RelayService {
   }
 
   private onSessionEnd(deviceId: string, reason: 'closed' | 'goodbye'): void {
+    const proven = this.sessions.get(deviceId)?.proven === true;
     this.sessions.delete(deviceId);
     if (reason === 'goodbye') {
       this.dropDevice(deviceId);
       return;
     }
+    if (!proven) return;
     this.touch(deviceId);
     this.onChange();
   }
@@ -206,10 +213,16 @@ export class RelayService {
     }
   }
 
-  /** The row goes first: from here the phone cannot start a session, whatever the relay does. */
+  /**
+   * The row goes first: from here the phone cannot start a session, whatever the relay does. A
+   * rolled-back pairing reaches this with a session up, because `commit` saves before its `ack`.
+   */
   private dropDevice(deviceId: string): boolean {
+    const session = this.sessions.get(deviceId);
     const removal = this.devices.remove(deviceId);
     if (!removal) return false;
+    session?.close(CLOSE.deviceRemoved);
+    this.sessions.delete(deviceId);
     void this.sendRemoval(removal);
     this.onChange();
     return true;
@@ -258,7 +271,7 @@ export class RelayService {
         platform: device.platform,
         addedAt: device.addedAt,
         ...(device.lastSeenAt ? { lastSeenAt: device.lastSeenAt } : {}),
-        connected: this.sessions.has(device.deviceId),
+        connected: this.sessions.get(device.deviceId)?.proven === true,
       })),
       pairing: this.pairing?.view() ?? null,
       ...(undenied > 0 ? { undeniedGrants: undenied } : {}),
@@ -294,6 +307,7 @@ export class RelayService {
         label: this.label,
         open: this.open,
         onChange: () => { if (this.pairing === pairing) this.onChange(); },
+        accepts: (phone) => this.acceptsPhone(phone),
         commit: (phone) => this.commit(phone, identity),
         rollback: (phone) => { this.dropDevice(phone.deviceId); },
       });
@@ -307,6 +321,12 @@ export class RelayService {
         throw error;
       }
     });
+  }
+
+  /** `relayKey` is unproven until the phone's first signed socket, so it cannot take over a row. */
+  private acceptsPhone(phone: PairedPhone): boolean {
+    const saved = this.devices.get(phone.deviceId);
+    return !saved || saved.noiseKey === phone.noiseKey;
   }
 
   /** Save, open the socket if none, wait for `hello`, `device-add`, wait for its `ack`, § 9.4. */
@@ -358,16 +378,7 @@ export class RelayService {
 
   /** cezar first, complete from that moment: then the session, then the relay, § Removal. */
   remove(deviceId: string): boolean {
-    return outsideRelayScope(() => {
-      if (!this.devices.get(deviceId)) return false;
-      const session = this.sessions.get(deviceId);
-      const removal = this.devices.remove(deviceId);
-      session?.close(CLOSE.deviceRemoved);
-      this.sessions.delete(deviceId);
-      if (removal) void this.sendRemoval(removal);
-      this.onChange();
-      return true;
-    });
+    return outsideRelayScope(() => this.dropDevice(deviceId));
   }
 }
 

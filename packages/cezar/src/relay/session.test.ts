@@ -282,6 +282,88 @@ describe('sessions and the tunnel', () => {
     await expect(phone.connect()).rejects.toThrow(/device-removed/);
   });
 
+  it('a rolled-back pairing ends the session it let up, whatever the relay does', async () => {
+    relay.swallowRemovals = true;
+    relay.commands['device-add'] = 'silent';
+    const started = await service.startPairing();
+    const phone = new PhoneSim(relay.open);
+    await phone.pairWithQr(started.qr);
+    await waitFor(() => service.list().pairing?.status === 'confirm');
+    service.approvePairing(started.id);
+    const add = () => relay.cezarFrames.find((f): f is string => typeof f === 'string' && f.includes('device-add'));
+    await waitFor(() => add() !== undefined, 'device-add');
+    await phone.connect();
+    await waitFor(() => phone.leases > 0, 'LEASE echo');
+
+    relay.control({ t: 'error', id: (JSON.parse(add()!) as { id: string }).id, code: 'internal' });
+    await waitFor(() => service.list().pairing?.status === 'failed');
+    expect(service.list().phones).toEqual([]);
+    expect(service.remove(phone.deviceId)).toBe(false);
+    await waitFor(() => phone.tunnelFrames.some((frame) => frame.type === 'close'), 'CLOSE');
+    expect(phone.tunnelFrames.find((frame) => frame.type === 'close')).toEqual({ type: 'close', code: CLOSE.deviceRemoved });
+    phone.stream('GET', '/api/v1/workspace');
+    await tick();
+    expect(requests).toEqual([]);
+  });
+
+  it('a replayed first message shows nobody connected and leaves "seen" alone', async () => {
+    const phone = await session();
+    const before = service.list().phones[0]!;
+    expect(before).toMatchObject({ connected: true });
+    const first = phone.lastFirstMessage!;
+    phone.closeSocket();
+    await waitFor(() => !service.list().phones[0]!.connected);
+    const seen = service.list().phones[0]!.lastSeenAt;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const count = relay.cezarFrames.length;
+    relay.control({ t: 'phone-joined', device: phone.deviceId });
+    relay.inject(phone.deviceId, first);
+    await waitFor(() => relay.cezarFrames.length > count, 'KK reply');
+    await tick();
+    expect(service.list().phones[0]).toMatchObject({ connected: false, lastSeenAt: seen });
+    relay.control({ t: 'phone-left', device: phone.deviceId });
+    await tick();
+    expect(service.list().phones[0]!.lastSeenAt).toBe(seen);
+  });
+
+  it('counts a phone as connected from its first HELLO', async () => {
+    const phone = await paired();
+    expect(service.list().phones[0]).not.toHaveProperty('lastSeenAt');
+    await phone.connect();
+    await waitFor(() => service.list().phones[0]!.connected);
+    expect(service.list().phones[0]!.lastSeenAt).toBeTruthy();
+  });
+
+  it('a HELLO with min over max is a protocol error, not a version mismatch', async () => {
+    const phone = await paired();
+    phone.hello = { min: 2, max: 1 };
+    await phone.connect();
+    await waitFor(() => phone.tunnelFrames.some((frame) => frame.type === 'close'));
+    expect(phone.tunnelFrames.find((frame) => frame.type === 'close')).toEqual({ type: 'close', code: CLOSE.protocolError });
+  });
+
+  it('DATA after a GET has sent END is a protocol error', async () => {
+    const phone = await session();
+    const stream = phone.stream('GET', '/slow');
+    phone.frame({ type: 'data', stream: stream.id, data: Buffer.from('late') });
+    await waitFor(() => phone.tunnelFrames.some((frame) => frame.type === 'close'));
+    expect(phone.tunnelFrames.find((frame) => frame.type === 'close')).toEqual({ type: 'close', code: CLOSE.protocolError });
+  });
+
+  it('a handler that stops reading a body does not cost the session', async () => {
+    const phone = await session();
+    responder = async (request) => {
+      await request.body?.cancel();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return new Response('early');
+    };
+    const body = 'x'.repeat(1_000);
+    const answer = await phone.fetch('POST', '/api/v1/runs', [['content-length', '1000']], body);
+    expect(answer.status).toBe(200);
+    expect(phone.tunnelFrames.some((frame) => frame.type === 'close')).toBe(false);
+  });
+
   it('a lost device-remove is sent again after the next connect', async () => {
     const phone = await paired();
     const other = await paired();

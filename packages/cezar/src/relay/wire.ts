@@ -266,8 +266,8 @@ function readOpen(reader: Reader, size: number): TunnelFrame {
     throw refuse(RESET.badRequest);
   }
   if (reader.left !== 0) throw new Error('trailing bytes');
-  const ascii = target.every((byte) => byte > 0x20 && byte < 0x7f);
-  if (!METHODS.has(method) || !ascii || target.length > MAX_TARGET_BYTES || !/^\/(?!\/)/.test(text)) throw refuse(RESET.badRequest);
+  const printable = target.every((byte) => byte > 0x20 && byte < 0x7f && byte !== 0x5c);
+  if (!METHODS.has(method) || !printable || target.length > MAX_TARGET_BYTES || !/^\/(?!\/)/.test(text)) throw refuse(RESET.badRequest);
   return { type: 'open', stream, method, target: text, headers };
 }
 
