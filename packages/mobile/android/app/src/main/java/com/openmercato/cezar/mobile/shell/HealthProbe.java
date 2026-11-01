@@ -36,6 +36,18 @@ public final class HealthProbe {
         }
     }
 
+    /** The tunnel transport: the same JSON, from a path, with no Basic and no cookie (spec). */
+    public HealthAnswer probePath() {
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("Accept", "application/json");
+        headers.put("User-Agent", userAgent);
+        try {
+            return HealthClassifier.classify(http.get("/api/v1/health", headers));
+        } catch (IOException e) {
+            return HealthAnswer.of(HealthAnswer.Kind.RELAY_DOWN, 0);
+        }
+    }
+
     private static String basic(String username, String password) {
         byte[] pair = ((username == null ? "" : username) + ":" + password).getBytes(StandardCharsets.UTF_8);
         return "Basic " + Base64.getEncoder().encodeToString(pair);

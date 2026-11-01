@@ -25,7 +25,14 @@ public final class ServerListStore {
         if (rows == null) return out;
         for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.optJSONObject(i);
-            if (row == null || row.optString("id", "").isEmpty() || row.optString("url", "").isEmpty()) continue;
+            if (row == null || row.optString("id", "").isEmpty()) continue;
+            JSONObject relay = row.optJSONObject("relay");
+            if (relay != null) {
+                out.add(new ServerRecord(row.optString("id"), row.optString("label"), new RelayFields(relay.optString("origin"), relay.optString("cezarId"),
+                        relay.optString("cezarKey"), relay.optString("deviceId"), relay.optInt("port")), text(row, "noteShown")));
+                continue;
+            }
+            if (row.optString("url", "").isEmpty()) continue;
             out.add(new ServerRecord(row.optString("id"), row.optString("label"), row.optString("url"),
                     text(row, "username"), text(row, "realm"), text(row, "noteShown")));
         }
@@ -38,7 +45,12 @@ public final class ServerListStore {
     }
 
     public synchronized ServerRecord findByUrl(String url) {
-        for (ServerRecord server : list()) if (server.url.equals(url)) return server;
+        for (ServerRecord server : list()) if (url.equals(server.url)) return server;
+        return null;
+    }
+
+    public synchronized ServerRecord findByCezarId(String cezarId) {
+        for (ServerRecord server : list()) if (server.relay != null && server.relay.cezarId.equals(cezarId)) return server;
         return null;
     }
 
@@ -86,6 +98,13 @@ public final class ServerListStore {
         try {
             JSONArray rows = new JSONArray();
             for (ServerRecord server : servers) {
+                if (server.relay != null) {
+                    rows.put(new JSONObject().put("id", server.id).put("label", server.label)
+                            .put("noteShown", server.noteShown == null ? JSONObject.NULL : server.noteShown)
+                            .put("relay", new JSONObject().put("origin", server.relay.origin).put("cezarId", server.relay.cezarId)
+                                    .put("cezarKey", server.relay.cezarKey).put("deviceId", server.relay.deviceId).put("port", server.relay.port)));
+                    continue;
+                }
                 rows.put(new JSONObject()
                         .put("id", server.id).put("label", server.label).put("url", server.url)
                         .put("username", server.username == null ? JSONObject.NULL : server.username)

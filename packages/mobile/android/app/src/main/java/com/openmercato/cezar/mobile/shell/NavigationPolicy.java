@@ -8,7 +8,7 @@ public final class NavigationPolicy {
 
     private NavigationPolicy() {}
 
-    public static Action decide(ServerOrigin origin, String url, String pageUrl, boolean mainFrame, boolean redirect) {
+    public static Action decide(PageOrigin origin, String url, String pageUrl, boolean mainFrame, boolean redirect) {
         String scheme = schemeOf(url);
         if (scheme.equals("cezar")) {
             return mainFrame && url.toLowerCase(Locale.ROOT).matches("cezar://servers/?") ? Action.SERVERS : Action.BLOCK;
@@ -20,12 +20,12 @@ public final class NavigationPolicy {
         if (!mainFrame) return Action.ALLOW;
         // An SSO login leaves the origin by redirect and works on its own pages until it returns.
         // The responder still refuses every challenge off the origin.
-        if (scheme.equals("https") && (redirect || !origin.sameOrigin(pageUrl))) return Action.ALLOW;
+        if (scheme.equals("https") && origin.allowsSso() && (redirect || !origin.sameOrigin(pageUrl))) return Action.ALLOW;
         return Action.EXTERNAL;
     }
 
     /** `window.open` and `target=_blank`: same origin stays here, the rest leave the app. */
-    public static Action decideWindow(ServerOrigin origin, String url) {
+    public static Action decideWindow(PageOrigin origin, String url) {
         if (origin.sameOrigin(url)) return Action.ALLOW;
         String scheme = schemeOf(url);
         boolean external = scheme.equals("https") || scheme.equals("http") || scheme.equals("mailto") || scheme.equals("tel");

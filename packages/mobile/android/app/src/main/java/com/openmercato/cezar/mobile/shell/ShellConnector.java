@@ -38,15 +38,34 @@ public final class ShellConnector {
     public static final String CONNECTION_ERROR = "connection-error";
     public static final String CLEARTEXT = "cleartext-refused";
     public static final String INVALID_URL = "invalid-url";
+    public static final String CEZAR_OFFLINE = "cezar-offline";
+    public static final String RELAY_DOWN = "relay-down";
+    public static final String QUOTA = "quota";
+    public static final String DEVICE_REMOVED = "device-removed";
+    public static final String UPDATE_APP = "update-app";
+    public static final String UPDATE_CEZAR = "update-cezar";
+
+    /** The tunnel side of a relay server. Null on a shell with no relay, which then behaves as before. */
+    public interface RelayPort {
+        HealthAnswer probe(ServerRecord server);
+        void goodbye(ServerRecord server);
+        void forgetKeys(String id);
+    }
 
     private final ServerListStore servers;
     private final CredentialStore credentials;
     private final HealthProbe probe;
+    private final RelayPort relay;
 
     public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe) {
+        this(servers, credentials, probe, null);
+    }
+
+    public ShellConnector(ServerListStore servers, CredentialStore credentials, HealthProbe probe, RelayPort relay) {
         this.servers = servers;
         this.credentials = credentials;
         this.probe = probe;
+        this.relay = relay;
     }
 
     public List<ServerRecord> list() {
@@ -62,6 +81,7 @@ public final class ShellConnector {
     public Outcome open(String id, String cookies) {
         ServerRecord server = servers.get(id);
         if (server == null) return Outcome.screen(LIST, null, 0);
+        if (server.relay != null) return openRelay(server);
         if (realmChanged(server, cookies)) return Outcome.screen(ASK_CREDENTIALS, id, 401);
         String password = credentials.get(id);
         HealthAnswer health = probe.probe(server.origin(), server.username, password, cookies);
@@ -79,6 +99,45 @@ public final class ShellConnector {
                 servers.markUsed(id);
                 return new Outcome(OPEN, id, server.origin().url(StartDecision.path(route)), oneTimeNote(server, route, health), health.status);
         }
+    }
+
+    /** The start table for a relay server. Basic routes cannot occur: it has no challenge. `url` is a path here. */
+    private Outcome openRelay(ServerRecord server) {
+        if (relay == null) return Outcome.screen(CONNECTION_ERROR, server.id, 0);
+        HealthAnswer health = relay.probe(server);
+        StartDecision.Route route = StartDecision.decide(health, false);
+        switch (route) {
+            case CEZAR_OFFLINE:
+                return Outcome.screen(CEZAR_OFFLINE, server.id, 0);
+            case RELAY_DOWN:
+                return Outcome.screen(health.kind == HealthAnswer.Kind.QUOTA ? QUOTA : RELAY_DOWN, server.id, health.status);
+            case DEVICE_REMOVED:
+                return Outcome.screen(DEVICE_REMOVED, server.id, 0);
+            case PROTOCOL_MISMATCH:
+                return Outcome.screen(health.kind == HealthAnswer.Kind.UPDATE_APP ? UPDATE_APP : UPDATE_CEZAR, server.id, 0);
+            case MANAGER:
+            case ROOT_MANAGERS_OFF:
+            case ROOT_OLD_SERVER:
+                servers.markUsed(server.id);
+                return new Outcome(OPEN, server.id, StartDecision.path(route), oneTimeNote(server, route, health), health.status);
+            default:
+                return Outcome.screen(CONNECTION_ERROR, server.id, health.status);
+        }
+    }
+
+    /** Pairing succeeded: one row per cezar, whose old keys the new ones replace. */
+    public String saveRelayServer(String label, RelayFields fields) {
+        ServerRecord existing = servers.findByCezarId(fields.cezarId);
+        String id = existing != null ? existing.id : UUID.randomUUID().toString();
+        int port = existing != null ? existing.relay.port : 0;
+        servers.put(new ServerRecord(id, label, fields.withPort(port), existing == null ? null : existing.noteShown));
+        servers.markUsed(id);
+        return id;
+    }
+
+    public void saveRelayPort(String id, int port) {
+        ServerRecord server = servers.get(id);
+        if (server != null && server.relay != null) servers.put(server.withPort(port));
     }
 
     /** Runs the add-server table. A retried answer goes back through it, so 403 after 401 explains. */
@@ -111,6 +170,11 @@ public final class ShellConnector {
 
     /** Deletes the password first: a list that outlives it can only re-ask. */
     public void forget(String id) {
+        ServerRecord server = servers.get(id);
+        if (server != null && server.relay != null && relay != null) {
+            relay.goodbye(server);
+            relay.forgetKeys(id);
+        }
         credentials.delete(id);
         servers.remove(id);
     }
