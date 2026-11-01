@@ -43,7 +43,7 @@ export function parseQr(qr: string): { origin: string; secret: Buffer; key: Buff
 }
 
 export const normalizeCode = (input: string): string | null => {
-  const text = input.replace(/[ \-‐-―]/g, '').toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1');
+  const text = input.replace(/[ \-‐-―]/g, '').replace(/[a-z]/g, (letter) => letter.toUpperCase()).replace(/O/g, '0').replace(/[IL]/g, '1');
   return /^[0-9A-HJKMNP-TV-Z]{12}$/.test(text) ? text : null;
 };
 
@@ -149,6 +149,7 @@ export class PhoneSim {
   readonly tunnelFrames: TunnelFrame[] = [];
   leases = 0;
   closes: number[] = [];
+  lastFirstMessage: Buffer | undefined;
 
   constructor(private readonly open: SocketFactory, private readonly identity = { name: 'Sim phone', platform: 'android' }) {}
 
@@ -221,7 +222,8 @@ export class PhoneSim {
       s: this.x25519.secret,
       rs: this.cezarNoiseKey!,
     });
-    channel.socket.send(Buffer.concat([Buffer.from([1]), noise.writeMessage()]));
+    this.lastFirstMessage = noise.writeMessage();
+    channel.socket.send(Buffer.concat([Buffer.from([1]), this.lastFirstMessage]));
     const reply = await until(channel.events, 'KK reply', (event) => event.kind === 'data');
     const range = JSON.parse(decodeRecord(noise.readMessage((reply as { bytes: Buffer }).bytes)).toString('utf8')) as { tunnel: unknown };
     if (!range.tunnel) throw new Error('no tunnel range');

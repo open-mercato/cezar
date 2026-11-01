@@ -65,9 +65,11 @@ describe('pairing', () => {
 
   it('pairs by typed code, in the same flow', async () => {
     const started = await service.startPairing();
-    expect(started.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    expect(started).not.toHaveProperty('code');
+    const typed = await service.pairingCode(started.id);
+    expect(typed?.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}$/);
     const phone = new PhoneSim(relay.open);
-    const { digits } = await phone.pairWithCode(started.relayOrigin, started.code!.toLowerCase());
+    const { digits } = await phone.pairWithCode(started.relayOrigin, typed!.code.toLowerCase());
     await until('confirm');
     expect(service.list().pairing).toMatchObject({ method: 'code', digits });
     service.approvePairing(started.id);
@@ -76,10 +78,12 @@ describe('pairing', () => {
 
   it('closes the other rendezvous when a phone joins one', async () => {
     const started = await service.startPairing();
+    const typed = await service.pairingCode(started.id);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
+    await settle();
     const late = new PhoneSim(relay.open);
-    await expect(late.pairWithCode(started.relayOrigin, started.code!)).rejects.toThrow(/no-rendezvous/);
+    await expect(late.pairWithCode(started.relayOrigin, typed!.code)).rejects.toThrow(/no-rendezvous/);
   });
 
   it('Deny discards everything', async () => {
@@ -187,12 +191,29 @@ describe('pairing', () => {
     expect(service.list().phones).toEqual([]);
   });
 
-  it('shows the QR code alone when the second rendezvous is refused', async () => {
+  it('opens one rendezvous until the user asks for the code', async () => {
+    const started = await service.startPairing();
+    expect(relay.opened.filter((url) => url.includes('/v1/pair/'))).toHaveLength(1);
+    await service.pairingCode(started.id);
+    await service.pairingCode(started.id);
+    expect(relay.opened.filter((url) => url.includes('/v1/pair/'))).toHaveLength(2);
+  });
+
+  it('keeps the QR code when the code rendezvous is refused', async () => {
     let seen = 0;
     relay.refuse = (url) => (url.includes('/v1/pair/') && (seen += 1) === 2 ? { status: 429, retryAfter: 3600 } : undefined);
     const started = await service.startPairing();
-    expect(started.code).toBeNull();
-    expect(started.qr).toContain('/p#1.');
+    await expect(service.pairingCode(started.id)).rejects.toBeInstanceOf(PairingStartError);
+    expect(status()).toBe('waiting');
+    const phone = new PhoneSim(relay.open);
+    await phone.pairWithQr(started.qr);
+    await until('confirm');
+  });
+
+  it('reports a refused QR rendezvous with its retryAfter', async () => {
+    relay.refuse = (url) => (url.includes('/v1/pair/') ? { status: 429, retryAfter: 1800 } : undefined);
+    await expect(service.startPairing()).rejects.toMatchObject({ retryAfter: 1800 });
+    expect(service.list().pairing).toBeNull();
   });
 
   it('never lets the code or secret reach an event, a log or a file', async () => {
@@ -203,6 +224,7 @@ describe('pairing', () => {
     const views: string[] = [];
     service.attach(async () => new Response('ok'), () => { views.push(JSON.stringify(service.list())); });
     const started = await service.startPairing();
+    const typed = await service.pairingCode(started.id);
     const phone = new PhoneSim(relay.open);
     await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -211,7 +233,7 @@ describe('pairing', () => {
     await until('approved');
     vi.restoreAllMocks();
     const secret = started.qr.split('#1.')[1]!.split('.')[0]!;
-    const code = started.code!;
+    const code = typed!.code;
     const files = readdirSync(directory).map((name) => readFileSync(join(directory, name), 'utf8'));
     for (const haystack of [...lines, ...views, ...files]) {
       expect(haystack).not.toContain(secret);

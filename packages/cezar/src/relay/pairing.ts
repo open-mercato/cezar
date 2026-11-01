@@ -14,7 +14,6 @@ export const PAIRING_CLOSE_AFTER_OUTCOME_MS = 5_000;
 export interface PairingCredentials {
   id: string;
   qr: string;
-  code: string | null;
   expiresAt: string;
 }
 
@@ -49,33 +48,48 @@ export class Pairing {
   private decisionTimer: NodeJS.Timeout | undefined;
   private closeTimer: NodeJS.Timeout | undefined;
   private settled = false;
+  private code: string | undefined;
 
   constructor(private readonly deps: PairingDeps) {}
 
-  /** Opens both rendezvous. The secret and code live in this frame and the response, nowhere else. */
+  /** Opens the QR's rendezvous. The secret lives in this frame and the response, nowhere else. */
   async start(): Promise<PairingCredentials> {
     const { origin, identity } = this.deps;
     const secret = randomBytes(32);
-    const code = generateCode();
     const qr = this.channel('qr', deriveFromSecret(secret));
-    const typed = this.channel('code', await deriveFromCode(code));
-    this.channels = [qr, typed];
-    const [qrResult, codeResult] = await Promise.allSettled([qr.open(), typed.open()]);
-    if (qrResult.status === 'rejected') {
+    this.channels = [qr];
+    try {
+      await qr.open();
+    } catch (error) {
       this.closeChannels();
-      throw refusalError(qrResult.reason);
+      throw refusalError(error);
     }
-    // If the second rendezvous is refused, cezar shows the QR code alone, § 9.2.
-    if (codeResult.status === 'rejected') this.channels = [qr];
     this.expiresAtMs = Date.now() + PAIRING_LIFE_MS;
     this.lifeTimer = setTimeout(() => this.expire(), PAIRING_LIFE_MS);
     this.lifeTimer.unref?.();
-    return {
-      id: this.id,
-      qr: qrString(origin, secret, identity.x25519Public),
-      code: codeResult.status === 'fulfilled' ? displayCode(code) : null,
-      expiresAt: new Date(this.expiresAtMs).toISOString(),
-    };
+    return { id: this.id, qr: qrString(origin, secret, identity.x25519Public), expiresAt: new Date(this.expiresAtMs).toISOString() };
+  }
+
+  /** The typed code's own rendezvous, on request. If it is refused, the QR code stands alone. */
+  async revealCode(): Promise<string> {
+    if (this.code) return this.code;
+    if (this.settled || this.winner) throw new PairingStartError('This pairing can no longer use a typed code.');
+    const code = generateCode();
+    const channel = this.channel('code', await deriveFromCode(code));
+    this.channels.push(channel);
+    try {
+      await channel.open();
+    } catch (error) {
+      this.channels = this.channels.filter((item) => item !== channel);
+      channel.close();
+      throw refusalError(error);
+    }
+    if (this.settled || this.winner) {
+      channel.close();
+      throw new PairingStartError('This pairing can no longer use a typed code.');
+    }
+    this.code = displayCode(code);
+    return this.code;
   }
 
   private channel(kind: 'qr' | 'code', keys: Awaited<ReturnType<typeof deriveFromCode>>): RendezvousChannel {

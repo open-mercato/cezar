@@ -2,12 +2,15 @@ import { HOP_BY_HOP_HEADERS, MAX_HEAD_CONTENT, RESET, encodeFrame, isDroppedRequ
 
 export const STREAM_WINDOW = 262_144;
 const CREDIT_THRESHOLD = 65_536;
+/** Read no further ahead of the tunnel than this, so a stalled phone stalls the producer. */
+const OUTGOING_LIMIT = 131_072;
 /** Never a real host, so nothing can mistake it for this machine. */
 const RELAY_ORIGIN = 'http://relay.invalid';
 const BODYLESS = new Set(['GET', 'HEAD']);
 
 export interface StreamHost {
   sendFrame(frame: TunnelFrame): void;
+  dataSlot(): Promise<void>;
   streamDone(id: number): void;
   readonly maxData: number;
 }
@@ -52,6 +55,11 @@ export class TunnelStream {
   private bodyWake: (() => void) | undefined;
   private bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
   private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  private outgoing: Buffer[] = [];
+  private outgoingBytes = 0;
+  private readerDone = false;
+  private flushWaiter: (() => void) | undefined;
+  private drained: (() => void) | undefined;
 
   constructor(
     private readonly open: OpenFrame,
@@ -143,12 +151,19 @@ export class TunnelStream {
     }
     this.host.sendFrame({ type: 'head', stream: this.id, status: response.status, headers });
     if (response.body && this.open.method !== 'HEAD') {
+      const flushed = this.flush();
       this.reader = response.body.getReader();
       for (;;) {
         const { done, value } = await this.reader.read();
         if (done || this.finished) break;
-        await this.write(Buffer.from(value));
+        this.outgoing.push(Buffer.from(value));
+        this.outgoingBytes += value.length;
+        this.wakeFlush();
+        if (this.outgoingBytes >= OUTGOING_LIMIT) await new Promise<void>((resolve) => { this.drained = resolve; });
       }
+      this.readerDone = true;
+      this.wakeFlush();
+      await flushed;
     } else {
       await response.body?.cancel().catch(() => {});
     }
@@ -159,18 +174,41 @@ export class TunnelStream {
     else this.reset(RESET.cancelled);
   }
 
-  private async write(bytes: Buffer): Promise<void> {
-    let rest = bytes;
-    while (rest.length > 0 && !this.finished) {
-      if (this.sendWindow === 0) {
+  /** One `DATA` per pace slot, holding everything ready, so an SSE replay is not one frame per event. */
+  private async flush(): Promise<void> {
+    while (!this.finished) {
+      if (this.outgoingBytes === 0) {
+        if (this.readerDone) return;
+        await new Promise<void>((resolve) => { this.flushWaiter = resolve; });
+      } else if (this.sendWindow === 0) {
         await new Promise<void>((resolve) => { this.windowWaiter = resolve; });
-        continue;
+      } else {
+        await this.host.dataSlot();
+        if (!this.finished) this.sendReady();
       }
-      const size = Math.min(rest.length, this.sendWindow, this.host.maxData);
-      this.sendWindow -= size;
-      this.host.sendFrame({ type: 'data', stream: this.id, data: rest.subarray(0, size) });
-      rest = rest.subarray(size);
     }
+  }
+
+  private sendReady(): void {
+    const ready = Buffer.concat(this.outgoing);
+    const size = Math.min(ready.length, this.sendWindow, this.host.maxData);
+    this.sendWindow -= size;
+    this.outgoingBytes -= size;
+    this.outgoing = size < ready.length ? [ready.subarray(size)] : [];
+    this.host.sendFrame({ type: 'data', stream: this.id, data: ready.subarray(0, size) });
+    if (this.outgoingBytes < OUTGOING_LIMIT) this.wakeDrained();
+  }
+
+  private wakeFlush(): void {
+    const wake = this.flushWaiter;
+    this.flushWaiter = undefined;
+    wake?.();
+  }
+
+  private wakeDrained(): void {
+    const wake = this.drained;
+    this.drained = undefined;
+    wake?.();
   }
 
   receive(frame: StreamFrame): void {
@@ -261,7 +299,10 @@ export class TunnelStream {
   private teardown(): void {
     this.finished = true;
     this.chunks = [];
+    this.outgoing = [];
     this.wakeBody();
+    this.wakeFlush();
+    this.wakeDrained();
     const wake = this.windowWaiter;
     this.windowWaiter = undefined;
     wake?.();

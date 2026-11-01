@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CipherState, HandshakeState, x25519Public } from './noise.ts';
-import { parseQr } from './phone-sim.testkit.ts';
+import { normalizeCode, parseQr } from './phone-sim.testkit.ts';
 import {
   OpenRefused,
   b64u,
@@ -75,6 +75,11 @@ describe('qr.json', () => {
     expect(keys.locator.toString('hex')).toBe(qr.locatorHex);
     expect(keys.psk.toString('hex')).toBe(qr.psk);
     for (const item of qr.accepted) {
+      // § 9.1 took 10.0.2.2 out of the table; the vector keeps it for the app's parser, not cezar's.
+      if (item.relayOrigin.includes('10.0.2.2')) {
+        expect(parseRelayOrigin(item.relayOrigin)).toBeNull();
+        continue;
+      }
       const origin = parseRelayOrigin(item.relayOrigin);
       expect(origin).toBe(item.relayOrigin);
       expect(socketOrigin(origin!)).toBe(item.socketOrigin);
@@ -100,7 +105,9 @@ describe('qr.json', () => {
 describe('code.json', () => {
   it('derives both keys', async () => {
     const codes = load('code.json');
+    for (const item of codes.refused) expect(normalizeCode(item.input), item.name).toBeNull();
     for (const item of codes.cases) {
+      for (const input of item.inputs) expect(normalizeCode(input)).toBe(item.code);
       const keys = await deriveFromCode(item.code);
       expect(keys.locator.toString('hex')).toBe(item.locatorHex);
       expect(keys.psk.toString('hex')).toBe(item.psk);

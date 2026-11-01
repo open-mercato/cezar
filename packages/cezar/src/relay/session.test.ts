@@ -186,17 +186,71 @@ describe('sessions and the tunnel', () => {
     expect(relay.cezarFrames.length).toBe(count);
   });
 
-  it('answers one first message per slot', async () => {
-    const phone = await session();
-    phone.closeSocket();
-    await waitFor(() => !service.list().phones[0]!.connected);
-    relay.control({ t: 'phone-joined', device: phone.deviceId });
-    relay.inject(phone.deviceId, Buffer.alloc(48, 1));
-    await tick();
+  it('a stale frame on an open slot does not use it up', async () => {
+    const phone = await paired();
     const count = relay.cezarFrames.length;
+    relay.control({ t: 'phone-joined', device: phone.deviceId });
+    relay.inject(phone.deviceId, Buffer.alloc(304, 1));
     relay.inject(phone.deviceId, Buffer.alloc(48, 1));
     await tick();
     expect(relay.cezarFrames.length).toBe(count);
+    await phone.connect();
+    await waitFor(() => phone.leases > 0, 'session after stale frames');
+  });
+
+  it('answers one first message per slot', async () => {
+    const phone = await session();
+    const first = phone.lastFirstMessage!;
+    // The session ended and the slot stayed used, so the same bytes get no second reply.
+    phone.frame({ type: 'close', code: CLOSE.normal });
+    await waitFor(() => !service.list().phones[0]!.connected);
+    const count = relay.cezarFrames.length;
+    relay.inject(phone.deviceId, first);
+    await tick();
+    expect(relay.cezarFrames.length).toBe(count);
+  });
+
+  it('coalesces a burst into far fewer DATA frames, and paces them', async () => {
+    const phone = await session();
+    const events = 5_000;
+    responder = () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < events; i += 1) controller.enqueue(new TextEncoder().encode(`event: run\ndata: ${i}\n\n`));
+        controller.close();
+      },
+    }));
+    const before = phone.tunnelFrames.length;
+    const answer = await phone.fetch('GET', '/replay');
+    expect(answer.body.toString().match(/event: run/g)).toHaveLength(events);
+    const frames = phone.tunnelFrames.slice(before).filter((frame) => frame.type === 'data');
+    expect(frames.length).toBeLessThan(events / 50);
+  });
+
+  it('paces DATA at 40% of framesPerSecond across every stream', async () => {
+    const phone = await session();
+    relay.hello = {};
+    responder = () => new Response(new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await new Promise((resolve) => setImmediate(resolve));
+        controller.enqueue(new Uint8Array(10));
+      },
+    }));
+    const stream = phone.stream('GET', '/firehose');
+    await stream.head;
+    const count = () => phone.tunnelFrames.filter((frame) => frame.type === 'data').length;
+    const before = count();
+    const started = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const rate = (count() - before) / ((Date.now() - started) / 1000);
+    stream.reset();
+    expect(rate).toBeGreaterThan(20);
+    expect(rate).toBeLessThanOrEqual(220);
+  });
+
+  it('drops x-cezar-runtime-handoff', async () => {
+    const phone = await session();
+    await phone.fetch('GET', '/x', [['x-cezar-runtime-handoff', 'token']]);
+    expect(requests[0]!.headers.get('x-cezar-runtime-handoff')).toBeNull();
   });
 
   it('drops a device with no row without a reply', async () => {
@@ -352,9 +406,9 @@ describe('sessions and the tunnel', () => {
     });
 
     it('absent hello limits fall back to the table', () => {
-      expect(limitsFrom({})).toEqual({ frameBytes: 65_552, controlBytes: 8_192, devices: 10 });
+      expect(limitsFrom({})).toEqual({ frameBytes: 65_552, controlBytes: 8_192, devices: 10, framesPerSecond: 500 });
       expect(limitsFrom({ limits: { frameBytes: 20_000 } })).toMatchObject({ frameBytes: 20_000, controlBytes: 8_192 });
-      expect(limitsFrom({ limits: { frameBytes: 'x', devices: -1 } })).toEqual({ frameBytes: 65_552, controlBytes: 8_192, devices: 10 });
+      expect(limitsFrom({ limits: { frameBytes: 'x', devices: -1 } })).toEqual({ frameBytes: 65_552, controlBytes: 8_192, devices: 10, framesPerSecond: 500 });
     });
 
     it('a corrupt devices.json degrades to empty, with one warning', () => {
@@ -467,6 +521,18 @@ describe('RelayConnection', () => {
     vi.advanceTimersByTime(3_600_000);
     expect(script.sockets).toHaveLength(1);
     expect(statuses.at(-1)).toBe(status);
+  });
+
+  it('keeps commands under the relay budget', async () => {
+    const script = new Script();
+    const relayed = connection(script);
+    relayed.start();
+    script.hello();
+    for (let i = 0; i < 40; i += 1) void relayed.command({ t: 'device-remove', device: 'x' }).catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(script.last.sent.length).toBe(30);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(script.last.sent.length).toBeGreaterThan(30);
   });
 
   it('reconnects after retryAfter on 4429', () => {

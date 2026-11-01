@@ -8394,6 +8394,17 @@ export function createApp(deps: ServerDeps) {
         return c.json({ error: error.message }, 409);
       }
     })
+    .post('/workspace/phones/pairing/:id/code', paramZodValidator(phonePairingParamSchema), async (c) => {
+      c.header('Cache-Control', 'no-store');
+      try {
+        const code = await phonePairing.pairingCode(c.req.valid('param').id);
+        return code ? c.json(code) : c.json(PAIRING_NOT_FOUND, 409);
+      } catch (error) {
+        if (!(error instanceof PairingStartError)) throw error;
+        if (error.retryAfter !== undefined) c.header('Retry-After', String(error.retryAfter));
+        return c.json({ error: error.message }, 409);
+      }
+    })
     .post('/workspace/phones/pairing/:id/approve', paramZodValidator(phonePairingParamSchema), (c) =>
       phonePairing.approvePairing(c.req.valid('param').id) ? c.json({ ok: true as const }) : c.json(PAIRING_NOT_FOUND, 409))
     .post('/workspace/phones/pairing/:id/deny', paramZodValidator(phonePairingParamSchema), (c) =>

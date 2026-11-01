@@ -19,13 +19,14 @@ const api = async (method: string, path: string, body?: unknown): Promise<any> =
   return text ? JSON.parse(text) : null;
 };
 const log = (...args: unknown[]) => console.log(...args);
-const redacted = { qr: '<redacted>', code: '<redacted>' };
+const redacted = { qr: '<redacted>' };
 
 const started = await api('POST', '/workspace/phones/pairing');
+const typed = process.env.REAL_RELAY_TYPED === '1' ? await api('POST', `/workspace/phones/pairing/${started.id}/code`) : null;
 log('pairing started', { ...started, ...redacted });
 
 const phone = new PhoneSim(openWebSocket, { name: 'Node sim', platform: 'android' });
-const paired = await phone.pairWithQr(started.qr);
+const paired = typed ? await phone.pairWithCode(started.relayOrigin, typed.code) : await phone.pairWithQr(started.qr);
 log('phone digits', paired.digits, 'pending label', paired.pending.label);
 const view = (await api('GET', '/workspace/phones')).pairing;
 log('desktop pairing', view.status, 'digits', view.digits, 'match', view.digits === paired.digits);

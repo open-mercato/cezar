@@ -11,11 +11,16 @@ const RESET_ATTEMPTS_AFTER_MS = 60_000;
 const MAX_BACKOFF_S = 300;
 const KILL_SWITCH_MIN_MS = 5 * 60_000;
 const KILL_SWITCH_MAX_MS = 15 * 60_000;
+/** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
+const COMMANDS_PER_MINUTE = 30;
+/** DATA stays well under `framesPerSecond`: past it the relay closes cezar and drops every phone. */
+const DATA_SHARE_OF_FRAMES = 0.4;
 
 export interface RelayLimits {
   frameBytes: number;
   controlBytes: number;
   devices: number;
+  framesPerSecond: number;
 }
 
 /** `hello` limits override the table; an absent key falls back to it (§ 4, § 8). */
@@ -25,7 +30,7 @@ export function limitsFrom(hello: { limits?: unknown }): RelayLimits {
     const value = live[name];
     return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : LIMIT_DEFAULTS[name];
   };
-  return { frameBytes: pick('frameBytes'), controlBytes: pick('controlBytes'), devices: pick('devices') };
+  return { frameBytes: pick('frameBytes'), controlBytes: pick('controlBytes'), devices: pick('devices'), framesPerSecond: pick('framesPerSecond') };
 }
 
 /** Attempt `n` waits a uniform time from 1 s to `min(300 s, 2^n s)`. */
@@ -73,6 +78,8 @@ export class RelayConnection {
   private pingTimer: NodeJS.Timeout | undefined;
   private pongTimer: NodeJS.Timeout | undefined;
   private readonly commands = new Map<string, PendingCommand>();
+  private commandTimes: number[] = [];
+  private nextDataAt = 0;
   private readyWaiters: { resolve(): void; reject(error: Error): void }[] = [];
   limits: RelayLimits = { ...LIMIT_DEFAULTS };
 
@@ -114,6 +121,13 @@ export class RelayConnection {
 
   /** Sends one command and resolves on its `ack`; rejects on `error`, a lost socket or a timeout. */
   command(frame: Record<string, unknown>, timeoutMs = COMMAND_TIMEOUT_MS): Promise<void> {
+    const now = Date.now();
+    this.commandTimes = this.commandTimes.filter((at) => now - at < 60_000);
+    if (this.commandTimes.length >= COMMANDS_PER_MINUTE) {
+      const waitMs = this.commandTimes[0]! + 60_000 - now;
+      return new Promise((resolve) => { setTimeout(resolve, waitMs).unref?.(); }).then(() => this.command(frame, timeoutMs));
+    }
+    this.commandTimes.push(now);
     const id = randomUUID();
     const text = JSON.stringify({ ...frame, id });
     if (!this.live || !this.socket) return Promise.reject(new RelayCommandError('unreachable'));
@@ -127,6 +141,15 @@ export class RelayConnection {
       this.commands.set(id, { resolve, reject, timer });
       this.socket?.send(text);
     });
+  }
+
+  /** Resolves when one more DATA frame fits the pace. Bytes that wait here coalesce, § 12.2. */
+  dataSlot(): Promise<void> {
+    const spacingMs = 1000 / Math.max(1, this.limits.framesPerSecond * DATA_SHARE_OF_FRAMES);
+    const now = Date.now();
+    const at = Math.max(now, this.nextDataAt);
+    this.nextDataAt = at + spacingMs;
+    return new Promise((resolve) => { setTimeout(resolve, at - now); });
   }
 
   /** Only a session calls this, which is what keeps § 6 rule 5 true. */

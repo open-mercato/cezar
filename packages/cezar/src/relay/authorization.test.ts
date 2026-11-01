@@ -118,37 +118,47 @@ describe('a relay request is a hosted request', () => {
   describe('each power localHandoff gates', () => {
     it('agent-config PUT', async () => {
       const app = makeApp();
-      const res = await asPhone(app, '/api/v1/agent-config/claude-user-settings', put({ content: '{"hooks":{}}' }));
+      const res = await asPhone(app, '/api/v1/agent-config/claude.project.settings', put({ content: '{"hooks":{}}', version: null }));
       expect(res.status).toBe(409);
+      expect((await apiRequest(app, '/api/v1/agent-config/claude.project.settings', put({ content: '{}', version: null }))).status).toBe(200);
     });
 
     it('open-in, for a project and for a run', async () => {
       const app = makeApp({ openFile: async () => { throw new Error('must not open'); } });
-      expect((await asPhone(app, '/api/v1/open-in', post({ target: 'finder' }))).status).toBe(409);
-      expect((await asPhone(app, '/api/v1/runs/none/open-in', post({ target: 'finder' }))).status).toBe(409);
-      expect((await asPhone(app, '/api/v1/runs/none/open-in-cli', { method: 'POST' })).status).toBe(409);
+      const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+      const refusal = 'local handoff is disabled — this cockpit runs in hosted mode (CEZ_REMOTE)';
+      for (const path of ['/api/v1/open-in', `/api/v1/runs/${run.id}/open-in`]) {
+        const res = await asPhone(app, path, post({ target: 'finder' }));
+        expect(res.status, path).toBe(409);
+        expect(await res.json()).toEqual({ error: refusal });
+      }
+      expect((await asPhone(app, `/api/v1/runs/${run.id}/open-in-cli`, { method: 'POST' })).status).toBe(409);
       expect(await (await asPhone(app, '/api/v1/open-targets')).json()).toEqual({ targets: [] });
     });
 
     it('terminal', async () => {
       process.env.CEZ_TERMINAL = '1';
       const app = makeApp();
-      const res = await asPhone(app, '/api/v1/runs/none/terminal', post({ cols: 80, rows: 24 }));
+      const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+      const res = await asPhone(app, `/api/v1/runs/${run.id}/terminal`, post({ cols: 80, rows: 24 }));
       expect(res.status).toBe(409);
+      expect((await res.json() as { error: string }).error).toContain('terminal is disabled');
     });
 
-    it('browse stays inside the browse root', async () => {
+    it('adding a project outside the browse root', async () => {
       const app = makeApp();
-      const desktop = await apiRequest(app, `/api/v1/fs/browse?path=${encodeURIComponent('/')}`);
-      const phone = await asPhone(app, `/api/v1/fs/browse?path=${encodeURIComponent('/')}`);
-      expect(desktop.status).toBe(200);
-      const names = (await phone.json() as { entries?: { name: string }[]; path?: string });
-      expect(names.path).not.toBe('/');
+      const outside = mkdtempSync(join(realpathSync(tmpdir()), 'cez-relay-auth-outside-'));
+      await apiRequest(app, '/api/v1/workspace/config', put({ browseRoot: home }));
+      const phone = await asPhone(app, '/api/v1/projects', post({ root: outside }));
+      expect(phone.status).toBe(400);
+      expect(await phone.json()).toEqual({ error: 'folder is outside the browsable root' });
+      expect((await apiRequest(app, '/api/v1/projects', post({ root: outside }))).status).not.toBe(400);
+      rmSync(outside, { recursive: true, force: true });
     });
 
     it('design proxy', async () => {
-      const res = await asPhone(makeApp(), '/api/v1/preview/design-proxy', post({ target: 'http://127.0.0.1:3000', parent: 'http://127.0.0.1:4321' }));
-      expect([403, 409]).toContain(res.status);
+      const res = await asPhone(makeApp(), '/api/v1/preview/design-proxy', post({ target: 'http://127.0.0.1:3000', parentOrigin: 'http://127.0.0.1:4321' }));
+      expect(res.status).toBe(409);
     });
   });
 
@@ -260,7 +270,7 @@ describe('a relay request is a hosted request', () => {
       const source = readFileSync(join(import.meta.dirname, '../server/server.ts'), 'utf8');
       const handlers = source.split('streamSSENoBuffer(c, async (stream) => {').slice(1);
       expect(handlers.length).toBeGreaterThanOrEqual(3);
-      for (const body of handlers) expect(body.slice(0, body.indexOf('\n    })'))).not.toMatch(/\bcapabilities\(\)/);
+      for (const body of handlers) expect(body.slice(0, body.search(/\n {6}\}\);\n/))).not.toMatch(/\bcapabilities\(\)/);
     });
 
     describe('health', () => {
@@ -316,8 +326,7 @@ describe('a relay request is a hosted request', () => {
       const execute = vi.spyOn(RunManager.prototype as never as { execute: () => Promise<void> }, 'execute')
         .mockImplementation(async () => { seen.push(inRelayScope()); });
       try {
-        const dataDir = join(repoRoot, '.ai/cezar');
-        const manager = new RunManager(store, { repoRoot, dataDir } as never);
+        const manager = new RunManager(store, repoRoot);
         const workflow = { name: 'w', steps: [{ id: 'a', prompt: 'x' }] };
         runInRelayScope({ deviceId: DEVICE }, () => manager.startRun(workflow as never, { task: 't' } as never));
         for (let i = 0; i < 100 && seen.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -374,7 +383,7 @@ describe('a relay request is a hosted request', () => {
     it('a phone cannot pair another phone or edit agent config', async () => {
       const { phone, service } = await tunnel();
       expect((await phone.fetch('POST', '/api/v1/workspace/phones/pairing', [['host', '127.0.0.1:4321']])).status).toBe(403);
-      const config = await phone.fetch('PUT', '/api/v1/agent-config/claude-user-settings', [['host', 'localhost'], ['content-type', 'application/json']], '{"content":"{}"}');
+      const config = await phone.fetch('PUT', '/api/v1/agent-config/claude.project.settings', [['host', 'localhost'], ['content-type', 'application/json']], '{"content":"{}","version":null}');
       expect(config.status).toBe(409);
       service.dispose();
     });
@@ -393,7 +402,7 @@ describe('a relay request is a hosted request', () => {
       'automations/builtin-skill.ts': 1,
       'workflows/run.ts': 1, // `dispatch`
       'server/capabilities.ts': 8, // the definitions and their internal callers
-      'server/server.ts': 8, // the closure, accounts, boot warm-up, startServer's flags, verifyWsUpgrade
+      'server/server.ts': 6, // the closure, the accounts closure, startServer's flags, verifyWsUpgrade
     };
 
     it('a new direct read of the boundary in a request path fails here', () => {

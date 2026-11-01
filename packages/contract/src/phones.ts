@@ -56,15 +56,18 @@ export const phonesResponseSchema = z.object({
 });
 export type PhonesResponse = z.infer<typeof phonesResponseSchema>;
 
-/** The only shape that carries the credentials. Sent once, `no-store`, and never logged. */
+/** Carries a credential, like the code below. Sent once, `no-store`, and never logged. */
 export const startPhonePairingResponseSchema = z.object({
   id: z.string(),
   qr: z.string(),
-  code: z.string().nullable(),
   relayOrigin: z.string(),
   expiresAt: z.string(),
 });
 export type StartPhonePairingResponse = z.infer<typeof startPhonePairingResponseSchema>;
+
+/** The typed code, opened only on request so an unused one costs the relay nothing (§ 9.2). */
+export const phonePairingCodeResponseSchema = z.object({ code: z.string(), relayOrigin: z.string() });
+export type PhonePairingCodeResponse = z.infer<typeof phonePairingCodeResponseSchema>;
 
 export const renamePhoneInputSchema = z.object({ label: z.string().trim().min(1).max(64) }).strict();
 export type RenamePhoneInput = z.infer<typeof renamePhoneInputSchema>;

@@ -1,6 +1,6 @@
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import type { PhonesResponse, RelayStatus, StartPhonePairingResponse } from '@open-mercato/cezar-contract';
+import type { PhonePairingCodeResponse, PhonesResponse, RelayStatus, StartPhonePairingResponse } from '@open-mercato/cezar-contract';
 import { cezarHomeDir } from '../paths.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
@@ -159,8 +159,9 @@ export class RelayService {
       session.receive(ciphertext);
       return;
     }
-    // One first message per slot, and nothing for a device with no row, § 10.
-    if (!this.slots.delete(deviceId)) return;
+    // One first message per slot, and nothing for a device with no row, § 10. A stale frame from
+    // an ended session can land here, so only a first message that decrypts uses the slot up.
+    if (!this.slots.has(deviceId)) return;
     const device = this.devices.get(deviceId);
     const noiseKey = device ? fromB64u(device.noiseKey, 32) : null;
     const identity = this.identity;
@@ -169,10 +170,12 @@ export class RelayService {
       deviceId,
       send: (bytes) => this.connection?.sendData(deviceId, bytes),
       frameBytes: () => this.connection?.limits.frameBytes ?? 0,
+      dataSlot: () => this.connection?.dataSlot() ?? Promise.resolve(),
       fetch: (request) => this.dispatch(deviceId, request),
       onEnd: (reason) => this.onSessionEnd(deviceId, reason),
     });
     if (!accepted) return;
+    this.slots.delete(deviceId);
     this.sessions.set(deviceId, accepted);
     this.devices.update(deviceId, { lastSeenAt: new Date(this.now()).toISOString() });
     this.onChange();
@@ -312,6 +315,15 @@ export class RelayService {
     await connection.whenReady(SOCKET_READY_MS);
     await connection.command({ t: 'device-add', device: phone.deviceId, key: phone.relayKey }, COMMAND_TIMEOUT_MS);
     this.onChange();
+  }
+
+  /** Opened only on request, so an expired code nobody asked for costs one rendezvous, § 9.2. */
+  pairingCode(id: string): Promise<PhonePairingCodeResponse | null> {
+    return outsideRelayScope(async () => {
+      const origin = this.origin;
+      if (!origin || this.pairing?.id !== id) return null;
+      return { code: await this.pairing.revealCode(), relayOrigin: origin };
+    });
   }
 
   approvePairing(id: string): boolean {

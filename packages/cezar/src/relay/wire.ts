@@ -50,7 +50,7 @@ export function proofHeaders(seed: Buffer, proof: string, time: number): ProofHe
 
 // ---- relay address (§ 3, § 9.1) -----------------------------------------------------------------
 
-const CLEARTEXT_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '10.0.2.2']);
+const CLEARTEXT_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
 /** `CEZ_RELAY_URL` to its origin, or `null` when § 9.1 refuses it. One trailing `/` is accepted. */
 export function parseRelayOrigin(value: string | undefined): string | null {
@@ -139,6 +139,7 @@ export const LIMIT_DEFAULTS = {
   frameBytes: 65_552,
   controlBytes: 8_192,
   devices: 10,
+  framesPerSecond: 500,
 } as const;
 export const RENDEZVOUS_FRAME_BYTES = 16_384;
 
@@ -315,5 +316,5 @@ export function isDroppedRequestHeader(name: string): boolean {
 }
 
 const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
-const DROPPED_HEADERS = new Set(['host', 'origin', 'cookie', 'authorization', 'forwarded', 'x-real-ip', ...HOP_BY_HOP]);
+const DROPPED_HEADERS = new Set(['host', 'origin', 'cookie', 'authorization', 'x-cezar-runtime-handoff', 'forwarded', 'x-real-ip', ...HOP_BY_HOP]);
 export const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set(HOP_BY_HOP);
