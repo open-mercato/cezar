@@ -728,7 +728,10 @@ pub fn run() {
     });
 
     let shell_for_state = shell.clone();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.on_web_content_process_terminate(notch::on_page_crashed);
+    builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             update_cezar_command,
