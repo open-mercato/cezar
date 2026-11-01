@@ -176,12 +176,17 @@ All endpoints live on one host and carry the version in the path. Sockets are `w
 | Endpoint | Role | Proves | Lifetime |
 | --- | --- | --- | --- |
 | `GET /v1/cezar/<cezarId>` (upgrade) | One cezar | Holds the key behind `cezarId` | Long-lived, hibernated. One per room. A new authenticated socket closes the old one with 4409 |
-| `GET /v1/phone/<cezarId>/<deviceId>` (upgrade) | One paired phone | Holds the key behind `deviceId`, and `deviceId` is on the room's allowlist | Only while the app is in the foreground |
+| `GET /v1/phone/<cezarId>/<deviceId>` (upgrade) | One paired phone | Holds the key behind `deviceId`, and `deviceId` is on the room's allowlist | Only while the app is in the foreground. One per `deviceId`. A new authenticated socket closes the old one with 4409 |
 | `GET /v1/pair/<locator>?role=cezar` (upgrade) | cezar during pairing | Holds the key behind the `X-Cezar-Relay-Key` it sends | Created here. See [Rendezvous](#rendezvous) |
 | `GET /v1/pair/<locator>?role=phone` (upgrade) | Unpaired phone | Knows the locator | One phone. A second gets 4410 |
 | `POST /v1/push-grants` | Phone | Holds a device key | Request |
 | `POST /v1/push-grants/revoke` | Phone | Holds the device key sealed in the grant | Request |
 | `POST /v1/push` | cezar or a hosted server | Holds the key sealed in the grant | Request |
+| `GET /p` | Anyone | Nothing | Request. A static page saying how to get the app, with no script. Clients never call it |
+
+When a phone socket replaces another for the same `deviceId`, the relay sends cezar `phone-left` and then
+`phone-joined`, both before the first data frame from the new socket. cezar ends a device's session on
+`phone-left`, so the data after every `phone-joined` starts with a new handshake.
 
 A **room** is the per-cezar state on the relay, one Durable Object per `cezarId`. The room holds the
 device allowlist, the grant denylist and rate counters. It never holds a payload, a device token or
@@ -205,7 +210,7 @@ never sees them in the clear or as an identifier.
 
 ### Upgrade and request proof
 
-Every endpoint except `role=phone` rendezvous carries three headers:
+Every endpoint except `role=phone` rendezvous and `GET /p` carries three headers:
 
 | Header | Value |
 | --- | --- |
@@ -236,7 +241,9 @@ sig    V68ncyA98yXD5r524pXn17WZs8PNJKCytyw41XCAcEceSEkQJyYg99SHobPMZKg_qtS2VVmob
 ```
 
 A rejected upgrade may answer before the socket exists, with the HTTP status from
-[Close codes](#close-codes) and `{ "code": "<name>" }`. Both forms mean the same to a client.
+[Close codes](#close-codes) and `{ "code": "<name>" }`. Both forms mean the same to a client. A
+`bad-proof` rejection is always this HTTP form and carries a `Date` header, so a client with a wrong
+clock can correct it.
 
 ### Frames
 
@@ -277,6 +284,13 @@ answered by the relay with `error` code `unknown-frame`, so a command the relay 
 
 `cezarId` is implied by the socket, so no control frame repeats it.
 
+| `error` code | Meaning |
+| --- | --- |
+| `unknown-frame` | The relay does not know this `t` |
+| `bad-command` | A required field is missing or malformed |
+| `device-limit` | The allowlist is at `devices` |
+| `device-key-mismatch` | `device` is not the id of `key` |
+
 ### Rendezvous
 
 A rendezvous joins two parties that have no allowlist entry yet. It is the same flow for a QR code
@@ -310,7 +324,9 @@ These rules exist because awake time is what drives cost.
 5. **Metric.** The relay reports room awake seconds and phone-connected seconds per day, so their
    ratio can be watched. The alert and test live in `patzick/rome`. The client half of this guard is
    in this repository: cezar sends no data frame without a live end-to-end session.
-6. **Storage expiry.** A room's storage is deleted 90 days after its last authenticated cezar socket.
+6. **Storage expiry.** A room's storage is deleted 90 days after its last authenticated cezar socket or
+   signed `POST /v1/push`, and never while a denylist entry is still live. A Manual server never opens
+   a socket, and losing its denylist would revive a revoked grant.
 
 ### Push signal
 
@@ -398,11 +414,11 @@ Rejected upgrades should be refused in the Worker where possible, so that junk n
 | 1000 | | `normal` | Nothing |
 | 1001 | | `going-away` | Reconnect with jitter. A relay deploy causes this |
 | 4400 | 400 | `bad-frame` | Stop. A bug, reported in the UI |
-| 4401 | 401 | `bad-proof` | Retry once after re-reading the clock, then stop and report |
-| 4403 | 403 | `device-removed` | Phone: stop for good and show that this phone was removed |
+| 4401 | 401 | `bad-proof` | Retry once, correcting the time by the response's `Date`, then stop and report |
+| 4403 | 403 | `device-removed` | Phone: stop reconnecting and show that this phone was removed. Keep the keys and offer a manual retry, because the relay is untrusted and a lost room looks the same |
 | 4404 | 404 | `no-rendezvous` | Phone: "code not found or expired" |
 | 4408 | | `pair-expired` | Show a new code |
-| 4409 | | `replaced` | Do not reconnect. Another cezar process owns this identity |
+| 4409 | | `replaced` | cezar: do not reconnect. Another process owns this identity. Phone: this socket was replaced by a newer one, so do nothing |
 | 4410 | 409 | `pair-taken` | Phone: show a warning. Pairing has failed safe |
 | 4413 | | `frame-too-large` | Stop. A bug, reported in the UI |
 | 4426 | 426 | `protocol-unsupported` | Show "update the app" or "update cezar" |
@@ -955,3 +971,5 @@ promise of this feature, and the claim that anyone can check it is only as good 
 
 - 2026-11-01: Relay contract, protocol version 1. Relay repository is `patzick/rome`.
 - 2026-11-01: Added the design around the contract. The contract text did not change.
+- 2026-11-01: Contract additions from review, protocol version still 1: one socket per `deviceId`, `GET /p`,
+  named `error` codes, `Date` on `bad-proof`, 4403 keeps the keys, and room expiry counts `POST /v1/push`.
