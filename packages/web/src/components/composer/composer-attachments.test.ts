@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  appendAttachment,
   attachmentMediaType,
   fileToPendingAttachment,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS,
+  MAX_IMAGE_BYTES_PER_MESSAGE,
   screenFiles,
   toAttachmentInput,
 } from './composer-attachments'
@@ -13,7 +16,7 @@ import {
 const fakeFile = (over: { type?: string; size?: number; name?: string } = {}): File =>
   ({ type: 'image/png', size: 1024, name: 'shot.png', ...over }) as File
 
-describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod', () => {
+describe('screenFiles — the caps, mirrored from the server zod', () => {
   it('accepts images within the caps', () => {
     const intake = screenFiles([fakeFile(), fakeFile({ name: 'b.png' })], 0)
     expect(intake.accepted).toHaveLength(2)
@@ -48,28 +51,38 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     expect(intake.rejected).toEqual([])
   })
 
-  it('refuses an unsupported file out loud, naming it', () => {
-    const intake = screenFiles([fakeFile({ type: 'application/zip', name: 'payload.zip' })], 0)
-    expect(intake.accepted).toEqual([])
-    expect(intake.rejected).toEqual([
-      'payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)',
-    ])
+  /** Telemetry 48850f4a: a `.zip` was refused — any file is taken now, as a binary attachment. */
+  it('takes a file of any type, as a binary attachment', () => {
+    const zip = fakeFile({ type: 'application/zip', name: 'spec v2.zip' })
+    const typeless = fakeFile({ type: '', name: 'model.xlsx' })
+    const intake = screenFiles([zip, typeless], 0)
+    expect(intake.accepted).toEqual([zip, typeless])
+    expect(intake.rejected).toEqual([])
+    expect(attachmentMediaType(zip)).toBe('application/octet-stream')
+    expect(attachmentMediaType(typeless)).toBe('application/octet-stream')
   })
 
   it('names an oversized file in the rejection', () => {
     const intake = screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES + 1, name: 'huge.png' })], 0)
     expect(intake.accepted).toEqual([])
-    expect(intake.rejected).toEqual(['huge.png is too large (max 5 MB)'])
+    expect(intake.rejected).toEqual(['“huge.png” is too large (max 5 MB)'])
   })
 
   it('exactly 5 MB still passes (the cap is inclusive, like the legacy check)', () => {
     expect(screenFiles([fakeFile({ size: MAX_ATTACHMENT_BYTES })], 0).accepted).toHaveLength(1)
   })
 
-  it('enforces the 4-attachment cap against what is already attached', () => {
-    const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], 3)
+  /** Telemetry 7054e5f2: a fifth ordinary screenshot was refused under the old cap of four. */
+  it('takes a fifth screenshot', () => {
+    const intake = screenFiles([fakeFile({ name: 'e.png', size: 1024 * 1024 })], 4)
     expect(intake.accepted).toHaveLength(1)
-    expect(intake.rejected).toEqual(['b.png skipped — max 4 attachments per message'])
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('enforces the attachment-count cap against what is already attached', () => {
+    const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], MAX_ATTACHMENTS - 1)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([`“b.png” skipped — max ${MAX_ATTACHMENTS} attachments per message`])
   })
 
   it('a batch mixing every failure mode reports each file by name', () => {
@@ -82,16 +95,47 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
       ],
       0,
     )
-    expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md'])
-    expect(intake.rejected).toEqual([
-      'big.png is too large (max 5 MB)',
-      'payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)',
-    ])
+    expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md', 'payload.zip'])
+    expect(intake.rejected).toEqual(['“big.png” is too large (max 5 MB)'])
   })
 
   it('an unnamed paste still reads humanly in the rejection', () => {
     const intake = screenFiles([fakeFile({ name: '', size: MAX_ATTACHMENT_BYTES + 1 })], 0)
     expect(intake.rejected).toEqual(['attachment is too large (max 5 MB)'])
+  })
+})
+
+/** The async append re-applies the count cap: encodes from an earlier drop land after `screenFiles`
+ *  screened the next one against a snapshot that did not include them. */
+describe('appendAttachment', () => {
+  const att = (bytes: number, mediaType = 'image/png') => ({ mediaType, data: 'A'.repeat(Math.ceil(bytes / 3) * 4) })
+
+  it('appends within the caps', () => {
+    expect(appendAttachment([att(3)], att(3))).toHaveLength(2)
+  })
+
+  it('refuses past the count cap', () => {
+    expect(appendAttachment(Array.from({ length: MAX_ATTACHMENTS }, () => att(3)), att(3))).toBeNull()
+  })
+
+  /** Images reach the provider inline in one turn, staged or not; files travel as paths. */
+  it('refuses images past the 20 MB image budget, and never counts files toward it', () => {
+    const full = Array.from({ length: 4 }, () => att(MAX_ATTACHMENT_BYTES - 2))
+    expect(appendAttachment(full, att(3))).toHaveLength(5)
+    expect(appendAttachment(full, att(30))).toBeNull()
+    expect(appendAttachment(full, att(MAX_ATTACHMENT_BYTES - 2, 'application/pdf'))).toHaveLength(5)
+  })
+})
+
+describe('screenFiles — the image budget', () => {
+  it('refuses an image past 20 MB of images, but still takes a PDF', () => {
+    const intake = screenFiles(
+      [fakeFile({ name: 'a.png', size: 2 }), fakeFile({ name: 'r.pdf', type: 'application/pdf', size: MAX_ATTACHMENT_BYTES })],
+      4,
+      MAX_IMAGE_BYTES_PER_MESSAGE - 1,
+    )
+    expect(intake.accepted.map((f) => f.name)).toEqual(['r.pdf'])
+    expect(intake.rejected).toEqual(['“a.png” skipped — max 20 MB of images per message'])
   })
 })
 
@@ -108,9 +152,35 @@ describe('attachmentMediaType', () => {
     expect(attachmentMediaType(fakeFile({ type: 'application/octet-stream', name: 'a.pdf' }))).toBe('application/pdf')
   })
 
-  it('answers null for a file cezar will not take, whatever it is called', () => {
-    expect(attachmentMediaType(fakeFile({ type: 'application/zip', name: 'a.zip' }))).toBeNull()
-    expect(attachmentMediaType(fakeFile({ type: 'text/html', name: 'a.html' }))).toBeNull()
+  it('sends any other file as a binary attachment, whatever it is called (telemetry 48850f4a)', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'application/zip', name: 'a.zip' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'Makefile' }))).toBe('application/octet-stream')
+    expect(attachmentMediaType(fakeFile({ type: 'application/octet-stream', name: 'a.bin' }))).toBe('application/octet-stream')
+  })
+
+  /** Telemetry 6c4b3066: an `.html` was refused. Text formats go as `text/plain`, never `text/html`
+   *  — the contract stays narrow because attachments are served from the cockpit's own origin. */
+  it('sends HTML, CSV, JSON and source files as plain text', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'text/html', name: 'blog-listing.html' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'text/csv', name: 'rows.csv' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'application/json', name: 'data.json' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'main.ts' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'video/mp2t', name: 'main.ts' }))).toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'text/x-python', name: 'run' }))).toBe('text/plain')
+  })
+})
+
+describe('screenFiles — text formats (telemetry 6c4b3066)', () => {
+  it('accepts an .html file instead of refusing it', () => {
+    const intake = screenFiles([fakeFile({ type: 'text/html', name: 'page.html' })], 0)
+    expect(intake.accepted.map((f) => f.name)).toEqual(['page.html'])
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('encodes it as text/plain and keeps its own name for the library', async () => {
+    const file = new File(['<h1>hi</h1>'], 'page.html', { type: 'text/html' })
+    const wire = toAttachmentInput(await fileToPendingAttachment(file))
+    expect(wire).toEqual({ mediaType: 'text/plain', data: btoa('<h1>hi</h1>'), name: 'page.html' })
   })
 })
 

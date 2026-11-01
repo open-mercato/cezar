@@ -1,0 +1,25 @@
+---
+title: "Manual project order"
+description: "Arrange projects in the sidebar."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/appearance.tsx
+    line: 131
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Drag projects in the navigation to reorder them. Appearance provides Reset order to clear your custom order and restore sorting by the most recently opened project.
+
+## Where to find it
+
+Project sidebar / Settings → Global → Appearance → Project order
+
+## How to use it
+
+1. Drag projects in the sidebar.
+2. Open Appearance to undo the custom order.
+3. Choose Reset order.
+
+> **Good to know**: Reset appears only when there are multiple projects and a saved manual order. The order is shared between browsers using this instance.

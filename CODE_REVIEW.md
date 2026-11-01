@@ -37,7 +37,7 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 - No secrets in state files: nothing under `.ai/cezar/` (runs.json, NDJSON events, handoff.md, ui-state.json, config.json) may contain tokens or credentials. `GITHUB_TOKEN` stays in the environment; the launch key stays in the gitignored `launch-key` file and is only served same-origin.
 - Server stays on `127.0.0.1`; CORS is for `/api/health` only (bookmarklet discovery, spec 011). Widening either is a blocker.
 - Path handling on user-supplied names: file-serving routes must sanitize (`basename()` as in `/api/runs/:id/images/:file`); workflow names are slugified before becoming filenames. Any user string that reaches a path or a shell needs the same treatment.
-- Spawned processes use `execFile`/`spawn` with argument arrays — never string-interpolated shell commands. Tool access for agents goes through a per-step allowlist (`allowedTools`), but the zero-config default includes unrestricted `Bash` (no `bashAllowlist`), and unapproved tools are denied without prompting (`--permission-mode dontAsk`; `CEZ_APPROVAL_GATE=1` opts into `acceptEdits` and Claude's approval UI) — treat a run as having full shell access in its worktree, not a sandboxed allowlist. Codex, OpenCode, and Cursor don't honor `allowedTools` at all (Codex: its own sandbox, approvals off, network on; OpenCode: everything auto-approved; Cursor: `--force`/`--trust` auto-approves tool use) (#430).
+- Spawned processes use `execFile`/`spawn` with argument arrays — never string-interpolated shell commands. Tool access for agents goes through a per-step allowlist (`allowedTools`), but the zero-config default includes unrestricted `Bash` (no `bashAllowlist`), and unapproved tools are denied without prompting (`--permission-mode dontAsk`; `CEZ_APPROVAL_GATE=1` selects `acceptEdits`, but cezar has no cockpit permission response channel) — treat a run as having full shell access in its worktree, not a sandboxed allowlist. Codex, OpenCode, and Cursor don't honor `allowedTools` at all (Codex: its own sandbox, approvals off, network on; OpenCode: everything auto-approved; Cursor: `--force`/`--trust` auto-approves tool use) (#430).
 - Writes that must not clobber use `wx` or tmp+rename; check new file writes follow one of those.
 
 ### State-file and API compatibility
@@ -45,6 +45,13 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 - New fields on `RunRecord`/`StepState` are optional (or defaulted) so old `runs.json` files still parse — the existing comments ("old runs.json files … have neither") show the convention.
 - NDJSON event logs are append-only; readers skip unparseable lines. Never rewrite or reorder an existing event file.
 - Renaming/removing an API route, an event `type`, or a persisted field is a breaking change — route it through `BACKWARD_COMPATIBILITY.md`.
+
+### Release lines
+
+- A fix for a bug that exists on a released line carries `backport release/vX.Y.x` (`SDLC.md` § Release lines and backports); a feature or refactor does not.
+- A PR into `release/v*` is a blocker unless the Backport workflow opened it (it carries the `backport` label) or it is the documented can't-wait hotfix labelled `backport main`.
+- A backport PR changes only what the original fix changed, and that change still fits the line's code. A hand-edited version, workspace lockfile entry or released changelog entry is a blocker — the release workflows own them.
+- Every PR carries the category label its release-note section needs (`bug`, `feature`, `security`, `refactor`, `dependencies`, `documentation`; bookkeeping `skip-changelog`). Apply or correct it yourself; report it when you cannot write labels. Never a blocking finding.
 
 ### Code quality
 

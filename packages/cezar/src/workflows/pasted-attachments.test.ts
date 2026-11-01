@@ -24,6 +24,7 @@ import {
   isAttachmentMediaType,
   isImageAttachmentName,
   sanitizeAttachmentName,
+  storedAttachmentExtension,
 } from '@open-mercato/cezar-contract';
 
 const run = promisify(execFile);
@@ -38,6 +39,8 @@ const TINY_PNG_B64 =
 // prompt, which is the whole point of handing the agent a path instead of the bytes.
 const BRIEF_MD = '# Brief\n\nShip the alpha-particle report.\n';
 const BRIEF_MD_B64 = Buffer.from(BRIEF_MD).toString('base64');
+// An empty ZIP archive (end-of-central-directory record only) — a binary attachment.
+const ZIP_B64 = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]).toString('base64');
 const TINY_PDF = '%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
 const TINY_PDF_B64 = Buffer.from(TINY_PDF).toString('base64');
 
@@ -53,7 +56,7 @@ describe('HANDOFF_INSTRUCTIONS pasted-attachments note', () => {
   /** #950 — a file has no inline copy at all, and an agent that assumes one would answer about a
    *  document it never saw. The contract has to say so, not merely imply it. */
   it('says a non-image attachment exists only as the file on disk', () => {
-    expect(HANDOFF_INSTRUCTIONS).toMatch(/PDF, TXT, MD/);
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/PDF, text, archives — any type/);
     expect(HANDOFF_INSTRUCTIONS).toMatch(/a non-image attachment exists ONLY as the file at that path/);
   });
 });
@@ -204,15 +207,34 @@ describe('copyToAttachmentLibrary (#929)', () => {
  * under another — these cases pin both directions of that round trip.
  */
 describe('attachment media types, extensions and blocks (#950)', () => {
-  it('accepts images and the PDF/TXT/MD allowlist, and nothing else', () => {
+  it('accepts images, the PDF/TXT/MD allowlist and opaque binary files, and nothing else', () => {
     expect(isAttachmentMediaType('image/png')).toBe(true);
     expect(isAttachmentMediaType('image/svg+xml')).toBe(true); // unchanged: images were never narrowed
     expect(isAttachmentMediaType('application/pdf')).toBe(true);
     expect(isAttachmentMediaType('text/plain')).toBe(true);
     expect(isAttachmentMediaType('text/markdown')).toBe(true);
     expect(isAttachmentMediaType('text/x-markdown')).toBe(true);
+    // Telemetry 48850f4a: every other file travels as `application/octet-stream` instead.
+    expect(isAttachmentMediaType('application/octet-stream')).toBe(true);
     expect(isAttachmentMediaType('application/zip')).toBe(false);
     expect(isAttachmentMediaType('text/html')).toBe(false);
+  });
+
+  it('stores a binary file under its own data extension, and anything else as .bin', () => {
+    const stored = (name: string) => {
+      const sanitized = sanitizeAttachmentName(name, 'application/octet-stream') ?? undefined;
+      return { sanitized, ext: storedAttachmentExtension('application/octet-stream', sanitized) };
+    };
+    expect(stored('TEGES spec v2.zip')).toEqual({ sanitized: 'TEGES spec v2.zip', ext: 'zip' });
+    expect(stored('budget.XLSX')).toEqual({ sanitized: 'budget.xlsx', ext: 'xlsx' });
+    // An executable or an image/text spelling must not keep its extension: readers branch on it.
+    expect(stored('install.sh')).toEqual({ sanitized: 'install.sh.bin', ext: 'bin' });
+    expect(stored('setup.exe')).toEqual({ sanitized: 'setup.exe.bin', ext: 'bin' });
+    expect(stored('fake.png')).toEqual({ sanitized: 'fake.png.bin', ext: 'bin' });
+    expect(isImageAttachmentName(`pasted-1.${stored('fake.png').ext}`)).toBe(false);
+    expect(storedAttachmentExtension('application/octet-stream')).toBe('bin');
+    // Every other type keeps `attachmentExtension`, whatever name it carries.
+    expect(storedAttachmentExtension('text/plain', 'archive.zip.txt')).toBe('txt');
   });
 
   it('derives the on-disk extension from the media type alone — no user filename reaches a path', () => {
@@ -619,6 +641,30 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(ndjson).not.toContain(TINY_PNG_B64);
   }, 30_000);
 
+  // Telemetry 18c930de: the note stands in for the empty task inside the step's template.
+  it('an attachment-only task opens on the attachment note, inside the step template', async () => {
+    writeFileSync(argsFile, '', 'utf8');
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'attachment-only-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: 'Review: {{task}} Then report back.' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const image: ContentBlock = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+    };
+    const record = manager.startRun(workflow, { task: '', images: [image], worktree: false });
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+
+    const userText = readStdinLines()[0]?.userText ?? '';
+    expect(userText.startsWith('Review: The user attached the files below without a written task — work out what they need from them. Then report back.')).toBe(true);
+    expect(userText).toContain('The user attached 1 pasted file, also saved on disk at:');
+  }, 30_000);
+
   /**
    * The PDF/TXT/MD half of the same contract (#950). A file has nothing for the model to look at,
    * so the assertions are the mirror image of the screenshot case: the bytes must land on disk and
@@ -714,6 +760,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
         // No name (a client from before #929, or a paste with nothing to go on): still persisted
         // to the run folder exactly as before, just not filed.
         { type: 'file', mediaType: 'application/pdf', data: TINY_PDF_B64 },
+        // Telemetry 48850f4a: an archive is a binary attachment that keeps its extension.
+        { type: 'file', mediaType: 'application/octet-stream', data: ZIP_B64, name: 'spec v2.zip' },
       ],
       worktree: false,
     });
@@ -721,7 +769,8 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const libraryPath = join(attachmentLibraryDir(dataDir), 'alpha-brief.md');
     // Filed at persist time, so it is on disk before the run is even dequeued.
     expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
-    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
+    expect(readdirSync(attachmentLibraryDir(dataDir)).sort()).toEqual(['alpha-brief.md', 'spec v2.zip']);
+    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'spec v2.zip')).toString('base64')).toBe(ZIP_B64);
 
     await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
     const after = store.getRun(record.id);
@@ -731,12 +780,14 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     // Both run-folder paths are still announced — the library is additive, not a replacement.
     expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.md')}`);
     expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-2.pdf')}`);
+    expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-3.zip')}`);
+    expect(lines[0]?.userText).not.toContain(ZIP_B64);
     // …and the library is named, so a later task can find `alpha-brief.md` by the name the user
     // knows it by rather than by this run's `pasted-1.md`.
     expect(lines[0]?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(dataDir)}`);
     // The unnamed PDF was persisted to the run folder but never filed.
     expect(existsSync(join(attachmentLibraryDir(dataDir), 'pasted-2.pdf'))).toBe(false);
-    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
+    expect(readdirSync(attachmentLibraryDir(dataDir)).sort()).toEqual(['alpha-brief.md', 'spec v2.zip']);
     expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
 
     // …and the agent is actually ALLOWED to look where it was told to. A run's cwd is its
@@ -845,8 +896,68 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(opening?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, stackedName)}`);
   }, 30_000);
 
+  /** #926 — the exact reported interaction: a screenshot pasted into a task that is still
+   * waiting for a processing slot must survive the queue and reach the eventual opening prompt.
+   * This is intentionally separate from the file case above: screenshots also need their inline
+   * image block and are the browser's clipboard path. */
+  it('a screenshot stacked onto a queued run reaches the opening prompt', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'stacked-screenshot-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const holder: WorkflowDef = {
+      name: 'hold-slot-screenshot',
+      source: 'built-in',
+      steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 700)"` }],
+    };
+    manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
+    const record = manager.startRun(workflow, { task: 'wait for my screenshot', worktree: false });
+    expect(store.getRun(record.id)?.status).toBe('queued');
+
+    const queuedMessage = manager.enqueueMessage(record.id, [
+      { type: 'text', text: 'please inspect this screenshot' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 } },
+    ]);
+    expect(queuedMessage?.images).toEqual([`/api/v1/runs/${record.id}/images/pasted-1.png`]);
+    expect(existsSync(join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png'))).toBe(true);
+
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+    const opening = readStdinLines().find((line) => line.userText.includes('wait for my screenshot'));
+    expect(opening).toBeDefined();
+    expect(opening?.imageCount).toBe(1);
+    expect(opening?.userText).toContain('please inspect this screenshot');
+    expect(opening?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png')}`);
+  }, 30_000);
+
   it('a follow-up pasted image is saved and its path is appended to the delivered message', async () => {
     writeFileSync(stdinFile, '', 'utf8');
+    writeFileSync(argsFile, '', 'utf8');
+    // Reproduce #987's first-use case: the live session starts before any named attachment has
+    // created the project library. Its fixed grant must still include the directory.
+    const liveRepoRoot = mkdtempSync(join(tmpdir(), 'cez-live-attachment-repo-'));
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: liveRepoRoot });
+    writeFileSync(join(liveRepoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: liveRepoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: liveRepoRoot });
+    const liveDataDir = join(liveRepoRoot, '.ai/cezar');
+    mkdirSync(liveDataDir, { recursive: true });
+    writeFileSync(join(liveDataDir, 'config.json'), JSON.stringify({ maxParallel: 1 }));
+    const liveStore = RunStore.open(liveDataDir);
+    const liveManager = new RunManager(liveStore, liveRepoRoot);
+    const waitForLiveStatus = async (runId: string, statuses: string[]): Promise<string> => {
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const status = liveStore.getRun(runId)?.status;
+        if (status && statuses.includes(status)) return status;
+        if (Date.now() > deadline) throw new Error(`run did not reach ${statuses.join('/')} in time (was ${status})`);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
     // A single agent step with no trailing check stays interactive — it parks
     // at `waiting` after its first turn so a follow-up can be sent.
     const workflow: WorkflowDef = {
@@ -854,35 +965,40 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       source: 'built-in',
       steps: [{ id: 'work', prompt: '{{task}}' }],
     };
-    const record = manager.startRun(workflow, { task: 'chat with me' });
-    await waitForStatus(record.id, ['waiting']);
+    const record = liveManager.startRun(workflow, { task: 'chat with me' });
+    await waitForLiveStatus(record.id, ['waiting']);
 
-    const state = (manager as unknown as {
+    const initialArgs = JSON.parse(readFileSync(argsFile, 'utf8').trim().split('\n')[0] as string) as string[];
+    const initialGranted = initialArgs.flatMap((arg, i) => (arg === '--add-dir' ? [initialArgs[i + 1] as string] : []));
+    expect(initialGranted).toContain(attachmentLibraryDir(liveDataDir));
+
+    const state = (liveManager as unknown as {
       active: Map<string, { session: { sendMessage(content: ContentBlock[]): boolean } }>;
     }).active.get(record.id)!;
     const refusal = vi.spyOn(state.session, 'sendMessage').mockReturnValueOnce(false);
     try {
-      expect(manager.sendMessage(record.id, [
+      expect(liveManager.sendMessage(record.id, [
         toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'backend-refused.png' }),
       ])).toBe(false);
-      expect(existsSync(join(attachmentLibraryDir(dataDir), 'backend-refused.png'))).toBe(false);
+      expect(existsSync(join(attachmentLibraryDir(liveDataDir), 'backend-refused.png'))).toBe(false);
     } finally {
       refusal.mockRestore();
     }
     const image = toPastedContent({
       mediaType: 'image/jpeg', data: TINY_PNG_B64, name: 'live-photo.jpeg',
     });
-    const delivered = manager.sendMessage(record.id, [{ type: 'text', text: 'here is a screenshot' }, image]);
+    const delivered = liveManager.sendMessage(record.id, [{ type: 'text', text: 'here is a screenshot' }, image]);
     expect(delivered).toBe(true);
-    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'live-photo.jpeg'))).toEqual(Buffer.from(TINY_PNG_B64, 'base64'));
+    expect(readFileSync(join(attachmentLibraryDir(liveDataDir), 'live-photo.jpeg'))).toEqual(Buffer.from(TINY_PNG_B64, 'base64'));
 
     // Back to `waiting` once the mock's follow-up turn completes.
-    await waitForStatus(record.id, ['waiting']);
+    await waitForLiveStatus(record.id, ['waiting']);
 
     const lines = readStdinLines();
     const followUp = lines.find((line) => line.userText.includes('here is a screenshot'));
     expect(followUp).toBeDefined();
     expect(followUp?.userText).toContain('The user attached 1 pasted file, also saved on disk at:');
+    expect(followUp?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(liveDataDir)}`);
 
     // The mock's own turn-1 tool screenshot shares the same on-disk counter, so
     // this pasted follow-up doesn't have to land on seq 1 — it must land on
@@ -890,11 +1006,61 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const pathMatch = followUp?.userText.match(/- (.*pasted-\d+\.jpg)/);
     expect(pathMatch).toBeTruthy();
     const filePath = pathMatch?.[1] as string;
-    expect(filePath).toMatch(new RegExp(`^${join(dataDir, 'runs', `${record.id}-images`).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/pasted-\\d+\\.jpg$`));
+    expect(filePath).toMatch(new RegExp(`^${join(liveDataDir, 'runs', `${record.id}-images`).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/pasted-\\d+\\.jpg$`));
     expect(existsSync(filePath)).toBe(true);
     expect(readFileSync(filePath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
 
-    manager.finish(record.id);
+    liveManager.finish(record.id);
+    liveStore.flush();
+    rmSync(liveRepoRoot, { recursive: true, force: true });
+  }, 30_000);
+
+  it('does not advertise a library that appeared after the live session failed to grant it', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    writeFileSync(argsFile, '', 'utf8');
+    const liveRepoRoot = mkdtempSync(join(tmpdir(), 'cez-late-library-repo-'));
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: liveRepoRoot });
+    writeFileSync(join(liveRepoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: liveRepoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: liveRepoRoot });
+    const liveDataDir = join(liveRepoRoot, '.ai/cezar');
+    mkdirSync(liveDataDir, { recursive: true });
+    writeFileSync(join(liveDataDir, 'config.json'), JSON.stringify({ maxParallel: 1 }));
+    const blockedLibrary = attachmentLibraryDir(liveDataDir);
+    writeFileSync(blockedLibrary, 'mkdir is intentionally blocked');
+    const liveStore = RunStore.open(liveDataDir);
+    const liveManager = new RunManager(liveStore, liveRepoRoot);
+    const waitForLiveStatus = async (runId: string, statuses: string[]): Promise<string> => {
+      const deadline = Date.now() + 20_000;
+      for (;;) {
+        const status = liveStore.getRun(runId)?.status;
+        if (status && statuses.includes(status)) return status;
+        if (Date.now() > deadline) throw new Error(`run did not reach ${statuses.join('/')} in time (was ${status})`);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
+    const workflow: WorkflowDef = {
+      name: 'late-library-test',
+      source: 'built-in',
+      steps: [{ id: 'work', prompt: '{{task}}' }],
+    };
+    const record = liveManager.startRun(workflow, { task: 'chat with me' });
+    await waitForLiveStatus(record.id, ['waiting']);
+
+    rmSync(blockedLibrary, { force: true });
+    mkdirSync(blockedLibrary, { recursive: true });
+    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'late.png' });
+    expect(liveManager.sendMessage(record.id, [{ type: 'text', text: 'late attachment' }, image])).toBe(true);
+    await waitForLiveStatus(record.id, ['waiting']);
+
+    const followUp = readStdinLines().find((line) => line.userText.includes('late attachment'));
+    expect(followUp?.userText).toContain('also saved on disk at:');
+    expect(followUp?.userText).not.toContain(`kept under their original names in ${blockedLibrary}`);
+    expect(existsSync(join(blockedLibrary, 'late.png'))).toBe(true);
+
+    liveManager.finish(record.id);
+    liveStore.flush();
+    rmSync(liveRepoRoot, { recursive: true, force: true });
   }, 30_000);
 
   /** Continue takes a prompt of its own, and the composer that writes it is a full composer —

@@ -11,7 +11,7 @@ export function BranchChip({ className, ...props }: React.ComponentProps<'span'>
     <span
       data-slot="branch-chip"
       className={cn(
-        'inline-block rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11.5px] leading-[1.3] font-medium whitespace-nowrap text-muted-foreground',
+        'inline-block rounded-md bg-muted px-1.5 py-0.5 font-mono text-meta leading-[1.3] font-medium whitespace-nowrap text-muted-foreground',
         className,
       )}
       {...props}

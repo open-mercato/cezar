@@ -1,0 +1,25 @@
+---
+title: "Different agents in one workflow"
+description: "Assign implementation to one runner and review to another."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/types.ts
+    line: 29
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each implementation or review node can use its own runner and model. You can assign changes to one agent and their review to another, then connect these steps to a test of the result.
+
+## Where to find it
+
+Workflows → Agent → runner / model
+
+## How to use it
+
+1. Add separate implementation and review nodes.
+2. Choose a runner and optional model in each.
+3. Connect them to a test that checks the result.
+
+> **Good to know**: The choice in a step takes precedence over the task agent and the project's default runner.

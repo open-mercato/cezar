@@ -59,14 +59,14 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
               data-slot="week-day-header"
               data-today={column.isToday ? 'true' : undefined}
               className={cn(
-                'flex items-center gap-2 border-l border-border px-2 py-2.5 text-[11px] font-semibold tracking-[.05em] uppercase',
+                'flex items-center gap-2 border-l border-border px-2 py-2.5 eyebrow',
                 column.isToday ? 'text-foreground' : 'text-soft-foreground',
               )}
             >
               {column.label}
               <span
                 className={cn(
-                  'rounded-full px-[7px] py-px text-[13px] font-medium tracking-normal normal-case',
+                  'rounded-full px-[7px] py-px text-ui font-medium tracking-normal normal-case',
                   column.isToday ? 'bg-primary text-primary-foreground' : 'text-muted-foreground',
                 )}
               >

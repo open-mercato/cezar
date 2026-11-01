@@ -16,7 +16,7 @@
  */
 
 /** The backend that produced a session. */
-export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi'
+export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'antigravity'
 
 /** Tool lifecycle status (ACP-aligned; `running` ≡ ACP `in_progress`). */
 export type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined'
@@ -260,6 +260,8 @@ export interface UiAskRequestedEvent {
   type: 'ask.requested'
   requestId: string
   questions: UiAskQuestion[]
+  /** Who asks: absent = the agent; `'workflow'` = a graph gate or question node. */
+  source?: 'workflow'
 }
 
 /** Cumulative-for-session raw telemetry. */

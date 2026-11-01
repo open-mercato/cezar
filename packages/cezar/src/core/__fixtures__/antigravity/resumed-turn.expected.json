@@ -1,0 +1,63 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": "cee872c9-0b46-48ac-b957-98677f3cd7db",
+    "cwd": "/repo",
+    "tools": [
+      "invoke_subagent",
+      "manage_subagents",
+      "manage_task",
+      "replace_file_content",
+      "run_command",
+      "view_file",
+      "write_to_file"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_10",
+      "role": "assistant",
+      "text": "DONE."
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_10",
+    "field": "text",
+    "delta": "\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_10",
+      "role": "assistant",
+      "text": "DONE.\n"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 15467,
+      "output": 2,
+      "total": 15469
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 15467,
+      "output": 2,
+      "total": 15469
+    }
+  }
+]

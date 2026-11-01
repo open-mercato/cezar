@@ -1,3 +1,10 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { executeTrackerOperation } from './task-access.ts';
+const taskService = vi.hoisted(() => ({ driver: vi.fn() }));
+vi.mock('./index.ts', () => ({ createTrackerService: () => taskService }));
 import { describe, expect, it, vi } from 'vitest';
 import {
   trackerAssociationResultSchema,
@@ -461,3 +468,108 @@ it('revalidates detail on a subsequent request instead of renewing a cached snap
   revoked = true;
   expect(await driver.getItem('PROJ-1')).toMatchObject({ available: false, code: 'unauthorized' });
 });
+
+describe('mediated Jira task operations', () => {
+  function taskClient(options: { status?: string; required?: boolean; crossScope?: boolean; mention?: boolean; writeStatus?: number; oversizedPage?: number } = {}) {
+    const writes: RequestInit[] = [];
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/_edge/tenant_info')) return json({ cloudId: 'cloud-1' });
+      if (init?.method === 'POST') { writes.push(init); if (options.writeStatus) return json({}, options.writeStatus); return url.endsWith('/transitions') ? new Response(null, { status: 204 }) : json({ id: 'comment-id' }, 201); }
+      if (url.includes('/comment?')) {
+        const params = new URL(url).searchParams;
+        const offset = Number(params.get('startAt'));
+        if (offset === options.oversizedPage) return json({ startAt: offset, total: 2, comments: [{ id: 'huge', created: '2026-01-01', body: 'x'.repeat(2 * 1024 * 1024) }] });
+        // Index 0 is the oldest comment; `orderBy=-created` serves the newest first.
+        const index = params.get('orderBy') === '-created' ? 1 - offset : offset;
+        return json({ startAt: offset, total: 2, comments: [{ id: String(index), created: '2026-01-01', body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: `page-${index}` }, ...(options.mention ? [{ type: 'mention', attrs: { text: '@Anna' } }] : [])] }] } }] });
+      }
+      if (url.includes('/transitions?')) return json({ transitions: [{ id: 'go', name: 'Start', to: { id: 'started' }, fields: options.required ? { custom: { required: true } } : {} }] });
+      const row = issue();
+      return json({ ...row, fields: { ...(row.fields as object), project: { id: options.crossScope ? '20000' : '10000' }, status: { id: options.status ?? 'todo', name: 'To Do' } } });
+    }) as unknown as typeof fetch;
+    return { driver: createJiraClient(credentials, fetcher).driver(association()), writes };
+  }
+  it('reads all comment pages and binds operations to the immutable issue ID', async () => {
+    const { driver } = taskClient();
+    const context = await driver.context!('10001');
+    expect(context.issueId).toBe('10001');
+    expect(context.comments.map(c => c.body)).toEqual(['page-0', 'page-1']);
+    expect(context.transitions).toEqual([{ id: 'go', name: 'Start', statusId: 'started' }]);
+    expect(context.limitations.join(' ')).toContain('custom fields');
+  });
+  it('keeps the newest comments when a comment page exceeds the response size limit', async () => {
+    const context = await taskClient({ oversizedPage: 1 }).driver.context!('10001');
+    expect(context.comments.map(c => c.body)).toEqual(['page-1']);
+    expect(context.limitations.join(' ')).toContain('Not every comment page could be read');
+  });
+  it('degrades lossy comments to a limitation instead of refusing the issue', async () => {
+    const context = await taskClient({ mention: true }).driver.context!('10001');
+    expect(context.comments.map(c => c.body)).toEqual(['page-0@Anna', 'page-1@Anna']);
+    expect(context.limitations.join(' ')).toContain('2 comment(s) contain content rendered approximately');
+  });
+  it('accepts empty 204 transition responses and checks status before mutation', async () => {
+    const { driver, writes } = taskClient();
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).resolves.toBeUndefined();
+    expect(writes).toHaveLength(1);
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'changed' })).rejects.toThrow('Status changed');
+    expect(writes).toHaveLength(1);
+  });
+  it.each([401, 403])('never retries a mutation at the site after gateway %s', async status => {
+    for (const action of [{ kind: 'comment' as const, body: 'Hello' }, { kind: 'transition' as const, transitionId: 'go', expectedStatusId: 'todo' }]) {
+      const { driver, writes } = taskClient({ writeStatus: status });
+      await expect(driver.act!('10001', action)).rejects.toThrow();
+      expect(writes).toHaveLength(1);
+    }
+  });
+  it('rejects an HTTP 400 transition response', async () => {
+    const { driver, writes } = taskClient({ writeStatus: 400 });
+    await expect(driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).rejects.toThrow();
+    expect(writes).toHaveLength(1);
+  });
+  it('never records or replays a rejected Jira transition as completed', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'jira-receipt-'));
+    const { driver, writes } = taskClient({ writeStatus: 400 });
+    taskService.driver.mockResolvedValue(driver);
+    const binding = { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira' as const,
+      association: association(), issueId: '10001', key: 'PROJ-1', url: origin,
+      access: { version: 1 as const, writes: ['transition' as const] } };
+    const input = { operationId: randomUUID(), action: { kind: 'transition' as const, transitionId: 'go', expectedStatusId: 'todo' } };
+    try {
+      const result = await executeTrackerOperation(directory, directory, 'run', binding, input);
+      expect(result.status).toBe('unknown');
+      expect(await executeTrackerOperation(directory, directory, 'run', binding, input)).toEqual(result);
+      const receipt = JSON.parse(await readFile(join(directory, 'runs', 'run.tracker-operations', input.operationId + '.json'), 'utf8'));
+      expect(receipt.result.status).toBe('unknown');
+      expect(writes).toHaveLength(1);
+    } finally {
+      taskService.driver.mockReset();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it('denies cross-project issues, required transition fields and revoked connections', async () => {
+    await expect(taskClient({ crossScope: true }).driver.context!('10001')).rejects.toThrow('project');
+    const required = taskClient({ required: true });
+    await expect(required.driver.act!('10001', { kind: 'transition', transitionId: 'go', expectedStatusId: 'todo' })).rejects.toThrow();
+    expect(required.writes).toHaveLength(0);
+    const revoked = taskClient();
+    await expect(revoked.driver.act!('10001', { kind: 'comment', body: 'Hello' }, async () => { throw new Error('revoked'); })).rejects.toThrow('revoked');
+    expect(revoked.writes).toHaveLength(0);
+  });
+});
+
+for (const method of ['listIssues', 'searchItems'] as const) {
+  it.each([401, 403])(`cold ${method} retries read-only JQL at the site after gateway %s`, async status => {
+    const urls: string[] = [];
+    const fetcher = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input); urls.push(url);
+      if (url.endsWith('/_edge/tenant_info')) return json({ cloudId: 'cloud-1' });
+      return json({ isLast: true, issues: [] }, url.startsWith('https://api.atlassian.com/') ? status : 200);
+    }) as unknown as typeof fetch;
+    const driver = createJiraClient(credentials, fetcher).driver(association());
+    expect(await driver[method]({ limit: 50, state: 'all', q: 'bug' })).toMatchObject({ available: true, items: [] });
+    expect(urls).toHaveLength(3);
+    expect(urls[2]).toContain('/rest/api/3/search/jql');
+    expect(urls[2]).not.toContain('api.atlassian.com');
+  });
+}

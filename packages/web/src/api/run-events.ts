@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
-import type { RunEvent } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunRecord } from '@open-mercato/cezar-api-client'
 
 /**
  * The per-run event stream (`GET /api/runs/:id/events`), as a raw ordered list — R2 Step 2.4's
@@ -104,6 +104,26 @@ function coalesceLiveDeltas(events: readonly RunEvent[]): RunEvent[] {
   return output
 }
 
+function parseRunRecordFrame(data: string): RunRecord | null {
+  let payload: unknown
+  try {
+    payload = JSON.parse(data)
+  } catch {
+    return null
+  }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return null
+  const { id, steps } = payload as { id?: unknown; steps?: unknown }
+  return typeof id === 'string' && id !== '' && Array.isArray(steps) ? (payload as RunRecord) : null
+}
+
+/**
+ * How long a backgrounded tab keeps its event streams before releasing them (#1753). Browsers cap
+ * HTTP/1.1 at 6 connections per origin and each tab holds a workspace stream plus a run stream, so
+ * a few idle tabs starved every ordinary request. Long enough that flipping between tabs does not
+ * churn sockets; the return path reconnects and reconciles (global) / replays (run).
+ */
+export const HIDDEN_STREAM_GRACE_MS = 30_000
+
 /**
  * Parse one SSE frame into a `RunEvent`, or null for anything malformed. Null rather than a
  * throw, as everywhere on the stream boundary: one bad frame costs one frame, not the socket.
@@ -140,6 +160,10 @@ export interface RunEventStreamOptions {
   compactAt?: number
   /** Return exactly the live sequence numbers now covered by durable history. */
   onCompact?: (events: readonly RunEvent[]) => RunEventCompaction | false | Promise<RunEventCompaction | false>
+  /** The whole run record, sent on connect and on every change of this run. Delivered on the same
+   *  `RUN_EVENT_BATCH_MS` flush as the transcript frames, so a burst of changes costs one call
+   *  with the latest record. */
+  onRun?: (run: RunRecord) => void
 }
 
 export function useRunEvents(runId: string | undefined, options: RunEventStreamOptions = {}): RunEvent[] {
@@ -179,6 +203,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     let nextCompactionAt = 0
     let eventsSinceCompaction = 0
     let pending: RunEvent[] = []
+    let pendingRun: RunRecord | undefined
     let flushTimer: ReturnType<typeof setTimeout> | undefined
     const CLOSED = 2 // EventSource.CLOSED, spelled literally like global-events.tsx
     const REOPEN_DELAY_MS = 1_500
@@ -246,6 +271,11 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
 
     const flush = (): void => {
       flushTimer = undefined
+      if (pendingRun !== undefined) {
+        const run = pendingRun
+        pendingRun = undefined
+        if (!disposed) optionsRef.current.onRun?.(run)
+      }
       if (pending.length === 0) return
       const batch = pending
       pending = []
@@ -316,9 +346,8 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       // route, which unmounts this hook first.
       const params = new URLSearchParams()
       if (cursor !== undefined) params.set('cursor', cursor)
-      if (cursor !== undefined || afterSeq > 0) {
-        params.set('afterSeq', String(Math.max(pageHighWaterRef.current, maxSeqRef.current)))
-      }
+      const highWater = Math.max(pageHighWaterRef.current, maxSeqRef.current)
+      if (cursor !== undefined || highWater > 0) params.set('afterSeq', String(highWater))
       const query = params.size > 0 ? `?${params.toString()}` : ''
       const current = new Source(apiPath(`/runs/${encodeURIComponent(runId)}/events${query}`), {
         withCredentials: true,
@@ -330,6 +359,16 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       }
       const pingListener = (): void => onPing(token)
       current.addEventListener('ping', pingListener)
+      current.addEventListener('run', (event) => {
+        if (disposed || token !== streamToken) return
+        lastFrameAt = Date.now()
+        const run = parseRunRecordFrame((event as MessageEvent<string>).data)
+        if (!run) return
+        // Coalesced with the transcript frames: a run change (a token or cost tick included)
+        // otherwise writes the detail cache on every frame, bypassing the batch window.
+        pendingRun = run
+        scheduleFlush()
+      })
       const errorListener = (): void => {
         if (disposed || token !== streamToken) return
         // Ordinary drops leave the socket CONNECTING and the browser retries on its own; CLOSED
@@ -345,8 +384,28 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     // with no error handler ever firing. On return, reopen if it's closed — whatever is on screen
     // is about to be trusted (the thread is the app's primary view, same threat model as the
     // global stream). #minor-run-sse-recovery.
+    // #1753: a hidden tab releases the transcript socket after a grace. Nothing else needs it —
+    // run status and completion arrive on the workspace stream — and the reopen below replays
+    // from the high-water mark.
+    let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+    // Also armed after open(): a tab opened or restored in the background never fires visibilitychange (#1782).
+    const armHiddenTimer = (): void => {
+      if (document.visibilityState !== 'hidden') return
+      hiddenTimer ??= setTimeout(() => {
+        hiddenTimer = undefined
+        if (disposed || document.visibilityState !== 'hidden') return
+        clearTimeout(reopenTimer)
+        reopenTimer = undefined
+        closeSource()
+      }, HIDDEN_STREAM_GRACE_MS)
+    }
     const onVisibilityChange = (): void => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState === 'hidden') {
+        armHiddenTimer()
+        return
+      }
+      clearTimeout(hiddenTimer)
+      hiddenTimer = undefined
       if (!source || source.readyState === CLOSED) {
         clearTimeout(reopenTimer)
         reopenTimer = undefined
@@ -363,7 +422,9 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       closeSource()
     }
     const onPageShow = (event: PageTransitionEvent): void => {
-      if (event.persisted) open()
+      if (!event.persisted) return
+      open()
+      armHiddenTimer()
     }
 
     // The watchdog only acts while the tab is visible: a hidden tab legitimately receives
@@ -383,6 +444,7 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     window.addEventListener('pageshow', onPageShow)
     compactCommittedRef.current = requestCompaction
     open()
+    armHiddenTimer()
 
     return () => {
       disposed = true
@@ -390,7 +452,9 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       clearTimeout(flushTimer)
       flushTimer = undefined
       pending = []
+      pendingRun = undefined
       clearInterval(livenessTimer)
+      clearTimeout(hiddenTimer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)

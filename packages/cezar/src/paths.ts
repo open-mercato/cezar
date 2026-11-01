@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join, posix, sep, win32 } from 'node:path';
 import type { AgentHomePaths } from './agent-config/catalog.ts';
 
 /**
@@ -123,6 +123,11 @@ export function agentAccountsPath(): string {
   return join(cezarHomeDir(), 'agent-accounts.json');
 }
 
+/** Per-project automatic agent fallback policy. Kept separate from account credentials. */
+export function agentFallbackPolicyPath(): string {
+  return join(cezarHomeDir(), 'agent-fallback.json');
+}
+
 /**
  * Expand a leading `~` to the user's home. Lives here with the other homedir
  * logic (see the module note above — one place owns `homedir()`): the
@@ -134,6 +139,21 @@ export function agentAccountsPath(): string {
 export function expandTilde(path: string): string {
   if (path === '~') return homedir();
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+}
+
+/**
+ * Is `path` absolute on `platform`? The ONE absolute-path rule for every
+ * filesystem path cezar accepts or persists — project roots, browse/checkout
+ * roots, account dirs. Never a leading-`/` test: that refuses every native
+ * Windows path (`C:\projects\app`, `\\server\share\repo`), and because the
+ * project registry salvages per entry, a refused root does not error — the
+ * project silently vanishes on the next read while `registerProject`, which
+ * writes the platform's own `realpath()`, keeps putting it back.
+ *
+ * `platform` is a parameter so both answers stay testable from either OS.
+ */
+export function isAbsolutePath(path: string, platform: NodeJS.Platform = process.platform): boolean {
+  return (platform === 'win32' ? win32 : posix).isAbsolute(path);
 }
 
 /**
@@ -167,6 +187,10 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     codex: env.CODEX_HOME?.trim() || join(home, '.codex'),
     opencodeConfig: join(xdgConfig, 'opencode'),
     cursor: env.CURSOR_CONFIG_DIR?.trim() || join(home, '.cursor'),
+    copilot: env.COPILOT_HOME?.trim() || join(home, '.copilot'),
+    junie: join(home, '.junie'),
+    antigravity: join(home, '.gemini', 'antigravity-cli'),
+    pi: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.pi', 'agent'),
   };
 }
 

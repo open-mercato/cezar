@@ -10,7 +10,6 @@ import { remainingBudgetUsd } from '../dispatch/engine.ts';
 it('retains the child reservation after preliminary zero and failure before final cost', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cez-zero-incomplete-'));
   vi.stubEnv('CEZ_HOME', join(dir, 'home'));
-  vi.stubEnv('CEZ_AUTONAME', '0');
   vi.stubEnv('CEZ_FOLLOWUPS', '0');
   const store = RunStore.open(join(dir, '.ai/cezar'));
   const bin = join(dir, 'stub.mjs');

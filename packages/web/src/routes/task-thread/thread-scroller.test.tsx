@@ -129,6 +129,48 @@ describe('useThreadScroll — outside a shell scroller (jsdom, tests, storybook-
     })
     expect(onLoadOlder).toHaveBeenCalledTimes(2)
   })
+
+  it('a jump to the tail while an older page loads is not undone when that load settles', async () => {
+    let settleOlder!: () => void
+    const onLoadOlder = vi.fn(() => new Promise<void>((resolve) => {
+      settleOlder = resolve
+    }))
+    const Harness = () => {
+      const controls = useThreadScroll('r-jump', { onLoadOlder })
+      return <main data-slot="main"><div ref={controls.attachContent} /><button onClick={controls.jumpToLatest} /></main>
+    }
+    render(<Harness />)
+    const scroller = document.querySelector<HTMLElement>('[data-slot="main"]')!
+    let scrollHeight = 1_000
+    Object.defineProperties(scroller, {
+      scrollTop: { value: 0, writable: true },
+      clientHeight: { value: 400 },
+      scrollHeight: { get: () => scrollHeight },
+    })
+    scroller.scrollTo = ((options: ScrollToOptions) => {
+      scroller.scrollTop = options.top ?? scroller.scrollTop
+    }) as typeof scroller.scrollTo
+
+    await act(async () => {
+      fireEvent.wheel(scroller, { deltaY: -120 })
+      await Promise.resolve()
+    })
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+
+    scrollHeight = 1_500
+    await act(async () => {
+      fireEvent.click(document.querySelector('button')!)
+      await Promise.resolve()
+    })
+    expect(scroller.scrollTop).toBe(1_100)
+
+    // The cancelled load settles: its anchor restore must not pull the reader back up.
+    await act(async () => {
+      settleOlder()
+      await Promise.resolve()
+    })
+    expect(scroller.scrollTop).toBe(1_100)
+  })
 })
 
 /**
@@ -361,6 +403,78 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
     fireEvent.touchEnd(window)
 
     expect(scroller.scrollTop).toBe(900)
+  })
+
+  describe('nav keys (#1800)', () => {
+    it('an up key on <body> after a click in the thread releases the pin', () => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey="run-key-body:main" />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+      fireEvent.pointerUp(scroller)
+
+      fireEvent.keyDown(document.body, { key: 'PageUp' })
+      scroller.scrollTop = 900
+      grow()
+
+      expect(scroller.scrollTop).toBe(900)
+    })
+
+    it.each(['ArrowUp', 'Home'])('%s on <body> releases the pin too', (key) => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey={`run-key-${key}:main`} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+      fireEvent.keyDown(document.body, { key })
+      scroller.scrollTop = 900
+      grow()
+      expect(scroller.scrollTop).toBe(900)
+    })
+
+    it('a body key after a click OUTSIDE the thread leaves the pin alone', () => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey="run-key-other:main" />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(document.body)
+
+      fireEvent.keyDown(document.body, { key: 'PageUp' })
+      scroller.scrollTop = 900
+      grow()
+
+      expect(scroller.scrollTop).toBe(1_500)
+    })
+
+    it('an up key in an input outside the thread (the composer) leaves the pin alone', () => {
+      const grow = stubGrowthObserver()
+      render(
+        <>
+          <PinnedHarness viewKey="run-key-composer:main" />
+          <textarea aria-label="composer" />
+        </>,
+      )
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+
+      fireEvent.keyDown(document.querySelector('textarea')!, { key: 'ArrowUp' })
+      scroller.scrollTop = 900
+      grow()
+
+      expect(scroller.scrollTop).toBe(1_500)
+    })
+
+    it('a down key still only records re-pin intent', () => {
+      const grow = stubGrowthObserver()
+      render(<PinnedHarness viewKey="run-key-down:main" />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.pointerDown(scroller)
+      fireEvent.keyDown(document.body, { key: 'PageUp' })
+      scroller.scrollTop = 900
+      fireEvent.keyDown(document.body, { key: 'End' })
+      scroller.scrollTop = 1_500
+      fireEvent.scroll(scroller)
+      grow()
+      expect(scroller.scrollTop).toBe(1_500)
+    })
   })
 })
 

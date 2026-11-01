@@ -14,21 +14,30 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
+import { writeClipboard } from '@/lib/clipboard'
 
-const PROVIDERS = [
+/** The provider cards this pane renders, in order. Exported so tests count them from the
+ *  source of truth rather than from a literal that a new runner silently invalidates. */
+export const PROVIDERS = [
   { id: 'claude', label: 'Claude Code', login: 'claude auth login' },
   { id: 'codex', label: 'Codex', login: 'codex login' },
+  { id: 'junie', label: 'Junie', login: 'junie login' },
   { id: 'opencode', label: 'OpenCode', login: 'opencode auth login' },
   { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
+  { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
+  { id: 'antigravity', label: 'Antigravity', login: 'agy' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   claude: value,
   codex: value,
+  junie: value,
   opencode: value,
   cursor: value,
   pi: value,
+  copilot: value,
+  antigravity: value,
 })
 
 const STATUS_PRESENTATION = {
@@ -167,7 +176,7 @@ export function ProviderSettings() {
 
   const copyCommand = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command)
+      await writeClipboard(command)
       toast('Command copied')
     } catch {
       toast('Could not copy the command', { tone: 'danger' })
@@ -178,7 +187,7 @@ export function ProviderSettings() {
     <section id="providers" data-slot="provider-settings" className="scroll-mt-20">
       <div className="mb-2">
         <h2 className="text-sm font-semibold text-foreground">Providers</h2>
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-ui text-muted-foreground">
           Connect the coding agents available on this computer.
         </p>
       </div>
@@ -189,7 +198,7 @@ export function ProviderSettings() {
           className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger/30 bg-danger/5 px-3 py-2.5"
         >
           <div>
-            <p className="text-[13px] font-medium text-foreground">
+            <p className="text-ui font-medium text-foreground">
               Provider status could not be loaded
             </p>
             <p className="text-xs text-muted-foreground">{status.error.message}</p>
@@ -228,7 +237,7 @@ export function ProviderSettings() {
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h3 className="text-[13px] font-semibold text-foreground">{provider.label}</h3>
+                    <h3 className="text-ui font-semibold text-foreground">{provider.label}</h3>
                     <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                       <StatusDot tone={presentation.tone} pulse={status.isPending} />
                       <span>{presentation.label}</span>
@@ -240,7 +249,7 @@ export function ProviderSettings() {
                       </p>
                     ) : state === 'unknown' || (status.isError && !state) ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">
-                        Verification failed. Check again when the provider is available.
+                        {current?.hint ?? 'Verification failed. Check again when the provider is available.'}
                       </p>
                     ) : current?.hint ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">{current.hint}</p>
@@ -314,7 +323,7 @@ export function ProviderSettings() {
                   aria-label={`${manual.label} manual sign-in`}
                   className="rounded-md border border-pending/40 bg-pending/5 px-3.5 py-3"
                 >
-                  <p className="text-[13px] text-foreground">{manual.message}</p>
+                  <p className="text-ui text-foreground">{manual.message}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <code className="min-w-0 flex-1 overflow-x-auto rounded-sm bg-muted px-2 py-1.5 text-xs">
                       {manual.command}

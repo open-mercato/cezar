@@ -25,4 +25,20 @@ export * from './dashboard-insights.ts';
 export * from './host.ts';
 export * from './tracker.ts';
 export * from './self-update.ts';
+export * from './telemetry.ts';
 export * from './star-count.ts';
+export * from './worktree-lifecycle.ts';
+export * from './preview.ts';
+export * from './start-app.ts';
+export * from './secrets.ts';
+export * from './e2e.ts';
+
+export * from './webhooks.ts';
+export * from './terminal.ts';
+export * from './agent-setup.ts';
+export * from './workspace-layouts.ts';
+export * from './deferred-start-state.ts';
+export * from './deferred-start.ts';
+export * from './usage-windows.ts';
+
+export * from './tracker-operations.ts';

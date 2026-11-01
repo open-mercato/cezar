@@ -35,6 +35,8 @@ import { subscribeTopic } from './ws'
 
 /** How long the warm-up read waits — a little over the server's 2 s sampling interval. */
 export const HOST_USAGE_WARMUP_MS = 2_500
+/** A refused `host` topic polls the route at the server's own 2 s sampling cadence. */
+export const HOST_USAGE_POLL_MS = 2_000
 
 const delay = (ms: number, signal: AbortSignal | undefined): Promise<void> =>
   new Promise((resolve, reject) => {
@@ -135,6 +137,25 @@ export function createHostUsageStore(): HostUsageStore {
   let state: HostUsageState = EMPTY_HOST_USAGE_STATE
   let writer: HostUsageWriter | undefined
   const listeners = new Set<() => void>()
+  const notify = (): void => {
+    for (const listener of listeners) listener()
+  }
+  // A hidden tab renders nothing anyone sees, and a throttled one can be handed a backlog of
+  // frames in one burst - each a sync commit (telemetry 21762d83). Fold them into the state and
+  // re-render once, on return.
+  let deferred = false
+  const onVisible = (): void => {
+    if (document.visibilityState === 'hidden') return
+    document.removeEventListener('visibilitychange', onVisible)
+    deferred = false
+    notify()
+  }
+  const notifyFrame = (): void => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') return notify()
+    if (deferred) return
+    deferred = true
+    document.addEventListener('visibilitychange', onVisible)
+  }
 
   return {
     subscribe(listener) {
@@ -195,17 +216,17 @@ export function createHostUsageStore(): HostUsageStore {
         // (the very path the refusal switches on) must not clear it.
         ...(previous.topicUnavailable === true ? { topicUnavailable: true } : {}),
       }
-      for (const listener of listeners) listener()
+      notifyFrame()
     },
     markTopicUnavailable() {
       if (state.topicUnavailable === true) return
       state = { ...state, topicUnavailable: true }
-      for (const listener of listeners) listener()
+      notify()
     },
     reset() {
       writer = undefined
       state = EMPTY_HOST_USAGE_STATE
-      for (const listener of listeners) listener()
+      notify()
     },
   }
 }
@@ -324,6 +345,7 @@ export function useHostSampleAgeSeconds(): number | undefined {
 function useHostFrames(writer: HostUsageWriter, enabled: boolean): void {
   const store = useContext(HostUsageContext)
   const transport = useHostTransport()
+  const topicUnavailable = useHostTopicUnavailable()
 
   useEffect(() => {
     if (!store || !enabled || transport !== 'local') return
@@ -340,6 +362,22 @@ function useHostFrames(writer: HostUsageWriter, enabled: boolean): void {
       () => store.markTopicUnavailable(),
     )
   }, [store, enabled, transport, writer])
+
+  // A refused topic is not the end of live data (#1363): the same writer polls the authenticated
+  // route at the sampler's cadence, and each read keeps the server's timer warm for the next.
+  const polled = useQuery({
+    queryKey: [...workspaceQueryKeys.hostUsage, 'poll'],
+    queryFn: ({ signal }) => getWorkspaceHostUsage({ signal }),
+    enabled: store !== null && enabled && transport === 'local' && topicUnavailable,
+    refetchInterval: HOST_USAGE_POLL_MS,
+    staleTime: 0,
+    retry: false,
+  })
+  const polledSample = polled.data
+  useEffect(() => {
+    if (!store || polledSample === undefined) return
+    store.push(polledSample, Date.now(), writer)
+  }, [store, polledSample, writer])
 }
 
 /**
@@ -373,13 +411,12 @@ export function useHostUsageSubscription(options: { enabled?: boolean } = {}): v
 export function useHostUsageRoute() {
   const store = useContext(HostUsageContext)
   const transport = useHostTransport()
-  const topicUnavailable = useHostTopicUnavailable()
   const query = useQuery({
     queryKey: workspaceQueryKeys.hostUsage,
     queryFn: ({ signal }) => readWorkspaceHostUsage(signal),
-    // Remote cockpits read the route by design; a LOCAL cockpit whose `host` topic the hub refused
-    // falls back to the same authenticated same-origin read instead of an eternal `sampling…`.
-    enabled: transport === 'remote' || topicUnavailable,
+    // Remote only: a LOCAL cockpit whose `host` topic the hub refused polls the route from its
+    // live writer instead (`useHostFrames`), which also keeps the sidebar glance current.
+    enabled: transport === 'remote',
     staleTime: 0,
     retry: false,
   })
