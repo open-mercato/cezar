@@ -77,7 +77,7 @@ a Download button (Gatekeeper reports them "damaged"; SmartScreen blocks them).
 | `TAURI_SIGNING_PRIVATE_KEY` (+ `_PASSWORD`) | updater artifacts + `desktop-latest.json`. Public key is in `tauri.conf.json` `plugins.updater.pubkey`. Generated with `npx tauri signer generate`; the private half lives in the maintainer's `~/.tauri/cezar-desktop.key` and in this secret — lose it and installed shells can never adopt another update. |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` | Developer ID Application certificate (base64 .p12) for code signing |
 | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | notarization (app-specific password) |
-| Windows code signing | not wired yet — Azure Trusted Signing via `bundle.windows.signCommand` is the intended route; until then Windows builds are unsigned |
+| `SIGNPATH_API_TOKEN`, `SIGNPATH_ORGANIZATION_ID` (secrets); `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`, `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` (variables, defaults `cezar` / `release-signing` / SignPath's default) | Windows code signing through SignPath Foundation (free for open source). The installer is signed AFTER the build, as a run artifact; the updater signature is made again over the signed file and the publish job writes it into `desktop-latest.json`. Until the secrets exist the installer is unsigned and the summary says so. `docs/code-signing-policy.md` is the page the programme requires |
 
 Apple Developer Program membership (99 USD/year) is the one purchase required before publishing
 to anyone but maintainers.
@@ -124,7 +124,7 @@ old app. `~/.cezar` (versions, settings, window geometry) is untouched by that.
 | Add `TAURI_SIGNING_PRIVATE_KEY` (the file's contents) as a repository secret | GitHub → Settings → Secrets | without it the workflow builds installers but no `desktop-latest.json`, so shells never see a new version |
 | Join the Apple Developer Program (99 USD/year), create a Developer ID Application certificate, export as base64 `.p12` | developer.apple.com | without it the build is signed AD-HOC (`signingIdentity: "-"`), which seals the bundle: a downloaded copy gets "could not verify" and Open Anyway in System Settings. A bundle that is not sealed at all is what macOS calls "damaged" — the first 0.1.1 build shipped that way. Notarization (no prompt at all) still needs the certificate |
 | Add `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID` | GitHub secrets | tauri-action signs and notarizes with these; all-or-nothing |
-| Windows: Azure Trusted Signing (or an EV cert), wired through `bundle.windows.signCommand` | later | SmartScreen otherwise warns on every install |
+| Windows: apply to SignPath Foundation (signpath.org), then set `SIGNPATH_API_TOKEN` and `SIGNPATH_ORGANIZATION_ID` and install the SignPath GitHub App on the repository | after approval | SmartScreen otherwise warns on every install |
 | Cut `desktop-v0.1.0` and check the workflow summary shows no "UNSIGNED" warning | GitHub Actions | the first real run will surface platform-specific matrix issues |
 | Landing page + Homebrew tap pointing at the stable asset URLs | after the first green release | see "Downstream pointers" |
 
