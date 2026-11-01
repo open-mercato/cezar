@@ -251,7 +251,8 @@ const isRunner = (value: string): value is Runner =>
   value === 'cursor' ||
   value === 'pi' ||
   value === 'copilot' ||
-  value === 'antigravity'
+  value === 'antigravity' ||
+  value === 'kimi'
 
 /** "Use this": the template fills name, kind, trigger (filters too), prompt and task source; the rest stays. */
 export function applyTemplate(draft: EditorDraft, template: TemplatePick): EditorDraft {

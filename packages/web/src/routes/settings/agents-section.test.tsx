@@ -531,6 +531,7 @@ describe('the agents form', () => {
         'pi',
         'copilot',
         'antigravity',
+        'kimi',
       ])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
@@ -551,6 +552,7 @@ describe('the agents form', () => {
         'pipi CLI (provider/model)',
         'copilotGitHub Copilot CLI (ACP)',
         'antigravityGoogle Antigravity CLI (agy)',
+        'kimiKimi Code (ACP)',
       ])
       // The discovered account is the checked row until the repo says otherwise.
       expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')

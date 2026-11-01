@@ -191,6 +191,7 @@ export function agentHomePaths(env: NodeJS.ProcessEnv = process.env): AgentHomeP
     junie: join(home, '.junie'),
     antigravity: join(home, '.gemini', 'antigravity-cli'),
     pi: env.PI_CODING_AGENT_DIR?.trim() || join(home, '.pi', 'agent'),
+    kimi: env.KIMI_CODE_HOME?.trim() || join(home, '.kimi-code'),
   };
 }
 

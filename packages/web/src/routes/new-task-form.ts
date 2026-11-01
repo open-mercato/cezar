@@ -57,6 +57,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
   { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
+  { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
 ]
 
 export interface ModelPreset {
@@ -114,6 +115,9 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // account; nothing dated is listed here, and the field stays free text for any slug it prints.
   antigravity: [
     { id: '', label: 'auto', desc: 'Use your Antigravity default model' },
+  ],
+  kimi: [
+    { id: '', label: 'auto', desc: 'Use your Kimi default model' },
   ],
 }
 
@@ -215,6 +219,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   junie: 'Junie',
   cursor: 'Cursor',
   antigravity: 'Antigravity',
+  kimi: 'Kimi',
 }
 
 export function modelCatalogStatus(

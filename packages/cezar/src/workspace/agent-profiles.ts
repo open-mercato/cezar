@@ -53,6 +53,7 @@ const PROVIDER_HOME: Record<ProviderId, (home: ReturnType<typeof agentHomePaths>
   junie: (home) => home.junie,
   copilot: (home) => home.copilot,
   antigravity: (home) => home.antigravity,
+  kimi: (home) => home.kimi,
 };
 
 /**

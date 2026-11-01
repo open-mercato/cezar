@@ -251,7 +251,7 @@ describe('Agent accounts → Defaults for new projects', () => {
 
     await waitFor(() => expect(rows()).toHaveLength(9))
     expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
-      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'antigravity',
+      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'antigravity', 'kimi',
     ])
     expect(rows()[1]?.textContent).toContain('~/.claude-klaudiusz')
   })

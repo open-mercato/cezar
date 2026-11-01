@@ -28,22 +28,24 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id'>): A
 }
 
 describe('AGENT_DESCRIPTORS', () => {
-  it('has one entry per config-owning runner; Cursor has settings+mcp and Pi has settings+memory', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'antigravity', 'opencode', 'cursor', 'pi'])
-    for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor' && d.id !== 'pi')) {
+  it('has one entry per config-owning runner; Cursor has settings+mcp and Pi and Kimi have settings+memory', () => {
+    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'antigravity', 'opencode', 'cursor', 'pi', 'kimi'])
+    for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor' && d.id !== 'pi' && d.id !== 'kimi')) {
       expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
       expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()
     }
     expect(descriptorFor('cursor').groups.map((g) => g.id)).toEqual(['settings', 'mcp'])
     expect(descriptorFor('pi').groups.map((g) => g.id)).toEqual(['settings', 'memory'])
+    expect(descriptorFor('kimi').groups.map((g) => g.id)).toEqual(['settings', 'memory'])
   })
 
   it('membership uses runners[] inclusion — shared files belong to every reader', () => {
-    const shared = fileOf({ id: 'project.agents', runners: ['codex', 'opencode', 'copilot', 'antigravity'], kind: 'memory', format: 'markdown' })
+    const shared = fileOf({ id: 'project.agents', runners: ['codex', 'opencode', 'copilot', 'antigravity', 'kimi'], kind: 'memory', format: 'markdown' })
     expect(descriptorFor('codex').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('opencode').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('copilot').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('antigravity').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
+    expect(descriptorFor('kimi').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(true)
     expect(descriptorFor('claude').groups.find((g) => g.id === 'memory')!.files(shared)).toBe(false)
   })
 

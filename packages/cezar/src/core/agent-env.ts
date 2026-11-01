@@ -247,6 +247,7 @@ export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // out inside a run. The address is a socket path, not a secret. `XDG_RUNTIME_DIR` is already in
   // the base list. No credential env var is documented, so `GEMINI_`/`GOOGLE_` keys stay out.
   antigravity: ['ANTIGRAVITY_', 'DBUS_SESSION_BUS_ADDRESS'],
+  kimi: ['KIMI_'],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

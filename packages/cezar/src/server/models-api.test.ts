@@ -124,11 +124,10 @@ describe('workspace model catalog API', () => {
     });
   });
 
-  // Every runner cezar ships now discovers, so only a MISSING or unknown `runner` is rejected.
   it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, junie, or antigravity' });
+    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, junie, antigravity, or kimi' });
   });
 
   it('returns a Cursor catalog when that adapter is registered', async () => {
