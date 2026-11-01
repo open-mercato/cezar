@@ -1571,6 +1571,19 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   )
 }
 
+/**
+ * "Run First": move a queued task to the front of its queue so it takes the first free slot
+ * (never past a cap). Answers the updated record; a run that is no longer queued is a 409.
+ */
+export async function promoteRun(id: string): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].promote.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/promote'),
+  )
+}
+
 /** "Start now": run a queued task over the `maxParallel` cap. 409 when it is no longer queued. */
 export async function startRunNow(id: string): Promise<StartNowResponse> {
   return unwrap(

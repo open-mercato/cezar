@@ -1342,6 +1342,7 @@ export class RunManager {
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.
+  // Order: "Run First" promotions first (newest first), then arrival — see `enqueue()`.
   private readonly queue: string[] = [];
   private readonly starting = new Set<string>();
   // Runs cancelled inside that window: there is no `ActiveRun` to flag yet, so the starter checks
@@ -1500,6 +1501,7 @@ export class RunManager {
       busySlots: () => this.busySlots(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
+      newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
       refreshQueueReasons: () => this.refreshQueueReasons(),
       activeRuns: () => this.store.listRuns().filter((r) => RESTART_SENSITIVE.has(r.status)).length,
@@ -2069,15 +2071,76 @@ export class RunManager {
     if (state) this.clearMonitoringLivenessTimer(state);
   }
 
-  /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
-   *  key when a freed slot is broadcast), or null when nothing is queued.
-   *  `queue` is FIFO — `startRun` pushes and `recover()` re-queues by
-   *  `createdAt` — so the head is the oldest. */
+  /** Epoch ms of this manager's queue head (the semaphore's fairness key when a
+   *  freed slot is broadcast), or null when nothing is queued. Without a "Run
+   *  next" promotion the queue is FIFO — `startRun` pushes and `recover()`
+   *  re-queues by `createdAt` — so the head is the oldest; with one, the head is
+   *  the promoted run, and this is only the tie-breaker behind
+   *  `newestPromotionAt()`. */
   private oldestQueuedAt(): number | null {
     const head = this.queue[0];
     if (!head) return null;
     const createdAt = this.store.getRun(head)?.createdAt;
     const ms = createdAt ? Date.parse(createdAt) : Number.NaN;
+    return Number.isNaN(ms) ? null : ms;
+  }
+
+  /**
+   * Put a run into the queue at its rank (brief 2026-09-23-queued-task-run-next). The queue
+   * keeps one invariant: promoted runs first, newest promotion first, then everything else in
+   * arrival order. An unpromoted run is therefore a plain `push` — exactly what every call site
+   * did before "Run First" existed.
+   *
+   * Only a record can carry a live `promotedAt` into here — `promote()` itself, and restart
+   * recovery / the watchdog reviving a run that was promoted before the process lost it. Every
+   * other re-queue follows a dequeue, and the store retired the mark when the run left `queued`.
+   */
+  private enqueue(runId: string): void {
+    const promotedAt = this.store.getRun(runId)?.promotedAt;
+    if (!promotedAt) {
+      this.queue.push(runId);
+      return;
+    }
+    // Ties go to the newcomer: "Run First" means first, so the latest promotion wins.
+    const at = this.queue.findIndex((id) => {
+      const other = this.store.getRun(id)?.promotedAt;
+      return !other || other <= promotedAt;
+    });
+    if (at === -1) this.queue.push(runId);
+    else this.queue.splice(at, 0, runId);
+  }
+
+  /**
+   * "Run First": move a queued run to the front of this project's queue, so it takes the first
+   * slot the ordinary gates allow (brief 2026-09-23-queued-task-run-next). It never bypasses a
+   * cap or an account hold — `pump()` still skips a run that cannot start and starts the next
+   * one that can. Promoting an already-promoted run re-stamps it to the very top.
+   *
+   * Answers `false` when the run is not waiting in this engine's queue (already starting,
+   * running, finished, or unknown) — the route maps that to 409.
+   */
+  promote(runId: string): boolean {
+    const at = this.queue.indexOf(runId);
+    if (at === -1) return false;
+    this.queue.splice(at, 1);
+    this.store.updateRun(runId, { promotedAt: new Date().toISOString() });
+    this.enqueue(runId);
+    this.store.appendEvent(runId, { type: 'lifecycle', message: 'moved to the front of the queue — runs next' });
+    // No slot came free, so this changes WHICH run starts, not WHEN; a pump is still the cheap,
+    // idempotent way to make sure a slot that is somehow free right now is not left idle.
+    void this.pump();
+    return true;
+  }
+
+  /** Epoch ms of the newest "Run First" promotion in this manager's queue (the semaphore's
+   *  cross-project preference), or null. `enqueue()` keeps promotions at the head, newest
+   *  first, so the head answers for the whole queue. Best-effort like the rest of `release()`:
+   *  when that head cannot start (its account is held), `pump()` starts the next run that can,
+   *  which may be an unpromoted one here rather than a promoted one in another project. */
+  private newestPromotionAt(): number | null {
+    const head = this.queue[0];
+    const promotedAt = head ? this.store.getRun(head)?.promotedAt : undefined;
+    const ms = promotedAt ? Date.parse(promotedAt) : Number.NaN;
     return Number.isNaN(ms) ? null : ms;
   }
 
@@ -2173,6 +2236,10 @@ export class RunManager {
           if (next === -1) break; // nothing queued can start right now
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
+          // Leaving the queue gives up a "Run First" place. The store would retire it anyway once
+          // the run's status moves on, but the run is still `queued` until `execute` writes
+          // `running` — and a usage-limit send-back in that window must not re-enter at the front.
+          if (this.store.getRun(runId)?.promotedAt) this.store.updateRun(runId, { promotedAt: undefined });
           // Retired here: a run `requeueWhileHeld` sends back waits its turn again, Start now dropped.
           this.startNowRequested.delete(runId);
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
@@ -2276,7 +2343,7 @@ export class RunManager {
         prompt: RESTART_CONTINUATION_PROMPT,
         images: [],
       });
-      this.queue.push(run.id);
+      this.enqueue(run.id);
       this.store.appendEvent(run.id, {
         type: 'lifecycle',
         message: `${reason} — interrupted continuation re-queued`,
@@ -2314,14 +2381,15 @@ export class RunManager {
       // already-folded `input.task`, so re-hydrating at dequeue yields the same string.
       input: { ...this.workflowInput(run), ...(this.queuedUsageLimitResume(run) ? { usageLimitResume: true } : {}) },
     });
-    this.queue.push(run.id);
+    this.enqueue(run.id);
     this.store.appendEvent(run.id, { type: 'lifecycle', message: `${reason} — task re-queued` });
   }
 
   /**
    * Startup recovery (#367) — re-adopt runs that were live when the previous
    * cezar process exited (requires the store opened with `keepLive`):
-   *  - `queued`  → back into the queue (FIFO by createdAt), from the persisted
+   *  - `queued`  → back into the queue (FIFO by createdAt, a surviving "Run First"
+   *    promotion first — `enqueue()`), from the persisted
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
    *    settle exactly like a closed session (review/done, Continue still works),

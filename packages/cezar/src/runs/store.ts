@@ -459,6 +459,10 @@ export const runRecordSchema = z.object({
    *  the key rather than persist a `false` older cezars never wrote. */
   pinned: z.boolean().optional(),
   pinnedAt: z.string().optional(),
+  /** "Run First" (brief 2026-09-23-queued-task-run-next): the ISO time a queued run was
+   *  promoted to the front of its queue. Present only while the run is still `queued` —
+   *  `updateRun` retires it on any other status — so it survives a restart and nothing else. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -953,6 +957,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
   if (run.status !== 'waiting') run.askParked = undefined;
+  // A "Run First" place is a place in the QUEUE — the `failed` written above for readers that do
+  // not recover gives it up, exactly as `updateRun` retires it on any other status. Left behind,
+  // a later Continue would re-queue the run carrying a mark the user never renewed.
+  if (run.status !== 'queued') run.promotedAt = undefined;
   if (run.status !== 'waiting') run.attentionRequest = undefined;
   if (run.status !== 'done') run.completionReason = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
@@ -1425,6 +1433,13 @@ export class RunStore extends EventEmitter {
     // enforcing the invariant here spares every one of those callers the bookkeeping.
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
+    }
+    // "Run First" (brief 2026-09-23-queued-task-run-next) is a place in the QUEUE, so any run
+    // leaving it — starting, cancelled, failed — gives the place up. A run that later comes back
+    // (a Continue deferred for capacity, a usage-limit send-back) re-enters at the tail like
+    // everyone else instead of silently jumping the line on a stale mark.
+    if (normalized.status && normalized.status !== 'queued') {
+      normalized.promotedAt = undefined;
     }
     // An unanswered question belongs to the `failed` run its closed session left behind: the
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
