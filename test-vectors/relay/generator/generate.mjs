@@ -84,6 +84,7 @@ out['qr.json'] = {
   ],
   refused: [
     ['unsupported version', `https://relay.example.test/p#2.${w.b64u(secret)}.${pinned}`, 'version'],
+    ['unsupported version with another layout', 'https://relay.example.test/p#2.x', 'version'],
     ['cleartext to a public host', `http://relay.example.test/p${qrTail}`, 'cleartext'],
     ['cleartext to another private address', `http://192.168.1.10:8787/p${qrTail}`, 'cleartext'],
     ['cleartext to the emulator alias', `http://10.0.2.2:8787/p${qrTail}`, 'cleartext'],
@@ -425,6 +426,8 @@ out['negative.json'] = {
     { name: 'uppercase header name', content: hex(w.encode.open(1, 'GET', '/', [['Host', 'x']])), expect: 'refuse' },
     { name: 'target without a leading slash', content: hex(w.encode.open(1, 'GET', 'http://evil/', [])), expect: 'refuse' },
     { name: 'target with two leading slashes', content: hex(w.encode.open(1, 'GET', '//evil/', [])), expect: 'refuse' },
+    { name: 'target with a backslash', content: hex(w.encode.open(1, 'GET', '/\\evil/', [])), expect: 'refuse' },
+    { name: 'target with a tab', content: hex(w.encode.open(1, 'GET', '/\t/evil/', [])), expect: 'refuse' },
     { name: 'CONNECT', content: hex(w.encode.open(1, 'CONNECT', '/', [])), expect: 'refuse' },
     { name: 'status 101', content: hex(w.encode.head(1, 101, [])), expect: 'refuse' },
   ],
