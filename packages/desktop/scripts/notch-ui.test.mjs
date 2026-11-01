@@ -107,6 +107,12 @@ describe('the page', () => {
   })
 })
 
+describe('the panel', () => {
+  it('stays when the app is hidden', () => {
+    expect(read('../src-tauri/src/notch.rs')).toContain('panel.setCanHide(false)')
+  })
+})
+
 describe('the capability', () => {
   it('stays on macOS and off the network', () => {
     const capability = JSON.parse(read('../src-tauri/capabilities/notch.json'))

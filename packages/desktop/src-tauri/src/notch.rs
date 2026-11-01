@@ -363,6 +363,8 @@ fn configure(window: &WebviewWindow) {
     panel.setBecomesKeyOnlyIfNeeded(true);
     panel.setWorksWhenModal(true);
     panel.setHidesOnDeactivate(false);
+    // ⌘H hides every window that allows it, and the notch matters most while cezar is out of sight.
+    panel.setCanHide(false);
     // Over the menu bar (24) and under the menus that open from it (101).
     panel.setLevel(25);
     // Every Space, full-screen ones included, and out of Mission Control and ⌘`.
@@ -494,7 +496,10 @@ pub fn on_page_crashed(webview: &tauri::Webview) {
         return;
     }
     if let Some(notch) = webview.try_state::<Arc<Notch>>() {
-        notch.view().rects.clear();
+        let mut view = notch.view();
+        view.rects.clear();
+        // The reloaded page starts closed; a shell still counting the list as open would never reopen it.
+        view.hover.close();
     }
     let _ = webview.reload();
 }
