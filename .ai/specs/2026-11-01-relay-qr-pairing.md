@@ -147,8 +147,8 @@ server's process restart, and all Basic code for the Manual path.
 | --- | --- |
 | `ServerRecord` | Becomes two kinds. `manual` keeps today's fields. `relay` holds `cezarId`, relay host, pinned key, `deviceId` and port, with no URL or password |
 | `ServerOrigin` | Unchanged for Manual, where `parse` still refuses `http`. A new `ProxyOrigin` type gives gates the exact `http://127.0.0.1:<port>`, not a general `http` allowance |
-| `NavigationPolicy`, `RequestGate` | Take the common origin type. The SSO `https` redirect branch applies to Manual only |
-| `HealthProbe`, `HttpGet` | Gain a tunnel transport. `HealthClassifier` reads the same JSON |
+| `NavigationPolicy`, and `RequestGate` on Android | Take the common origin type. The SSO `https` redirect branch applies to Manual only |
+| `HealthProbe`, and `HttpGet` on Android | Gain a tunnel transport. `HealthClassifier` reads the same JSON |
 | `StartDecision` | The table stays. New routes: `CEZAR_OFFLINE`, `RELAY_DOWN`, `DEVICE_REMOVED`, `PROTOCOL_MISMATCH`. Basic routes cannot occur on a relay server |
 | `ServerActivity`, `ServerViewController` | Load the proxy origin for a relay server, and show the native [connection banner](#how-a-failure-appears-in-the-app) over the page |
 | `BasicChallengeResponder` | Not used for relay servers, which get no challenge |
@@ -569,7 +569,7 @@ Design Mode, system notifications and `phonePairing` to false. That covers the 6
 | Read | Why the closure misses it | Change |
 | --- | --- | --- |
 | Agent accounts | `agentAccountsEnabled(process.env, bindHost)` reads the boundary directly, at eight checks in the agent-profile routes (`server.ts:2331` to `:2907`). A phone could otherwise create an account with any `configDir` | One closure that answers false in a relay scope, even with `CEZ_REMOTE_AGENT_ACCOUNTS=1`. Account management needs the machine |
-| Health | `GET /health` answers from the process-wide `healthCache` (`:2037`), and `healthSnapshot` computes `capabilities` and `repoRoot` once (`:1976`, `:1992`). A phone would read the desktop's local view and full path, and a phone's refresh would publish the narrowed view to the desktop | The cache keeps only fields that do not depend on scope. The route and the topic snapshot add `capabilities` and `repoRoot` when they read, and `refreshHealth` runs outside any relay scope |
+| Health | `GET /health` answers from the process-wide `healthCache` (`:2037`), and `healthSnapshot` computes `capabilities` and `repoRoot` once (`:1976`, `:1992`). A phone would read the desktop's local view and full path, and a phone's refresh would publish the narrowed view to the desktop | The cache keeps only fields that do not depend on scope. The route, the topic snapshot and `refreshHealth`'s `publishHealth` (`:2053`) each add `capabilities` and `repoRoot` as they send, since a desktop that receives a push without `capabilities` drops the topic (`packages/web/src/api/queries.ts:1048`). `refreshHealth` runs outside any relay scope, so what it publishes is always the desktop's view |
 
 ### Host and origin guards
 
@@ -589,6 +589,7 @@ it anyway, because the scope decides.
 `server.ts:8421`, `:8472`, `:8533` and `:8609`, `index.ts:346` and `:349`, `workflows/run.ts:2664` and
 `automations/builtin-skill.ts:26` call `resolveCapabilities` directly, but none is in a relay request
 path: they are process-level state, the WebSocket upgrade, or fields `narrowForRelay` leaves alone.
+`index.ts:346` still matters, because it fixes the webhook mode, covered [below](#what-a-phone-can-do).
 `index.ts:378` also does, for self-update path trimming, and must move to the narrowed value. A test
 walks the source so that any new direct call to `resolveCapabilities`, `agentAccountsEnabled` or
 `localHandoffEnabled` in a request path fails.
@@ -604,15 +605,24 @@ includes runs, timers, Manager turns and lazily started publishers. Left alone, 
 under a phone's message would read the narrowed value at `server.ts:8265` and silently drop the desktop
 notification, and `ManagerEngine.forward` would run narrowed or local depending on who started the turn.
 So every point where work leaves a request calls `outsideRelayScope(fn)`, a thin
-`AsyncLocalStorage.exit`: starting a run, `ManagerEngine.enqueue`, `refreshHealth`, and topic publishers.
-Work that outlives a request therefore reads the unscoped value, as it would had the desktop started it.
+`AsyncLocalStorage.exit`. That means at least starting a run, `ManagerEngine.enqueue`, `refreshHealth`,
+topic publishers, automation launches and lazily built project contexts, and R3's audit makes the list
+complete. Work that outlives a request therefore reads the unscoped value, as it would had the desktop started it.
 
 ### What a phone can do
 
 | A phone's requests can | A phone's requests cannot |
 | --- | --- |
-| Everything a hosted cockpit can: Manager, approvals, start and answer tasks, read diffs | Open a shell, edit agent config or agent accounts, use open-in routes, browse outside the browse root |
-| | Pair, approve or remove a phone. Those routes answer 403 in a relay scope |
+| Everything a hosted cockpit can, except the right-hand column: Manager, approvals, start and answer tasks, read diffs | Open a shell, edit agent config or agent accounts, use open-in routes, browse outside the browse root |
+| | Use any `/workspace/phones` route. They answer 403 in a relay scope, and `phone-pairing` events are not sent to one |
+| | Set `browseRoot` or `projectsDir`, or write webhooks. See below |
+
+**Two hosted routes need their own refusal in a relay scope** [V], because hosted mode does not gate them:
+
+| Route | Why | Change |
+| --- | --- | --- |
+| `PUT /workspace/config` (`server.ts:3722`) | It has no `localHandoff` check, and the browse containment at `:3384` reads the `browseRoot` it writes, so a request could move its own boundary | Answers 403 if the body sets `browseRoot` or `projectsDir`. Other fields stay |
+| `/webhooks` write routes (`server/webhooks.ts`) | The coordinator captures `mode` from `index.ts:346` as `local` (`webhooks/coordinator.ts:49`), and `webhooks/destination.ts:51` and `:68` then allow `http` and private addresses | Answer 403. Webhooks are set up from the machine |
 
 **These limits bind a phone's requests, not what a task does.** Starting a task is running code as the
 user, as the guard's own comment says, and a default task has unrestricted `Bash`. So a stolen unlocked
@@ -621,8 +631,8 @@ pairing routes over loopback. The narrowing stops a compromised page or a bug fr
 directly. It does not contain a phone in the wrong hands. Only Remove does that, and a lock would. See
 [QR3](#qr3-does-a-phone-need-its-own-lock).
 
-**Full local paths are not hidden.** Hosted mode trims `repoRoot` and self-update paths, but `worktreePath`
-and a project's `root` are always sent, because a hosted reader was never on that machine. A phone will see
+**Full local paths are not hidden.** Hosted mode trims `repoRoot` and self-update paths, but `worktreePath`,
+a project's `root` and health's `repo.root` are always sent, because a hosted reader was never on that machine. A phone will see
 them. That is accepted for v1, since those paths belong to the phone's owner, and no privacy claim may say
 otherwise.
 
@@ -632,8 +642,8 @@ Devices live in `~/.cezar/relay/devices.json`, an own file like `agent-accounts.
 `config.json`: `deviceId`, `label`, `platform`, both public keys, `addedAt`, `lastSeenAt`, and any sealed
 grant. Deleting the directory loses pairings, and the user pairs again. That is state, not configuration.
 
-Only `cezar serve` runs the client, never `cez run`. Identity is per home, so a second process on the
-same home gets 4409 and stops, and Settings says which situation it is in.
+Only `cezar serve` runs the client, never `cez run`. Identity is per home, so when a second process on the
+same home connects, the first gets 4409 and stops, and Settings says which situation it is in.
 
 New routes, contract first, in one chained workspace-level family and listed in BACKWARD_COMPATIBILITY.md §2:
 
@@ -685,7 +695,8 @@ that this phone can run tasks on this computer. The list stays usable from any n
 ### Consent and zero config
 
 Connecting a cezar to a relay widens exposure, so it needs a recorded decision under AGENTS.md
-§ Zero config. Nothing leaves the machine until the user clicks **Connect a phone**. The socket exists
+§ Zero config. Nothing reaches the relay until the user clicks **Connect a phone**, apart from `POST /v1/push`
+on a Manual server, which has its own per-server toggle and `CEZ_PUSH=0`. The socket exists
 from the first Approve, while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
 all of it. `CEZ_RELAY_URL` overrides the host for development. Both go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
@@ -706,7 +717,7 @@ The rule follows from the design, instead of depending on anyone remembering it:
 
 | Guard | Where | Fails when |
 | --- | --- | --- |
-| Quiet test | Public, `packages/cezar/src/relay/` | With a fake socket and a running Manager and tasks, any frame but `ping` is sent while no session exists |
+| Quiet test | Public, `packages/cezar/src/relay/` | With a fake socket and a running Manager and tasks, any frame is sent while no session exists, other than `ping` and the one `device-sync` after connecting. A device command from the user is excluded |
 | Stream-origin test | Public | cezar can emit a data frame for a stream the phone did not open |
 | Lease test | Public | Streams survive 60 s without `LEASE` |
 | Hibernation test | `patzick/rome`, against real `workerd` | A room with one cezar socket and no phone is still in memory after the idle window, or wakes on `ping` |
@@ -846,7 +857,7 @@ A reviewer has no desktop cezar to scan from, so the parent spec's demo VPS (Q10
    approves automatically, without the 2-minute limit. Its devices expire after 24 hours and are capped,
    and the nightly reset clears the rest.
 3. Review notes hold the code, plus a QR image the reviewer can scan from another screen.
-4. The demo reopens its rendezvous each time it expires, 12 times an hour, so `patzick/rome` raises
+4. The demo reopens its rendezvous each time the 120 s claim window lapses, 30 times an hour, so `patzick/rome` raises
    `rendezvousPerHour` for that one `cezarId` through its `hello` limits, and cezar skips its own limit of 5
    an hour under the demo code. The contract does not change.
 5. Notes also include a short video of a real desktop pairing, since the desktop half cannot be seen.
@@ -924,7 +935,8 @@ listing.
   rules, and §2 and §9 entries. A breaking relay change needs a new path version and old clients served
   until a release of each has been in the wild.
 - §6b from #1883 gains the tunnel protocol. Every existing clause stands.
-- A server with this feature behaves identically when no phone is paired, with no socket and no call out.
+- A server with this feature behaves identically when no phone is paired and no push grant exists, with no
+  socket and no call out.
 - Manual users see only the connect screen's new order.
 - New env vars `CEZ_RELAY`, `CEZ_RELAY_URL` and `CEZ_RELAY_DEMO_CODE` go in `.env.example` and
   `docs/reference.md`. A new feature page goes under `docs/site`.
@@ -958,7 +970,8 @@ so that it stays one spec.
   capabilities, proving that the scope does not leak. Agent-profile routes are refused, with and without
   `CEZ_REMOTE_AGENT_ACCOUNTS=1`. `/health` in a relay scope is narrowed when the cache holds the desktop's
   view, and a refresh from a relay scope changes nothing a desktop reads or receives on the `health` topic.
-  A run, timer or Manager turn started from a relay request reads the unscoped value. The source-walking
+  A run, timer or Manager turn started from a relay request reads the unscoped value. `PUT /workspace/config`
+  with `browseRoot` and every `/webhooks` write are refused, while other config fields still save. The source-walking
   test. Prove each fails without its change, by the AGENTS.md rule.
 - **Empty input:** no devices means no socket, an empty `device-sync`, and absent `hello` limits fall back
   to the table.
@@ -1027,4 +1040,5 @@ promise of this feature, and the claim that anyone can check it is only as good 
 - 2026-11-01: Contract additions from review, protocol version still 1: one socket per `deviceId`, `GET /p`,
   named `error` codes, `Date` on `bad-proof`, 4403 keeps the keys, and room expiry counts `POST /v1/push`.
 - 2026-11-01: Review corrections outside the contract: authorization reads the closure misses, scope ending
-  with the request, proxy listener and port rules, and the worst-case cost.
+  with the request, proxy listener and port rules, the worst-case cost, and refusals for browse and webhook
+  writes. The contract did not change.
