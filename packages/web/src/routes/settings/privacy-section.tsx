@@ -34,9 +34,9 @@ export function PrivacySection() {
             <h2 className="text-sm font-semibold text-foreground">
               <label htmlFor="telemetry-enabled">Share usage data</label>
             </h2>
-            <p className="text-[13px] text-muted-foreground">
+            <p className="text-ui text-muted-foreground">
               Task counts and crash reports, sent to cezar’s maintainers at Open Mercato
-              {data ? <> (<span className="font-mono text-[12px]">{data.endpoint}</span>)</> : null}. Never
+              {data ? <> (<span className="font-mono text-label">{data.endpoint}</span>)</> : null}. Never
               prompts, code, diffs, paths or repository names. Off unless you turn it on; turning it
               off deletes this machine’s install id.
             </p>
@@ -51,14 +51,14 @@ export function PrivacySection() {
         </div>
 
         {blockedBy === 'env' ? (
-          <p data-slot="telemetry-blocked" className="text-[13px] text-muted-foreground">
-            <code className="font-mono text-[12px]">CEZ_TELEMETRY=0</code> or{' '}
-            <code className="font-mono text-[12px]">DO_NOT_TRACK=1</code> is set for this server, so
+          <p data-slot="telemetry-blocked" className="text-ui text-muted-foreground">
+            <code className="font-mono text-label">CEZ_TELEMETRY=0</code> or{' '}
+            <code className="font-mono text-label">DO_NOT_TRACK=1</code> is set for this server, so
             nothing is sent whatever this switch says.
           </p>
         ) : blockedBy === 'automation' ? (
-          <p data-slot="telemetry-blocked" className="text-[13px] text-muted-foreground">
-            This server runs under CI, a test runner or <code className="font-mono text-[12px]">CEZ_DRY_RUN=1</code>,
+          <p data-slot="telemetry-blocked" className="text-ui text-muted-foreground">
+            This server runs under CI, a test runner or <code className="font-mono text-label">CEZ_DRY_RUN=1</code>,
             so nothing is sent from it.
           </p>
         ) : null}
@@ -67,7 +67,7 @@ export function PrivacySection() {
           href={TELEMETRY_DOC_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex w-fit items-center gap-1 text-[13px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          className="inline-flex w-fit items-center gap-1 text-ui text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
         >
           Exactly what is collected
           <ArrowUpRightIcon className="size-3.5" aria-hidden="true" />

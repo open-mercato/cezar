@@ -242,7 +242,7 @@ export function LayoutCards({
               data-strip-item=""
               aria-current={notesActive ? 'page' : undefined}
               className={cn(
-                'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
+                'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-ui font-medium',
                 notesActive
                   ? 'border-foreground text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -290,7 +290,7 @@ export function LayoutCards({
             }}
             onDragEnd={() => onViewDragEnd?.()}
             className={cn(
-              'relative -mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+              'relative -mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-ui font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
               (selected || on) && 'text-foreground',
               selected && 'border-foreground',
             )}
@@ -378,7 +378,7 @@ export function LayoutCards({
  *  chord floats over the tab's corner and the icon keeps its space. */
 function TabIcon({ hint, children }: { hint: string | undefined; children: ReactNode }) {
   const kbdClass =
-    'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-[10px] leading-none font-semibold text-background'
+    'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-micro leading-none font-semibold text-background'
   if (!hint) return children
   if (hint.length === 1) {
     return (
@@ -486,7 +486,7 @@ function LayoutMenu({
             data-active-layout={current ? current.name : undefined}
             aria-label={current ? `Layout: ${layoutDisplayName(current.name)}` : 'Layouts'}
             title="Layouts — open a saved one, or save what is on screen"
-            className={cn('h-7 max-w-48 shrink-0 gap-1.5 px-2 text-[12.5px]', current ? 'text-foreground' : 'text-muted-foreground')}
+            className={cn('h-7 max-w-48 shrink-0 gap-1.5 px-2 text-label', current ? 'text-foreground' : 'text-muted-foreground')}
           >
             <LayoutGlyph count={current?.columns.length ?? 2} />
             <span className="truncate max-md:hidden">{current ? layoutDisplayName(current.name) : 'Layout'}</span>

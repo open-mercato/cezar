@@ -43,11 +43,13 @@ export function EditorScheduleFields({
   schedule,
   timeZone,
   onChange,
+  allowOnce = true,
 }: {
   schedule: AutomationSchedule
   /** The server's zone — what the schedule is evaluated in. */
   timeZone: string
   onChange: (schedule: AutomationSchedule) => void
+  allowOnce?: boolean
 }) {
   const s = normalizeSchedule(schedule)
   const set = (patch: Partial<AutomationSchedule>) => {
@@ -61,7 +63,7 @@ export function EditorScheduleFields({
   return (
     <div data-slot="editor-schedule" className="flex flex-col gap-3.5">
       <div role="group" aria-label="Schedule type" className="flex flex-wrap gap-1.5">
-        {TYPES.map(([value, label]) => (
+        {TYPES.filter(([value]) => allowOnce || value !== 'once').map(([value, label]) => (
           <Chip key={value} active={s.type === value} aria-pressed={s.type === value} onClick={() => set({ type: value })}>
             {label}
           </Chip>
@@ -83,7 +85,7 @@ export function EditorScheduleFields({
         </div>
       ) : null}
       {s.type === 'once' ? (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-ui text-muted-foreground">
           on
           <Input
             type="date"
@@ -95,10 +97,10 @@ export function EditorScheduleFields({
         </div>
       ) : null}
       {s.type === 'hours' ? (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-ui text-muted-foreground">
           every
           <Select value={String(s.every)} onValueChange={(value) => { const every = Number(value); if (isScheduleEvery(every)) set({ every }) }}>
-            <SelectTrigger size="sm" aria-label="Every N hours" className="text-[13px]">
+            <SelectTrigger size="sm" aria-label="Every N hours" className="text-ui">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -110,7 +112,7 @@ export function EditorScheduleFields({
           starting at 00:00
         </div>
       ) : (
-        <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+        <div className="flex items-center gap-2 text-ui text-muted-foreground">
           at
           <Input
             aria-label="Hour"

@@ -79,6 +79,7 @@ export const workspaceConfigResponseSchema = z.object({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      antigravity: z.string().optional(),
     }).optional(),
   }),
 });
@@ -126,6 +127,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
           copilot: z.string().trim().min(1).max(200).nullable().optional(),
+          antigravity: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -161,6 +163,13 @@ const taskTableUiStateSchema = z.looseObject({
   /** Explicit user choices only. Missing ids keep the registry-owned default. */
   expandedColumns: z.record(z.string(), z.boolean()).optional(),
 });
+
+export const AUTOMATION_ORDER_LIMIT = 200;
+export const automationListPreferencesSchema = z.looseObject({
+  sort: z.enum(['manual', 'name', 'nextRun']).optional(),
+  order: z.array(z.string().trim().min(1).max(200)).max(AUTOMATION_ORDER_LIMIT).optional(),
+});
+export type AutomationListPreferences = z.infer<typeof automationListPreferencesSchema>;
 
 /**
  * `GET/PUT /api/v1/ui-state` — the per-repo GUI prefs in `.ai/cezar/ui-state.json`.
@@ -205,6 +214,8 @@ export const uiStateSchema = z.looseObject({
   githubView: z.enum(['issues', 'prs']).optional(),
   /** The GitHub tab's list order. Absent → newest first, which is what `gh` already returns. */
   githubSort: z.enum(['newest', 'oldest']).optional(),
+  /** List presentation only (#1819); absent preserves alphabetical order. */
+  automationList: automationListPreferencesSchema.optional(),
   /** Settings → Appearance. The theme itself stays in localStorage (`cez-theme`) — it must
    *  pre-paint, and it is per-browser by design. */
   appearance: appearanceSchema.optional(),
@@ -307,6 +318,7 @@ export const workspaceUiStateSchema = z.looseObject({
       pi: z.string().optional(),
       junie: z.string().optional(),
       copilot: z.string().optional(),
+      antigravity: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -331,6 +343,31 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Layouts the user saved by name in a task's Layout menu — offered in every task of every
    *  project. One bad entry drops the list rather than the whole file. */
   savedLayouts: z.array(savedWorkspaceLayoutSchema).catch([]).optional(),
+  /** First-run onboarding (spec 2026-10-26-first-run-onboarding). Workspace-wide — the same
+   *  person sets up every project. */
+  onboarding: z
+    .looseObject({
+      setupDismissed: z.boolean().optional(),
+      /** "Continue anyway" past the sign-in screen: provider detection can miss a working login. */
+      agentCheckSkipped: z.boolean().optional(),
+      /** Feature announcements the user closed, by id — a new announcement shows once. */
+      dismissedAnnouncements: z.array(z.string().max(64)).max(50).optional(),
+      /** Coming back after a while: the first and the latest visit, written at most hourly. */
+      firstVisitAt: z.string().max(40).optional(),
+      lastVisitAt: z.string().max(40).optional(),
+      /** Set when a visit follows a long absence: the visit before it, and when the user came
+       *  back. The tasks page greets them with what they left and what changed since. */
+      returnedFrom: z.string().max(40).optional(),
+      returnedAt: z.string().max(40).optional(),
+      welcomeBackClosedAt: z.string().max(40).optional(),
+      /** The last time the user opened "What's new" — its sidebar dot counts from here. */
+      whatsNewSeenAt: z.string().max(40).optional(),
+      /** Composer tips on `/new` (one or two controls explained per visit): the ones already
+       *  shown, by id, and whether the user turned them off. */
+      composerTipsSeen: z.array(z.string().max(64)).max(50).optional(),
+      composerTipsOff: z.boolean().optional(),
+    })
+    .optional(),
 });
 export type WorkspaceUiState = z.infer<typeof workspaceUiStateSchema>;
 
@@ -371,6 +408,7 @@ export const setWorkspaceUiStateInputSchema = z
         pi: z.string().min(1).max(128).optional(),
         junie: z.string().min(1).max(128).optional(),
         copilot: z.string().min(1).max(128).optional(),
+        antigravity: z.string().min(1).max(128).optional(),
       })
       .optional(),
     importedSkills: z.array(z.string().min(1).max(200)).max(WORKSPACE_UI_STATE_MAX_KEYS).optional(),
@@ -418,6 +456,7 @@ export const runnerModelsSchema = z.object({
   cursor: z.string().optional(),
   pi: z.string().optional(),
   copilot: z.string().optional(),
+  antigravity: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
@@ -488,6 +527,7 @@ export const setConfigInputSchema = z.object({
       cursor: z.string().trim().max(200).nullable().optional(),
       pi: z.string().trim().max(200).nullable().optional(),
       copilot: z.string().trim().max(200).nullable().optional(),
+      antigravity: z.string().trim().max(200).nullable().optional(),
     })
     .optional(),
   /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
@@ -626,11 +666,11 @@ export type ProviderUpdateResponse = z.infer<typeof providerUpdateResponseSchema
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
- * CLI's `list_models` control request (#784), Cursor through its CLI model listing, and Junie through ACP session config options. A runner absent here has no discovery path and
+ * CLI's `list_models` control request (#784), Cursor through its CLI model listing, Junie through ACP session config options, and Antigravity through `agy models`. A runner absent here has no discovery path and
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;

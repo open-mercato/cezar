@@ -54,6 +54,7 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -383,12 +384,15 @@ describe('the hero surface', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Run mode' })).toBeNull()
   })
 
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the hero in the onboarding grammar: title, subtitle, a plain violet surface, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // Spec 2026-10-26-first-run-onboarding § Composer: the page wears the onboarding palette and
+    // no background texture — the twinkles and the ghost code are gone.
+    expect(document.querySelector('[data-route="new"]')?.hasAttribute('data-onboarding')).toBe(true)
+    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
     // per-state cases live in "the run-mode note" below.

@@ -7,6 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { ProjectGroups } from '@/components/project-groups'
+import { PROJECT_FOLDERS_STORAGE_KEY } from '@/lib/project-folders'
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from '@/lib/sidebar-collapse'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -702,6 +703,71 @@ describe('ProjectGroups', () => {
       // link into a scope where nothing answers.
       expect(group('shop').querySelector('a')).toBeNull()
       expect(disclosure('shop')).toBeNull()
+    })
+  })
+
+  describe('project folders', () => {
+    it('opens the wrapper while the scoped project lives inside it', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'client', name: 'Client A', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/shop/runs': [] })
+      renderGroups(
+        [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+        '/p/shop/',
+      )
+
+      await waitFor(() => expect(group('shop')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="client"]')
+      expect(folder?.querySelector('button[aria-expanded="true"]')).not.toBeNull()
+    })
+
+    it('renders empty folder and shows "No projects" when expanded', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'empty-folder', name: 'Empty Folder', projectIds: [] }]),
+      )
+      storeCollapsed({ 'folder:empty-folder': false })
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+      const folder = document.querySelector('[data-slot="project-folder"][data-folder="empty-folder"]')
+      expect(folder).not.toBeNull()
+      expect(folder?.querySelector('span[aria-label="0 projects"]')?.textContent).toBe('0')
+      expect(folder?.textContent).toContain('No projects')
+      expect(folder?.querySelector('button[aria-label="Edit Empty Folder"]')).not.toBeNull()
+    })
+
+    it('creates a new folder via the dialog and moves project from previous folder', async () => {
+      localStorage.setItem(
+        PROJECT_FOLDERS_STORAGE_KEY,
+        JSON.stringify([{ id: 'old-folder', name: 'Old Folder', projectIds: ['shop'] }]),
+      )
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
+
+      await waitFor(() => expect(group('cezar')).not.toBeNull())
+
+      const newFolderBtn = screen.getByRole('button', { name: 'New folder' })
+      fireEvent.click(newFolderBtn)
+
+      const nameInput = screen.getByPlaceholderText('Client name')
+      fireEvent.change(nameInput, { target: { value: 'New Folder' } })
+
+      const shopCheckbox = screen.getByRole('checkbox', { name: 'shop' })
+      fireEvent.click(shopCheckbox)
+
+      const saveBtn = screen.getByRole('button', { name: 'Save folder' })
+      fireEvent.click(saveBtn)
+
+      const stored = JSON.parse(localStorage.getItem(PROJECT_FOLDERS_STORAGE_KEY) ?? '[]')
+      const oldFolder = stored.find((f: { id: string }) => f.id === 'old-folder')
+      const newFolder = stored.find((f: { name: string }) => f.name === 'New Folder')
+
+      expect(oldFolder?.projectIds).toEqual([])
+      expect(newFolder?.projectIds).toEqual(['shop'])
     })
   })
 })

@@ -32,6 +32,9 @@ import type {
   RemoveAgentProfileResponse,
   SelectAgentProfileInput,
   UpdateAgentProfileInput,
+  AgentFallbackPolicy,
+  GetAgentFallbackPolicyQuery,
+  PutAgentFallbackPolicy,
   AutomationsResponse,
   AutomationCheck,
   AutomationCheckQueuedResponse,
@@ -74,6 +77,11 @@ import type {
   StartNowResponse,
   LandResponse,
   FsBrowseResponse,
+  GithubLoginState,
+  InitProjectGitResponse,
+  PublishProjectGithubInput,
+  PublishProjectGithubResponse,
+  RepoSuggestionsResponse,
   GitCommitResponse,
   GitPushResponse,
   GitStatusResponse,
@@ -105,6 +113,10 @@ import type {
   PatchRunInput,
   PickVariantResponse,
   PlanResponse,
+  AgentSetupProvider,
+  AgentSetupAction,
+  AgentSetupSession,
+  AgentSetupState,
   ProviderConnectResponse,
   ProviderUpdateResponse,
   ProviderId,
@@ -597,6 +609,77 @@ export async function browseFs(
       init(opts),
     ),
     '/fs/browse',
+  )
+}
+
+/** The first-run "Pick a project" list (spec 2026-10-26-first-run-onboarding). */
+export async function getRepoSuggestions(opts?: ReadOptions): Promise<RepoSuggestionsResponse> {
+  return unwrap(await cez.api.v1.fs.repos.$get({}, init(opts)), '/fs/repos')
+}
+
+/** "Initialize git here" — a `not-git` project becomes a repository with its files committed. */
+export async function initProjectGit(projectId: string): Promise<InitProjectGitResponse> {
+  return unwrap(
+    await cez.api.v1.projects[':projectId']['git-init'].$post({ param: { projectId: encodeURIComponent(projectId) } }),
+    `/projects/${encodeURIComponent(projectId)}/git-init`,
+  )
+}
+
+/** "Publish to GitHub" — a local repository with no remote becomes a new private GitHub repo. */
+export async function publishProjectGithub(projectId: string, input: PublishProjectGithubInput): Promise<PublishProjectGithubResponse> {
+  return unwrap(
+    await cez.api.v1.projects[':projectId']['publish-github'].$post({ param: { projectId: encodeURIComponent(projectId) }, json: input }),
+    `/projects/${encodeURIComponent(projectId)}/publish-github`,
+  )
+}
+
+/** The GitHub device flow run by cezar: start (or join the login already waiting), poll, cancel. */
+export async function startGithubLogin(): Promise<GithubLoginState> {
+  return unwrap(await cez.api.v1.github.login.$post(), '/github/login')
+}
+
+export async function getGithubLogin(opts?: ReadOptions): Promise<GithubLoginState> {
+  return unwrap(await cez.api.v1.github.login.$get({}, init(opts)), '/github/login')
+}
+
+export async function cancelGithubLogin(): Promise<GithubLoginState> {
+  return unwrap(await cez.api.v1.github.login.$delete(), '/github/login')
+}
+
+/** Installing and signing in to an agent on the first-run page: the state, and one setup terminal. */
+export async function getAgentSetup(opts?: ReadOptions): Promise<AgentSetupState> {
+  return unwrap(await cez.api.v1.providers.setup.$get({}, init(opts)), '/providers/setup')
+}
+
+export async function startAgentSetup(provider: AgentSetupProvider, action: AgentSetupAction): Promise<AgentSetupSession> {
+  return unwrap(await cez.api.v1.providers.setup.sessions.$post({ json: { provider, action } }), '/providers/setup/sessions')
+}
+
+export async function readAgentSetup(sessionId: string, cursor: number): Promise<TerminalOutput> {
+  return unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].output.$get({ param: { sessionId }, query: { cursor: String(cursor) } }),
+    `/providers/setup/sessions/${sessionId}/output`,
+  )
+}
+
+export async function writeAgentSetup(sessionId: string, data: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].input.$post({ param: { sessionId }, json: { data } }),
+    `/providers/setup/sessions/${sessionId}/input`,
+  )
+}
+
+export async function resizeAgentSetup(sessionId: string, cols: number, rows: number): Promise<void> {
+  await unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].resize.$post({ param: { sessionId }, json: { cols, rows } }),
+    `/providers/setup/sessions/${sessionId}/resize`,
+  )
+}
+
+export async function cancelAgentSetup(sessionId: string): Promise<void> {
+  await unwrap(
+    await cez.api.v1.providers.setup.sessions[':sessionId'].$delete({ param: { sessionId } }),
+    `/providers/setup/sessions/${sessionId}`,
   )
 }
 
@@ -1488,6 +1571,19 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   )
 }
 
+/**
+ * "Run First": move a queued task to the front of its queue so it takes the first free slot
+ * (never past a cap). Answers the updated record; a run that is no longer queued is a 409.
+ */
+export async function promoteRun(id: string): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].promote.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/promote'),
+  )
+}
+
 /** "Start now": run a queued task over the `maxParallel` cap. 409 when it is no longer queued. */
 export async function startRunNow(id: string): Promise<StartNowResponse> {
   return unwrap(
@@ -1923,10 +2019,10 @@ export async function commitRun(id: string, message: string): Promise<GitCommitR
 }
 
 /** What the run's worktree holds that has not left it: uncommitted files, unpushed commits. */
-export async function getRunGitStatus(id: string, opts?: ReadOptions): Promise<GitStatusResponse> {
+export async function getRunGitStatus(id: string, opts?: ReadOptions, projectScope = queryScope()): Promise<GitStatusResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].git.status.$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      { param: { projectId: projectScope, id: encodeURIComponent(id) } },
       init(opts),
     ),
     runPath(id, '/git/status'),
@@ -2549,6 +2645,20 @@ export async function getAgentProfiles(opts?: ReadOptions): Promise<AgentProfile
   }
 }
 
+export async function getAgentFallbackPolicy(input: GetAgentFallbackPolicyQuery, opts?: ReadOptions): Promise<AgentFallbackPolicy> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles']['fallback-policy'].$get({ query: input }, init(opts)),
+    '/workspace/agent-profiles/fallback-policy',
+  )
+}
+
+export async function putAgentFallbackPolicy(input: PutAgentFallbackPolicy, opts?: ReadOptions): Promise<AgentFallbackPolicy> {
+  return unwrap(
+    await cez.api.v1.workspace['agent-profiles']['fallback-policy'].$put({ json: input }, init(opts)),
+    '/workspace/agent-profiles/fallback-policy',
+  )
+}
+
 /** Register an extra config dir as an account. The id is allocated server-side from the label. */
 export async function createAgentProfile(
   input: CreateAgentProfileInput,
@@ -2835,8 +2945,8 @@ export async function getLifecycleOperation(operationId: string, opts?: ReadOpti
 export async function getLifecycleOutput(operationId: string, afterSeq = 0, opts?: ReadOptions): Promise<LifecycleOutputResponse> {
   return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].output.$get({ param: { projectId: queryScope(), operationId }, query: { afterSeq, limit: 100 } }, init(opts)), '/worktree-lifecycle/operations/output')
 }
-export async function startLifecycleRemoval(input: StartLifecycleRemovalInput): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
-  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations.$post({ param: { projectId: queryScope() }, json: input }), '/worktree-lifecycle/operations')
+export async function startLifecycleRemoval(input: StartLifecycleRemovalInput, projectScope = queryScope()): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
+  return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations.$post({ param: { projectId: projectScope }, json: input }), '/worktree-lifecycle/operations')
 }
 export async function actOnLifecycleOperation(operationId: string, input: LifecycleActionInput): Promise<z.infer<typeof lifecycleOperationResponseSchema>> {
   return unwrap(await cez.api.v1.p[':projectId']['worktree-lifecycle'].operations[':operationId'].actions.$post({ param: { projectId: queryScope(), operationId }, json: input }), '/worktree-lifecycle/operations/actions')

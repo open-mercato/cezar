@@ -44,8 +44,12 @@ Five moves that make the cockpit worth the browser tab:
   `maxParallel` at once across every project (default **2**; a non-git directory
   always runs one) and
   holds the rest in a FIFO queue with visible positions (`#1`, `#2`, …). Cancel a
-  queued task before it starts; the queue even survives a cockpit restart —
-  everything still `queued` is re-enqueued in order. It's the orchestration layer
+  queued task before it starts, or press **Run First** on its waiting screen to move it to the
+  front so it takes the first free slot. It still waits for that slot and never goes past
+  a cap. The most recent **Run First** wins, and when a slot frees anywhere in the workspace
+  a promoted task is preferred over older ones in other projects. The queue even survives
+  a cockpit restart: everything still `queued` is re-enqueued in order, promotions
+  included. It's the orchestration layer
   that turns "one agent at a time" into a backlog that drains itself.
 - 🧠 **Memory-aware runs.** Each run's whole process tree is sampled (~2 s) for CPU
   and RSS, and its **peak memory** is recorded and shown in the task table. Set an
@@ -105,6 +109,10 @@ acts on that task without opening it; ⌥↵ opens a view beside the current one
 Shortcuts run those commands with the palette closed: ⌘1–⌘9 switch the task's tabs and
 ⌘/ opens the terminal in a column; hold ⌘ to see each tab's number. Rebind any command with ⇧↵ on its row, or in
 Settings → Keyboard. Shortcuts are saved in `~/.cezar/ui-state.json`.
+**⌥↑ / ⌥↓** (Alt on Windows and Linux) open the previous / next task in the sidebar's order,
+**⌥⇧↑ / ⌥⇧↓** the previous / next task that needs you — Slack's channel keys, from any page,
+wrapping at the ends. In the desktop app **⌃⌥↑ / ⌃⌥↓** do the Needs-you step from any
+application: the window comes to the front on the task.
 
 ---
 
@@ -117,15 +125,14 @@ workspace file that also holds the global knobs
 the repo: per-project state stays exactly where it was, in that repo's
 `.ai/cezar/`.
 
-**Your first run registers the repo you start it in** — that is the whole setup.
-After that the registry is yours to curate: starting cezar somewhere else serves
-that folder as usual (its own tasks, its own `.ai/cezar/`, reachable at
-`/p/<slug>/`) and opens the browser on it, but does not add it to the list. While
-you are in it the sidebar shows it marked **not saved**; switch to another project
-and it drops out, so the sidebar keeps showing the projects you chose. A bare `/`
-opens the page you were last on, or the most recent project. Keeping the folder is
-the explicit click: **Add project** in its Settings (or `cezar projects add` from
-a terminal).
+**Every normal serve launch registers the eligible repo you start it in** — that is the whole
+setup. Starting cezar somewhere else adds that folder when needed, reuses the compatible running
+cockpit, and opens its `/p/<slug>/` page. Task worktrees and `$HOME` stay deliberately unsaved; a
+guarded or unreadable launch root is still served through its temporary boot identity without
+polluting the registry. A bare `/` opens the page you were last on, or the most recent project.
+You can also curate the registry explicitly through **Add project** in Settings or
+`cezar projects add/remove` from a terminal; launching a removed eligible project again adds it
+back by design.
 
 Project views are scoped to their repository; **Dashboard** at `/dashboard`, **All tasks**, and global settings span the workspace:
 
@@ -178,6 +185,46 @@ Remove), **Tracker**, **Secrets**, **External integrations**, **Agents**,
 repo and live under `/p/<projectId>/settings`. On any project page, clicking
 another project in the tree opens the same place there: the same section, or
 its General page when General is open; the previous project folds.
+
+### Automatic agent fallback
+
+In project **Settings → Agents → Automatic fallback**, add agents in the order they should
+continue a task after its current agent exhausts its usage allowance. Add up to ten unique
+provider/account pairs, optionally selecting a model for each. Drag the row handles or use the
+arrow buttons to reorder agents; remove rows with the remove button, then enable the header switch. Handles also support Space to pick up, arrow keys to move,
+Space to drop and Escape to cancel. Adding rows alone leaves fallback off; removing
+the last row turns it off. This setting is available on local cockpits only.
+
+Fallback continues the same task and checkout. It applies to **Quick task** and sequential
+step-list workflows only while their last step is running, provided that step is an agent step.
+Subsequent continuations of those tasks are also covered. Workflow graphs, check steps and
+earlier workflow steps retain ordinary reset-time auto-resume where eligible. Detection uses
+recognized provider exhaustion messages; generic HTTP 429 and temporary rate-limit messages
+do not transfer the task. Explicit billing quota exhaustion can trigger fallback even with 429.
+
+Each provider/account pair is considered once per automatic episode. The exhausted starting
+account, held accounts, removed accounts and disabled providers are skipped; the cockpit also
+checks provider/account connectivity. If a successor fails before producing assistant text or
+tool activity, cezar tries the next candidate. If nobody can continue, the task stops with a
+summary and waits for manual action. If the reset time is known, the exhausted account remains
+held for queued tasks until that time, even if the original task is completed or deleted.
+
+While choosing a successor, the task shows “switching agent” without a failure notification.
+The transcript records skips and handovers, and identifies the automatic continuation message.
+The next provider receives the task and repository context and may bill its own plan. Existing
+task budgets apply; tool restrictions depend on the backend (Codex, OpenCode and Cursor do not
+enforce Claude's `allowedTools`).
+
+**Settings changes apply to new tasks.** Existing tasks retain their saved list; tasks created
+with fallback off do not acquire it later. Turning it off cancels unstarted handovers, but does
+not interrupt an already running successor. Turning it on again does not restore consent for
+old task snapshots. Manual Continue starts a new attempt episode without refreshing the list
+or clearing account holds, and retains the usual requirement for an existing agent session.
+
+An explicit candidate model is retained. Auto clears the preceding agent's model pin and uses
+the successor's native model choice, not the project's composer preset. With model selection
+locked, add candidates using native settings; replace any previously pinned rows. A successful
+handover changes the task's current agent, not the project's default agent.
 
 ### Grouping connected repositories: tags and the All tasks page
 
@@ -496,6 +543,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/cursor-agent` | Override which Cursor Agent CLI binary is used. Unset: `cursor-agent` on PATH, then `~/.local/bin/cursor-agent`, then `agent` on PATH. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_AGY_BIN=/path/to/agy` | Override which Google Antigravity CLI (`agy`) binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
@@ -512,7 +560,7 @@ Useful environment variables:
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
 | `CEZ_SIMLOCK=0` | Turn OFF the **simlock** integration, which is on whenever `simlock` is on PATH: see [Mobile apps with simlock](#mobile-apps-with-simlock). Only the exact value `0` opts out. |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
-| `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
+| `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment except inherited `CEZ_TRACKER_CAPABILITY` (any casing); explicit per-launch task grants still apply. Off by default; only set it if you understand that this hands other host secrets to the agent process. |
 | `CEZ_REMOTE=1` | Hosted/server-install mode. The configured port is authoritative so an occupied port fails the real bind with `EADDRINUSE` instead of drifting away from the reverse-proxy upstream; interactive local launches keep bounded auto-increment. Read at startup. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_SECRETS_KEYCHAIN=0` | Keep the secret store's data key out of the OS keychain and use the `0600` key file `~/.cezar/secrets/.key` only. By default the key goes to the keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager, via the optional `@napi-rs/keyring`) when one is usable, and to the file otherwise; Settings → Secrets and `cezar secrets list` say which. Only the exact value `0`. |
@@ -554,6 +602,29 @@ platform.
 
 ---
 
+## Starting or reusing the cockpit
+
+A plain `cezar` / `npx cezar-run` is an add-and-open gesture. It reuses the verified compatible
+cockpit already running for this user, registers the current project there when it is not known,
+and opens (or, with `--no-open`, prints) its canonical `/p/<project>/` URL. If no compatible owner
+exists, the command starts the server normally. `--port` chooses the preferred port only for that
+new-server path; it does not request a second interactive cockpit.
+
+The disposable ownership records live under `~/.cezar/runtime/cockpits/` with user-only
+permissions. A PID is never trusted by
+itself: cezar checks the process's OS start/boot identity and a random identity echoed by health.
+Stale records are reclaimed only after the exact owner is proven dead; an alive but unreachable or
+mismatched owner fails closed rather than starting duplicate schedulers. The private lease token
+authorizes only the same-user CLI's project-registration handoff (including to a hosted service);
+the public health `runtimeId` grants no authority. Deleting the runtime directory is safe only
+while all cockpits are stopped.
+
+Installed and strict remote services keep role-specific singleton slots, so named installs may
+coexist and a service manager never abandons its configured endpoint. A human launch automatically
+prefers the verified default installed service, then the ordinary interactive slot.
+
+---
+
 ## Secret storage and recovery
 
 The vault encrypts values with AES-256-GCM. It reads the data key on each use from
@@ -574,6 +645,8 @@ Remove orphaned `secrets/<project>.json` files for unregistered projects manuall
 A replacement key is created only when no ciphertext remains. If the lost key belonged
 to a keychain this environment cannot use, also remove the stale `secrets/.backend`
 hint after removing the ciphertext. Paths are relative to `CEZ_HOME` (default `~/.cezar`).
+
+---
 
 ## Mobile apps with simlock
 
@@ -602,14 +675,16 @@ their TTL (15 minutes by default). iOS needs a Mac, and Android emulators on Lin
 
 Without `simlock` on `PATH`, or with `CEZ_SIMLOCK=0`, none of this happens.
 
+---
+
 ## Talking to a running cockpit
 
-The cockpit is a local HTTP server; three CLIs and any script can talk to it
+The cockpit is a local HTTP server; CLI commands and scripts can talk to it
 while it runs. They find it through `CEZ_API_URL` — the address the cockpit
 printed after `cockpit →` when it started (`http://127.0.0.1:4321` unless that
 port was busy or you passed `--port`).
 
-### From a shell: `cez runs`, `cez task`, `cez automation`
+### From a shell: `cez runs`, `cez task`, `cez automation`, `cez tracker`
 
 Inside a task, cezar sets `CEZ_API_URL`, `CEZ_PROJECT_ID` and `CEZ_TASK_ID` for
 the agent. From your own terminal, set the address yourself:
@@ -621,6 +696,12 @@ cez runs list --status running,review --json
 cez automation list                 # automations, with state and counts
 cez task tree <run id>              # a dispatch tree
 ```
+
+A task started by a Jira/Linear automation also gets `CEZ_TRACKER_CAPABILITY`, a
+per-session secret for `cez tracker read|comment|transition` on its own issue only
+(see [issue trackers](issue-trackers.md)). It is generated by cezar, dies with the
+session and is never a setting; it replaces the Jira/Linear tokens tasks used to get.
+Inherited `CEZ_TRACKER_CAPABILITY` values (any casing) are stripped from agent environments, including with `CEZ_AGENT_ENV_FULL=1`; only a grant supplied explicitly through the launch's `extraEnv` is passed. Trusted and untrusted check environments also strip this inherited variable. Other environment and PATH inheritance is unchanged. This is a guarantee about the environment cezar builds: a check's login shell can still export a value from the user's profile, and this is not an OS isolation boundary. Its value is treated as a secret for transcript redaction.
 
 On a cockpit that serves several projects, add `CEZ_PROJECT_ID=<id>`
 (`cezar projects` lists the ids); without it every command addresses the
