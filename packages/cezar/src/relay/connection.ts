@@ -9,6 +9,8 @@ export const PONG_WAIT_MS = 15_000;
 export const COMMAND_TIMEOUT_MS = 10_000;
 const RESET_ATTEMPTS_AFTER_MS = 60_000;
 const MAX_BACKOFF_S = 300;
+/** The relay's `retryAfter` is unchecked input: past 2^31 ms a timer fires at once. */
+const MAX_RETRY_AFTER_S = 86_400;
 const KILL_SWITCH_MIN_MS = 5 * 60_000;
 const KILL_SWITCH_MAX_MS = 15 * 60_000;
 /** Half the relay's 60 commands a minute, so a reconnect loop can never reach its 4429. */
@@ -324,7 +326,7 @@ export class RelayConnection {
 
   private after(status: RelayStatus, seconds: number | undefined): void {
     this.deps.onStatus(status);
-    if (seconds !== undefined) this.schedule(seconds * 1000);
+    if (seconds !== undefined) this.schedule(Math.min(Math.max(seconds, 1), MAX_RETRY_AFTER_S) * 1000);
     else this.backoff();
   }
 

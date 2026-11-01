@@ -192,7 +192,8 @@ export class Pairing {
 
   /** The user asked for a new code or left the screen. */
   cancel(): void {
-    if (this.settled) return;
+    // An approval in flight stands: `commit` tells the phone, and a second answer would contradict it.
+    if (this.settled || this.status === 'approving') return;
     if (this.winner) {
       this.winner.tell({ t: 'failure', reason: 'cancelled' });
       this.outcome('cancelled');
@@ -210,6 +211,7 @@ export class Pairing {
 
   approve(): boolean {
     if (this.settled || this.status !== 'confirm' || !this.phone) return false;
+    this.clearTimers(); // The user answered, so `timeout` can no longer be the outcome.
     this.set('approving');
     void this.commit(this.phone);
     return true;

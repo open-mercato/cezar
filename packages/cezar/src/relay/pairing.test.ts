@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRelay } from './fake-relay.testkit.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { RelayService, PairingStartError, PAIRINGS_PER_HOUR } from './service.ts';
-import { PAIRING_LIFE_MS } from './pairing.ts';
+import { RelayDevices } from './devices.ts';
+import { PAIRING_DECISION_LIMIT_MS, PAIRING_LIFE_MS } from './pairing.ts';
 
 const ORIGIN = 'https://relay.example.test';
 
@@ -177,6 +178,54 @@ describe('pairing', () => {
     await vi.advanceTimersByTimeAsync(10_001);
     expect(await outcome).toEqual({ t: 'failure', reason: 'relay-error' });
     expect(service.list().pairing).toMatchObject({ status: 'failed', failure: 'relay-error' });
+    expect(service.list().phones).toEqual([]);
+  });
+
+  it('a screen closed while the row is being added leaves the approval to answer the phone', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    relay.commands['device-add'] = 'silent';
+    const started = await service.startPairing();
+    const phone = new PhoneSim(relay.open);
+    const pairing = phone.pairWithQr(started.qr);
+    await vi.advanceTimersByTimeAsync(50);
+    await pairing;
+    await vi.advanceTimersByTimeAsync(50);
+    service.approvePairing(started.id);
+    expect(service.denyPairing(started.id)).toBe(true);
+    expect(status()).toBe('approving');
+    const outcome = phone.outcome(20_000);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await outcome).toEqual({ t: 'failure', reason: 'relay-error' });
+  });
+
+  it('the decision limit cannot answer the phone after Approve', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    relay.commands['device-add'] = 'silent';
+    const started = await service.startPairing();
+    const phone = new PhoneSim(relay.open);
+    const pairing = phone.pairWithQr(started.qr);
+    await vi.advanceTimersByTimeAsync(50);
+    await pairing;
+    await vi.advanceTimersByTimeAsync(PAIRING_DECISION_LIMIT_MS - 1_000);
+    service.approvePairing(started.id);
+    const outcome = phone.outcome(20_000);
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(await outcome).toEqual({ t: 'failure', reason: 'relay-error' });
+  });
+
+  it('a home that stops taking writes fails the pairing, not the process', async () => {
+    const started = await service.startPairing();
+    const phone = new PhoneSim(relay.open);
+    await phone.pairWithQr(started.qr);
+    await until('confirm');
+    const write = vi.spyOn(RelayDevices.prototype as unknown as { write(): void }, 'write').mockImplementation(() => {
+      throw new Error('EROFS');
+    });
+    service.approvePairing(started.id);
+    expect(await phone.outcome()).toEqual({ t: 'failure', reason: 'relay-error' });
+    await until('failed');
+    await settle();
+    write.mockRestore();
     expect(service.list().phones).toEqual([]);
   });
 

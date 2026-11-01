@@ -186,6 +186,13 @@ describe('sessions and the tunnel', () => {
     expect(relay.cezarFrames.length).toBe(count);
   });
 
+  it('an OPEN it would refuse still ends a session that has not leased', async () => {
+    const phone = await paired();
+    await phone.connect([{ type: 'hello', min: 1, max: 1 }, { type: 'open', stream: 1, method: 'TRACE', target: '/', headers: [] }]);
+    await waitFor(() => phone.tunnelFrames.length > 0, 'an answer');
+    expect(phone.tunnelFrames).toEqual([{ type: 'close', code: CLOSE.protocolError }]);
+  });
+
   it('a stale frame on an open slot does not use it up', async () => {
     const phone = await paired();
     const count = relay.cezarFrames.length;
@@ -544,6 +551,18 @@ describe('RelayConnection', () => {
     vi.advanceTimersByTime(89_999);
     expect(script.sockets).toHaveLength(1);
     vi.advanceTimersByTime(1);
+    expect(script.sockets).toHaveLength(2);
+  });
+
+  it('caps a retryAfter no timer can hold, instead of reconnecting at once', () => {
+    const script = new Script();
+    connection(script).start();
+    script.hello();
+    script.last.handlers.onMessage(JSON.stringify({ t: 'closing', retryAfter: 2 ** 31 }));
+    script.last.handlers.onClose(4429);
+    vi.advanceTimersByTime(86_399_000);
+    expect(script.sockets).toHaveLength(1);
+    vi.advanceTimersByTime(1_000);
     expect(script.sockets).toHaveLength(2);
   });
 

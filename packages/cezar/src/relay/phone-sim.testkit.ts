@@ -203,18 +203,18 @@ export class PhoneSim {
   }
 
   /** Opens the phone socket and runs `KK`. Throws when the socket is refused or nobody answers. */
-  async connect(): Promise<void> {
+  async connect(firstFrames: TunnelFrame[] = [{ type: 'hello', min: 1, max: 1 }, { type: 'lease' }]): Promise<void> {
     const time = Math.floor(Date.now() / 1000);
     const proof = socketProof('phone', this.cezarId, this.deviceId, time);
     const channel = pipe(this.open, `${socketOrigin(this.origin)}/v1/phone/${this.cezarId}/${this.deviceId}`, { ...proofHeaders(this.edSeed, proof, time) });
     this.phone = channel;
     const hello = await until(channel.events, 'hello', isControl('hello')) as { frame: Record<string, unknown> };
     if (hello.frame.cezar !== 'online') await until(channel.events, 'cezar-online', isControl('cezar-online'));
-    await this.handshakeSession(channel);
+    await this.handshakeSession(channel, firstFrames);
     void this.pump(channel);
   }
 
-  private async handshakeSession(channel: Pipe): Promise<void> {
+  private async handshakeSession(channel: Pipe, firstFrames: TunnelFrame[]): Promise<void> {
     const noise = new HandshakeState({
       pattern: 'KK',
       initiator: true,
@@ -230,8 +230,7 @@ export class PhoneSim {
     const { send, receive } = noise.split();
     this.sender = send;
     this.inbound = receive;
-    this.frame({ type: 'hello', min: 1, max: 1 });
-    this.frame({ type: 'lease' });
+    for (const frame of firstFrames) this.frame(frame);
   }
 
   private async pump(channel: Pipe): Promise<void> {
