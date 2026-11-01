@@ -1970,11 +1970,6 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
   });
 });
 
-/**
- * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
- * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
- * carries it — a Continue, a Finish, a cancel, an archive and a reload all retire it on their own.
- */
 describe('RunStore — waitingSince', () => {
   let dataDir: string;
   const AT = '2026-10-05T10:00:00.000Z';
@@ -2037,8 +2032,21 @@ describe('RunStore — waitingSince', () => {
     store.updateRun(other, { status: 'failed' });
     expect(store.getRun(other)?.waitingSince).toBeUndefined();
   });
+
+  it('goes when the task is archived, with the question it belonged to', () => {
+    const store = RunStore.open(dataDir);
+    const id = parked(store);
+    store.updateRun(id, { status: 'failed', finishedAt: AT, awaitingAnswerSince: AT });
+    store.setArchived(id, true);
+    expect(store.getRun(id)?.waitingSince).toBeUndefined();
+  });
 });
 
+/**
+ * `awaitingAnswerSince`: a `failed` run whose session closed on an unanswered `CEZ:ASK`. The
+ * cockpit keeps it under "needs you", so the store owns the invariant that only a `failed` run
+ * carries it — a Continue, a Finish, a cancel, an archive and a reload all retire it on their own.
+ */
 describe('RunStore — awaitingAnswerSince', () => {
   let dataDir: string;
   const AT = '2026-10-05T10:00:00.000Z';

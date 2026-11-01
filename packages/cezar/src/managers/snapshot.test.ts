@@ -114,14 +114,21 @@ describe('task-needs-you', () => {
     expect(taskAttention('p', [run({ id: 'r', ...over })], NOW)).toEqual([]);
   });
 
-  it('reports worktree recovery once per operation, with what to do about it', () => {
-    const gate = { worktreeId: 'w', generation: 1, activeOperationId: 'op1', state: 'needs_attention', needsAttention: true } as RunRecord['worktreeLifecycle'];
+  it('reports worktree recovery once per failure, with what to do about it', () => {
+    const gate = { worktreeId: 'w', generation: 1, activeOperationId: 'op1', state: 'needs_attention', revision: 3, needsAttention: true } as RunRecord['worktreeLifecycle'];
     const blocked = run({ id: 'r', status: 'waiting', worktreeLifecycle: gate, dispatch });
     const [item] = taskAttention('p', [blocked], NOW);
-    expect(item).toMatchObject({ kind: 'task-needs-you', key: 'task-needs-you:p:r:worktree:op1' });
+    expect(item).toMatchObject({ kind: 'task-needs-you', key: 'task-needs-you:p:r:worktree:op1:3' });
     expect(item?.detail).toContain('Worktrees settings');
-    const retried = { ...gate, activeOperationId: 'op2' } as RunRecord['worktreeLifecycle'];
+    // A retry reuses the operation: only its revision moves.
+    const retried = { ...gate, revision: 5 } as RunRecord['worktreeLifecycle'];
     expect(taskAttention('p', [{ ...blocked, worktreeLifecycle: retried }], NOW)[0]?.key).not.toBe(item?.key);
+  });
+
+  it('a closed question held for worktree recovery is not filed as a failure', () => {
+    const gate = { worktreeId: 'w', generation: 2, needsAttention: true } as RunRecord['worktreeLifecycle'];
+    const held = taskAttention('p', [run({ id: 'r', status: 'failed', finishedAt: at, awaitingAnswerSince: at, worktreeLifecycle: gate })], NOW);
+    expect(held.map((item) => item.kind)).toEqual(['task-needs-you']);
   });
 
   it('a finished task held for worktree recovery keeps its own outcome too', () => {

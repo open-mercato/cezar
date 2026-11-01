@@ -640,6 +640,7 @@ function isAccessDenied(err: unknown): boolean {
  */
 function clearAwaitingAnswer(run: RunRecord): void {
   run.awaitingAnswerSince = undefined;
+  run.waitingSince = undefined;
 }
 
 /**

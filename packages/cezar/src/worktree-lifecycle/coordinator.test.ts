@@ -213,6 +213,19 @@ describe('worktree lifecycle coordinator with real Git and command fixtures', ()
     expect((await p.coordinator.operation(initial.id)).history.filter(item => item.entryId === first.id)).toHaveLength(1);
   });
 
+  it('tells a retry\'s failure from the one before it on the run record', async () => {
+    const p = await project(); await p.config([entry('exit 4')]);
+    const prepared = await p.prepare();
+    const first = p.records.get(p.id)?.worktreeLifecycle as {activeOperationId?: string; revision?: number; needsAttention: boolean};
+    expect(first.needsAttention).toBe(true);
+    p.resume.mockImplementation(async () => { await p.prepare(); });
+    await p.action(prepared.operationId!, 'retry');
+    await vi.waitFor(() => expect(p.records.get(p.id)?.worktreeLifecycle).toMatchObject({needsAttention: true}), {timeout: 5000, interval: 25});
+    const second = p.records.get(p.id)?.worktreeLifecycle as typeof first;
+    expect(second.activeOperationId).toBe(first.activeOperationId);
+    expect(second.revision).toBeGreaterThan(first.revision!);
+  });
+
   it('reruns an edited successful entry and omits removed entries on current-list retry', async () => {
     const p = await project();
     const first = entry('echo old >> trace'); const failing = entry('exit 5');
