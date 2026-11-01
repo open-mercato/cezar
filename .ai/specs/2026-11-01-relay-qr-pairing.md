@@ -914,15 +914,12 @@ acceptable only for a relay the user runs. It changes QR bytes, so decide before
   a daily cron deletes expired rooms, and a rendezvous keeps one alarm of at most 300 s. A typed code needs a
   relay address while QR1 is open. Added `HELLO` and `HEAD`, the pairing messages, the `LEASE` echo and one
   rendezvous per credential. Applied the parent spec amendments.
-<<<<<<< HEAD
 - 2026-11-01: R1 review. `device-add` is idempotent for a listed device, a failed pairing also sends
   `device-remove`, a `failure` in place of `pending` uses nonce 0, and a phone with no shared tunnel version
   closes and waits. Protocol version stays 1.
-=======
 - 2026-11-01: R1 review fixes, text only, no vector byte changed. Corrected the claim that nothing depends on
   the relay for authorization and the "photographed" row for a system-camera scan, and opened QR9. Added
   frame pacing, stale-frame handling, `RESET` after `END`, `device-removed` reconnects, the 60-a-minute command
   limit, `bytesPerDay` closing cezar, the rendezvous kill-switch exception, absent `hello` keys, public keys
   seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
   and "MUST NOT use" `permessage-deflate`.
->>>>>>> 8c46c9f8d (docs(relay): apply R1 review findings F1-F11 to the protocol text and spec)
