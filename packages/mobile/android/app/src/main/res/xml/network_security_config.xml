@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
+    <!-- The loopback proxy under the webview (spec "Which proxy"). Nothing else may be cleartext. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
     <!-- Debug builds only: a local test CA in the user store, for a gate on an emulator. -->
     <debug-overrides>
         <trust-anchors>

@@ -34,12 +34,41 @@ test('not-cezar says the status', () => {
   assert.match(screenFor({ screen: 'not-cezar', status: 500, servers: [] }).notice, /status 500/);
 });
 
-test('an empty list goes to the add form, and an unknown screen fails safe to the list', () => {
+test('an empty list goes to the first screen where pairing exists, else the add form', () => {
+  assert.equal(screenFor({ screen: 'list', servers: [], pairing: true }).name, 'start');
   assert.equal(screenFor({ screen: 'list', servers: [] }).name, 'add');
+});
+
+test('an unknown screen fails safe to the list', () => {
   assert.equal(screenFor({ screen: 'later-thing', servers: [saved] }).name, 'list');
 });
 
 test('open and login leave the page waiting for the server view', () => {
   assert.equal(screenFor({ screen: 'open', servers: [saved] }).name, 'busy');
   assert.equal(screenFor({ screen: 'login', servers: [] }).name, 'busy');
+});
+
+const paired = { id: 'r', url: 'https://relay.example.test', label: 'Laptop', relay: true };
+
+test('a relay outage never reads as a problem with the computer', () => {
+  assert.match(screenFor({ screen: 'relay-down', serverId: 'r', servers: [paired] }).message, /Your computer is fine/);
+  assert.match(screenFor({ screen: 'cezar-offline', serverId: 'r', servers: [paired] }).message, /asleep/);
+});
+
+test('a removed phone gets its own screen, not a connection error', () => {
+  assert.deepEqual(screenFor({ screen: 'device-removed', serverId: 'r', servers: [paired] }), { name: 'removed', serverId: 'r', label: 'Laptop' });
+});
+
+test('pairing phases', () => {
+  assert.equal(screenFor({ screen: 'pair', phase: 'connecting', seq: 1 }).name, 'pair-waiting');
+  assert.deepEqual(screenFor({ screen: 'pair', phase: 'confirm', seq: 2, digits: '518255', label: 'Mac' }), { name: 'pair-confirm', digits: '518255', label: 'Mac', seq: 2 });
+});
+
+test('every pairing failure says something, and an unknown one still does', () => {
+  assert.match(screenFor({ screen: 'pair', phase: 'failed', reason: 'taken' }).message, /Someone else/);
+  assert.match(screenFor({ screen: 'pair', phase: 'failed', reason: 'later-thing' }).message, /Pairing failed/);
+});
+
+test('quota names the wait', () => {
+  assert.match(screenFor({ screen: 'quota', status: 12, serverId: 'r', servers: [paired] }).message, /12 minutes/);
 });

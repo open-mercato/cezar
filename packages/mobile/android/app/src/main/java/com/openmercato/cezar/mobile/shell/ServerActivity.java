@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.net.Uri;
 import android.net.http.SslError;
 import android.os.Build;
@@ -12,7 +13,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
@@ -24,14 +27,23 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
+import android.webkit.WebStorage;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
 import androidx.appcompat.app.AppCompatActivity;
+import com.openmercato.cezar.mobile.shell.relay.LoopbackProxy;
+import com.openmercato.cezar.mobile.shell.relay.RelayConnections;
+import com.openmercato.cezar.mobile.shell.relay.RelayLink;
+import com.openmercato.cezar.mobile.shell.relay.RelayStatus;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -57,10 +69,23 @@ public final class ServerActivity extends AppCompatActivity {
     /** The cockpit's dark background, behind the system bars. */
     private static final int BAR_COLOR = 0xFF0D0D0D;
 
+    /** Native, because the cockpit cannot reliably describe its own transport. */
+    private static final int BANNER_COLOR = 0xF0401010;
+
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private ShellConnector connector;
-    private ServerOrigin origin;
+    private PageOrigin origin;
+    /** Set on a relay server only. The Manual path never touches these. */
+    private RelayConnections relayConnections;
+    private RelayLink link;
+    private LoopbackProxy proxy;
+    private LinearLayout bannerView;
+    private TextView bannerText;
+    private Button bannerRetry;
+    private long notReadySince;
+    private boolean reloadWhenReady;
+    private final Runnable bannerTick = this::showBanner;
     private String serverId;
     private String pendingLabel;
     private boolean pendingLogin;
@@ -103,8 +128,12 @@ public final class ServerActivity extends AppCompatActivity {
                     leave(ShellConnector.LIST);
                     return;
                 }
-                origin = server.origin();
-                responder = new BasicChallengeResponder(server, connector::password);
+                if (server.relay != null) {
+                    if (!openProxy(server)) return;
+                } else {
+                    origin = server.origin();
+                    responder = new BasicChallengeResponder(server, connector::password);
+                }
             }
         } catch (ServerOrigin.InvalidUrl e) {
             leave(ShellConnector.LIST);
@@ -115,17 +144,129 @@ public final class ServerActivity extends AppCompatActivity {
         setContentView(frame);
         insetForSystemBars();
         if (savedInstanceState != null) restoreUrl = savedInstanceState.getString(STATE_URL);
-        addWebView(intent.getStringExtra(EXTRA_URL));
+        if (proxy == null) addWebView(intent.getStringExtra(EXTRA_URL));
+        else setGateCookieThenLoad(origin.url(intent.getStringExtra(EXTRA_URL)));
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack();
+                if (webView != null && webView.canGoBack()) webView.goBack();
                 else if (pendingLogin) leave(ShellConnector.NOT_CEZAR);
                 else moveTaskToBack(true);
             }
         });
         String note = intent.getStringExtra(EXTRA_NOTE);
         if (note != null) Toast.makeText(this, note, Toast.LENGTH_LONG).show();
+    }
+
+    /** One listener, its port saved. A taken port is hostile: its origin's storage goes, and the page loads anew (spec). */
+    private boolean openProxy(ServerRecord server) {
+        relayConnections = ShellServices.relay(this);
+        try {
+            proxy = relayConnections.openProxy(server);
+        } catch (IOException e) {
+            relayConnections.release();
+            leave(ShellConnector.CONNECTION_ERROR);
+            return false;
+        }
+        link = relayConnections.link(server);
+        int saved = server.relay.port;
+        if (proxy.rebound()) WebStorage.getInstance().deleteOrigin(new ProxyOrigin(saved).origin());
+        if (proxy.port() != saved) connector.saveRelayPort(serverId, proxy.port());
+        origin = new ProxyOrigin(proxy.port());
+        return true;
+    }
+
+    /** The callback is what guarantees the cookie reaches the first request (spec R0 question 2). */
+    private void setGateCookieThenLoad(String url) {
+        CookieManager cookies = CookieManager.getInstance();
+        String cookie = LoopbackProxy.COOKIE + "=" + proxy.cookieValue() + "; Path=/; HttpOnly; SameSite=Strict";
+        cookies.setCookie(origin.origin(), cookie, stored -> {
+            cookies.flush();
+            if (!isDestroyed()) addWebView(url);
+        });
+    }
+
+    private void onRelayStatus(RelayStatus status) {
+        main.post(() -> {
+            if (isDestroyed() || leaving) return;
+            if (status.kind == RelayStatus.Kind.DEVICE_REMOVED) {
+                leave(ShellConnector.DEVICE_REMOVED);
+                return;
+            }
+            if (status.kind == RelayStatus.Kind.READY) {
+                notReadySince = 0;
+                if (reloadWhenReady && webView != null) {
+                    reloadWhenReady = false;
+                    webView.reload();
+                }
+            } else if (notReadySince == 0 && status.kind != RelayStatus.Kind.IDLE) {
+                notReadySince = System.currentTimeMillis();
+            }
+            showBanner();
+        });
+    }
+
+    private void showBanner() {
+        main.removeCallbacks(bannerTick);
+        if (link == null) return;
+        RelayStatus status = link.status();
+        boolean counting = status.kind != RelayStatus.Kind.READY && status.kind != RelayStatus.Kind.IDLE && notReadySince != 0;
+        long waited = counting ? System.currentTimeMillis() - notReadySince : 0;
+        ConnectionBanner banner = counting ? ConnectionBanner.of(status, waited) : null;
+        if (banner == null) {
+            if (bannerView != null) bannerView.setVisibility(View.GONE);
+            if (counting && waited < ConnectionBanner.GRACE_MS) main.postDelayed(bannerTick, ConnectionBanner.GRACE_MS - waited);
+            return;
+        }
+        if (bannerView == null) addBannerView();
+        bannerText.setText(banner.text);
+        bannerRetry.setVisibility(banner.retry ? View.VISIBLE : View.GONE);
+        bannerView.setVisibility(View.VISIBLE);
+        bannerView.bringToFront();
+    }
+
+    private void addBannerView() {
+        bannerView = new LinearLayout(this);
+        bannerView.setOrientation(LinearLayout.HORIZONTAL);
+        bannerView.setGravity(Gravity.CENTER_VERTICAL);
+        bannerView.setBackgroundColor(BANNER_COLOR);
+        int pad = (int) (12 * getResources().getDisplayMetrics().density);
+        bannerView.setPadding(pad, pad / 2, pad / 2, pad / 2);
+        // A touch on the banner must not reach the page under it.
+        bannerView.setClickable(true);
+        bannerText = new TextView(this);
+        bannerText.setTextColor(Color.WHITE);
+        bannerView.addView(bannerText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        bannerRetry = new Button(this);
+        bannerRetry.setText("Retry");
+        bannerRetry.setOnClickListener(view -> link.retryNow());
+        bannerView.addView(bannerRetry);
+        Button servers = new Button(this);
+        servers.setText("Servers");
+        servers.setOnClickListener(view -> leave(ShellConnector.LIST));
+        bannerView.addView(servers);
+        frame.addView(bannerView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP));
+    }
+
+    /** Foreground only: the socket closes with the screen, and the port stays bound and answers 503 (spec). */
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (link == null) return;
+        proxy.setServing(true);
+        link.setListener(this::onRelayStatus);
+        link.start();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (link == null) return;
+        main.removeCallbacks(bannerTick);
+        link.setListener(null);
+        link.stop();
+        proxy.setServing(false);
+        notReadySince = 0;
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -145,7 +286,7 @@ public final class ServerActivity extends AppCompatActivity {
         settings.setUserAgentString(settings.getUserAgentString() + " " + ShellServices.userAgentToken(this));
         webView.setWebViewClient(new ServerClient());
         webView.setWebChromeClient(new ServerChrome());
-        frame.addView(webView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        frame.addView(webView, 0, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         mainFrameUrl = url;
         webView.loadUrl(url);
     }
@@ -228,7 +369,14 @@ public final class ServerActivity extends AppCompatActivity {
         openCount--;
         background.shutdown();
         if (webView != null) webView.destroy();
+        if (proxy != null) relayConnections.release(proxy);
         super.onDestroy();
+    }
+
+    /** Null lets the request go; anything else answers it. */
+    private WebResourceResponse gated(WebResourceRequest request) {
+        if (!RequestGate.blocks(origin, request.getUrl().toString())) return null;
+        return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked", Collections.<String, String>emptyMap(), new ByteArrayInputStream(new byte[0]));
     }
 
     private final class ServerClient extends WebViewClient {
@@ -252,8 +400,7 @@ public final class ServerActivity extends AppCompatActivity {
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-            if (!RequestGate.blocks(origin, request.getUrl().toString())) return null;
-            return new WebResourceResponse("text/plain", "utf-8", 403, "Blocked", Collections.<String, String>emptyMap(), new ByteArrayInputStream(new byte[0]));
+            return gated(request);
         }
 
         @Override
@@ -302,6 +449,13 @@ public final class ServerActivity extends AppCompatActivity {
             if (origin.sameOrigin(error.getUrl())) leave(ShellConnector.TLS_FAILURE);
         }
 
+        /** The proxy answered 502 or 503 with no session: the page reloads once one exists. */
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+            int status = response.getStatusCode();
+            if (link != null && request.isForMainFrame() && (status == 502 || status == 503)) reloadWhenReady = true;
+        }
+
         @Override
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
             if (request.isForMainFrame()) leave(ShellConnector.CONNECTION_ERROR);
@@ -323,6 +477,12 @@ public final class ServerActivity extends AppCompatActivity {
         public boolean onCreateWindow(WebView view, boolean dialog, boolean userGesture, Message resultMsg) {
             WebView popup = new WebView(ServerActivity.this);
             popup.setWebViewClient(new WebViewClient() {
+                // A blank popup is a document too: script can write a request into it.
+                @Override
+                public WebResourceResponse shouldInterceptRequest(WebView popupView, WebResourceRequest request) {
+                    return gated(request);
+                }
+
                 @Override
                 public boolean shouldOverrideUrlLoading(WebView popupView, WebResourceRequest request) {
                     String url = request.getUrl().toString();

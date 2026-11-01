@@ -1,0 +1,76 @@
+{
+  "description": "Typed code normalization and PBKDF2 derivation.",
+  "alphabet": "0123456789ABCDEFGHJKMNPQRSTVWXYZ",
+  "salt": "cezar-pair-code-v1",
+  "iterations": 200000,
+  "outputBytes": 64,
+  "cases": [
+    {
+      "code": "QRFX7KMD2NVB",
+      "display": "QRFX-7KMD-2NVB",
+      "inputs": [
+        "QRFX-7KMD-2NVB",
+        "qrfx-7kmd-2nvb",
+        "QRFX 7KMD 2NVB",
+        "qrfx7kmd2nvb",
+        " QRFX–7KMD—2NVB "
+      ],
+      "locator": "msnAjsdZqBCStx3h406mYQmsnfCnG54PsSKzvdh6OZo",
+      "locatorHex": "9ac9c08ec759a81092b71de1e34ea66109ac9df0a71b9e0fb122b3bdd87a399a",
+      "psk": "209d3ec5656e3ff045f47292b31cf3400e44a2b40294560975ab9947aa069428"
+    },
+    {
+      "code": "0123456789AB",
+      "display": "0123-4567-89AB",
+      "inputs": [
+        "0123-4567-89AB",
+        "o123-4567-89ab",
+        "OI23-4567-89AB",
+        "Ol23-4567-89AB"
+      ],
+      "locator": "Fy7goizSsMel_mtKtLQpaaU1bLzg0z3QJvnb9g0RQAw",
+      "locatorHex": "172ee0a22cd2b0c7a5fe6b4ab4b42969a5356cbce0d33dd026f9dbf60d11400c",
+      "psk": "00d3c14576c697e0bf7f3f1e3b73db6b6d9ff09f565ccfa4991ce111cbac70a7"
+    },
+    {
+      "code": "ZZZZZZZZZZZZ",
+      "display": "ZZZZ-ZZZZ-ZZZZ",
+      "inputs": [
+        "zzzz-zzzz-zzzz"
+      ],
+      "locator": "Fmmt2B1XtFS4X_d9eh21AtspMJcpbPUW47Ba6oDLCIM",
+      "locatorHex": "1669add81d57b454b85ff77d7a1db502db293097296cf516e3b05aea80cb0883",
+      "psk": "93518a772d7056439a29a1a2ca564cb5b4d3457e7dabbc4274ecca067fb6e72a"
+    }
+  ],
+  "refused": [
+    {
+      "name": "the letter U",
+      "input": "QRFX-7KMD-2NVU"
+    },
+    {
+      "name": "eleven characters",
+      "input": "QRFX-7KMD-2NV"
+    },
+    {
+      "name": "thirteen characters",
+      "input": "QRFX-7KMD-2NVBB"
+    },
+    {
+      "name": "a non-ASCII letter",
+      "input": "QRFX-7KMD-2NVÉ"
+    },
+    {
+      "name": "a dotless i, which only Unicode uppercasing turns into I",
+      "input": "QRFX-7KMD-2NVı"
+    },
+    {
+      "name": "punctuation",
+      "input": "QRFX.7KMD.2NVB"
+    },
+    {
+      "name": "empty",
+      "input": ""
+    }
+  ]
+}
