@@ -119,6 +119,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // the run (#405's invariant). Rejecting a bare id the way opencode and pi do would reject the
   // only form Copilot accepts.
   copilot: { defaultProvider: 'github' },
+  // Antigravity's `--model` takes its own bare slugs (`gemini-3.8-flash-high`, `agy models`), and
+  // unknown ones fail loudly in the CLI. As with junie, the default provider names the backend
+  // so a bare slug resolves instead of being rejected as ambiguous.
+  antigravity: { defaultProvider: 'antigravity' },
   // Kimi Code selects a model by the alias of a `[models."<alias>"]` table in its config.toml, and
   // its own aliases are already `provider/model`-shaped (`kimi-code/k3`). No default provider, so
   // a bare alias passes through unchanged.

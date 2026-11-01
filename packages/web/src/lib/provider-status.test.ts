@@ -336,6 +336,19 @@ describe('usableRunners', () => {
     expect(usableRunners(status)).toEqual(['junie'])
   })
 
+  it('allows enabled Antigravity when unknown — its `agy models` probe needs the network', () => {
+    // The live failure: a network blip left agy `unknown`, and Continue fell back to claude.
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['claude', 'antigravity'])
+    expect(usableRunners({ providers: [{ provider: 'antigravity', status: 'disconnected', enabled: true }] })).toEqual([])
+  })
+
   it('still excludes disabled or not-installed Junie', () => {
     const status: ProviderStatusResponse = {
       providers: [

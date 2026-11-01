@@ -1,3 +1,4 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
@@ -11,6 +12,10 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 /** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
 export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
 export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
+
+/** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
+export const workspaceEventsQuerySchema = z.object({ slim: z.enum(['1']).optional() });
+export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
@@ -181,6 +186,14 @@ export const runRecordSchema = z.object({
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Enabled policy captured at task creation; manual Continue does not refresh it. */
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(),
+    incarnation: z.string().nullable(),
+    revocation: z.string().nullable(),
+  }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -249,6 +262,8 @@ export const runRecordSchema = z.object({
           labelName: z.string().optional(),
         })
         .optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string(),
     })
@@ -275,6 +290,16 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** Accounts this run exhausted before a fallback moved it on; each holds its queue until its reset. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional(),
+  /** The unattended fallback episode: provider:account keys already tried and the reserved successor step. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    done: z.boolean().optional(),
+  }).optional(),
   /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
    *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
@@ -375,6 +400,10 @@ export const runRecordSchema = z.object({
    *  add later — "pinned oldest first" and "unpin what you pinned a month ago" both need it,
    *  and neither can be reconstructed after the fact. */
   pinnedAt: z.string().optional(),
+  /** "Run First": when this queued run was promoted to the front of its queue. Present only
+   *  while `status === 'queued'`; the newest promotion starts first, before every unpromoted
+   *  queued run. Never bypasses a parallel cap. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old

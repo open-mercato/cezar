@@ -30,6 +30,7 @@ beforeEach(() => {
  *  one carrying the server's setup hint. The names/hints mirror `src/core/backend-detect.ts`. */
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/home/me/cezar',

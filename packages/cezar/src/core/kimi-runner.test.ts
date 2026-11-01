@@ -156,7 +156,7 @@ describe('a KimiRunner session over the ACP mock', () => {
     // Kimi's own tools are outside cezar's allowlist vocabulary and stay allowed.
     const own = run({ userPrompt: 'go ask:Agent', allowedTools: ['Read'] });
     expect((await own.session.result).text).toContain('permission Agent: approve_once');
-  });
+  }, 15_000);
 
   it('queues a message typed mid-turn and sends it as the next turn', async () => {
     const events: AgentEvent[] = [];

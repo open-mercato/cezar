@@ -80,7 +80,7 @@ export function AgentsDock({
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={cn('flex w-full items-center gap-2 px-3.5 text-left text-[13px]', open ? 'pt-2 pb-1.5' : 'py-2')}
+        className={cn('flex w-full items-center gap-2 px-3.5 text-left text-ui', open ? 'pt-2 pb-1.5' : 'py-2')}
       >
         <BotIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />
         <span className="shrink-0 font-semibold">Agents</span>
@@ -118,7 +118,7 @@ function AgentRow({ agent, onSelect }: { agent: SubagentSummary; onSelect?: (id:
       {agent.agentType !== undefined ? (
         <span
           data-slot="agent-type"
-          className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+          className="shrink-0 rounded-full bg-muted px-2 py-0.5 eyebrow text-muted-foreground"
         >
           {agent.agentType}
         </span>
@@ -133,7 +133,7 @@ function AgentRow({ agent, onSelect }: { agent: SubagentSummary; onSelect?: (id:
   )
 
   return (
-    <li data-slot="agent-item" data-status={agent.status} className="min-w-0 text-[13px]">
+    <li data-slot="agent-item" data-status={agent.status} className="min-w-0 text-ui">
       {onSelect ? (
         <button
           type="button"

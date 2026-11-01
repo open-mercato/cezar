@@ -307,6 +307,18 @@ const baseWith = (extra: string) => `${BASE}\n\n${extra}`
 // ---- lists + detail ---------------------------------------------------------------------------
 
 describe('the GitHub tab lists', () => {
+  it('shows issue ownership beside row navigation with separate external PR links (#1620)', async () => {
+    stubFetch({ 'GET /api/v1/github?limit=50': () => jsonResponse({ ...GITHUB, issues: [{ ...ISSUE_142, assignees: ['grace'], linkedPrs: [{ number: 180, title: 'Fix the session refresh', url: 'https://github.com/acme/demo/pull/180', state: 'open', isDraft: false }] }] }) })
+    renderAt('/github')
+    const group = await screen.findByRole('group', { name: 'Issue #142 ownership' })
+    expect(within(group).getByText('Assigned to @grace')).toBeTruthy()
+    const pr = within(group).getByRole('link', { name: 'PR #180 · Open: Fix the session refresh' })
+    expect(pr.parentElement?.closest('a')).toBeNull()
+    const row = screen.getByRole('link', { name: /Login form drops session on refresh/ })
+    fireEvent.click(row)
+    expect(await screen.findByRole('heading', { name: 'Login form drops session on refresh' })).toBeTruthy()
+  })
+
   it('/github renders the header, both count tabs, the issue rows, and the first issue’s detail', async () => {
     stubFetch()
     renderAt('/github')
@@ -1510,6 +1522,7 @@ async function openDetail(entry = '/github/issues/142') {
  *  (the pre-#471 shape silently rotted here until the merge fixed the inbox's copy). */
 const health = (backends: readonly Runner[]): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',

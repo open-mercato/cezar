@@ -314,6 +314,22 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(overIntent.id)?.model).toBeUndefined();
     }, 40_000);
 
+    it('refuses an explicit --model its runner cannot run, and leaves matching pairs alone (#1578)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, { runner: 'codex', model: 'gpt-5.6-terra' });
+      const before = store.listRuns().length;
+      expect(refusal(parent.id, order('bad pair', { runner: 'claude', model: 'gpt-5.6-terra', max_cost: 1 }))).toContain('does not belong to runner "claude"');
+      // The inherited runner is judged too: a codex parent with a claude model.
+      expect(refusal(parent.id, order('inherited runner', { model: 'claude-opus-5-5', max_cost: 1 }))).toContain('does not belong to runner "codex"');
+      expect(store.listRuns()).toHaveLength(before);
+      const ok = dispatchOk(parent.id, order('good pair', { runner: 'codex', model: 'gpt-5.6-terra', max_cost: 1 }));
+      expect(store.getRun(ok.id)?.model).toBe('gpt-5.6-terra');
+      store.updateRun(ok.id, { status: 'done' });
+      const noModel = dispatchOk(parent.id, order('no model', { runner: 'claude', max_cost: 1 }));
+      expect(store.getRun(noModel.id)?.runner).toBe('claude');
+    }, 40_000);
+
     it('a root started with an intent runs in a worktree even when the composer opted out, and its prompt carries the intent block', async () => {
       const record = start('mock:monitoring the user asked for a fan-out', undefined, { worktree: false, dispatchIntent: { maxSubtasks: 5 } });
       await waitFor(record.id, (r) => r?.activity === 'monitoring');

@@ -65,7 +65,7 @@ export function SkillSourceTag({
             data-source={source}
             aria-label={description}
             className={cn(
-              'shrink-0 rounded-full border border-border px-2 py-px font-mono text-[10.5px]',
+              'shrink-0 rounded-full border border-border px-2 py-px font-mono text-micro',
               project ? 'font-semibold text-foreground' : 'text-soft-foreground',
               className,
             )}
@@ -105,12 +105,12 @@ export function SkillDetailBody({
               <Heading className="min-w-0 font-mono text-lg font-semibold break-all">{skill.name}</Heading>
               <SkillSourceTag source={skill.source} teamRepo={skill.team?.repo} />
             </div>
-            <p data-slot="skill-path" className="mt-1 font-mono text-[10.5px] break-all text-soft-foreground">
+            <p data-slot="skill-path" className="mt-1 font-mono text-micro break-all text-soft-foreground">
               {skill.path}
               {skill.team ? ` · from ${skill.team.repo}` : ''}
             </p>
             {skill.description ? (
-              <p data-slot="skill-description" className="mt-2.5 text-[13px] text-muted-foreground">
+              <p data-slot="skill-description" className="mt-2.5 text-ui text-muted-foreground">
                 {skill.description}
               </p>
             ) : null}
@@ -132,7 +132,7 @@ export function SkillDetailBody({
 
         {usedBy !== undefined ? (
           <section data-slot="skill-used-by" className="mt-4 border-t border-border pt-4">
-            <h3 className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
+            <h3 className="eyebrow text-soft-foreground">
               Used by
             </h3>
             {usedBy.length > 0 ? (
@@ -154,7 +154,7 @@ export function SkillDetailBody({
       </section>
 
       <section data-slot="skill-content" className="mt-6 min-w-0 border-t border-border pt-5">
-        <h3 className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">Content</h3>
+        <h3 className="eyebrow text-soft-foreground">Content</h3>
         <div data-slot="skill-body" className="mt-3 text-sm">
           <Markdown>{skill.body}</Markdown>
         </div>
@@ -178,7 +178,7 @@ function SkillBookmarklet({ skill }: { skill: Skill }) {
   const url = bookmarkletUrl(skill.name, auto, key, origin, projectId)
   return (
     <section data-slot="skill-run-from-github" className="mt-5 border-t border-border pt-4">
-      <h3 className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">Run from GitHub</h3>
+      <h3 className="eyebrow text-soft-foreground">Run from GitHub</h3>
       <p className="mt-1.5 text-xs text-muted-foreground">
         Drag the button to your bookmarks bar, then click it on a GitHub PR or issue.
       </p>

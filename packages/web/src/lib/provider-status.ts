@@ -4,7 +4,7 @@ import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-merca
  *  provider derives it instead of keeping a fifth hand-written copy — the copy in
  *  `accounts-section.tsx` silently dropped Copilot when #582 added it, and nothing in the
  *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. */
-export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'kimi']
+export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'antigravity', 'kimi']
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -153,20 +153,23 @@ function sameProviderStatusRow(left: ProviderStatus, right: ProviderStatus): boo
     && left.authFailureId === right.authFailureId
 }
 
+/**
+ * Providers whose auth cannot be verified offline, so an `unknown` probe is inconclusive rather
+ * than signed out and the run itself surfaces a real rejection. Junie has no read-only status
+ * command; Antigravity's (`agy models`) calls Google's API, so a network blip reads as unknown —
+ * treating that as unusable silently moved a task's Continue onto claude. Mirrors the server gate.
+ */
+const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<Runner> = new Set(['junie', 'antigravity'])
+
+/** Whether an enabled provider row may run: connected, or unverifiable (see above). */
+export function providerRowRunnable(row: Pick<ProviderStatus, 'provider' | 'status'>): boolean {
+  return row.status === 'connected' || (row.status === 'unknown' && RUNNABLE_WHEN_UNVERIFIED.has(row.provider))
+}
+
 export function usableRunners(status: ProviderStatusResponse | undefined): Runner[] {
   const rows = completeProviderRows(status)
   if (rows === null) return []
-  const usable = new Set(
-    rows
-      .filter((row) => row.enabled && (
-        row.status === 'connected'
-        // Junie has no read-only auth-status command. Its probe can confirm the CLI is installed,
-        // but must report auth as unknown rather than guess; allow selection and let ACP surface
-        // any required authentication at run time.
-        || (row.provider === 'junie' && row.status === 'unknown')
-      ))
-      .map((row) => row.provider),
-  )
+  const usable = new Set(rows.filter((row) => row.enabled && providerRowRunnable(row)).map((row) => row.provider))
   return RUNNER_ORDER.filter((runner) => usable.has(runner))
 }
 

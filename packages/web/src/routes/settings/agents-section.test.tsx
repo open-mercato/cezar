@@ -530,6 +530,7 @@ describe('the agents form', () => {
         'cursor',
         'pi',
         'copilot',
+        'antigravity',
         'kimi',
       ])
       // …and it is still called what it always was, because there is no account in play.
@@ -550,6 +551,7 @@ describe('the agents form', () => {
         'cursorCursor Agent CLI',
         'pipi CLI (provider/model)',
         'copilotGitHub Copilot CLI (ACP)',
+        'antigravityGoogle Antigravity CLI (agy)',
         'kimiKimi Code (ACP)',
       ])
       // The discovered account is the checked row until the repo says otherwise.

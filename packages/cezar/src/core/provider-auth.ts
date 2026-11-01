@@ -7,13 +7,14 @@ import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { isSignalTerminationExit } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveAntigravityBin } from './antigravity-runner.ts';
 import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'kimi'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity', 'kimi'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -529,6 +530,19 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     unrecognizedHint: copilotUnrecognizedHint,
   },
   {
+    id: 'antigravity',
+    overrideEnv: 'CEZ_AGY_BIN',
+    executable: () => resolveAntigravityBin(),
+    // `agy models` needs a session: signed in it lists the account's models and exits 0 (agy 1.4.0),
+    // signed out it exits 1 asking to sign in - without prompting and without spending a request.
+    statusArgs: ['models'],
+    // agy has no login subcommand; the first interactive `agy` launch runs the Google sign-in.
+    loginArgs: [],
+    updateArgs: ['update'],
+    installHint: 'Install the Antigravity CLI (https://antigravity.google/docs/cli), then run `agy` once and sign in with Google.',
+    parse: parseAntigravityStatus,
+  },
+  {
     id: 'kimi',
     overrideEnv: 'CEZ_KIMI_BIN',
     executable: () => resolveKimiExecutable(),
@@ -538,6 +552,13 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     parse: parseKimiStatus,
   },
 ];
+
+function parseAntigravityStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (text.includes('sign in') || text.includes('authentication required')) return 'disconnected';
+  return null;
+}
 
 function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   // probe() already handles ENOENT / any other errorCode before calling parse() — result here

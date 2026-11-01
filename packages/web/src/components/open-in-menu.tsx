@@ -78,6 +78,7 @@ const OPEN_IN_ICONS: Record<string, LucideIcon> = {
   opencode: BotIcon,
   pi: BotIcon,
   copilot: BotIcon,
+  antigravity: BotIcon,
   kimi: BotIcon,
 }
 

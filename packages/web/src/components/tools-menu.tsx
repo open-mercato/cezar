@@ -32,7 +32,7 @@ import {
  *  fail the typecheck here instead of quietly dropping out of the dot's idea of what can start a
  *  task. A type-level set, so no zod schema — and no zod — is pulled into the cockpit bundle for
  *  it. */
-const RUNNER_NAMES: Record<Runner, true> = { claude: true, codex: true, junie: true, opencode: true, cursor: true, pi: true, copilot: true, kimi: true }
+const RUNNER_NAMES: Record<Runner, true> = { claude: true, codex: true, junie: true, opencode: true, cursor: true, pi: true, copilot: true, antigravity: true, kimi: true }
 
 const isRunner = (check: BackendCheck): boolean => Object.hasOwn(RUNNER_NAMES, check.name)
 
@@ -121,7 +121,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
           type="button"
           data-slot="tools-menu-trigger"
           title={toolsTooltip(health)}
-          className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-meta font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <StatusDot tone={blocker || disk ? 'pending' : 'success'} />
           Tools
@@ -136,7 +136,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
         data-slot="tools-menu-content"
         className="w-[240px]"
       >
-        <DropdownMenuLabel className="text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
+        <DropdownMenuLabel className="eyebrow text-soft-foreground">
           Installed tools
         </DropdownMenuLabel>
         {health.checks.map((check) =>
@@ -145,7 +145,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
         {note ? (
           <>
             <DropdownMenuSeparator />
-            <p data-slot="forge-note" className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+            <p data-slot="forge-note" className="px-2 py-1.5 text-meta leading-snug text-muted-foreground">
               {note}
             </p>
           </>
@@ -153,11 +153,11 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
         {disk ? (
           <>
             <DropdownMenuSeparator />
-            <p data-slot="disk-note" className="px-2 pt-1.5 text-[11px] leading-snug text-muted-foreground">
+            <p data-slot="disk-note" className="px-2 pt-1.5 text-meta leading-snug text-muted-foreground">
               {disk}
             </p>
             <DropdownMenuItem asChild>
-              <Link to="/settings/worktrees" data-slot="disk-reclaim" className="text-[11.5px] font-semibold text-violet">
+              <Link to="/settings/worktrees" data-slot="disk-reclaim" className="text-meta font-semibold text-violet">
                 Manage worktrees →
               </Link>
             </DropdownMenuItem>
@@ -174,7 +174,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
           <RouterLink
             to={ACCOUNTS_PATH}
             data-slot="tools-settings"
-            className="gap-2 text-[12.5px] text-muted-foreground"
+            className="gap-2 text-label text-muted-foreground"
           >
             <SettingsIcon className="size-3.5" aria-hidden="true" />
             Agent accounts
@@ -196,10 +196,10 @@ function AvailableToolRow({ check }: { check: BackendCheck }) {
       className="flex items-center gap-2 rounded-sm px-2 py-1.5"
     >
       <StatusDot tone="success" />
-      <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
+      <span className="font-mono text-label font-medium">{check.name}</span>
       <span
         data-slot="tool-version"
-        className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums"
+        className="ml-auto font-mono text-meta font-medium text-muted-foreground tabular-nums"
       >
         {check.version ?? 'not found'}
       </span>
@@ -223,10 +223,10 @@ function UnavailableToolRow({ check }: { check: BackendCheck }) {
     <>
       <span className="flex items-center gap-2">
         <StatusDot tone="danger" />
-        <span className="font-mono text-[12.5px] font-medium">{check.name}</span>
+        <span className="font-mono text-label font-medium">{check.name}</span>
         <span
           data-slot="tool-version"
-          className="ml-auto font-mono text-[11.5px] font-medium text-muted-foreground"
+          className="ml-auto font-mono text-meta font-medium text-muted-foreground"
         >
           not found
         </span>
@@ -234,12 +234,12 @@ function UnavailableToolRow({ check }: { check: BackendCheck }) {
       {check.hint || isRunner(check) ? (
         <span className="flex items-end justify-between gap-3 pl-[15px]">
           {check.hint ? (
-            <span data-slot="tool-hint" className="min-w-0 text-[11px] leading-snug text-muted-foreground">
+            <span data-slot="tool-hint" className="min-w-0 text-meta leading-snug text-muted-foreground">
               {check.hint}
             </span>
           ) : null}
           {isRunner(check) ? (
-            <span data-slot="tool-setup" className="ml-auto shrink-0 text-[11.5px] font-semibold text-violet">
+            <span data-slot="tool-setup" className="ml-auto shrink-0 text-meta font-semibold text-violet">
               Set up →
             </span>
           ) : null}

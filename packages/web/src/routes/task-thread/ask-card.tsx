@@ -148,7 +148,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       </div>
       {oneTap ? (
         resuming ? (
-          <p data-slot="ask-resume-hint" className="mt-3 text-[11.5px] text-soft-foreground">
+          <p data-slot="ask-resume-hint" className="mt-3 text-meta text-soft-foreground">
             The session has ended — your answer reopens it and goes to the agent.
           </p>
         ) : null
@@ -161,7 +161,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
               "pick one or more" hint a live run shows. */}
           <span
             data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
-            className="text-[11.5px] text-soft-foreground"
+            className="text-meta text-soft-foreground"
           >
             {resuming
               ? 'the session has ended — sending reopens it'
@@ -172,7 +172,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       {/* Send stays disabled until every question has a pick; say which ones lack it, since a
           long card scrolls its earlier questions out of sight (#1247). */}
       {!oneTap && unanswered.length > 0 ? (
-        <p data-slot="ask-unanswered" className="mt-2 text-[11.5px] text-soft-foreground">
+        <p data-slot="ask-unanswered" className="mt-2 text-meta text-soft-foreground">
           unanswered: {unanswered.join(', ')}
         </p>
       ) : null}
@@ -256,11 +256,11 @@ function AskQuestionBlock({
   return (
     <div role="group" aria-label={question.question}>
       <div className="mb-0.5 flex items-center gap-2">
-        <span className="rounded-md bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground">
+        <span className="rounded-md bg-primary px-1.5 py-0.5 eyebrow text-primary-foreground">
           {question.header}
         </span>
         {multiSelect ? (
-          <span className="ml-auto text-[10.5px] text-soft-foreground">select all that apply</span>
+          <span className="ml-auto text-micro text-soft-foreground">select all that apply</span>
         ) : null}
       </div>
       <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
@@ -347,12 +347,12 @@ function AskChoice({
         selected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
       )}
     >
-      <span className="flex min-w-0 items-start gap-2 text-[13.5px] font-semibold text-foreground">
+      <span className="flex min-w-0 items-start gap-2 text-ui font-semibold text-foreground">
         {checkbox ? (
           <span
             aria-hidden
             className={cn(
-              'flex size-4 shrink-0 items-center justify-center rounded border text-[10px]',
+              'flex size-4 shrink-0 items-center justify-center rounded border text-micro',
               selected ? 'border-primary bg-primary text-primary-foreground' : 'border-soft-foreground',
             )}
           >

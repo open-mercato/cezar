@@ -61,6 +61,9 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   pi: null,
   junie: null,
   copilot: null,
+  // The CLI documents no home variable; its state is `~/.gemini/antigravity-cli`, relocated only
+  // by moving `HOME` itself, which would also move every tool the agent's Bash calls touch.
+  antigravity: null,
   kimi: 'KIMI_CODE_HOME',
 };
 
@@ -118,7 +121,8 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   pi: [],
   // junie cannot carry profiles either (`PROFILE_ENV_VAR.junie === null`) — same reason.
   junie: [],
-  // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
+  // Same for copilot (`PROFILE_ENV_VAR.copilot === null`) and antigravity.
   copilot: [],
+  antigravity: [],
   kimi: ['config.toml', 'credentials'],
 };

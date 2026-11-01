@@ -56,6 +56,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
   { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
 ]
 
@@ -109,6 +110,11 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // stays free text for anything the account is entitled to.
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // Antigravity's slugs (`gemini-3.8-flash-high`, …) come from `agy models` for the signed-in
+  // account; nothing dated is listed here, and the field stays free text for any slug it prints.
+  antigravity: [
+    { id: '', label: 'auto', desc: 'Use your Antigravity default model' },
   ],
   kimi: [
     { id: '', label: 'auto', desc: 'Use your Kimi default model' },
@@ -212,6 +218,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   opencode: 'OpenCode',
   junie: 'Junie',
   cursor: 'Cursor',
+  antigravity: 'Antigravity',
   kimi: 'Kimi',
 }
 

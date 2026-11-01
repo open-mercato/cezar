@@ -1,6 +1,7 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { cliTargetRunner } from '@/components/open-in-menu'
 import { canBeUnread, isUnread } from '@/lib/read-state'
+import { queuePositions } from '@/lib/task-groups'
 import { isRunActive } from '@/lib/run-status'
 
 export { cliTargetRunner }
@@ -15,6 +16,12 @@ export { cliTargetRunner }
 
 // Lives in `lib/` so shared components can use it without importing a route module.
 export { isRunActive }
+
+/** Reclaim keeps the task and branch; an in-place checkout never belongs to this action. */
+export function canRemoveTaskWorktree(run: RunRecord): boolean {
+  return !isRunActive(run.status) && run.worktree !== false && !!run.worktreePath
+    && !run.worktreeReclaimedAt && !run.worktreeLifecycle?.activeOperationId
+}
 
 /** The latest agent session across steps — what Continue/Terminal resume. */
 export function lastSessionId(run: RunRecord): string | undefined {
@@ -42,6 +49,7 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   junie: 'junie --resume',
   pi: 'pi --session',
   copilot: 'copilot --resume',
+  antigravity: 'agy --conversation',
   kimi: 'kimi --session',
 }
 
@@ -111,6 +119,10 @@ export interface RunActionFlags {
    *  read. Both halves come from `lib/read-state.ts` so the header can never offer an action
    *  whose result the marker rule would ignore. */
   markUnread: boolean
+  /** "Run First" — move a queued task to the front of its queue, so it takes the first free
+   *  slot (brief 2026-09-23-queued-task-run-next). Only while the run is actually waiting in the
+   *  queue; offered again on a promoted run, because promoting again re-stamps it to the top. */
+  promote: boolean
   /** The inverse: an unread, finished task can be marked read without opening it again —
    *  offered exactly where `markUnread` is not, so the control flips instead of vanishing. */
   markRead: boolean
@@ -133,6 +145,7 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
     pin: !run.archived,
     markUnread: canBeUnread(run) && !isUnread(run),
     markRead: canBeUnread(run) && isUnread(run),
+    promote: run.status === 'queued' && !run.archived,
     cancel: !gated && active,
     deleteRun: !gated && !active,
   }
@@ -194,14 +207,11 @@ export function finishTitle(status: RunStatus): string {
 }
 
 /**
- * 1-based position among the queued, unarchived runs, FIFO by `createdAt` — the legacy
- * queued-placeholder math (web/app.js `queuePosition`, spec 006). Undefined when the run is
- * not itself queued (or the list doesn't know it yet — SSE races the detail fetch).
+ * 1-based position among the queued, unarchived runs, in the engine's start order — the legacy
+ * queued-placeholder math (web/app.js `queuePosition`, spec 006), now `queuePositions` itself so
+ * a "Run First" promotion moves this number and the list's in the same render. Undefined when the
+ * run is not itself queued (or the list doesn't know it yet — SSE races the detail fetch).
  */
 export function queuePosition(runs: RunRecord[], runId: string): number | undefined {
-  const queued = runs
-    .filter((run) => !run.archived && run.status === 'queued')
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  const index = queued.findIndex((run) => run.id === runId)
-  return index >= 0 ? index + 1 : undefined
+  return queuePositions(runs).get(runId)
 }

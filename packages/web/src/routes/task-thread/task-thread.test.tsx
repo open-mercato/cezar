@@ -1552,6 +1552,17 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
   })
 
+  it('the queued placeholder\'s Run First posts promote, also under a usage-limit hold', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((_input: RequestInfo | URL) =>
+      Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })),
+    )
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock)
+    fireEvent.click(document.querySelector('[data-slot="promote-run"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/promote'))).toBe(true))
+  })
+
   it('the first real event replaces the queued placeholder', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([line(1, 'lifecycle', { message: 'cezar restarted — task re-queued' })])} />)
     expect(document.querySelector('[data-slot="queued-state"]')).toBeNull()
