@@ -92,7 +92,8 @@ only an `NSPanel` honours `NonactivatingPanel`. `canBecomeKey` and `canBecomeMai
   mini opens that chat, `+N` opens the list and holds it 2.5s for the pointer to arrive. A list
   closed by clicking a manager stays shut until the pointer has left.
 - **A crashed page**: its shapes and open state are cleared, so nothing catches clicks and hover
-  works again, and it reloads.
+  works again, and it reloads. The hook replaces the runtime's default for every webview, so it
+  reloads the cockpit too.
 - **⌘H**: `canHide` is off, so hiding cezar leaves the notch in place.
 - **Displays**: the panel lives on the display the pointer is on, checked once a second, which also
   catches displays coming and going. An open list stays put until it folds.
