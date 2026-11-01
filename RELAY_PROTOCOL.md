@@ -193,6 +193,10 @@ Text that is not a JSON object with a string `t` closes with 4400.
 | `device-key-mismatch` | `device` is not the id of `key` | A bug. Report it |
 | `too-many-grants` | The phone **was** removed, but its grants were not denied, because the room holds 1,000 live denials | Keep the `grantId`s and warn in Settings. Do not resend, since the phone is already gone |
 
+`device-add` for a device already on the allowlist with the same key answers `ack`, and is never
+`device-limit`, because the `device-sync` during pairing has usually listed it. A `device-sync` over
+`devices` answers `device-limit` and leaves the allowlist unchanged.
+
 **cezar's obligations.** After each connect, once `hello` has arrived, cezar sends one `device-sync`
 with every saved device, so a lost command converges. cezar tracks the `grantId`s of each device,
 because `device-remove` must list them. A list that does not fit `controlBytes` is split across
@@ -375,7 +379,8 @@ secret   = 43base64url                       ; 32 random bytes
 cezarkey = 43base64url                       ; cezar's X25519 public key
 ```
 
-There is no user info, no other path and no query. The parser is strict, and anything else is
+String literals in this grammar are case-sensitive, unlike plain ABNF. There is no user info, no other
+path and no query. The parser is strict, and anything else is
 refused. A browser never sends the fragment, so a system camera that opens the link reaches `GET /p`
 with no secret. A hostile relay could serve script there, so a system-camera scan counts as a
 photographed code. Any `version` other than 1 shows "Update the app".
@@ -503,11 +508,13 @@ third handshake message: it leaves by closing its socket.
 | `tunnel-unsupported` | No shared tunnel version. Carries `"tunnel":{"min":…,"max":…}`, cezar's range, instead of a `pending` |
 | `internal` | Anything else |
 
-An unknown `reason` reads as `internal`.
+An unknown `reason` reads as `internal`. `bad-payload` and `tunnel-unsupported` are sent in place of
+`pending`, so they use nonce 0.
 
 **Flow on Approve.** cezar saves the device, opens its relay socket if it has none, waits for `hello`,
 sends `device-sync`, sends `device-add`, and waits for its `ack`, at most 10 s. Then it sends `approved`.
-On failure, it deletes the row and sends `failure`. No device row exists before Approve.
+On failure, it deletes the row, sends `device-remove` because `device-sync` may have listed the phone,
+and sends `failure`. No device row exists before Approve.
 
 **Who closes.** After `approved`, `denied` or `failure`, the phone closes with 1000. cezar closes with
 1000 after 5 s if the phone has not. A `peer-left` after `approved` is not a failure. Otherwise a
@@ -697,7 +704,7 @@ The proxy and the dispatcher both remove these request headers, so a modified ap
 | Fetch metadata | every `sec-fetch-*` |
 | Hop-by-hop | `connection`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`, `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade` |
 
-The proxy adds `user-agent: CezarMobile/<version>`, replacing the webview's. It decodes a chunked
+The proxy adds `user-agent: CezarMobile/<version> (ios|android)`, replacing the webview's. It decodes a chunked
 request body before framing it. It keeps `content-length` if the webview sent it, and a body that does
 not match is `RESET` `bad-request`. `Upgrade` is refused, with 400 from the proxy and `RESET` `bad-request`
 from cezar, so no WebSocket crosses the tunnel. The dispatcher sets its own `host`. Identity comes from
@@ -737,8 +744,9 @@ route's pins cover a user's second tap. A `GET` is not retried by the proxy eith
 cezar states its tunnel range in the `KK` reply. The phone cannot state its own in a first message that
 must be empty, so it states it in `HELLO`, the same bytes in every version. Both then compute
 `min(phone.max, cezar.max)`, valid when it is at or above `max(phone.min, cezar.min)`. With no shared
-version, the phone sends `CLOSE` `tunnel-unsupported` instead of `HELLO`, and shows "Update the app" when
-`phone.max < cezar.min`, otherwise "Update cezar". cezar shows nothing. `HELLO` and `CLOSE` keep this
+version, the phone sends `CLOSE` `tunnel-unsupported` instead of `HELLO`, closes the socket with 1000, and
+shows "Update the app" when `phone.max < cezar.min`, otherwise "Update cezar". It does not reconnect until
+the user retries. cezar shows nothing. `HELLO` and `CLOSE` keep this
 layout in every later version.
 
 During pairing, `tunnel` in the third message and `pending` only prove an overlap exists, and the live
