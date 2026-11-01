@@ -477,6 +477,22 @@ describe('the catalog list and skill preview', () => {
     expect(document.querySelector('[data-slot="bookmarklets-row"]')).toBeNull()
   })
 
+  it('shows full descriptions on demand, keyboard-reachable, and clamps them again (#895)', async () => {
+    serve()
+    renderAt('/skills')
+    await waitFor(() => expect(rowNames()).toHaveLength(3))
+    const description = () => document.querySelector('[data-slot="skill-description"]') as HTMLElement
+    const toggle = document.querySelector('[data-slot="skills-detailed"]') as HTMLButtonElement
+    expect(toggle.tagName).toBe('BUTTON')
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    expect(description().className).toContain('line-clamp-2')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(description().className).not.toContain('line-clamp-2')
+    fireEvent.click(toggle)
+    expect(description().className).toContain('line-clamp-2')
+  })
+
   it('explains where skills come from when the catalog is empty', async () => {
     serve({ skills: [] })
     renderAt('/skills')
