@@ -220,6 +220,7 @@ network), reuses an already-healthy instance instead of double-booting, and writ
 ## Related documents
 
 - `AGENT_PROTOCOL.md` — the agent protocol: the runner seam, the v1 `AgentEvent` + v2 `UiEvent` streams, per-backend mapping, the golden-fixture testing contract, and the checklist for adding a new runner.
+- `RELAY_PROTOCOL.md` — the phone relay's wire contract, with vectors in `test-vectors/relay/`.
 - `SDLC.md` — ticket flow, label state machine, QA gate, claim protocol.
 - `CODE_REVIEW.md` — what reviewers check and how severities are assigned.
 - `BACKWARD_COMPATIBILITY.md` — the public surfaces you must not break silently.

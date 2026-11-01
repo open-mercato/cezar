@@ -165,7 +165,7 @@ relay server has no password.
 | Layer | Handling |
 | --- | --- |
 | Cockpit | Cannot drift. It comes from cezar |
-| Tunnel protocol | Each side sends `{ min, max }` in the handshake and they use the highest shared version |
+| Tunnel protocol | Each side states `{ min, max }` when a session starts, cezar in the `KK` reply and the phone in `HELLO`, and they use the highest shared version |
 | No shared version, app too old | "Update the app", with a store link |
 | No shared version, cezar too old | "Update cezar on your computer" |
 | Relay contract | `/v1` in the path, and 4426 if retired. cezar and the app each read `hello` limits rather than build them in |
@@ -292,8 +292,8 @@ generates its device key before its first grant. Only the X25519 keys protect co
 2. The QR holds `<relay origin>/p#1.<secret>.<cezar X25519 key>`, and the origin comes from
    `CEZ_RELAY_URL`, under the grammar in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string). A browser does not send the
    fragment, and a system camera that opens the link reaches a page explaining how to get the app. That
-   page has no script, but a hostile relay could serve one that reads the fragment, so a system-camera
-   scan counts as a [photo](#what-if-the-qr-code-is-photographed).
+   page has no script, but a hostile relay could serve one that reads the fragment and pair as a phone
+   itself. That is worse than a [photo](#what-if-the-qr-code-is-photographed): see [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open).
 3. The app scans it, derives the locator and pre-shared key, and joins the rendezvous.
 4. The two run `Noise_XXpsk3_25519_ChaChaPoly_SHA256`, with the phone as initiator. The phone checks
    that the key from the handshake equals the one in the QR.
@@ -328,7 +328,7 @@ grants access.**
 
 | Scenario | Result |
 | --- | --- |
-| Photo used after 2 minutes | 4404. Nothing happens |
+| Photo used after 2 minutes | 4408, or 4404 once the rendezvous is gone. Nothing happens |
 | Photo used after the real phone paired | 4404. The rendezvous is gone |
 | Attacker scans first, then the user's phone tries | The phone gets 4410 and a warning, and `pair-contested` makes desktop cancel the pairing and warn, so it fails safe |
 | Attacker joins while the user's phone is pairing | 4410 for the attacker and `pair-contested` on desktop, with the same result |
@@ -336,11 +336,11 @@ grants access.**
 | Photo plus a hostile relay, QR flow | Cannot impersonate cezar: the phone pins the key, and the attacker lacks its private half |
 | Typed code read in time, plus a hostile relay | **Residual risk.** No pinned key, and an attacker on both legs could grind ephemeral keys until the 6 digits match. It needs the code within 2 minutes and control of the relay. Accepted for a fallback, and the UI says to prefer the QR code |
 | Screen recording or screen share | Same as a photo |
-| System camera opens the link, hostile relay reads the fragment | Same as a photo plus a hostile relay: the phone-side pin holds, and Approve still decides |
+| System camera opens the link, hostile relay reads the fragment | **Not the same as a photo.** The relay's page script has the secret and cezar's key, runs `XXpsk3`, reaches Approve and shows the same six digits, so they warn nobody. Only the user's attention at Approve stands against it, and Approve adds a device that can start tasks. Open question [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open) |
 
 A code is shown only after a click, and never appears in a notification, log or `.ai/cezar/`. At most one
 pairing is pending, and cezar allows 5 per hour. Each opens two rendezvous, so that exactly fits the relay's
-`rendezvousPerHour`.
+`rendezvousPerHour`. The typed-code rendezvous opens only when the user asks to show the code, so an expired QR nobody scanned costs one.
 
 ### Sessions and replay
 
@@ -890,6 +890,16 @@ R6.** It is a legal filing. Everything said about it here is [M].
 **Recommended: yes, a focused review of the handshake, tunnel and proxy.** End-to-end encryption is the
 promise of this feature, and the claim that anyone can check it is only as good as someone having done so.
 
+### QR9: Should the QR code be something a browser does not open?
+
+**Recommended: yes, a non-https scheme such as `cezar-pair:1.<origin>.<secret>.<key>`, before any relay the user does not run.**
+A system camera that opens `https://<relay>/p#secret` hands the secret to a page the relay serves, and a
+hostile relay's script can pair as a phone and show the same six digits (R1 review F1). The user's
+attention at Approve is then the only defence. The trade-off: a system camera no longer reaches `GET /p`,
+so someone with no app gets no "how to get the app" page, and the code works only inside the app's
+scanner. Until decided, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
+acceptable only for a relay the user runs. It changes QR bytes, so decide before the public relay.
+
 ## Changelog
 
 - 2026-11-01: Relay contract, protocol version 1. Relay repository is `patzick/rome`.
@@ -904,3 +914,12 @@ promise of this feature, and the claim that anyone can check it is only as good 
   a daily cron deletes expired rooms, and a rendezvous keeps one alarm of at most 300 s. A typed code needs a
   relay address while QR1 is open. Added `HELLO` and `HEAD`, the pairing messages, the `LEASE` echo and one
   rendezvous per credential. Applied the parent spec amendments.
+- 2026-11-01: R1 review. `device-add` is idempotent for a listed device, a failed pairing also sends
+  `device-remove`, a `failure` in place of `pending` uses nonce 0, and a phone with no shared tunnel version
+  closes and waits. Protocol version stays 1.
+- 2026-11-01: R1 review fixes, text only, no vector byte changed. Corrected the claim that nothing depends on
+  the relay for authorization and the "photographed" row for a system-camera scan, and opened QR9. Added
+  frame pacing, stale-frame handling, `RESET` after `END`, `device-removed` reconnects, the 60-a-minute command
+  limit, `bytesPerDay` closing cezar, the rendezvous kill-switch exception, absent `hello` keys, public keys
+  seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
+  and "MUST NOT use" `permessage-deflate`.

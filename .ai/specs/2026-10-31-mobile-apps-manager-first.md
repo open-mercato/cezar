@@ -20,6 +20,8 @@ cannot: the server list, the login in the OS keychain, and later push. Everythin
 - **Notifications:** no push in the first TestFlight build. Push is required before a public
   listing on either store, and native push requires a Cloudflare Worker relay the project runs.
 - **First installable thing:** the web app manifest from #1762, which needs no store account.
+- **Relay:** a hosted cezar is now the Advanced path. The default is the relay in
+  `.ai/specs/2026-11-01-relay-qr-pairing.md`.
 
 ## Evidence and its limits
 
