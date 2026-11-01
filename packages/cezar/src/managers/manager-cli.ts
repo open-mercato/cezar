@@ -114,7 +114,7 @@ export async function runManagerCommand(
         }
         if (command === 'status' || command === 'attention') {
           if (data.attention.length === 0) io.log('Nothing needs attention.');
-          for (const item of data.attention) io.log(`${item.kind}  ${item.projectId}  ${item.runId ?? (item.number !== undefined ? `#${item.number}` : '')}  ${item.title}`);
+          for (const item of data.attention) io.log(`${item.kind}  ${item.projectId}  ${item.runId ?? (item.number !== undefined ? `#${item.number}` : '')}  ${item.title}${item.detail ? ` — ${item.detail}` : ''}`);
         }
         if (command === 'status' || command === 'tasks') {
           for (const project of projects) for (const task of project.tasks) {
