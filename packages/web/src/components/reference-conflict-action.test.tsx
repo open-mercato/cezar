@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -147,7 +148,7 @@ describe('ResolveConflictsButton', () => {
 })
 
 describe('TaskReferenceChip', () => {
-  it('keeps the supplied primary and exposes additional PR associations', () => {
+  it('keeps the supplied primary and groups additional PR associations behind +N', async () => {
     render(
       <TaskReferenceChip
         run={
@@ -160,9 +161,70 @@ describe('TaskReferenceChip', () => {
         reference={{ kind: 'PR', number: 10, url: 'https://github.com/o/r/pull/10' }}
       />,
     )
+    // One chip on the row, the rest one click away — the task header's grouping.
     expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
       'https://github.com/o/r/pull/10',
-      'https://github.com/o/r/pull/9',
     ])
+    const overflow = screen.getByRole('button', { name: /Show all 2 references/ })
+    expect(overflow.textContent).toBe('+1')
+    fireEvent.click(overflow)
+    await waitFor(() =>
+      expect(screen.getAllByRole('link').map((link) => link.getAttribute('href'))).toEqual([
+        'https://github.com/o/r/pull/10',
+        'https://github.com/o/r/pull/10',
+        'https://github.com/o/r/pull/9',
+      ]),
+    )
+  })
+
+  it('moves a conflicting PR out from behind +N so its Resolve conflicts stays on the row', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const path = String(input)
+        sent.push({ path, method: init.method ?? 'GET', body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+        if (path.includes('/ref-status')) {
+          return jsonResponse({ available: true, prs: { 9: 'ready', 10: 'ready' }, issues: {}, conflicts: [9], recheckAfterMs: null })
+        }
+        if (path === '/api/v1/providers/status') {
+          return jsonResponse({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+        }
+        return jsonResponse({})
+      }),
+    )
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider
+          projectId="acme"
+          requests={[
+            { projectId: 'acme', kind: 'PR', number: 10 },
+            { projectId: 'acme', kind: 'PR', number: 9 },
+          ]}
+        >
+          <TaskReferenceChip
+            run={run('running', {
+              pullRequestUrl: 'https://github.com/o/r/pull/10',
+              referencedPullRequestUrl: 'https://github.com/o/r/pull/9',
+              markerRefs: { pr: 9 },
+            })}
+            reference={{ kind: 'PR', number: 10, url: 'https://github.com/o/r/pull/10' }}
+          />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+    const chip = await waitFor(() => {
+      const found = document.querySelector('[data-slot="pr-chip"][data-conflicting="true"]')
+      if (!found) throw new Error('no conflicting chip yet')
+      return found as HTMLElement
+    })
+    // #9 leads the row, ahead of the task's own #10.
+    expect(chip.getAttribute('href')).toBe('https://github.com/o/r/pull/9')
+    fireEvent.focus(chip)
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' })))
+    await waitFor(() =>
+      expect(sent.find((request) => request.method === 'POST')?.body).toMatchObject({
+        text: resolveConflictsPrompt(9),
+      }),
+    )
   })
 })
