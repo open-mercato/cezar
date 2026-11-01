@@ -2921,6 +2921,13 @@ export class RunManager {
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
     const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
+    // An explicit --model the child's runner cannot run would fail at its first turn (#1578).
+    const orderedRunner = input.runner ?? intent?.runner ?? parent.runner ?? 'claude';
+    if (input.model && modelConflictsWithRunner(input.model, orderedRunner)) {
+      const refused = `model "${input.model}" does not belong to runner "${orderedRunner}" — pick a model of that runner or drop --model.`;
+      note(`dispatch refused — ${refused}`, 'danger');
+      return { refused };
+    }
     const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
     const inFlight = inFlightChildren(runs, parentId).length;
     if (inFlight + 1 > inFlightCap) {
