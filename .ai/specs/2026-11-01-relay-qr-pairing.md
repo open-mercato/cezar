@@ -506,7 +506,8 @@ New routes, contract first, in one chained workspace-level family and listed in 
 | Route | Purpose |
 | --- | --- |
 | `GET /workspace/phones` | List, with relay status |
-| `POST /workspace/phones/pairing` | Start. Returns the QR string, code and expiry |
+| `POST /workspace/phones/pairing` | Start. Returns the QR string and expiry |
+| `POST /workspace/phones/pairing/:id/code` | Opens the typed code's rendezvous and returns the code (RELAY_PROTOCOL.md §9.2) |
 | `POST /workspace/phones/pairing/:id/approve` and `/deny` | Decide |
 | `PATCH /workspace/phones/:deviceId` | Rename |
 | `DELETE /workspace/phones/:deviceId` | Remove |
@@ -934,6 +935,7 @@ wire shape changes either way.
   limit, `bytesPerDay` closing cezar, the rendezvous kill-switch exception, absent `hello` keys, public keys
   seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
   and "MUST NOT use" `permessage-deflate`.
+- 2026-11-01: R3. The start route returns no code: `POST /workspace/phones/pairing/:id/code` opens that rendezvous on request. `outsideRelayScope` sits at run start, `ManagerEngine.enqueue` and its timers, `refreshHealth`, topic start, automation reschedule, webhook service resolution and lazy context builds. Audit: the only values a scope changes are `localHandoff`, `terminal`, `designMode`, `managerSystemNotifications`, `phonePairing`, the accounts closure and `isHostedMode`, so a site matters only if deferred work can reach one of those. A phone's rendezvous-side rollback also removes the row when the phone left before hearing `approved`.
 - 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
   parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol
   errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone

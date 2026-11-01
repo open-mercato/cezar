@@ -17,6 +17,7 @@ import {
   BlocksIcon,
   TicketIcon,
   ShieldCheckIcon,
+  SmartphoneIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -30,6 +31,7 @@ import { InstructionsSection } from './instructions-section'
 import { KeyboardSection } from './keyboard-section'
 import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
+import { PhonesSection } from './phones-section'
 import { PrivacySection } from './privacy-section'
 import { ProjectsSection } from './projects-section'
 import { ResourcesSection } from './resources-section'
@@ -77,6 +79,7 @@ export type SettingsSectionId =
   | 'integrations'
   | 'webhooks'
   | 'workspace-secrets'
+  | 'phones'
   | 'privacy'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
@@ -227,6 +230,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     scope: 'global',
   },
   {
+    id: 'phones',
+    title: 'Connect a phone',
+    description: 'Pair the Cezar app with this computer through the relay.',
+    icon: SmartphoneIcon,
+    component: PhonesSection,
+    scope: 'global',
+  },
+  {
     id: 'workspace-secrets',
     title: 'Secrets',
     description: 'Encrypted values shared by every project on this machine — never for agents.',
@@ -267,20 +278,21 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'phonePairing'>>,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      !(capabilities?.phonePairing !== true && section.id === 'phones'),
   )
 }
 
 /** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
  *  global sections as flat rows, the project sections under every project in the tree. */
 export function settingsSectionsByScope(
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'phonePairing'>>,
 ): Record<SettingsScope, SettingsSection[]> {
   return {
     global: visibleSettingsSections('global', capabilities),

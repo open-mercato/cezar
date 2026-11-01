@@ -9,6 +9,7 @@ import { reclaimWorktrees } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunManager } from '../workflows/run.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { getRepoInfo } from './git.ts';
 import { resolveTrackerAgentEnv } from './tracker/agent-credentials.ts';
@@ -119,12 +120,13 @@ export class ProjectContexts {
     if (existing) return existing;
     const inFlight = this.building.get(projectId);
     if (inFlight) return inFlight;
-    const build = this.build(projectId);
+    // A context outlives the request that first touched it, whoever that was.
+    const build = outsideRelayScope(() => this.build(projectId));
     this.building.set(projectId, build);
     try {
       const ctx = await build;
       this.contexts.set(projectId, ctx);
-      this.notifyBuilt(ctx);
+      outsideRelayScope(() => this.notifyBuilt(ctx));
       return ctx;
     } finally {
       this.building.delete(projectId);

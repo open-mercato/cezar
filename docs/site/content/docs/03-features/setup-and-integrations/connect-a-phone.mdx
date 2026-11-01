@@ -1,0 +1,46 @@
+---
+title: "Connect a phone"
+description: "Pair the Cezar app with this computer through an encrypted relay, using a QR code."
+---
+
+Connect a phone pairs the Cezar app with the cezar on your computer. You need no server, domain or password: both connect out to a relay, and traffic crosses it end-to-end encrypted. The relay can drop traffic. It cannot read it.
+
+## Turn it on
+
+Set the relay's address before you start cezar. No relay is built in.
+
+```bash
+CEZ_RELAY_URL=https://relay.example.com cezar
+```
+
+`https://` works anywhere. `http://` works only for `127.0.0.1`, `localhost` and `[::1]`, for a relay on your own machine. Without a valid address, Settings has no Connect a phone section.
+
+## Pair a phone
+
+1. Open **Settings → Connect a phone** and select **Connect a phone**. Nothing reaches the relay before this.
+2. In the Cezar app, scan the QR code. Scan inside the app, not with your camera app. The code lasts two minutes.
+3. Check that the phone and the computer show the same six digits, then select **Approve**.
+
+The phone can now run tasks on this computer, with everything a task can do.
+
+If the app cannot scan, select **Type a code instead** and enter the code and the relay address in the app. The QR code is safer, because only it lets the app check that it reached this computer.
+
+> **Good to know**: approve only a phone you are holding. A system camera opens the QR link in a browser, where a hostile relay could read it, so a scan outside the app is safe only with a relay you run yourself.
+
+## What a phone can do
+
+A phone has what a hosted cockpit has: Manager, approvals, starting and answering tasks, and reading diffs. Its requests cannot open a shell, edit agent config or accounts, use open-in actions, change the browse root, write webhooks, or pair and remove phones.
+
+Those limits bind the phone's requests, not what a task does. A task runs as you, so a stolen unlocked phone can ask a task to do anything. **Remove** is the answer.
+
+## Remove a phone
+
+Select the bin icon beside the phone. It loses access at once. The relay connection closes when the last phone is removed.
+
+## Turn it off
+
+`CEZ_RELAY=0` blocks everything relay-related, including the connection for phones already paired. Pairings stay in `~/.cezar/relay/`. Delete that folder to forget them.
+
+## What the relay sees
+
+It sees your IP address, opaque ids for the computer and each phone, and the timing and volume of traffic. It never sees prompts, code or keys. While no phone is connected, cezar sends only a keepalive ping every 45 seconds.

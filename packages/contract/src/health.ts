@@ -49,6 +49,12 @@ export const capabilitiesSchema = z.object({
    */
   designMode: z.boolean(),
   followups: z.boolean(),
+  /**
+   * `true` means Settings offers Connect a phone: `CEZ_RELAY_URL` names a valid relay and
+   * `CEZ_RELAY=0` is not set (spec `.ai/specs/2026-11-01-relay-qr-pairing.md`). Always false in a
+   * relay scope, so a phone cannot pair another phone.
+   */
+  phonePairing: z.boolean(),
   singleProject: z.boolean(),
   /**
    * `true` means `CEZ_AUTOMATIONS=1` opted this server into GitHub automations (#801). Off — the
