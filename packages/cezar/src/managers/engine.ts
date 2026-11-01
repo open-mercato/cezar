@@ -1077,9 +1077,6 @@ export class ManagerEngine {
       if (input.dispatch || (input.workflow && input.workflow !== 'quick-task')) {
         return { error: `${input.projectId} is read-only for this manager: only a plain read-only task can start there`, status: 403 };
       }
-      if (input.runner && input.runner !== 'claude') {
-        return { error: 'a read-only task runs on Claude, the only backend that enforces it (#430)', status: 403 };
-      }
     }
     const prefix = `/p/${encodeURIComponent(input.projectId)}`;
     const response = await this.forward(`${prefix}/runs`, {
@@ -1088,7 +1085,8 @@ export class ManagerEngine {
         workflow: input.workflow ?? 'quick-task',
         task: input.task,
         systemPrompt: MANAGER_TASK_SYSTEM_PROMPT,
-        ...(readOnly ? { readOnly: true, runner: 'claude' } : input.runner ? { runner: input.runner } : {}),
+        ...(readOnly ? { readOnly: true } : {}),
+        ...(input.runner ? { runner: input.runner } : {}),
         ...(input.model ? { model: input.model } : {}),
         ...(input.dispatch ? { dispatch: {} } : {}),
       },

@@ -117,6 +117,12 @@ Notable fields (full doc-comments in the source):
   blocks — pasted screenshots), `cwd` (the run dir and the only writable root),
   `model?`, `timeoutMs?`, `env?` (merged over `process.env` — carries
   `CEZ_HANDOFF_FILE` / `CEZ_TODOS_FILE` / `CEZ_TASK_ID`).
+- `readOnly?` — the task must not change the repository or publish anything, on every backend:
+  Claude and Pi through `allowedTools` (no shell), Codex `sandbox: read-only`, OpenCode denied
+  `edit`/`bash` in `OPENCODE_CONFIG_CONTENT`, Cursor `--mode ask` without `--force`, Copilot
+  `--deny-tool` with its permission prompts refused, Junie without `brave_mode` with its prompts
+  refused. `read-only-env.ts` is the shared floor (no `gh` login, no git credential). A new runner
+  that cannot enforce it must fail the run, never ignore the field.
 - `allowedTools?` / `bashAllowlist?` / `additionalDirectories?` — tool access.
   **Caveat (#430):** the zero-config default (`DEFAULT_ALLOWED_TOOLS`) includes
   unrestricted `Bash`, and Codex/OpenCode do not honor `allowedTools` at all.

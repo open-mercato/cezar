@@ -428,7 +428,7 @@ class CodexSession implements AgentSession {
       // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
       // keeps container installs working when bubblewrap cannot create a UID map (#563).
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
+      sandbox: this.spec.readOnly ? 'read-only' : process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
       approvalPolicy: 'never',
       // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
       // config overrides, so the user's own [mcp_servers] table is extended, never replaced.

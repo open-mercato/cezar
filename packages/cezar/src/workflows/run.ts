@@ -1,3 +1,4 @@
+import { readOnlyEnv } from '../core/read-only-env.ts';
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
@@ -5748,15 +5749,17 @@ export class RunManager {
           ...(openingImages.length ? { images: openingImages } : {}),
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          ...(state.readOnly ? { readOnly: true } : {}),
           bashAllowlist: state.readOnly ? undefined : toolsStep?.bashAllowlist,
           additionalDirectories: agentDirectories(
             join(this.dataDir, 'runs'),
             state.grantedAttachmentLibrary,
             continueProfile.env,
           ),
-          env: continueProfile.env,
+          env: state.readOnly ? { ...continueProfile.env, ...readOnlyEnv() } : continueProfile.env,
           onUsageWindows: continueProfile.onUsageWindows,
-          mcpServers: continueMcp,
+          // A private server's tools are writes nothing here can vouch for.
+          mcpServers: state.readOnly ? [] : continueMcp,
           model: continueModel,
           sessionId: launchSessionId,
           resume,
@@ -7907,6 +7910,7 @@ export class RunManager {
           images,
           cwd: state.cwd,
           allowedTools: state.readOnly ? READ_ONLY_TOOLS : step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          ...(state.readOnly ? { readOnly: true } : {}),
           bashAllowlist: state.readOnly ? undefined : step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(
@@ -7914,9 +7918,9 @@ export class RunManager {
             state.grantedAttachmentLibrary,
             stepProfile.env,
           ),
-          env: stepProfile.env,
+          env: state.readOnly ? { ...stepProfile.env, ...readOnlyEnv() } : stepProfile.env,
           onUsageWindows: stepProfile.onUsageWindows,
-          mcpServers: stepMcp,
+          mcpServers: state.readOnly ? [] : stepMcp,
           model: backendModel,
           sessionId: launchSessionId,
           resume,

@@ -571,19 +571,18 @@ describe('ManagerEngine', () => {
       expect(managerAccessOf({ access: 'read', projectAccess: { alpha: 'write' } }, 'alpha')).toBe('write');
     });
 
-    it('starts only a read-only task, on Claude', async () => {
+    it('starts only a read-only task, on whichever agent was asked for', async () => {
       const engine = makeEngine();
       const id = await readOnly(engine);
-      await engine.createTask(id, { projectId: 'alpha', task: 'What does this do?' });
-      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ readOnly: true, runner: 'claude' });
+      await engine.createTask(id, { projectId: 'alpha', task: 'What does this do?', runner: 'codex' });
+      expect(requests.find((request) => request.path.endsWith('/runs'))?.body).toMatchObject({ readOnly: true, runner: 'codex' });
     });
 
-    it('refuses dispatch, other workflows and other runners', async () => {
+    it('refuses dispatch and other workflows', async () => {
       const engine = makeEngine();
       const id = await readOnly(engine);
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', dispatch: true })).toMatchObject({ status: 403 });
       expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', workflow: 'fix-ci' })).toMatchObject({ status: 403 });
-      expect(await engine.createTask(id, { projectId: 'alpha', task: 'x', runner: 'codex' })).toMatchObject({ status: 403 });
       expect(requests).toEqual([]);
     });
 
