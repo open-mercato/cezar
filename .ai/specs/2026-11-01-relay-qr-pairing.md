@@ -4,8 +4,8 @@ Refs `.ai/specs/2026-10-31-mobile-apps-manager-first.md` (the parent spec), PR #
 
 Stacked on PR #1879. Nothing in this PR is built.
 
-Status: draft. The [relay contract](#relay-contract) is stable enough to build against. Any change to
-it is a separate commit and a line in the [changelog](#changelog).
+Status: draft. **The wire contract now lives in [`RELAY_PROTOCOL.md`](../../RELAY_PROTOCOL.md)**, which
+wins over this file. Any change to it is a separate commit and a line in the [changelog](#changelog).
 
 ## TLDR
 
@@ -155,7 +155,7 @@ server's process restart, and all Basic code for the Manual path.
 | Connect page | First screen becomes Scan QR code and Enter code. The URL form moves under Advanced, word for word |
 | `network_security_config.xml`, `Info.plist` | One cleartext exception for `127.0.0.1`, and `NSCameraUsageDescription` plus Android's `CAMERA`. Remote cleartext stays refused |
 | New native code | Noise, tunnel, proxy and scanner, as framework-free classes. Android's `minSdkVersion` 24 predates platform X25519 [M], so it needs one crypto library. iOS 15 has CryptoKit [M] |
-| `README.md`, BACKWARD_COMPATIBILITY.md §6b | §6b keeps every clause and gains the tunnel protocol version. Its rule that any shell must work with any cezar holds through negotiation, see [Version mismatch](#version-mismatch) |
+| `README.md`, BACKWARD_COMPATIBILITY.md §6b | §6b arrives with #1883, so its clause is R4's to add. §6b keeps every clause and gains the tunnel protocol version. Its rule that any shell must work with any cezar holds through negotiation, see [Version mismatch](#version-mismatch) |
 
 The password rules, one-answer rule and Android restart logic stay on the Manual path only, because a
 relay server has no password.
@@ -165,7 +165,7 @@ relay server has no password.
 | Layer | Handling |
 | --- | --- |
 | Cockpit | Cannot drift. It comes from cezar |
-| Tunnel protocol | Each side sends `{ min, max }` in the handshake and they use the highest shared version |
+| Tunnel protocol | Each side states `{ min, max }` when a session starts, cezar in the `KK` reply and the phone in `HELLO`, and they use the highest shared version |
 | No shared version, app too old | "Update the app", with a store link |
 | No shared version, cezar too old | "Update cezar on your computer" |
 | Relay contract | `/v1` in the path, and 4426 if retired. cezar and the app each read `hello` limits rather than build them in |
@@ -174,271 +174,100 @@ relay server has no password.
 
 ## Relay contract
 
-Protocol version 1. The relay is built in the private repository `patzick/rome`. This section is the
-whole interface between that relay and the public clients. It describes behaviour only.
+**Moved to [`RELAY_PROTOCOL.md`](../../RELAY_PROTOCOL.md), with vectors in `test-vectors/relay/`.** Endpoints,
+proofs, frames, control frames, rendezvous, relay behaviour, the push signal, limits and close codes
+are there, restated and closed. Protocol version stays 1. This spec keeps the reasoning.
 
-The relay is assumed hostile. It is trusted for availability and nothing else, so nothing here may
-depend on it for confidentiality or authorization of cezar's API.
+The relay is built in the private repository `patzick/rome` and assumed hostile. It is trusted for
+availability and nothing else.
 
-### Connection roles
+Maintainer decisions on the conflicts `patzick/rome#1` raised, applied to rules 1 and 6 of
+[§6 Relay behaviour](../../RELAY_PROTOCOL.md#6-relay-behaviour):
 
-All endpoints live on one host and carry the version in the path. Sockets are `wss://`.
-
-| Endpoint | Role | Proves | Lifetime |
-| --- | --- | --- | --- |
-| `GET /v1/cezar/<cezarId>` (upgrade) | One cezar | Holds the key behind `cezarId` | Long-lived, hibernated. One per room. A new authenticated socket closes the old one with 4409 |
-| `GET /v1/phone/<cezarId>/<deviceId>` (upgrade) | One paired phone | Holds the key behind `deviceId`, and `deviceId` is on the room's allowlist | Only while the app is in the foreground. One per `deviceId`. A new authenticated socket closes the old one with 4409 |
-| `GET /v1/pair/<locator>?role=cezar` (upgrade) | cezar during pairing | Holds the key behind the `X-Cezar-Relay-Key` it sends | Created here. See [Rendezvous](#rendezvous) |
-| `GET /v1/pair/<locator>?role=phone` (upgrade) | Unpaired phone | Knows the locator | One phone. A second gets 4410 |
-| `POST /v1/push-grants` | Phone | Holds a device key | Request |
-| `POST /v1/push-grants/revoke` | Phone | Holds the device key sealed in the grant | Request |
-| `POST /v1/push` | cezar or a hosted server | Holds the key sealed in the grant | Request |
-| `GET /p` | Anyone | Nothing | Request. A static page saying how to get the app, with no script. Clients never call it |
-
-When a phone socket replaces another for the same `deviceId`, the relay sends cezar `phone-left` and then
-`phone-joined`, both before the first data frame from the new socket. cezar ends a device's session on
-`phone-left`, so the data after every `phone-joined` starts with a new handshake.
-
-A **room** is the per-cezar state on the relay, one Durable Object per `cezarId`. The room holds the
-device allowlist, the grant denylist and rate counters. It never holds a payload, a device token or
-queued work.
-
-### Routing identifiers
-
-Everything is base64url with no padding. Hashes and keys below are raw bytes before encoding.
-
-| Name | Value | Visible to relay |
+| Rule | Was | Now |
 | --- | --- | --- |
-| `cezarId` | `SHA-256("cezar-relay-id-v1\n" ‖ ed25519Pub)[0..16]`, 22 characters | Yes |
-| `deviceId` | The same formula over the phone's Ed25519 public key | Yes |
-| `locator` | 32 bytes derived from the pairing secret, 43 characters. It reveals nothing without that secret | Yes, for one rendezvous |
-| `grant` | Opaque, sealed by the relay. Clients never parse it | Yes |
-| `grantId` | 16 random bytes chosen by the relay, returned with the grant | Yes |
+| 1 Sleep | Alarms allowed to expire storage, at most once a day | **Rooms have no alarm.** `RendezvousObject` keeps one one-shot alarm of at most 300 s, the only way a 4408 can fire |
+| 6 Storage expiry | Timing unstated | **A daily cron deletes expired rooms.** The 90-day rule and the live-denylist exception stand |
 
-Both ids are self-certifying, so a cezar needs no account and the relay needs no registry to accept
-one. The Ed25519 keys here are for the relay only. The end-to-end keys are separate, and the relay
-never sees them in the clear or as an identifier.
+### What rome#1 changed
 
-### Upgrade and request proof
+Every flaw, assumption and client change from that PR's body, adopted or rejected. "Adopted" means it
+is normative in `RELAY_PROTOCOL.md`.
 
-Every endpoint except `role=phone` rendezvous and `GET /p` carries three headers:
-
-| Header | Value |
-| --- | --- |
-| `X-Cezar-Relay-Key` | Ed25519 public key |
-| `X-Cezar-Relay-Time` | Unix seconds, within ±120 s of the relay's clock |
-| `X-Cezar-Relay-Sig` | Ed25519 signature over the proof string |
-
-The proof string for a socket is UTF-8, joined with `\n`, with no trailing newline:
-
-```text
-cezar-relay-v1
-<role: cezar | phone | pair>
-<cezarId, or the locator for role pair>
-<deviceId, or - for cezar and pair>
-<X-Cezar-Relay-Time>
-```
-
-The relay recomputes the id from the key, compares it with the path, then verifies the signature. A
-`POST` replaces the first line with `cezar-relay-post-v1`, the role with the request path, and the
-id lines with the hex SHA-256 of the raw body and `-`.
-
-Test vector. The Ed25519 seed is 32 bytes of `0x01`, role `cezar`, time `1793491200`:
-
-```text
-key    iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w
-id     JG0cluinRjn-lvNKCdLU5w
-sig    V68ncyA98yXD5r524pXn17WZs8PNJKCytyw41XCAcEceSEkQJyYg99SHobPMZKg_qtS2VVmoblfOyvCV9eY4Dg
-```
-
-A rejected upgrade may answer before the socket exists, with the HTTP status from
-[Close codes](#close-codes) and `{ "code": "<name>" }`. Both forms mean the same to a client. A
-`bad-proof` rejection is always this HTTP form and carries a `Date` header, so a client with a wrong
-clock can correct it.
-
-### Frames
-
-**Binary frames are data and text frames are control.** The relay never parses a data payload beyond
-its header.
-
-```text
-phone  → relay   0x01 ‖ ciphertext
-relay  → cezar   0x01 ‖ deviceId (16 raw bytes) ‖ ciphertext
-cezar  → relay   0x01 ‖ deviceId (16 raw bytes) ‖ ciphertext
-relay  → phone   0x01 ‖ ciphertext
-```
-
-Rendezvous data has no `deviceId`: `0x01 ‖ ciphertext` in both directions. An unknown first byte
-closes the socket with 4400, so a later version can add frame types.
-
-**Keepalive.** The text frame `ping` is answered with `pong` by the runtime, without waking the room.
-A client sends at most one per 20 s. This is the only traffic an idle cezar sends. A client must
-never use any other frame as a keepalive, because any other frame wakes the room.
-
-**Control frames** are JSON objects with a `t` key. Unknown `t` values are ignored by clients and
-answered by the relay with `error` code `unknown-frame`, so a command the relay lacks fails visibly.
-
-| Direction | Frame | Meaning |
+| Item | Verdict | Where, and why |
 | --- | --- | --- |
-| relay → any | `{"t":"hello","protocol":1,"limits":{…}}` | First frame on a socket. `limits` has the [limit names](#limits) with live values, which override the table |
-| relay → cezar | `hello` also carries `"phones":["<deviceId>"]` | Phones connected now, for a cezar that reconnected |
-| relay → phone | `hello` also carries `"cezar":"online"\|"offline"` | Whether a cezar socket is present |
-| relay → cezar | `{"t":"phone-joined","device":"<deviceId>"}` | A phone socket opened |
-| relay → cezar | `{"t":"phone-left","device":"<deviceId>"}` | A phone socket closed |
-| relay → phone | `{"t":"cezar-online"}`, `{"t":"cezar-offline"}` | The cezar socket opened or closed |
-| cezar → relay | `{"t":"device-add","id":"<cmd>","device":"<deviceId>","key":"<ed25519Pub>"}` | Add to the allowlist. The relay recomputes `device` from `key` |
-| cezar → relay | `{"t":"device-remove","id":"<cmd>","device":"<deviceId>","grants":["<grantId>"]}` | Remove, close that phone's socket with 4403, deny the listed grants |
-| cezar → relay | `{"t":"device-sync","id":"<cmd>","devices":[{"device":"…","key":"…"}]}` | Replace the allowlist. Sent once after each connect, so a lost command converges |
-| relay → cezar | `{"t":"ack","id":"<cmd>"}` | The command is durable |
-| relay → sender | `{"t":"error","id":"<cmd>","code":"<name>"}` | The command failed. `id` is absent for a frame without one |
-| relay → any | `{"t":"closing","retryAfter":<seconds>}` | Sent before a 4429, 4430 or 4503 close |
+| Flaw 1: `POST /v1/push-grants` unlimited and not tied to the allowlist | Adopted | §7. Shares the per-IP counter; denials from keys off the allowlist have their own pool, 8 per key |
+| Flaw 2: `frameBytes` asymmetric | Adopted | §8. Ciphertext at most `min(65,535, frameBytes − 17)` |
+| Flaw 3: one `ping` per 20 s cannot be enforced | Adopted | §4. A client rule, and the text says the relay cannot enforce it |
+| Flaw 4: `phoneSecondsPerDay` only checked on an event | Adopted | §6 rule 7 |
+| Flaw 5: no mechanism for the demo's raised `rendezvousPerHour` | **Rejected as written** | `hello` reports limits, it cannot set them. No wire change. The relay needs a per-`cezarId` override, which R6 must ask of `patzick/rome` |
+| Flaw 6: phones hear nothing when a cezar socket is replaced | Adopted | §4 Replacement, §10.1 |
+| Departure: rooms have no alarm, daily cron | Adopted | Owner decision, §6 rules 1 and 6 |
+| Departure: rendezvous keeps one alarm | Adopted | Owner decision, §6 rule 1 |
+| Departure: `too-many-grants` | Adopted | §4 `error` table |
+| Ordering: per-IP limit before signature | Adopted | §3.1. Not observable to a client |
+| Unknown route or bad shape, 404 `no-route` | Adopted | §3.2 |
+| Other version, 426 `protocol-unsupported` | Adopted | §3.2 |
+| Socket route without `Upgrade`, 400 `upgrade-required` | Adopted | §3.2 |
+| Wrong method, 405 `method-not-allowed` | Adopted | §3.2 |
+| Malformed `POST`, 400 `bad-request` | Adopted | §3.2 |
+| Bad proof on a `POST`, 401 | Adopted | §3.2, §7 |
+| Kill switch, 503 `relay-disabled` with `Retry-After: 300` | Adopted | §3.2 |
+| Phone over `phoneSockets`, 429 | Adopted | §3.2 |
+| `device-sync` closes phones that fell off, 4403 | Adopted | §4 |
+| First-seen `cezarId` over `newRoomsPerHour`, 429 with 3600 | Adopted | §3.2 |
+| `framesPerSecond` counts text | Adopted | §6 rule 7, §8 |
+| A closing cezar socket counts as a sighting | Adopted | §6 rule 6 |
+| Over `phoneSecondsPerDay`, phones close with 4430 and cezar stays | Adopted | §6 rule 7 |
+| `bytesPerDay` counts each frame once, inbound | Adopted | §6 rule 7 |
+| Kill switch on a live socket: `closing`, 4503 on the next frame | Adopted | §6 rule 8 |
+| Phone sending a cezar command gets `unknown-frame` | Adopted | §4 |
+| Non-object text closes with 4400 | Adopted | §4 |
+| First cezar wins, a second is 409 | Adopted | §5 |
+| A phone slot burns once used | Adopted | §5 |
+| Second phone refused by HTTP 409 | Adopted | §5. Equal to 4410 |
+| `peer-joined` to both; late phone accepted then 4408 | Adopted | §3.2, §5 |
+| 33rd frame closes both with 4429, `ping` excepted | Adopted | §5, which also forbids reconnecting |
+| Rendezvous `hello` reports 16,384, header included | Adopted | §5 |
+| `rendezvousPerHour` charged to the proving key | Adopted | §3.1, §5 |
+| A rendezvous counts for `newRoomsPerHour` | Adopted | §5 |
+| `platform` values | Adopted | §7 |
+| `POST` capped at `controlBytes`, shares the IP counter, token at most 1,024 | Adopted | §7 |
+| Unopenable grant answers 410 | Adopted | §7 |
+| Failed `/v1/push` answers 503 with no body | Adopted | §7 |
+| `device-remove` denial lasts 90 days | Adopted | §7 |
+| Revoke that creates a room is charged, 429 | Adopted | §7 |
+| Missing seal key answers 503, never 410 | Adopted | §7 |
+| Unstored revoke answers 503 with `Retry-After: 60` | Adopted | §7 |
+| `device-remove` removes the phone first | Adopted | §4 `too-many-grants` |
+| Two denial pools, 1,000 each, 8 per stranger key | Adopted | §7 |
+| Usage metric shape, 10 s idle tail | Rejected for the contract | Operations, with no wire effect. It stays in `patzick/rome` |
+| IPv6 /64 buckets, rate-limit binding, `wrangler.jsonc` duplication | Rejected for the contract | Relay internals. Stays in `patzick/rome` |
+| Cap phone ciphertext at 65,535 bytes | Adopted | §8 |
+| `peer-left` and `pair-contested` end the code | Adopted | §5, §9.4 |
+| Track `grantId`s per device, at most 1,000 live denials | Adopted | §4 cezar's obligations. R3 keeps a `grants` list, empty until R5 |
+| Accept `no-route`, `upgrade-required`, `method-not-allowed`, `bad-request`, `too-many-grants` | Adopted | §3.2, §4 |
+| Phone ends the session on `cezar-offline`, re-handshakes after `cezar-online`, also together | Adopted | §10.1 |
+| Keep a grant on 503, only 403 and 410 delete | Adopted | §7 |
+| Retry a revoke on 429 or 503, only 204 means stored | Adopted | §7 |
+| Every rendezvous frame counts, text included | Adopted | §5 |
+| Relay host in the QR | Adopted | §9.1, with scheme and port |
+| `GET /p` is live | Adopted | §3 |
+| Update spec rule 1 | Adopted | Above |
 
-`cezarId` is implied by the socket, so no control frame repeats it.
+### What R1 added
 
-| `error` code | Meaning |
+Gaps the design left, closed there. Each is a decision a later reader should know about.
+
+| Addition | Why |
 | --- | --- |
-| `unknown-frame` | The relay does not know this `t` |
-| `bad-command` | A required field is missing or malformed |
-| `device-limit` | The allowlist is at `devices` |
-| `device-key-mismatch` | `device` is not the id of `key` |
-
-### Rendezvous
-
-A rendezvous joins two parties that have no allowlist entry yet. It is the same flow for a QR code
-and a typed code, because only the locator differs.
-
-| Rule | Value |
-| --- | --- |
-| Creation | The first `role=cezar` upgrade creates it. A `role=phone` upgrade before that closes with 4404 |
-| Claim window | The phone must join within 120 s of creation, or the socket closes with 4408 |
-| Hard lifetime | 300 s from creation, closing both sockets with 4408. The human approval happens inside this |
-| Parties | One cezar and one phone. A second phone closes with 4410, and the cezar gets `{"t":"pair-contested"}` |
-| Control | `{"t":"peer-joined"}`, `{"t":"peer-left"}` |
-| Volume | At most 32 data frames of 16 KiB each |
-| Storage | None. When both sockets are gone, nothing remains |
-
-The relay does not know whether a pairing succeeded. Success is a `device-add` on the room.
-
-### Relay behaviour
-
-These rules exist because awake time is what drives cost.
-
-1. **Sleep.** With no phone socket in a room, the room hibernates. A hibernated cezar socket must not
-   cost duration. No timer, outbound request or non-hibernating socket may hold the room awake.
-   Alarms are allowed only to expire storage, at most once a day.
-2. **No buffering.** A data frame with no live target is dropped, with `phone-left` to a cezar or
-   `cezar-offline` to a phone. The relay queues nothing, and a client recovers by asking again.
-3. **No persistence.** Payloads are never written to storage, logs or analytics. Connection metadata
-   is logged only in aggregate.
-4. **Order.** Frames between two sockets stay in order, with no duplicates. Clients still treat
-   reordering or loss as fatal to their session.
-5. **Metric.** The relay reports room awake seconds and phone-connected seconds per day, so their
-   ratio can be watched. The alert and test live in `patzick/rome`. The client half of this guard is
-   in this repository: cezar sends no data frame without a live end-to-end session.
-6. **Storage expiry.** A room's storage is deleted 90 days after its last authenticated cezar socket or
-   signed `POST /v1/push`, and never while a denylist entry is still live. A Manual server never opens
-   a socket, and losing its denylist would revive a revoked grant.
-
-### Push signal
-
-A grant ties one phone's push token to one cezar key, without either party's store holding the token.
-Grants are sealed with an AEAD key held only in Cloudflare secrets, alongside the APNs and FCM keys.
-
-**Get a grant.** `POST /v1/push-grants`, by the phone:
-
-```json
-{ "platform": "ios", "token": "<apns or fcm token>", "cezarKey": "<ed25519Pub>" }
-```
-
-`200 { "grant": "…", "grantId": "…", "expiresAt": 1801267200 }`. A grant lasts 90 days. The phone
-renews on app open once under 30 days remain. The sealed grant holds the token, platform, `cezarKey`,
-the phone's device key and the expiry. The phone gives it to cezar inside the encrypted session.
-
-**Send.** `POST /v1/push`, by cezar, signed with the key sealed in the grant:
-
-```json
-{ "v": 1, "grant": "…", "kind": "attention", "count": 3, "id": "<16 random bytes>", "ts": 1793491200 }
-```
-
-| Field | Rule |
-| --- | --- |
-| `kind` | `attention` is the only value in v1. Any other is 400 |
-| `count` | Integer 0 to 99, the badge |
-| `id` | Refused if seen in the last 10 minutes, as replay protection |
-| `ts` | Within ±120 s |
-| Anything else | 400. There is no free-text field, so user text has nowhere to go |
-
-The relay sends a fixed notification and never forwards anything from the request except `count`:
-
-| Field | Value |
-| --- | --- |
-| Visible text | Title `Cezar`, body `Cezar needs you` |
-| Badge | `count` |
-| Custom data | `{ "s": "<cezarId>" }`, so the tap opens that server |
-| Collapse key | `cezarId`, so a phone holds one notification per server |
-| Expiry at APNs or FCM | 1 hour |
-
-| Answer | Meaning | cezar does |
-| --- | --- | --- |
-| 202 `{ "ok": true }` | Handed to APNs or FCM | Nothing |
-| 400 | Malformed | Logs it. A bug, never retried |
-| 401 | Bad signature, wrong key, or `ts` out of range | Logs it |
-| 403 `{ "code": "grant-denied" }` | On the denylist | Deletes the grant |
-| 409 `{ "code": "replay" }` | `id` already seen | Nothing |
-| 410 `{ "code": "grant-gone" }` | Expired, or APNs or FCM reports the token dead | Deletes the grant |
-| 429 with `Retry-After` | Over a push limit | Drops this signal |
-| 503 | APNs, FCM or the relay failed | Drops this signal |
-
-Delivery is best effort. The relay never retries and cezar does not retry a dropped signal. The card
-stays in the chat.
-
-**Revoke.** `POST /v1/push-grants/revoke`, by the phone, `{ "grant": "…" }`, answers 204. The same
-grant can also be denied by `device-remove`. Denylist entries expire with the grant.
-
-### Limits
-
-Starting values. The `hello` frame carries the live ones, so the relay can change them without a
-client release. A client must obey the `hello` values.
-
-| Name | Scope | Value |
-| --- | --- | --- |
-| `frameBytes` | One binary frame, header included | 65,552 |
-| `controlBytes` | One text frame | 8,192 |
-| `devices` | Allowlist per room | 10 |
-| `phoneSockets` | Concurrent phone sockets per room | 3 |
-| `framesPerSecond` | Data frames per room, both directions | 500 |
-| `bytesPerDay` | Data bytes per room, per UTC day | 2 GiB |
-| `phoneSecondsPerDay` | Summed phone-connected time per room, per UTC day | 28,800 |
-| `connectsPerMinute` | Upgrades per `deviceId` or `cezarId` | 30 |
-| `ipUpgradesPerMinute` | Upgrades per source IP | 60 |
-| `newRoomsPerHour` | First-seen `cezarId` per source IP | 10 |
-| `rendezvousPerHour` | Rendezvous per `cezarId` | 10 |
-| `pushesPerMinute` | `POST /v1/push` per grant | 6 |
-| `pushesPerDay` | `POST /v1/push` per room | 200 |
-
-Rejected upgrades should be refused in the Worker where possible, so that junk never wakes a room.
-
-### Close codes
-
-| Code | HTTP | Name | Client does |
-| --- | --- | --- | --- |
-| 1000 | | `normal` | Nothing |
-| 1001 | | `going-away` | Reconnect with jitter. A relay deploy causes this |
-| 4400 | 400 | `bad-frame` | Stop. A bug, reported in the UI |
-| 4401 | 401 | `bad-proof` | Retry once, correcting the time by the response's `Date`, then stop and report |
-| 4403 | 403 | `device-removed` | Phone: stop reconnecting and show that this phone was removed. Keep the keys and offer a manual retry, because the relay is untrusted and a lost room looks the same |
-| 4404 | 404 | `no-rendezvous` | Phone: "code not found or expired" |
-| 4408 | | `pair-expired` | Show a new code |
-| 4409 | | `replaced` | cezar: do not reconnect. Another process owns this identity. Phone: this socket was replaced by a newer one, so do nothing |
-| 4410 | 409 | `pair-taken` | Phone: show a warning. Pairing has failed safe |
-| 4413 | | `frame-too-large` | Stop. A bug, reported in the UI |
-| 4426 | 426 | `protocol-unsupported` | Show "update the app" or "update cezar" |
-| 4429 | 429 | `rate-limited` | Reconnect after `retryAfter` |
-| 4430 | | `quota-exhausted` | Reconnect after `retryAfter`, and say so in the UI |
-| 4503 | 503 | `relay-disabled` | Back off 5 to 15 minutes. The operator's kill switch |
-
-Reconnect uses full jitter, from 1 s up to 5 minutes, so a deploy does not bring every cezar back at
-once. Any other close or network loss is treated like 1001.
+| Tunnel frames `HELLO` and `HEAD` | The spec's list had no way to return a status, and `KK`'s first message must be empty, so the phone's range needs a frame |
+| `pending`, `approved`, `denied`, `failure` | Step 6 said "tells the phone" and no more |
+| `XXpsk3` messages 1 and 2 carry nothing, and cezar's relay key waits for `pending` | Message 2 reaches anyone who knows the locator, which includes the relay. The phone's data rides message 3, under the PSK |
+| cezar echoes `LEASE`, and the phone gives up after 45 s | With no echo, a phone cannot tell that cezar dropped its session, because nothing else tells it |
+| Records around handshake payloads and pairing messages | The phone's name length would otherwise reach the relay |
+| Two rendezvous per pairing, one for each credential | The QR and the code have different locators. So one pairing costs two of `rendezvousPerHour`, and cezar's 5 an hour exactly fits the relay's 10 |
+| Response headers dropped by the proxy, `set-cookie` and `www-authenticate` | A response must not reach the proxy's gate cookie |
 
 ## Decision 2: keys, pairing and replay
 
@@ -458,12 +287,13 @@ generates its device key before its first grant. Only the X25519 keys protect co
 ### Pairing
 
 1. The user opens **Settings > Connect a phone**. cezar generates a 32-byte secret and a code, and
-   opens a [rendezvous](#rendezvous). The QR code lasts 2 minutes, and it does not rotate by itself. When
+   opens a [rendezvous](../../RELAY_PROTOCOL.md#5-rendezvous). The QR code lasts 2 minutes, and it does not rotate by itself. When
    it expires the screen offers **Show a new code**, so a forgotten tab shows nothing usable.
-2. The QR holds `https://<relay host>/p#1.<secret>.<cezar X25519 key>`. A browser does not send the
+2. The QR holds `<relay origin>/p#1.<secret>.<cezar X25519 key>`, and the origin comes from
+   `CEZ_RELAY_URL`, under the grammar in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string). A browser does not send the
    fragment, and a system camera that opens the link reaches a page explaining how to get the app. That
-   page has no script, but a hostile relay could serve one that reads the fragment, so a system-camera
-   scan counts as a [photo](#what-if-the-qr-code-is-photographed).
+   page has no script, but a hostile relay could serve one that reads the fragment and pair as a phone
+   itself. That is worse than a [photo](#what-if-the-qr-code-is-photographed): see [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open).
 3. The app scans it, derives the locator and pre-shared key, and joins the rendezvous.
 4. The two run `Noise_XXpsk3_25519_ChaChaPoly_SHA256`, with the phone as initiator. The phone checks
    that the key from the handshake equals the one in the QR.
@@ -475,12 +305,18 @@ generates its device key before its first grant. Only the X25519 keys protect co
    the row and both screens say the pairing failed, naming a full list for `device-limit`.
 7. Deny, a timeout or a closed tab discards everything. No device row exists until step 6.
 
-**Typed code.** The Connect a phone screen also shows a code such as `QRFX-7KMD-2NVB`: 12 Crockford
+**Typed code.** The Connect a phone screen also shows, after a click, a code such as `QRFX-7KMD-2NVB`: 12 Crockford
 base32 characters, 60 bits, same 2-minute life. The app runs PBKDF2-HMAC-SHA256 with 200,000 iterations
 over it, and splits the output into locator and pre-shared key. A QR secret uses HKDF instead, because
 it is already 256 bits. Steps 3 to 7 are identical, except that no key can be pinned in step 4, so the
-6-digit match matters more. The code uses the default relay host, so a custom `CEZ_RELAY_URL` needs the
-QR code. PBKDF2 was chosen because Node, CommonCrypto and the JDK all have it [M for the last two].
+6-digit match matters more.
+
+**A typed code needs a relay address while [QR1](#qr1-what-is-the-relays-hostname-and-who-owns-its-accounts)
+is open.** A code cannot carry the address and no default host exists, so desktop shows the address
+beside the code, and the app's Enter code screen has a relay address field. The field goes away the day
+a default host ships. Exact labels and derivations are in [§9](../../RELAY_PROTOCOL.md#9-pairing).
+
+PBKDF2 was chosen because Node, CommonCrypto and the JDK all have it [M for the last two].
 
 `psk3` means a passive observer of the handshake learns nothing it can test a guess against. The
 locator can be tested, which is why the 60 bits sit behind a slow hash and a 2-minute life.
@@ -492,7 +328,7 @@ grants access.**
 
 | Scenario | Result |
 | --- | --- |
-| Photo used after 2 minutes | 4404. Nothing happens |
+| Photo used after 2 minutes | 4408, or 4404 once the rendezvous is gone. Nothing happens |
 | Photo used after the real phone paired | 4404. The rendezvous is gone |
 | Attacker scans first, then the user's phone tries | The phone gets 4410 and a warning, and `pair-contested` makes desktop cancel the pairing and warn, so it fails safe |
 | Attacker joins while the user's phone is pairing | 4410 for the attacker and `pair-contested` on desktop, with the same result |
@@ -500,10 +336,11 @@ grants access.**
 | Photo plus a hostile relay, QR flow | Cannot impersonate cezar: the phone pins the key, and the attacker lacks its private half |
 | Typed code read in time, plus a hostile relay | **Residual risk.** No pinned key, and an attacker on both legs could grind ephemeral keys until the 6 digits match. It needs the code within 2 minutes and control of the relay. Accepted for a fallback, and the UI says to prefer the QR code |
 | Screen recording or screen share | Same as a photo |
-| System camera opens the link, hostile relay reads the fragment | Same as a photo plus a hostile relay: the phone-side pin holds, and Approve still decides |
+| System camera opens the link, hostile relay reads the fragment | **Not the same as a photo.** The relay's page script has the secret and cezar's key, runs `XXpsk3`, reaches Approve and shows the same six digits, so they warn nobody. Only the user's attention at Approve stands against it, and Approve adds a device that can start tasks. Open question [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open) |
 
 A code is shown only after a click, and never appears in a notification, log or `.ai/cezar/`. At most one
-pairing is pending, and cezar allows 5 per hour, below the relay's `rendezvousPerHour`.
+pairing is pending, and cezar allows 5 per hour. Each opens two rendezvous, so that exactly fits the relay's
+`rendezvousPerHour`. The typed-code rendezvous opens only when the user asks to show the code, so an expired QR nobody scanned costs one.
 
 ### Sessions and replay
 
@@ -524,10 +361,29 @@ another room.
 Rekey after 1 hour or 2^32 messages. Each direction rekeys on its own: the sender sends `REKEY` as its
 last frame under the old key, then calls Noise's `Rekey`. A session ends with its socket.
 
+### Noise libraries
+
+Evaluated for R1 on 2026-11-01. **No maintained library on any of the three platforms has `XXpsk3`, `KK` and
+`Rekey`, so each client carries a thin, unaudited state machine over audited primitives.** That is a finding,
+not a footnote: it is what [QR8](#qr8-should-the-noise-code-be-independently-reviewed-before-a-public-listing)
+exists for. `test-vectors/relay/generator/noise.mjs` is the reference.
+
+| Platform | Candidate | Result |
+| --- | --- | --- |
+| Node | **`node:crypto` with a thin state machine** | **Chosen.** OpenSSL has every primitive, so the published CLI gains no dependency. R3 ports `noise.mjs` to TypeScript |
+| Node | `noise-handshake` 4.2.0 | Rejected [V]: `NN`, `XX`, `IK`, `XXpsk0` and `NNpsk0` only, with `psk0` the one supported position, and no `KK` or `Rekey` |
+| Node | `@chainsafe/libp2p-noise` 17 | Rejected [M]: `XX` for libp2p only |
+| Node | `noise-protocol` 3.0.2, `noise-c.wasm` 0.4.0 | Rejected: last published 2023 and 2022, and native or WASM baggage for what OpenSSL has |
+| Android, minSdk 24 | `org.signal.forks:noise-java` 0.1.1, `rweather/noise-java` | Rejected [V]: `KK` yes, but only the old `NoisePSK` prefix, so no `psk3` modifier, and it carries its own primitives |
+| Android | **BouncyCastle `bcprov-jdk18on` 1.86, lightweight API, with a thin Kotlin state machine** | **Chosen for R4.** The API 24 platform lacks X25519 and ChaCha20-Poly1305, and PBKDF2-HMAC-SHA256 arrived at API 26 [M], so one library covers all of it. X25519, Ed25519, ChaCha20-Poly1305, HKDF and PBKDF2 are all public classes [M]. Call them directly, not through the JCA provider |
+| Android | Tink `tink-android` 1.24.0 | Fallback. It has the primitives [M], but no PBKDF2, and its raw X25519 sits in `subtle` |
+| iOS 15 | **CryptoKit with a thin Swift state machine, CommonCrypto for PBKDF2** | **Chosen for R4.** Platform code, with no dependency. Its Ed25519 signatures are randomized [M], so Swift verifies signature vectors and does not compare them |
+| iOS | `swift-libp2p-noise` | Rejected: libp2p's handshake only. It has no `psk` or `KK` that a code search can find [V] |
+
 ### Inside the tunnel
 
-The encrypted payload is a small stream protocol, published in `RELAY_PROTOCOL.md` with test vectors:
-`OPEN` (id, method, path, headers), `DATA`, `END`, `RESET`, `WINDOW`, `LEASE`, `REKEY`, `CLOSE`.
+The encrypted payload is a small stream protocol, in [§12](../../RELAY_PROTOCOL.md#12-tunnel) with test
+vectors: `HELLO`, `OPEN`, `HEAD`, `DATA`, `END`, `RESET`, `WINDOW`, `LEASE`, `REKEY`, `CLOSE`.
 
 | Rule | Value |
 | --- | --- |
@@ -678,7 +534,7 @@ it anyway.
 Settings › Connect a phone
 ┌──────────────────────────────────────────┐
 │ ▓▓▓▓▓▓▓▓    Scan with the Cezar app      │
-│ ▓▓ QR ▓▓    Or type: QRFX-7KMD-2NVB      │
+│ ▓▓ QR ▓▓    Or show a typed code         │
 │ ▓▓▓▓▓▓▓▓    Expires in 1:42              │
 ├──────────────────────────────────────────┤
 │ Your phones                              │
@@ -698,7 +554,8 @@ Connecting a cezar to a relay widens exposure, so it needs a recorded decision u
 § Zero config. Nothing reaches the relay until the user clicks **Connect a phone**, apart from `POST /v1/push`
 on a Manual server, which has its own per-server toggle and `CEZ_PUSH=0`. The socket exists
 from the first Approve, while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
-all of it. `CEZ_RELAY_URL` overrides the host for development. Both go in `.env.example` and
+all of it. `CEZ_RELAY_URL` sets the relay origin, which goes in the QR. No host is built in while QR1 is
+open, so with it unset `capabilities.phonePairing` is false. Both go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
 the same commit. See [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule).
 
@@ -762,7 +619,7 @@ Users who need independence from the relay have the Advanced path.
 
 ## Abuse controls
 
-The numbers are in [Limits](#limits). This is what each one is for.
+The numbers are in [§8 Limits](../../RELAY_PROTOCOL.md#8-limits). This is what each one is for.
 
 | Abuse | Control |
 | --- | --- |
@@ -857,9 +714,10 @@ A reviewer has no desktop cezar to scan from, so the parent spec's demo VPS (Q10
    approves automatically, without the 2-minute limit. Its devices expire after 24 hours and are capped,
    and the nightly reset clears the rest.
 3. Review notes hold the code, plus a QR image the reviewer can scan from another screen.
-4. The demo reopens its rendezvous each time the 120 s claim window lapses, 30 times an hour, so `patzick/rome` raises
-   `rendezvousPerHour` for that one `cezarId` through its `hello` limits, and cezar skips its own limit of 5
-   an hour under the demo code. The contract does not change.
+4. The demo reopens its rendezvous each time the 120 s claim window lapses, 30 times an hour. `patzick/rome`
+   has no way to raise `rendezvousPerHour` for one `cezarId`, since `hello` only reports limits, so R6 must
+   ask it for a per-`cezarId` override. cezar skips its own limit of 5 an hour under the demo code. The
+   contract does not change.
 5. Notes also include a short video of a real desktop pairing, since the desktop half cannot be seen.
 6. As a backup, Advanced with the demo's URL and throwaway Basic login still works, and already exists.
 
@@ -878,7 +736,7 @@ repository.
 | R2 | **Relay in `patzick/rome`.** Contract, conformance against R1's vectors, hibernation test, metric, staging. Confirms Cloudflare pricing and limits | Staging relay | R1. Already started on the contract above | L |
 | R3 | **cezar client.** `narrowForRelay`, keys, device store, dispatcher, routes, Settings UI, quiet tests | Desktop half, behind `capabilities.phonePairing` until R4 | R1. Stubbed sockets until R2 | L |
 | R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds | R0, R2, R3, M7 | L |
-| R5 | **Push through the relay.** Replaces M11's relay half | Native notifications | R2, R4, M10 | M |
+| R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10, QR10 | M |
 | R6 | **Public release additions.** Demo code, privacy policy, export answers. Extends M12 | Reviewable build | R5, Q10, QR7 | M |
 
 **Ships before the relay, unchanged:** M1 installable PWA, M4 phone chat, M5 approvals, M6 Manager first,
@@ -921,7 +779,7 @@ listing.
 | A change wakes rooms | Medium | Bill rises 24 times | Test plus metric |
 | New route reads `localHandoff` outside the closure | Medium | Phone gains a local power | Source-walking test |
 | Stolen unlocked phone | Medium | Tasks run on the user's computer, with everything a task can do | Remove, [QR3](#qr3-does-a-phone-need-its-own-lock) |
-| Hand-written Noise has a bug | Medium | Loss of confidentiality | Published vectors, Noise test vectors, external review before public listing |
+| Hand-written Noise has a bug | Medium | Loss of confidentiality | No maintained library has `XXpsk3`, `KK` and `Rekey` on our platforms, so all three clients carry a thin, unaudited state machine over audited primitives. Published vectors, shared vectors, a second implementation (`snow`), and external review before public listing, see [QR8](#qr8-should-the-noise-code-be-independently-reviewed-before-a-public-listing) |
 | Relay becomes a free tunnel | Low | Cost | Daily quotas, kill switch |
 | One private key across all relay users | Low | Generic push spam, not content | Cloudflare secrets, rotation in `patzick/rome` |
 | Single relay is a single dependency | Medium | Phones lose access | Advanced path, honest banners |
@@ -931,8 +789,8 @@ listing.
 ## Backward compatibility
 
 - Additive: new routes, a `phonePairing` capability, a `phone-pairing` event, new `~/.cezar/relay/` files.
-- BACKWARD_COMPATIBILITY.md gains a section for the relay contract and tunnel protocol, with versioning
-  rules, and §2 and §9 entries. A breaking relay change needs a new path version and old clients served
+- BACKWARD_COMPATIBILITY.md §6c is the relay contract and tunnel protocol, with versioning rules. R1 added
+  it. R3 adds the §2 and §9 entries with the routes and files they describe. A breaking relay change needs a new path version and old clients served
   until a release of each has been in the wild.
 - §6b from #1883 gains the tunnel protocol. Every existing clause stands.
 - A server with this feature behaves identically when no phone is paired and no push grant exists, with no
@@ -943,8 +801,7 @@ listing.
 
 ## Changes to the parent spec
 
-R1 makes these edits in `.ai/specs/2026-10-31-mobile-apps-manager-first.md`. They are left out of this PR
-so that it stays one spec.
+R1 made these edits in `.ai/specs/2026-10-31-mobile-apps-manager-first.md`.
 
 | Parent section | Change |
 | --- | --- |
@@ -959,8 +816,8 @@ so that it stays one spec.
 
 ## Testing
 
-- **Crypto:** Noise's published vectors in all three languages, plus shared cross-language vectors
-  generated by the Node client and read by Swift and Kotlin tests. Tampering, reorder and replay each end
+- **Crypto:** Noise's published vectors in all three languages, plus the shared vectors in
+  `test-vectors/relay/`, read by the Node, Swift and Kotlin tests. Tampering, reorder and replay each end
   a session. The first handshake message with a payload is refused.
 - **Pairing:** expiry, single use, contested join, Deny, closed tab, no device row before approval, pinned
   key mismatch, typed code, and the limit of 5 pairings per hour.
@@ -1033,6 +890,27 @@ R6.** It is a legal filing. Everything said about it here is [M].
 **Recommended: yes, a focused review of the handshake, tunnel and proxy.** End-to-end encryption is the
 promise of this feature, and the claim that anyone can check it is only as good as someone having done so.
 
+### QR9: Should the QR code be something a browser does not open?
+
+**Recommended: yes, a non-https scheme such as `cezar-pair:1.<origin>.<secret>.<key>`, before any relay the user does not run.**
+A system camera that opens `https://<relay>/p#secret` hands the secret to a page the relay serves, and a
+hostile relay's script can pair as a phone and show the same six digits (R1 review F1). The user's
+attention at Approve is then the only defence. The trade-off: a system camera no longer reaches `GET /p`,
+so someone with no app gets no "how to get the app" page, and the code works only inside the app's
+scanner. Until decided, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
+acceptable only for a relay the user runs. It changes QR bytes, so decide before the public relay.
+
+### QR10: How does a genuine revoke survive a full stranger denial pool?
+
+**Recommended: drop the 1,000 cap on the stranger pool before R5, and keep 8 per key, the per-IP limit and
+expiry with the grant as its bounds.** Today a hostile Manual server, or anyone who knows its key, can mint
+and revoke grants under 125 throwaway keys, about 2,000 `POST`s, and fill the pool. A real phone's revoke
+then answers 503 until the grant expires, so that server keeps sending `Cezar needs you` for up to 90 days,
+against the parent spec's rule that it must stop once the user says so. Harm is limited to generic text.
+Displacing old denials is worse: it silently revives a revoked grant. Cost of the fix: storage per room is
+bounded only by the rate limits, and that is `patzick/rome`'s to accept. R5 depends on this answer, and no
+wire shape changes either way.
+
 ## Changelog
 
 - 2026-11-01: Relay contract, protocol version 1. Relay repository is `patzick/rome`.
@@ -1042,3 +920,22 @@ promise of this feature, and the claim that anyone can check it is only as good 
 - 2026-11-01: Review corrections outside the contract: authorization reads the closure misses, scope ending
   with the request, proxy listener and port rules, the worst-case cost, and refusals for browse and webhook
   writes. The contract did not change.
+- 2026-11-01: R1. The wire contract moved to `RELAY_PROTOCOL.md`, with vectors in `test-vectors/relay/`.
+  Protocol version stays 1. Everything in `patzick/rome#1` is adopted or rejected above. Rooms have no alarm,
+  a daily cron deletes expired rooms, and a rendezvous keeps one alarm of at most 300 s. A typed code needs a
+  relay address while QR1 is open. Added `HELLO` and `HEAD`, the pairing messages, the `LEASE` echo and one
+  rendezvous per credential. Applied the parent spec amendments.
+- 2026-11-01: R1 review. `device-add` is idempotent for a listed device, a failed pairing also sends
+  `device-remove`, a `failure` in place of `pending` uses nonce 0, and a phone with no shared tunnel version
+  closes and waits. Protocol version stays 1.
+- 2026-11-01: R1 review fixes. `qr.json` moved `10.0.2.2` from accepted to refused. Corrected the claim that nothing depends on
+  the relay for authorization and the "photographed" row for a system-camera scan, and opened QR9. Added
+  frame pacing, stale-frame handling, `RESET` after `END`, `device-removed` reconnects, the 60-a-minute command
+  limit, `bytesPerDay` closing cezar, the rendezvous kill-switch exception, absent `hello` keys, public keys
+  seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
+  and "MUST NOT use" `permessage-deflate`.
+- 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
+  parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol
+  errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone
+  has its own timer after message 3, Approve closes 15 s before the hard lifetime, and a revoke's retry has an
+  exit. Opened QR10. Protocol version stays 1.
