@@ -3,8 +3,7 @@
 
 /** A pill exactly behind the camera: where shapes grow from and fold back into. */
 export function tucked(layout, housing) {
-  const centre = layout.window.width / 2
-  return { x: centre - housing.width / 2, y: housing.top, width: housing.width, height: housing.height }
+  return { x: housing.centre - housing.width / 2, y: housing.top, width: housing.width, height: housing.height }
 }
 
 function pill2Rect(layout, housing, island, minis, overflow) {
@@ -12,14 +11,14 @@ function pill2Rect(layout, housing, island, minis, overflow) {
   const { placement, gap, inset, padding, mini, miniGap, countWidth, belowHeight } = layout.pill2
   const width = padding * 2 + minis * mini + (minis - 1) * miniGap + (overflow > 0 ? countWidth + miniGap : 0)
   if (placement === 'below') {
-    return { x: layout.window.width / 2 - width / 2, y: housing.top + housing.height + gap, width, height: belowHeight }
+    return { x: housing.centre - width / 2, y: housing.top + housing.height + gap, width, height: belowHeight }
   }
   const pad = housing.width > 0 ? inset : 0
   return { x: island.x + island.width + gap, y: housing.top + pad, width, height: housing.height - pad * 2 }
 }
 
 export function computeShapes(layout, housing, { expanded, rows, textWidth, minis, overflow }) {
-  const centre = layout.window.width / 2
+  const { centre } = housing
   if (expanded) {
     const { width, headerFloating, rowHeight, maxRows, paddingBottom } = layout.expanded
     const header = housing.width > 0 ? housing.height : headerFloating

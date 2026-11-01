@@ -256,6 +256,7 @@ window.__notch = {
   setExpanded(next) {
     if (expanded === next) return
     expanded = next
+    if (!expanded) for (const row of document.querySelectorAll('.row.hot')) row.classList.remove('hot')
     if (model) draw()
   },
   /** WebKit gives a window that is never key no hover, so the shell forwards the pointer. */

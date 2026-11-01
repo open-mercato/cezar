@@ -46,6 +46,9 @@ pub struct Housing {
     pub height: f64,
     /// Distance from the panel's top to pill 1: a floating pill sits below the menu bar.
     pub top: f64,
+    /// The camera or the screen's centre, from the panel's left edge. Off the panel's middle only
+    /// when the screen is narrower than the panel.
+    pub centre: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,23 +68,29 @@ pub fn place(screen: &ScreenMetrics, panel: PanelSize) -> Placement {
     let frame = screen.frame;
     let top = frame.y + frame.height;
     let notched = screen.safe_area_top > 0.0 && screen.aux_left_width > 0.0 && screen.aux_right_width > 0.0;
-    let (centre, housing) = if notched {
+    let (centre, (width, height, housing_top)) = if notched {
         let width = (frame.width - screen.aux_left_width - screen.aux_right_width).max(0.0);
-        (frame.x + screen.aux_left_width + width / 2.0, Housing { width, height: screen.safe_area_top, top: 0.0 })
+        (frame.x + screen.aux_left_width + width / 2.0, (width, screen.safe_area_top, 0.0))
     } else {
         let bar = (top - screen.visible_top).max(0.0);
-        (frame.x + frame.width / 2.0, Housing { width: 0.0, height: FLOATING_HEIGHT, top: bar + FLOATING_GAP })
+        (frame.x + frame.width / 2.0, (0.0, FLOATING_HEIGHT, bar + FLOATING_GAP))
     };
     let origin_x = (centre - panel.width / 2.0).min(frame.x + frame.width - panel.width).max(frame.x);
-    Placement { origin_x, origin_y: top - panel.height, housing }
+    Placement { origin_x, origin_y: top - panel.height, housing: Housing { width, height, top: housing_top, centre: centre - origin_x } }
 }
 
 /// The display a point is on, or the first one when it is on none (a just-removed display).
+/// `mouseLocation` reaches `frame.maxY` on the top row of pixels, which a half-open rect leaves out.
 pub fn screen_at(screens: &[ScreenMetrics], x: f64, y: f64) -> Option<usize> {
     if screens.is_empty() {
         return None;
     }
-    Some(screens.iter().position(|screen| screen.frame.contains(x, y)).unwrap_or(0))
+    let on_top_row = |screen: &ScreenMetrics| {
+        let frame = screen.frame;
+        y == frame.y + frame.height && x >= frame.x && x < frame.x + frame.width
+    };
+    let index = screens.iter().position(|screen| screen.frame.contains(x, y)).or_else(|| screens.iter().position(on_top_row));
+    Some(index.unwrap_or(0))
 }
 
 /// `rects` are the page's: top-left origin, CSS pixels. The pointer is AppKit's.
@@ -94,29 +103,42 @@ pub fn pointer_on_shape(rects: &[Rect], placement: &Placement, panel: PanelSize,
 pub const OPEN_DWELL_MS: u64 = 140;
 /// Grace before closing, so a pointer that slips off an edge does not fold the list under it.
 pub const CLOSE_GRACE_MS: u64 = 380;
+/// How long a click from pill 2, which the list does not cover, gives the pointer to reach it.
+pub const CLICK_HOLD_MS: u64 = 2500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Hover {
     pub expanded: bool,
     /// When the pointer last crossed to the side opposite `expanded`.
     pending_since: Option<u64>,
+    /// Off the shape counts for nothing before this.
+    held_until: u64,
+    /// Dismissed under the pointer: nothing opens until it has left.
+    disarmed: bool,
 }
 
 impl Hover {
-    /// A click on the pill: opens now, with no dwell.
-    pub fn open(&mut self) {
-        self.expanded = true;
-        self.pending_since = None;
+    /// A click on a pill: opens now, with no dwell.
+    pub fn open(&mut self, now_ms: u64) {
+        *self = Hover { expanded: true, held_until: now_ms + CLICK_HOLD_MS, ..Hover::default() };
     }
 
     pub fn close(&mut self) {
-        self.expanded = false;
-        self.pending_since = None;
+        *self = Hover::default();
+    }
+
+    /// Closed by a click on a manager, with the pointer still where the list was.
+    pub fn dismiss(&mut self) {
+        *self = Hover { disarmed: true, ..Hover::default() };
     }
 
     /// One pointer sample. Returns the new `expanded` when it changed.
     pub fn step(&mut self, on_shape: bool, now_ms: u64) -> Option<bool> {
-        if on_shape == self.expanded {
+        if self.disarmed {
+            self.disarmed = on_shape;
+            return None;
+        }
+        if on_shape == self.expanded || (self.expanded && now_ms < self.held_until) {
             self.pending_since = None;
             return None;
         }
@@ -155,7 +177,7 @@ mod tests {
     #[test]
     fn a_notched_screen_centres_on_the_housing_not_the_screen() {
         let placed = place(&NOTCHED, PANEL);
-        assert_eq!(placed.housing, Housing { width: 200.0, height: 37.0, top: 0.0 });
+        assert_eq!(placed.housing, Housing { width: 200.0, height: 37.0, top: 0.0, centre: 400.0 });
         assert_eq!(placed.origin_x, 754.0 - 400.0);
         assert_eq!(placed.origin_y + PANEL.height, 982.0);
     }
@@ -184,7 +206,10 @@ mod tests {
     #[test]
     fn the_panel_stays_on_a_screen_narrower_than_itself() {
         let tiny = ScreenMetrics { frame: Rect { x: 100.0, y: 0.0, width: 600.0, height: 500.0 }, visible_top: 475.0, ..Default::default() };
-        assert_eq!(place(&tiny, PANEL).origin_x, 100.0);
+        let placed = place(&tiny, PANEL);
+        assert_eq!(placed.origin_x, 100.0);
+        // The shapes follow the screen's centre, not the panel's.
+        assert_eq!(placed.housing.centre, 300.0);
     }
 
     #[test]
@@ -194,6 +219,8 @@ mod tests {
         assert_eq!(screen_at(&screens, 2000.0, -100.0), Some(1));
         assert_eq!(screen_at(&screens, -5000.0, 0.0), Some(0));
         assert_eq!(screen_at(&[], 0.0, 0.0), None);
+        // The top row of pixels, on a display that is not the first.
+        assert_eq!(screen_at(&screens, 2000.0, 1240.0), Some(1));
     }
 
     #[test]
@@ -219,19 +246,41 @@ mod tests {
     #[test]
     fn a_slip_off_the_edge_does_not_close() {
         let mut hover = Hover::default();
-        hover.open();
-        assert_eq!(hover.step(false, 0), None);
-        assert_eq!(hover.step(true, 200), None);
-        assert_eq!(hover.step(false, 300), None);
-        assert_eq!(hover.step(false, 300 + CLOSE_GRACE_MS), Some(false));
+        assert_eq!(hover.step(true, 0), None);
+        assert_eq!(hover.step(true, OPEN_DWELL_MS), Some(true));
+        assert_eq!(hover.step(false, 1000), None);
+        assert_eq!(hover.step(true, 1200), None);
+        assert_eq!(hover.step(false, 1300), None);
+        assert_eq!(hover.step(false, 1300 + CLOSE_GRACE_MS), Some(false));
     }
 
     #[test]
     fn a_click_needs_no_dwell() {
         let mut hover = Hover::default();
         assert_eq!(hover.step(true, 0), None);
-        hover.open();
+        hover.open(1);
         assert!(hover.expanded);
+        assert_eq!(hover.step(true, 2), None);
+    }
+
+    #[test]
+    fn a_click_from_pill_two_waits_for_the_pointer_but_not_forever() {
+        let mut hover = Hover::default();
+        hover.open(0);
+        assert_eq!(hover.step(false, CLICK_HOLD_MS - 1), None);
+        assert_eq!(hover.step(false, CLICK_HOLD_MS), None);
+        assert_eq!(hover.step(false, CLICK_HOLD_MS + CLOSE_GRACE_MS), Some(false));
+    }
+
+    #[test]
+    fn a_dismissed_list_stays_shut_until_the_pointer_leaves() {
+        let mut hover = Hover::default();
+        hover.open(0);
+        hover.dismiss();
         assert_eq!(hover.step(true, 1), None);
+        assert_eq!(hover.step(true, 10_000), None);
+        assert_eq!(hover.step(false, 10_001), None);
+        assert_eq!(hover.step(true, 10_002), None);
+        assert_eq!(hover.step(true, 10_002 + OPEN_DWELL_MS), Some(true));
     }
 }
