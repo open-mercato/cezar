@@ -65,6 +65,7 @@ public final class RelayLink {
     private SocketTransport.Connection socket;
     private NoiseHandshake handshake;
     private int frameBytes = FRAME_DEFAULT;
+    private int framesPerSecond = TunnelSession.FRAMES_PER_SECOND_DEFAULT;
     private int attempts;
     private long clockOffsetSeconds;
     private boolean proofRetried;
@@ -303,6 +304,7 @@ public final class RelayLink {
             stopWith(RelayStatus.of(RelayStatus.Kind.BROKEN));
             return;
         }
+        framesPerSecond = limits == null ? TunnelSession.FRAMES_PER_SECOND_DEFAULT : limits.optInt("framesPerSecond", TunnelSession.FRAMES_PER_SECOND_DEFAULT);
         // The key is absent on a 4430 hello, and `closing` follows (§ 4).
         String cezar = hello.optString("cezar");
         if (cezar.equals("online")) startHandshake();
@@ -373,7 +375,7 @@ public final class RelayLink {
             int cezarMax = tunnel.getInt("max");
             SocketTransport.Connection connection = socket;
             TunnelSession next = new TunnelSession(ciphertext -> send(connection, ciphertext), current.split(), frameBytes,
-                    this::onSessionEnded, clock);
+                    new FramePacer(framesPerSecond, clock, Thread::sleep), this::onSessionEnded, clock);
             if (Math.min(TunnelSession.TUNNEL_MAX, cezarMax) < Math.max(TunnelSession.TUNNEL_MIN, cezarMin)) {
                 next.close(TunnelFrame.CLOSE_TUNNEL_UNSUPPORTED);
                 stopWith(RelayStatus.of(TunnelSession.TUNNEL_MAX < cezarMin ? RelayStatus.Kind.UPDATE_APP : RelayStatus.Kind.UPDATE_CEZAR));
