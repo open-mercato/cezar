@@ -38,7 +38,8 @@
       "skip-qa",
       "qa-approved",
       "qa-self-verified",
-      "in-progress"
+      "in-progress",
+      "ci-monitoring"
     ],
     "priority": [
       "priority-low",
