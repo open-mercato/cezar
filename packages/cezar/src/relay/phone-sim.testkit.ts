@@ -38,7 +38,7 @@ export function parseQr(qr: string): { origin: string; secret: Buffer; key: Buff
   const secret = fromB64u(secretText, 32);
   const key = fromB64u(keyText, 32);
   if (!secret || !key) return { refused: 'grammar' };
-  if (scheme === 'http' && !['127.0.0.1', 'localhost', '[::1]', '10.0.2.2'].includes(host)) return { refused: 'cleartext' };
+  if (scheme === 'http' && !['127.0.0.1', 'localhost', '[::1]'].includes(host)) return { refused: 'cleartext' };
   return { origin: `${scheme}://${host}${port ? `:${port}` : ''}`, secret, key };
 }
 

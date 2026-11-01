@@ -75,11 +75,6 @@ describe('qr.json', () => {
     expect(keys.locator.toString('hex')).toBe(qr.locatorHex);
     expect(keys.psk.toString('hex')).toBe(qr.psk);
     for (const item of qr.accepted) {
-      // § 9.1 took 10.0.2.2 out of the table; the vector keeps it for the app's parser, not cezar's.
-      if (item.relayOrigin.includes('10.0.2.2')) {
-        expect(parseRelayOrigin(item.relayOrigin)).toBeNull();
-        continue;
-      }
       const origin = parseRelayOrigin(item.relayOrigin);
       expect(origin).toBe(item.relayOrigin);
       expect(socketOrigin(origin!)).toBe(item.socketOrigin);
