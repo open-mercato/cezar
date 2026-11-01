@@ -62,7 +62,8 @@ transport frames and rekey through the `snow` crate, byte for byte.
 `generator/noise.mjs` is an **unaudited** Noise state machine, thin over audited primitives. No
 maintained JavaScript library has `XXpsk3`, `KK` and `Rekey` together. It passes the published vectors
 for `KK`, `XX` and `XXpsk3`, and `snow` agrees with it, but `snow` is unaudited too. Published vectors
-do not cover `Rekey`, so that rests on `snow` and on `verify.mjs`, which derives each new key by hand.
+do not cover `Rekey`, so that rests on `snow`, run by hand, and on `verify.mjs`, which derives each new key
+by hand.
 `packages/cezar/test/unit/relay-vectors.test.ts` runs the three Node checks in CI, and regenerating must
 reproduce every committed byte.
 Nothing in this directory ships: it is outside every npm workspace, and the published CLI does not

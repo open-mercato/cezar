@@ -56,6 +56,11 @@
       "reason": "version"
     },
     {
+      "name": "unsupported version with another layout",
+      "qr": "https://relay.example.test/p#2.x",
+      "reason": "version"
+    },
+    {
       "name": "cleartext to a public host",
       "qr": "http://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
       "reason": "cleartext"
