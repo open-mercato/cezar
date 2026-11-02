@@ -728,7 +728,7 @@ config exception names it.
 
 ## Phones open on Manager — deliberate, 2026-11-01
 
-Spec `.ai/specs/2026-10-31-mobile-apps-manager-first.md`, Decision 3. On a phone (coarse primary pointer, short screen side under 600), the first location of a page load being exactly `/` now opens `/manager` when `capabilities.managers` is true and first-run setup is finished. It used to restore the last project page, which moves one tap away, behind Code in the drawer.
+Spec `.ai/specs/2026-10-31-mobile-apps-manager-first.md`, Decision 3. On a phone (coarse primary pointer, short screen side under 600), the first location of a page load being exactly `/` now opens `/manager` when `capabilities.managers` is true and first-run setup is finished. It used to restore the last project page, which moves one tap away, behind Tasks in the drawer.
 
 Unchanged: desktop browsers, tablets, in-app links to `/`, `/` with a query or hash, deep links, servers with `CEZ_MANAGERS=0` or no answer from health, and `start_url: "/"` in the manifest.
 
