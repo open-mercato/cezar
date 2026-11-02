@@ -696,7 +696,9 @@ open questions (QR1, QR2, QR4, QR6, QR10) are still open.
 ### Q2: Accept Capacitor?
 
 **Decided 2026-11-02: yes, Capacitor is kept, subject to the iPhone proxy test** (the loopback proxy check,
-relay spec QR5/R0, which is still to do). Platform order is Android first, then iOS. Original text: M2 runs first, built with Capacitor on the
+relay spec QR5/R0, which is still to do). Platform order is Android first, then iOS.
+
+M2 runs first, built with Capacitor on the
 team's own devices with local signing and no store accounts. The shell work in M7 starts only if it
 passes.
 
