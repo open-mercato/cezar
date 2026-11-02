@@ -165,6 +165,7 @@ import { MIN_SECRET_LEN } from '../core/secret-redaction.ts';
 import { track } from '../telemetry.ts';
 import { skillLabel, taskOriginOf, workflowLabel, type TaskOrigin } from '../feature-telemetry.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
+import { outsideRelayScope } from '../relay/scope.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import {
   chainStepNote,
@@ -2256,7 +2257,7 @@ export class RunManager {
           if (continuation) {
             const hydrated = this.hydrateQueuedContinuation(runId, continuation);
             const ownerToken = Symbol('run-owner');
-            void this.runContinuation(
+            void outsideRelayScope(() => this.runContinuation(
               runId,
               hydrated.stepId,
               hydrated.sessionId,
@@ -2266,7 +2267,7 @@ export class RunManager {
               hydrated.persistedImages,
               hydrated.persistedAttachments,
               ownerToken,
-            ).catch((err: unknown) => {
+            )).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.failOwnedContinuation(runId, ownerToken, message);
               // A cancel that landed before the throw still owes the parent its report.
@@ -2284,7 +2285,7 @@ export class RunManager {
           // it is now, exactly as a run started now would be.
           const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
-          void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
+          void outsideRelayScope(() => this.execute(runId, workflow, input, ownerToken)).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -5182,7 +5183,7 @@ export class RunManager {
     // Same window as a dequeued continuation: live (and cancellable) before `runContinuation`
     // registers it in `active`.
     this.starting.add(runId);
-    void this.runContinuation(
+    void outsideRelayScope(() => this.runContinuation(
       runId,
       stepId,
       resume ? sessionStep?.sessionId : undefined,
@@ -5192,7 +5193,7 @@ export class RunManager {
       undefined,
       undefined,
       ownerToken,
-    ).catch(
+    )).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         this.failOwnedContinuation(runId, ownerToken, message);
