@@ -5,15 +5,37 @@ description: "Pair the Cezar app with this computer through an encrypted relay, 
 
 Connect a phone pairs the Cezar app with the cezar on your computer. You need no server, domain or password: both connect out to a relay, and traffic crosses it end-to-end encrypted. The relay can drop traffic. It cannot read it.
 
-## Turn it on
+## Choose a relay
 
-Set the relay's address before you start cezar. No relay is built in.
+No relay is built in yet, so give cezar one to use. You need no environment variable and no restart.
+
+1. Open **Settings → Connect a phone** and enter the address under **Relay address**.
+2. Select **Test**. cezar checks that the relay answers and speaks a compatible protocol version, using a throwaway key rather than this computer's.
+3. Select **Save**. It stays off until **Test** passes for that exact address.
+
+`https://` works anywhere. `http://` works only for `127.0.0.1`, `localhost` and `[::1]`, for a relay on your own machine. An address has no path. Until one is saved, **Connect a phone** is disabled.
+
+The address is saved in `~/.cezar/config.json` and survives a restart. Nothing contacts a relay until you select **Test** or **Connect a phone**.
+
+To set it from outside, start cezar with `CEZ_RELAY_URL`:
 
 ```bash
 CEZ_RELAY_URL=https://relay.example.com cezar
 ```
 
-`https://` works anywhere. `http://` works only for `127.0.0.1`, `localhost` and `[::1]`, for a relay on your own machine. Without a valid address, Settings has no Connect a phone section.
+That wins over the field, which then shows the value read-only. If it is set but not a valid address, phones cannot connect until you fix or unset it, because cezar will not fall back to another relay. Either way, your saved address is kept for when you unset it.
+
+## Change or clear the relay
+
+Changing or clearing the address disconnects every phone. If any are paired, cezar warns you first. A phone is tied to the relay it paired through, so it cannot follow you to a new one.
+
+When you confirm, cezar:
+
+- removes every phone from the list, and asks the old relay to drop them. If that relay does not answer within five seconds, cezar moves on, because it refuses those phones either way.
+- closes its connection to the old relay. It connects to the new one only when you next pair a phone.
+- keeps this computer's identity in `~/.cezar/relay/`, so nothing needs setting up again but the phones.
+
+Pair each phone again to use it.
 
 ## Pair a phone
 
@@ -31,6 +53,8 @@ If the app cannot scan, select **Type a code instead** and enter the code and th
 
 A phone has what a hosted cockpit has: Manager, approvals, starting and answering tasks, and reading diffs. Its requests cannot open a shell, edit agent config or accounts, use open-in actions, change the browse root, write webhooks, or pair and remove phones.
 
+A phone cannot read or change the relay address either. A hosted cockpit can, like its other workspace settings.
+
 Those limits bind the phone's requests, not what a task does. A task runs as you, so a stolen unlocked phone can ask a task to do anything. **Remove** is the answer.
 
 ## Remove a phone
@@ -39,7 +63,7 @@ Select the bin icon beside the phone. It loses access at once. The relay connect
 
 ## Turn it off
 
-`CEZ_RELAY=0` blocks everything relay-related, including the connection for phones already paired. Pairings stay in `~/.cezar/relay/`. Delete that folder to forget them.
+`CEZ_RELAY=0` blocks everything relay-related and hides the section, including the connection for phones already paired. Pairings stay in `~/.cezar/relay/`. Delete that folder to forget them.
 
 ## What the relay sees
 

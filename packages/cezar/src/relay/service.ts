@@ -1,20 +1,48 @@
+import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import type { PhonePairingCodeResponse, PhonesResponse, RelayStatus, StartPhonePairingResponse } from '@open-mercato/cezar-contract';
+import type { PhonePairingCodeResponse, PhonesResponse, RelayStatus, StartPhonePairingResponse, TestRelayAddressResponse } from '@open-mercato/cezar-contract';
 import { cezarHomeDir } from '../paths.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
 import { RelayIdentityStore, RelayKeysLocked, type RelayIdentity } from './identity.ts';
 import { Pairing, PairingStartError } from './pairing.ts';
+import { probeRelay } from './probe.ts';
 import type { PairedPhone } from './rendezvous.ts';
 import { outsideRelayScope, runInRelayScope } from './scope.ts';
 import { PhoneSession } from './session.ts';
 import { openWebSocket, type SocketFactory } from './socket.ts';
-import { CLOSE, fromB64u, relayOrigin } from './wire.ts';
+import { CLOSE, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
+const INVALID_ADDRESS = 'Use https://host, or http:// only for 127.0.0.1, localhost or [::1], with no path.';
 const HOUR_MS = 3_600_000;
 const SOCKET_READY_MS = 8_000;
+/** How long a new address waits for the old relay, so a dead one cannot hold the Save. */
+const LEAVE_RELAY_MS = 5_000;
+
+/** Where the address from Settings lives. Tests replace it; everything else uses `config.json`. */
+export interface RelayAddressStore {
+  read(): Promise<string | null>;
+  write(address: string | null): Promise<void>;
+}
+
+const workspaceAddressStore: RelayAddressStore = {
+  read: async () => (await loadWorkspaceConfig()).relayAddress ?? null,
+  write: async (address) => {
+    await mergeWriteWorkspaceConfig((config) => {
+      if (address === null) delete config.relayAddress;
+      else config.relayAddress = address;
+    });
+  },
+};
+
+export class RelayAddressError extends Error {
+  constructor(message: string, readonly status: 400 | 409) {
+    super(message);
+  }
+}
 
 export interface RelayServiceOptions {
   directory?: string;
@@ -23,6 +51,7 @@ export interface RelayServiceOptions {
   identity?: RelayIdentityStore;
   label?: string;
   now?: () => number;
+  addressStore?: RelayAddressStore;
 }
 
 const truncateBytes = (text: string, limit: number): string => {
@@ -54,6 +83,13 @@ export class RelayService {
   private readonly sessions = new Map<string, PhoneSession>();
   private fetcher: ((request: Request) => Promise<Response>) | undefined;
   private disposed = false;
+  private readonly addressStore: RelayAddressStore;
+  private savedAddress: string | null = null;
+  private addressLoaded = false;
+  private addressWrites = 0;
+  private changingAddress = false;
+  /** Never the real identity: Test must not tell a relay nobody chose yet who this computer is. */
+  private readonly probeSeed = randomBytes(32);
 
   constructor(options: RelayServiceOptions = {}) {
     this.env = options.env ?? process.env;
@@ -63,6 +99,7 @@ export class RelayService {
     this.devices = new RelayDevices(this.directory);
     this.label = options.label ?? (truncateBytes(hostname(), 64) || 'Computer');
     this.now = options.now ?? Date.now;
+    this.addressStore = options.addressStore ?? workspaceAddressStore;
   }
 
   /** Wired once the app exists: dispatched requests enter through `fetcher`. */
@@ -71,12 +108,17 @@ export class RelayService {
     this.onChange = onChange;
   }
 
+  private get address(): RelayAddress {
+    return resolveRelayAddress(this.env, this.savedAddress);
+  }
+
   private get origin(): string | null {
-    return relayOrigin(this.env);
+    return this.address.origin;
   }
 
   /** Reconnects at boot only if there is something to do. Never fails boot. */
   async start(): Promise<void> {
+    await this.refreshAddress();
     if (!this.origin || this.disposed) return;
     try {
       if (this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0) return;
@@ -262,6 +304,111 @@ export class RelayService {
     this.closeIfIdle();
   }
 
+  /**
+   * Read per request, so a save needs no restart and every `cezar serve` on this home converges.
+   * One that moved under us leaves the old relay without telling it: whoever saved has done that.
+   */
+  async refreshAddress(): Promise<void> {
+    const writes = this.addressWrites;
+    let saved: string | null;
+    try {
+      saved = await this.addressStore.read();
+    } catch {
+      return; // What it knew stands. The relay never fails a request or the boot.
+    }
+    if (this.changingAddress || writes !== this.addressWrites) return;
+    const before = this.origin;
+    const loaded = this.addressLoaded;
+    this.savedAddress = saved;
+    this.addressLoaded = true;
+    if (!loaded || this.origin === before) return;
+    this.pairing?.cancel();
+    this.connection?.stop();
+    this.connection = undefined;
+    this.devices.reload();
+    this.onChange();
+  }
+
+  /**
+   * The rows go first: past this point no phone can start a session, and a failed save has cost
+   * what the user already agreed to. The identity stays, because it is this home's and not the
+   * relay's: `cezarId`, both keys and any Manual push grant keep working on the new address.
+   */
+  setAddress(address: string | null, dropPhones: boolean): Promise<void> {
+    return outsideRelayScope(async () => {
+      if (this.address.source === 'env' || this.address.source === 'env-invalid') {
+        throw new RelayAddressError('CEZ_RELAY_URL sets the relay address, so it cannot be changed here.', 409);
+      }
+      const origin = address === null ? null : parseRelayOrigin(address);
+      if (address !== null && !origin) throw new RelayAddressError(INVALID_ADDRESS, 400);
+      if (this.changingAddress) throw new RelayAddressError('The relay address is already changing.', 409);
+      await this.refreshAddress();
+      if (origin === parseRelayOrigin(this.savedAddress ?? undefined)) return;
+      if (this.devices.list().length > 0 && !dropPhones) {
+        throw new RelayAddressError('Paired phones must pair again after this change, so confirm it first.', 409);
+      }
+      if (this.pairing && !this.pairing.canReplace) throw new RelayAddressError('A phone is waiting for your answer.', 409);
+      this.changingAddress = true;
+      try {
+        this.pairing?.cancel();
+        let removals: PendingRemoval[];
+        try {
+          removals = this.devices.forgetAll();
+        } catch {
+          throw new RelayAddressError('Could not update the phone list, so nothing changed.', 409);
+        }
+        try {
+          await this.addressStore.write(origin);
+          this.addressWrites += 1;
+          this.savedAddress = origin;
+        } catch {
+          throw new RelayAddressError('Could not save the relay address.', 409);
+        } finally {
+          await this.leaveRelay(removals);
+        }
+      } finally {
+        this.changingAddress = false;
+      }
+      this.onChange();
+    });
+  }
+
+  /** Clean on the old relay when it answers, bounded when it does not. It is only a cost filter. */
+  private async leaveRelay(removals: readonly PendingRemoval[]): Promise<void> {
+    for (const session of [...this.sessions.values()]) session.close(CLOSE.deviceRemoved);
+    const connection = this.connection;
+    const undelivered = new Set(removals);
+    if (connection?.ready) {
+      const told = removals.map(async (removal) => {
+        await connection.whenReady(LEAVE_RELAY_MS);
+        for (const frame of removalFrames(removal, connection.limits.controlBytes)) await connection.command(frame, LEAVE_RELAY_MS);
+        undelivered.delete(removal);
+      });
+      await Promise.race([
+        Promise.allSettled(told),
+        new Promise((resolve) => { setTimeout(resolve, LEAVE_RELAY_MS).unref?.(); }),
+      ]);
+    }
+    for (const removal of undelivered) {
+      try {
+        if (removal.grants.length > 0) this.devices.settleRemoval(removal.deviceId, removal.grants);
+      } catch {
+        // Grants lapse on their own within 90 days.
+      }
+    }
+    this.connection = undefined;
+    connection?.stop();
+    this.setStatus('off');
+  }
+
+  /** Touches no device row and no saved state, and runs only on the user's click. */
+  testAddress(address: string): Promise<TestRelayAddressResponse> {
+    return outsideRelayScope(async (): Promise<TestRelayAddressResponse> => {
+      const origin = parseRelayOrigin(address);
+      return origin ? probeRelay(origin, this.open, this.probeSeed) : { ok: false, reason: 'invalid-address' };
+    });
+  }
+
   /** The socket lasts only while a device is paired. */
   private closeIfIdle(): void {
     if (this.devices.list().length > 0 || this.devices.pendingRemovals().length > 0) return;
@@ -276,6 +423,7 @@ export class RelayService {
     const undenied = this.devices.undeniedGrants().length;
     return {
       relayOrigin: this.origin ?? '',
+      relaySource: this.address.source,
       relay: { status: this.status, ...(this.detail ? { detail: this.detail } : {}) },
       phones: this.devices.list().map((device) => ({
         deviceId: device.deviceId,
@@ -293,8 +441,10 @@ export class RelayService {
   /** Runs outside any scope, because a pairing outlives the click that started it. */
   startPairing(): Promise<StartPhonePairingResponse> {
     return outsideRelayScope(async () => {
+      await this.refreshAddress();
       const origin = this.origin;
-      if (!origin) throw new PairingStartError('Phone pairing is off.');
+      if (!origin) throw new PairingStartError(this.address.source === 'env-invalid' ? 'CEZ_RELAY_URL is not a valid relay address.' : 'Add a relay address first.');
+      if (this.changingAddress) throw new PairingStartError('The relay address is changing. Try again in a moment.');
       if (this.pairing && !this.pairing.canReplace) throw new PairingStartError('A phone is waiting for your answer.');
       const now = this.now();
       this.pairingStarts = this.pairingStarts.filter((at) => now - at < HOUR_MS);

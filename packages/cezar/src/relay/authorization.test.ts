@@ -13,6 +13,7 @@ import { FakeRelay } from './fake-relay.testkit.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { inRelayScope, narrowForRelay, outsideRelayScope, runInRelayScope } from './scope.ts';
 import { RelayService } from './service.ts';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 
 vi.mock('../core/backend-detect.ts', () => ({ detectEnvironment: async () => [] }));
 
@@ -83,11 +84,11 @@ describe('a relay request is a hosted request', () => {
   });
 
   describe('capability consent', () => {
-    it('unset, invalid or CEZ_RELAY=0 mean no phonePairing', () => {
-      expect(resolveCapabilities({}).phonePairing).toBe(false);
-      expect(resolveCapabilities({ CEZ_RELAY_URL: 'http://relay.example.test' }).phonePairing).toBe(false);
-      expect(resolveCapabilities({ CEZ_RELAY_URL: ORIGIN, CEZ_RELAY: '0' }).phonePairing).toBe(false);
+    it('only CEZ_RELAY=0 means no phonePairing: the address is a setting now', () => {
+      expect(resolveCapabilities({}).phonePairing).toBe(true);
+      expect(resolveCapabilities({ CEZ_RELAY_URL: 'http://relay.example.test' }).phonePairing).toBe(true);
       expect(resolveCapabilities({ CEZ_RELAY_URL: ORIGIN }).phonePairing).toBe(true);
+      expect(resolveCapabilities({ CEZ_RELAY_URL: ORIGIN, CEZ_RELAY: '0' }).phonePairing).toBe(false);
     });
   });
 
@@ -186,6 +187,8 @@ describe('a relay request is a hosted request', () => {
       ['POST', '/api/v1/workspace/phones/pairing/00000000-0000-4000-8000-000000000000/approve'],
       ['POST', '/api/v1/workspace/phones/pairing/00000000-0000-4000-8000-000000000000/deny'],
       ['DELETE', `/api/v1/workspace/phones/${DEVICE}`],
+      ['PUT', '/api/v1/workspace/phones/relay'],
+      ['POST', '/api/v1/workspace/phones/relay/test'],
     ];
 
     it.each(routes)('%s %s answers 403 in a scope', async (method, path) => {
@@ -198,14 +201,84 @@ describe('a relay request is a hosted request', () => {
       expect(res.status).toBe(403);
     });
 
-    it('answers 409 with the feature off', async () => {
+    it('answers 409 with the feature blocked, and to the address routes too', async () => {
+      process.env.CEZ_RELAY = '0';
+      const app = makeApp();
+      expect((await apiRequest(app, '/api/v1/workspace/phones')).status).toBe(409);
+      expect((await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address: 'https://own.example.test' }))).status).toBe(409);
+      expect((await apiRequest(app, '/api/v1/workspace/phones/relay/test', post({ address: 'https://own.example.test' }))).status).toBe(409);
+      expect((await loadWorkspaceConfig()).relayAddress).toBeUndefined();
+    });
+
+    it('lists with no address, and pairing asks for one', async () => {
       delete process.env.CEZ_RELAY_URL;
-      expect((await apiRequest(makeApp(), '/api/v1/workspace/phones')).status).toBe(409);
+      const app = makeApp();
+      expect(await (await apiRequest(app, '/api/v1/workspace/phones')).json()).toMatchObject({ relayOrigin: '', relaySource: 'none' });
+      const start = await apiRequest(app, '/api/v1/workspace/phones/pairing', { method: 'POST' });
+      expect(start.status).toBe(409);
+      expect(await start.json()).toEqual({ error: 'Add a relay address first.' });
     });
 
     it('lists for a desktop', async () => {
       const res = await apiRequest(makeApp(), '/api/v1/workspace/phones');
       expect(await res.json()).toMatchObject({ relayOrigin: ORIGIN, relay: { status: 'off' }, phones: [], pairing: null });
+    });
+  });
+
+  describe('the relay address', () => {
+    const OWN = 'https://own.example.test';
+
+    beforeEach(() => { delete process.env.CEZ_RELAY_URL; });
+
+    it('a desktop saves it to config.json, and it takes effect at once', async () => {
+      const app = makeApp();
+      const saved = await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address: `${OWN}/` }));
+      expect(await saved.json()).toMatchObject({ relayOrigin: OWN, relaySource: 'settings' });
+      expect((await loadWorkspaceConfig()).relayAddress).toBe(OWN);
+      expect(await (await apiRequest(app, '/api/v1/workspace/phones')).json()).toMatchObject({ relayOrigin: OWN });
+    });
+
+    it('a new app reads it back, so a restart keeps it', async () => {
+      await apiRequest(makeApp(), '/api/v1/workspace/phones/relay', put({ address: OWN }));
+      expect(await (await apiRequest(makeApp(), '/api/v1/workspace/phones')).json()).toMatchObject({ relayOrigin: OWN, relaySource: 'settings' });
+    });
+
+    it('refuses what parseRelayOrigin refuses, and saves nothing', async () => {
+      const app = makeApp();
+      for (const address of ['http://relay.example.test', `${OWN}/path`, 'HTTPS://own.example.test', 'ftp://own.example.test']) {
+        expect((await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address }))).status, address).toBe(400);
+      }
+      expect((await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address: 'http://127.0.0.1:8788' }))).status).toBe(200);
+      expect((await loadWorkspaceConfig()).relayAddress).toBe('http://127.0.0.1:8788');
+    });
+
+    it('CEZ_RELAY_URL wins and refuses the write', async () => {
+      await mergeWriteWorkspaceConfig((config) => { config.relayAddress = OWN; });
+      process.env.CEZ_RELAY_URL = ORIGIN;
+      const app = makeApp();
+      expect(await (await apiRequest(app, '/api/v1/workspace/phones')).json()).toMatchObject({ relayOrigin: ORIGIN, relaySource: 'env' });
+      expect((await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address: null }))).status).toBe(409);
+      expect((await loadWorkspaceConfig()).relayAddress).toBe(OWN);
+    });
+
+    it('a phone cannot read, write or test it by any route', async () => {
+      await mergeWriteWorkspaceConfig((config) => { config.relayAddress = OWN; });
+      const app = makeApp();
+      expect((await asPhone(app, '/api/v1/workspace/phones/relay', put({ address: 'https://evil.example.test', dropPhones: true }))).status).toBe(403);
+      expect((await asPhone(app, '/api/v1/workspace/phones/relay', put({ address: null, dropPhones: true }))).status).toBe(403);
+      expect((await asPhone(app, '/api/v1/workspace/phones/relay/test', post({ address: 'https://evil.example.test' }))).status).toBe(403);
+      expect((await asPhone(app, '/api/v1/workspace/phones')).status).toBe(403);
+      // The general settings route neither takes the key nor shows it.
+      expect((await asPhone(app, '/api/v1/workspace/config', put({ relayAddress: 'https://evil.example.test' }))).status).toBe(200);
+      expect(await (await asPhone(app, '/api/v1/workspace/config')).text()).not.toContain('own.example.test');
+      expect((await loadWorkspaceConfig()).relayAddress).toBe(OWN);
+    });
+
+    it('a hosted request may change it, as with PUT /workspace/config', async () => {
+      process.env.CEZ_REMOTE = '1';
+      const res = await makeApp().request('/api/v1/workspace/phones/relay', put({ address: OWN }));
+      expect(res.status).toBe(200);
+      expect((await loadWorkspaceConfig()).relayAddress).toBe(OWN);
     });
   });
 
@@ -385,6 +458,9 @@ describe('a relay request is a hosted request', () => {
       expect((await phone.fetch('POST', '/api/v1/workspace/phones/pairing', [['host', '127.0.0.1:4321']])).status).toBe(403);
       const config = await phone.fetch('PUT', '/api/v1/agent-config/claude.project.settings', [['host', 'localhost'], ['content-type', 'application/json']], '{"content":"{}","version":null}');
       expect(config.status).toBe(409);
+      const moved = await phone.fetch('PUT', '/api/v1/workspace/phones/relay', [['host', '127.0.0.1:4321'], ['content-type', 'application/json']], '{"address":null,"dropPhones":true}');
+      expect(moved.status).toBe(403);
+      expect(service.list().phones).toHaveLength(1);
       service.dispose();
     });
   });

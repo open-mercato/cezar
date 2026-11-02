@@ -1,5 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, hkdfSync, pbkdf2, randomInt, sign, type KeyObject } from 'node:crypto';
 import { promisify } from 'node:util';
+import type { RelayAddressSource } from '@open-mercato/cezar-contract';
 
 /** The relay wire formats, as RELAY_PROTOCOL.md defines them. No state lives here. */
 
@@ -52,7 +53,7 @@ export function proofHeaders(seed: Buffer, proof: string, time: number): ProofHe
 
 const CLEARTEXT_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
-/** `CEZ_RELAY_URL` to its origin, or `null` when § 9.1 refuses it. One trailing `/` is accepted. */
+/** One relay address to its origin, or `null` when § 9.1 refuses it. One trailing `/` is accepted. */
 export function parseRelayOrigin(value: string | undefined): string | null {
   if (!value) return null;
   const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/?$/.exec(value);
@@ -63,9 +64,29 @@ export function parseRelayOrigin(value: string | undefined): string | null {
   return `${scheme}://${host}${port ? `:${port}` : ''}`;
 }
 
-/** `CEZ_RELAY=0` blocks everything; otherwise the origin decides, § 9.1. */
-export function relayOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
-  return env.CEZ_RELAY === '0' ? null : parseRelayOrigin(env.CEZ_RELAY_URL);
+/** No host is built in while QR1 is open. The one place a project default goes. */
+export const DEFAULT_RELAY_ORIGIN: string | null = null;
+
+export const relayBlocked = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_RELAY === '0';
+
+export interface RelayAddress {
+  origin: string | null;
+  source: RelayAddressSource;
+}
+
+/**
+ * `CEZ_RELAY=0` blocks everything, then `CEZ_RELAY_URL`, the saved address, the default. A set but
+ * invalid `CEZ_RELAY_URL` still wins: falling through would pair through a relay nobody named.
+ */
+export function resolveRelayAddress(env: NodeJS.ProcessEnv, saved: string | null | undefined): RelayAddress {
+  if (relayBlocked(env)) return { origin: null, source: 'none' };
+  if (env.CEZ_RELAY_URL) {
+    const origin = parseRelayOrigin(env.CEZ_RELAY_URL);
+    return { origin, source: origin ? 'env' : 'env-invalid' };
+  }
+  const origin = parseRelayOrigin(saved ?? undefined);
+  if (origin) return { origin, source: 'settings' };
+  return DEFAULT_RELAY_ORIGIN ? { origin: DEFAULT_RELAY_ORIGIN, source: 'default' } : { origin: null, source: 'none' };
 }
 
 export const socketOrigin = (origin: string): string => origin.replace(/^http/, 'ws');

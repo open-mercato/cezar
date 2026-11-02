@@ -46,8 +46,14 @@ export const phoneSchema = z.object({
 });
 export type Phone = z.infer<typeof phoneSchema>;
 
+/** Where `relayOrigin` came from. `env-invalid` is a set `CEZ_RELAY_URL` that § 9.1 refuses. */
+export const relayAddressSourceSchema = z.enum(['env', 'env-invalid', 'settings', 'default', 'none']);
+export type RelayAddressSource = z.infer<typeof relayAddressSourceSchema>;
+
 export const phonesResponseSchema = z.object({
+  /** Empty with no usable address, which `relaySource` explains. */
   relayOrigin: z.string(),
+  relaySource: relayAddressSourceSchema,
   relay: z.object({ status: relayStatusSchema, detail: z.string().optional() }),
   phones: z.array(phoneSchema),
   pairing: phonePairingSchema.nullable(),
@@ -71,6 +77,29 @@ export type PhonePairingCodeResponse = z.infer<typeof phonePairingCodeResponseSc
 
 export const renamePhoneInputSchema = z.object({ label: z.string().trim().min(1).max(64) }).strict();
 export type RenamePhoneInput = z.infer<typeof renamePhoneInputSchema>;
+
+const relayAddressSchema = z.string().trim().min(1).max(300);
+
+/** `null` clears it. `dropPhones` is the user's answer to the warning: without it, paired phones refuse the change. */
+export const setRelayAddressInputSchema = z.object({
+  address: relayAddressSchema.nullable(),
+  dropPhones: z.boolean().optional(),
+}).strict();
+export type SetRelayAddressInput = z.infer<typeof setRelayAddressInputSchema>;
+
+export const testRelayAddressInputSchema = z.object({ address: relayAddressSchema }).strict();
+export type TestRelayAddressInput = z.infer<typeof testRelayAddressInputSchema>;
+
+export const relayTestFailureSchema = z.enum([
+  'invalid-address', 'unreachable', 'not-a-relay', 'incompatible', 'rate-limited', 'disabled', 'refused',
+]);
+export type RelayTestFailure = z.infer<typeof relayTestFailureSchema>;
+
+export const testRelayAddressResponseSchema = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true), origin: z.string(), protocol: z.number() }),
+  z.object({ ok: z.literal(false), reason: relayTestFailureSchema }),
+]);
+export type TestRelayAddressResponse = z.infer<typeof testRelayAddressResponseSchema>;
 
 export const phoneOkResponseSchema = z.object({ ok: z.literal(true) });
 export type PhoneOkResponse = z.infer<typeof phoneOkResponseSchema>;

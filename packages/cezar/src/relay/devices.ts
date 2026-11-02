@@ -111,6 +111,32 @@ export class RelayDevices {
     return removal;
   }
 
+  /**
+   * Every row and every queued removal belong to the relay being left, so neither survives a new
+   * address: a queued removal would open a socket to, and name a phone to, a relay it never knew.
+   * All at once or not at all, and the caller gets them to tell the old relay if it still can.
+   */
+  forgetAll(): PendingRemoval[] {
+    const state = this.read();
+    const removals = [...state.pendingRemovals, ...state.devices.map((device) => ({ deviceId: device.deviceId, grants: device.grants }))];
+    if (removals.length === 0) return [];
+    const { devices, pendingRemovals } = state;
+    state.devices = [];
+    state.pendingRemovals = [];
+    try {
+      this.write();
+    } catch (error) {
+      Object.assign(state, { devices, pendingRemovals });
+      throw error;
+    }
+    return removals;
+  }
+
+  /** Another process on this home changed the file. */
+  reload(): void {
+    this.state = undefined;
+  }
+
   pendingRemovals(): readonly PendingRemoval[] {
     return this.read().pendingRemovals;
   }
