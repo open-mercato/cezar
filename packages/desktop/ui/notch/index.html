@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cezar notch</title>
+    <!-- Manager text is agent output that may quote anyone: this page runs bundled files only. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src ipc: http://ipc.localhost"
+    />
+    <link rel="stylesheet" href="notch.css" />
+    <script type="module" src="notch.js"></script>
+  </head>
+  <body>
+    <section id="island" data-state="tucked">
+      <i class="ear left"></i><i class="ear right"></i>
+      <div id="compact">
+        <span id="primary-face" class="slot"></span>
+        <span id="primary-text"></span>
+      </div>
+      <div id="sheet">
+        <div id="sheet-title"></div>
+        <div id="rows" role="list"></div>
+      </div>
+    </section>
+    <section id="pill2" hidden>
+      <div id="minis"></div>
+      <span id="overflow" hidden></span>
+    </section>
+  </body>
+</html>
