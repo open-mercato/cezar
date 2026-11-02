@@ -558,7 +558,9 @@ restarts, such as editing `CEZ_RELAY_URL` or unsetting it to reach the default, 
 did, and `device-sync` lists them to the new relay at the next boot. Going from no address to the default
 is such a change for a home that paired through `CEZ_RELAY_URL`. A `config.json` that exists but cannot be read or
 restored is not a change: the last address stands while running, and with none known a boot opens no socket and a
-pairing refuses, unless `CEZ_RELAY_URL` names the relay.
+pairing refuses, unless `CEZ_RELAY_URL` names the relay. One case stays open: boot migrations merge-write before the
+relay starts, so a malformed file with no `.bak` holding projects is replaced by a healthy one with no address, and
+that home reads as going to the default. Closing it takes rows that record their relay.
 
 ### Removal
 
