@@ -860,7 +860,7 @@ R1 made these edits in `.ai/specs/2026-10-31-mobile-apps-manager-first.md`.
 | Decision 2, adding a server | Moves under Advanced. "HTTP is refused" stays for remote traffic |
 | Decision 5, relay trust and M11 | Point at the contract here. Grants stay, in the room |
 | Q9 | Extended by [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule) |
-| Q12 | Reopened by [QR3](#qr3-does-a-phone-need-its-own-lock) |
+| Q12 | Settled by [QR3](#qr3-does-a-phone-need-its-own-lock): optional lock, off by default, before public release |
 | Plan | M11 narrows to the sink's relay output, delegated to R5. M12 depends on R5 and R6 |
 
 ## Testing
@@ -923,7 +923,7 @@ Otherwise Manual users have no native push at all, and the parent spec requires 
 
 ### QR5: Accept the loopback proxy, pending R0?
 
-**Decided 2026-11-02: yes, subject to the iPhone proxy test (R0 question 1 on iOS), which is still to do.**
+**Decided 2026-11-02: yes, subject to the iPhone proxy test (R0 question 1, on iOS), which is still to do.**
 Rejecting it reopens bundling, and bundling still needs a transport.
 
 ### QR6: Are these quotas right for a free service?
