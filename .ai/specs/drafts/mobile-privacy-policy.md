@@ -21,7 +21,7 @@ This policy covers the Cezar mobile app, the relay that connects the app to a co
 notifications.
 
 The app is available for Android. An iOS version is not built yet, and this policy does not describe
-it. Before an iOS release this policy has to be checked again (see Appendix B).
+it. Before an iOS release this policy has to be checked again.
 
 The app is a small shell. It shows the Cezar cockpit from a Cezar server that you run or that someone
 runs for you. It connects in one of two ways:
@@ -54,8 +54,8 @@ off for this app, so this data is not copied to your cloud backup or to a new ph
 | Cookies, page storage and the browser cache of the server's pages | So the cockpit works | Android WebView's normal storage for this app |
 
 **Removing a server.** When you forget a server, the app deletes its saved password or keys and its
-entry in the list. It also clears the page storage for that server, and the cookies of a direct
-server. It does not clear the WebView's HTTP cache, or cookies for a paired server, so these can stay on
+entry in the list. It also clears the page storage for that server, and most cookies of a direct
+server. Cookies set for a wider domain or a sub-path, and cookies from a single sign-on provider, can stay. It does not clear the WebView's HTTP cache, or cookies for a paired server, so these can stay on
 the phone until you clear the app's storage or uninstall the app.
 
 **Phone lock.** The optional lock is off by default. It uses Android's own prompt for your biometrics
@@ -68,7 +68,7 @@ On Android 12 and older this also blocks screenshots of the app.
 
 | Permission | Why |
 | --- | --- |
-| Internet | To reach the relay or your server |
+| Internet | To reach the relay, your server, and images a cockpit page shows from other sites |
 | Camera | Only to scan the pairing QR code, when you choose to. The app reads the code on the phone and does not save or send the images |
 | Biometrics (`USE_BIOMETRIC`, `USE_FINGERPRINT`) | Only for the optional phone lock. These come from the Android biometric library |
 
@@ -90,13 +90,14 @@ user account. It does not reach us through this mechanism.
 
 You can remove a phone in Cezar's Settings. Cezar deletes the entry and tells the relay to remove the
 phone. If you forget a server in the app while Cezar is reachable, the entry is deleted as well.
-Otherwise it stays until you remove it on the computer.
+Otherwise it stays until you remove it on the computer. The phone's ID stays in the file until the relay
+confirms the removal.
 
 ## What the relay does
 
 The relay passes encrypted data between your phone and your computer. Nothing reaches the relay until
 you click **Test** or **Connect a phone** in Cezar on your computer. Your computer keeps a connection
-to the relay only while a phone is paired.
+to the relay only while a phone is paired or a removal is still waiting to reach the relay.
 
 The app's default relay on this version is `https://rome.patzick.workers.dev`. This is a test address
 and is expected to change: [OPEN MERCATO TO CONFIRM: production relay hostname]. If you set a different
@@ -128,8 +129,8 @@ has the keys. It also never sees the pairing QR code.
 
 The relay does not store your IP address in plain form, or keep any message it forwards. It holds no
 undelivered messages. The relay's code writes no logs, and Cloudflare's Workers logging is off in its
-configuration. It reports one aggregate usage figure with no ID in it: time awake, phone-connected
-time and the number of wake-ups.
+configuration. It reports usage data points with no ID in them: time awake, phone-connected
+time and the number of wake-ups. Each point covers one stretch of activity, not a total.
 
 A hashed IP address can still count as personal data, because someone holding the salt could test
 guesses against it. [OPEN MERCATO TO CONFIRM: how this is classified, and the lawful basis for the
@@ -159,7 +160,7 @@ statement as a company commitment]
 ## Telemetry
 
 The app sends no telemetry and has no analytics or crash-reporting library. The relay's code sends none
-either, apart from the aggregate usage figure above.
+either, apart from the usage data points above.
 
 The cockpit inside the app can report usage to Cezar on your computer. Your Cezar forwards it to Open
 Mercato only if you opted in. That is Cezar's own opt-in telemetry, described in Cezar's telemetry
@@ -178,8 +179,9 @@ describes that plan. It may change, and it does not apply until a release says s
   back, without storing the token.
 - A notification would carry the fixed text "Cezar needs you", a count, and Cezar's ID. It would hold no
   task, project or message text. Google or Apple would see that notification, the token and the time.
-- The relay would keep a grant's ID if the grant is revoked, for up to 90 days, so it cannot be reused.
-  It would keep push IDs for about 10 minutes to stop replays.
+- The relay would keep a grant's ID if the grant is revoked, for up to 90 days and until the next check
+  or the record's deletion, so it cannot be reused. It would refuse a repeated push ID for 10 minutes, and
+  would delete old IDs on a later push or with the record.
 
 ## Your choices
 
@@ -227,7 +229,7 @@ noted in the table after this one.
 | 13 | Page storage is on in the WebView | `A/shell/ServerActivity.java:280` | `setDomStorageEnabled(true)` |
 | 14 | Forget deletes keys, password and list entry | `A/shell/ShellConnector.java:188` | `credentials.delete(id)` |
 | 15 | Forget clears relay page storage | `A/ConnectionPlugin.java:97` | `deleteOrigin` |
-| 16 | Forget clears a direct server's cookies and storage | `A/ConnectionPlugin.java:256` | `clearWebsiteData` |
+| 16 | Forget clears a direct server's page storage and host-only cookies (`ConnectionPlugin.java:256-266`) | `A/ConnectionPlugin.java:256` | `clearWebsiteData` |
 | 17 | Lock is optional, off by default, 60 s | `packages/mobile/README.md:27` | `Optional and off by default` |
 | 18 | Lock uses the system prompt, biometric or credential | `A/shell/AppLock.java:32` | `BIOMETRIC_WEAK` |
 | 19 | Lock is a UI gate, not a key gate | `.ai/specs/2026-11-01-relay-qr-pairing.md:945` | `UI gate, not a key-release gate` |
