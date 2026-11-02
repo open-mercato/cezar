@@ -658,7 +658,11 @@ function HistoryBoundary({
   if (fallback) {
     return (
       <p data-slot="history-fallback" className="text-center text-xs text-soft-foreground" role="status">
-        Progressive history is unavailable; showing the complete session.
+        {error ?
+          'Progressive history is unavailable; earlier items could not be loaded.'
+        : loading ?
+          'Progressive history is unavailable; loading earlier items…'
+        : 'Progressive history is unavailable; showing the complete session.'}
       </p>
     )
   }

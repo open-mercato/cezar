@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ProjectScopeProvider } from '@/api/project-scope-context'
 import { lifecycleQueryKeys } from '@/api/worktree-lifecycle'
 import { queryKeys } from '@/api/queries'
+import type { RunHistoryState } from '@/api/run-history'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { createQueryClient } from '@/api/query-client'
 import type {
@@ -111,6 +112,23 @@ const transcriptRows = (fixture: ApiRun, thread = reduceThread(EVENTS)) =>
   buildTranscriptRows(mainTranscriptSections(fixture, thread), fixture.id)
 
 describe('ThreadView', () => {
+  it.each([
+    [{}, 'showing the complete session'],
+    [{ isFetchingOlder: true }, 'loading earlier items'],
+    [{ isFetchingOlder: true, olderError: 'Could not load earlier items' }, 'earlier items could not be loaded'],
+  ])('claims a complete fallback session only once nothing is left to refill (#882): %j', (state, copy) => {
+    const history = {
+      fallback: true,
+      hasOlder: false,
+      isFetchingOlder: false,
+      retainedPages: 0,
+      ...state,
+    } as unknown as RunHistoryState
+    renderView(<ThreadView run={run('done')} thread={reduceThread([])} history={history} />)
+
+    expect(document.querySelector('[data-slot="history-fallback"]')?.textContent).toContain(copy)
+  })
+
   it('keeps provider authorization recovery visible after the run reaches done', () => {
     const authRequired = [
       line(1, 'provider-auth-required', { provider: 'codex', authFailureId: 'incident-1' }),

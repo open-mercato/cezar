@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { ApiRun, RunEvent, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
+import type { ApiRun, RunEvent, RunEventsTruncatedFrame, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useThrottledValue } from '@/lib/use-throttled-value'
 import { getRunHistory, getRunHistoryContext } from './client'
@@ -14,6 +14,8 @@ const LIVE_FRAME_MS = 120
 const COMPACT_LIVE_AT_EVENTS = 200
 const LIVE_COMPACTION_SIZE_TRIGGER = 5_000
 const COMPACTION_TIMEOUT_MS = 15_000
+const GAP_RETRY_BASE_MS = 1_000
+const GAP_RETRY_MAX_MS = 60_000
 const EMPTY_RUN_EVENTS: RunEvent[] = []
 
 function orderedUnique(...groups: readonly (readonly RunEvent[])[]): RunEvent[] {
@@ -118,6 +120,94 @@ export function mergeRunHistoryEvents(
   // the old cursor. Both lists are ordered, so merge them without a map/sort and keep every live
   // frame that the persisted page does not contain.
   return mergeOrderedUnique(base, live)
+}
+
+/** `firstSeq: 0` is a replay that kept no event at all, so nothing bounds the gap above (#882). */
+function inHistoryGap(seq: number, { afterSeq, firstSeq }: RunEventsTruncatedFrame): boolean {
+  return seq > afterSeq && (firstSeq === 0 || seq < firstSeq)
+}
+
+interface GapRefill {
+  owner: string
+  events: RunEvent[]
+  loading: boolean
+  failed: boolean
+}
+
+/**
+ * Restore what a bounded replay left out (#882), which the fallback's "complete session" promises.
+ * Not the paged query: its `maxPages` window would evict the refill, and a hole between two live
+ * ranges has no "load older" to reach it. One walker per owner, independent of the socket, so a
+ * reconnect mid-page only queues its new range; a failed range keeps retrying while mounted.
+ */
+function useHistoryGapRefill(runId: string | undefined, owner: string): {
+  refill: GapRefill
+  onHistoryGap: (gap: RunEventsTruncatedFrame) => void
+} {
+  const [state, setState] = useState<GapRefill>({ owner, events: [], loading: false, failed: false })
+  const reportRef = useRef<((gap: RunEventsTruncatedFrame) => void) | undefined>(undefined)
+
+  useEffect(() => {
+    if (runId === undefined) return
+    const controller = new AbortController()
+    const { signal } = controller
+    const seen = new Set<string>()
+    let pending: RunEventsTruncatedFrame[] = []
+    let walking = false
+    let failures = 0
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
+    setState((current) => current.owner === owner ? current : { owner, events: [], loading: false, failed: false })
+
+    const walk = async (): Promise<void> => {
+      walking = true
+      setState((current) => current.loading ? current : { ...current, loading: true })
+      while (pending.length > 0) {
+        const gaps = pending
+        pending = []
+        const floor = Math.min(...gaps.map(({ afterSeq }) => afterSeq))
+        try {
+          let cursor: string | undefined
+          do {
+            const page = await getRunHistory(runId, cursor, { signal })
+            if (signal.aborted) return
+            const found = (page.events as RunEvent[]).filter(({ seq }) => gaps.some((gap) => inHistoryGap(seq, gap)))
+            if (found.length > 0) {
+              setState((current) => ({ ...current, events: orderedUnique(current.events, found) }))
+            }
+            // events[0] may be the turn boundary the server prepends from below this page.
+            const oldest = page.events[1]?.seq ?? page.events[0]?.seq
+            cursor = oldest !== undefined && oldest > floor ? page.olderCursor : undefined
+          } while (cursor !== undefined)
+          failures = 0
+        } catch {
+          if (signal.aborted) return
+          pending = [...gaps, ...pending]
+          failures = Math.min(failures + 1, 6)
+          setState((current) => ({ ...current, failed: true }))
+          retryTimer = setTimeout(() => void walk(), Math.min(GAP_RETRY_MAX_MS, GAP_RETRY_BASE_MS * 2 ** (failures - 1)))
+          return
+        }
+      }
+      walking = false
+      setState((current) => ({ ...current, loading: false, failed: false }))
+    }
+
+    reportRef.current = (gap) => {
+      const key = `${gap.afterSeq}:${gap.firstSeq}`
+      if (seen.has(key)) return
+      seen.add(key)
+      pending.push(gap)
+      if (!walking) void walk()
+    }
+    return () => {
+      controller.abort()
+      clearTimeout(retryTimer)
+      reportRef.current = undefined
+    }
+  }, [owner, runId])
+
+  const onHistoryGap = useCallback((gap: RunEventsTruncatedFrame) => reportRef.current?.(gap), [])
+  return { refill: state.owner === owner ? state : { owner, events: EMPTY_RUN_EVENTS, loading: false, failed: false }, onHistoryGap }
 }
 
 export interface RunHistoryState {
@@ -291,7 +381,8 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
     onCompact: compactLive,
     onRun,
   } : { onRun })
-  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun })
+  const { refill, onHistoryGap } = useHistoryGapRefill(runId, ownerKey)
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun, onHistoryGap })
   const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
   const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const fallbackTailRef = useRef<{ runId: string | undefined; scope: string; events: RunEvent[] }>({
@@ -320,9 +411,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   }, [pages, queryClient, runId, scope])
   const visibleEvents = useMemo(
     () => fallback
-      ? mergeOrderedUnique(pagedEvents, fallbackTail, fallbackEvents)
+      ? mergeOrderedUnique(pagedEvents, refill.events, fallbackTail, fallbackEvents)
       : mergeRunHistoryEvents(pagedEvents, liveEvents),
-    [fallback, fallbackEvents, fallbackTail, liveEvents, pagedEvents],
+    [fallback, fallbackEvents, fallbackTail, liveEvents, pagedEvents, refill.events],
   )
   const currentEvents = useMemo(() => {
     if (fallback) return visibleEvents
@@ -399,10 +490,10 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
     contextPending: !fallback && context.isPending,
     fallback,
     hasOlder: !fallback && Boolean(history.hasPreviousPage),
-    isFetchingOlder: history.isFetchingPreviousPage,
+    isFetchingOlder: history.isFetchingPreviousPage || refill.loading,
     olderError: history.isFetchPreviousPageError
       ? history.error instanceof Error ? history.error.message : 'Could not load earlier items'
-      : undefined,
+      : refill.failed ? 'Could not load earlier items' : undefined,
     loadOlder,
     jumpToLatest,
     retainedPages: pages.length,

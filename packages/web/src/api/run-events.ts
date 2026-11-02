@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
-import type { RunEvent, RunRecord } from '@open-mercato/cezar-api-client'
+import { apiPath, getApiScope, runEventsTruncatedFrameSchema } from '@open-mercato/cezar-api-client'
+import type { RunEvent, RunEventsTruncatedFrame, RunRecord } from '@open-mercato/cezar-api-client'
 
 /**
  * The per-run event stream (`GET /api/runs/:id/events`), as a raw ordered list — R2 Step 2.4's
@@ -116,6 +116,14 @@ function parseRunRecordFrame(data: string): RunRecord | null {
   return typeof id === 'string' && id !== '' && Array.isArray(steps) ? (payload as RunRecord) : null
 }
 
+function parseTruncatedFrame(data: string): RunEventsTruncatedFrame | null {
+  try {
+    return runEventsTruncatedFrameSchema.safeParse(JSON.parse(data)).data ?? null
+  } catch {
+    return null
+  }
+}
+
 /**
  * How long a backgrounded tab keeps its event streams before releasing them (#1753). Browsers cap
  * HTTP/1.1 at 6 connections per origin and each tab holds a workspace stream plus a run stream, so
@@ -164,6 +172,9 @@ export interface RunEventStreamOptions {
    *  `RUN_EVENT_BATCH_MS` flush as the transcript frames, so a burst of changes costs one call
    *  with the latest record. */
   onRun?: (run: RunRecord) => void
+  /** A cursorless replay left a range out (#882); it will never arrive on this socket. A resume
+   *  through `cursor` is not bounded, so only the cursorless fallback stream can fire this. */
+  onHistoryGap?: (gap: RunEventsTruncatedFrame) => void
 }
 
 export function useRunEvents(runId: string | undefined, options: RunEventStreamOptions = {}): RunEvent[] {
@@ -377,6 +388,12 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
         // updating, looking live over stale content. Reopen; `maxSeq` swallows the replay.
         if (current.readyState === CLOSED) reopenLater()
       }
+      current.addEventListener('history-truncated', (event) => {
+        if (disposed || token !== streamToken) return
+        lastFrameAt = Date.now()
+        const gap = parseTruncatedFrame((event as MessageEvent<string>).data)
+        if (gap) optionsRef.current.onHistoryGap?.(gap)
+      })
       current.addEventListener('error', errorListener)
     }
 
