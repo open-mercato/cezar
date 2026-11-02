@@ -131,6 +131,7 @@ function inHistoryGap(seq: number, { afterSeq, firstSeq }: RunEventsTruncatedFra
 interface GapRefill {
   owner: string
   events: RunEvent[]
+  loading: boolean
   failed: boolean
 }
 
@@ -144,7 +145,7 @@ function useHistoryGapRefill(runId: string | undefined, owner: string): {
   refill: GapRefill
   onHistoryGap: (gap: RunEventsTruncatedFrame) => void
 } {
-  const [state, setState] = useState<GapRefill>({ owner, events: [], failed: false })
+  const [state, setState] = useState<GapRefill>({ owner, events: [], loading: false, failed: false })
   const reportRef = useRef<((gap: RunEventsTruncatedFrame) => void) | undefined>(undefined)
 
   useEffect(() => {
@@ -156,10 +157,11 @@ function useHistoryGapRefill(runId: string | undefined, owner: string): {
     let walking = false
     let failures = 0
     let retryTimer: ReturnType<typeof setTimeout> | undefined
-    setState((current) => current.owner === owner ? current : { owner, events: [], failed: false })
+    setState((current) => current.owner === owner ? current : { owner, events: [], loading: false, failed: false })
 
     const walk = async (): Promise<void> => {
       walking = true
+      setState((current) => current.loading ? current : { ...current, loading: true })
       while (pending.length > 0) {
         const gaps = pending
         pending = []
@@ -188,7 +190,7 @@ function useHistoryGapRefill(runId: string | undefined, owner: string): {
         }
       }
       walking = false
-      setState((current) => current.failed ? { ...current, failed: false } : current)
+      setState((current) => ({ ...current, loading: false, failed: false }))
     }
 
     reportRef.current = (gap) => {
@@ -206,7 +208,7 @@ function useHistoryGapRefill(runId: string | undefined, owner: string): {
   }, [owner, runId])
 
   const onHistoryGap = useCallback((gap: RunEventsTruncatedFrame) => reportRef.current?.(gap), [])
-  return { refill: state.owner === owner ? state : { owner, events: EMPTY_RUN_EVENTS, failed: false }, onHistoryGap }
+  return { refill: state.owner === owner ? state : { owner, events: EMPTY_RUN_EVENTS, loading: false, failed: false }, onHistoryGap }
 }
 
 export interface RunHistoryState {
@@ -501,9 +503,9 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
     isPending: !fallback && (history.isPending || missingNewest),
     contextPending: !fallback && context.isPending,
     fallback,
-    fallbackTruncated: fallback && truncatedOwner === ownerKey && refill.failed,
+    fallbackTruncated: fallback && truncatedOwner === ownerKey && (refill.loading || refill.failed),
     hasOlder: !fallback && Boolean(history.hasPreviousPage),
-    isFetchingOlder: history.isFetchingPreviousPage,
+    isFetchingOlder: history.isFetchingPreviousPage || refill.loading,
     olderError: history.isFetchPreviousPageError
       ? history.error instanceof Error ? history.error.message : 'Could not load earlier items'
       : refill.failed ? 'Could not load earlier items' : undefined,
