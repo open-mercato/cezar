@@ -115,7 +115,7 @@ export class RelayDevices {
   /** Deletes the row and remembers the relay command until its `ack`, § 4 cezar's obligations. */
   remove(deviceId: string): PendingRemoval | undefined {
     const state = this.read();
-    const device = this.get(deviceId);
+    const device = state.devices.find((row) => row.deviceId === deviceId);
     if (!device) return undefined;
     const removal = { deviceId, grants: device.grants };
     state.devices = state.devices.filter((row) => row !== device);
