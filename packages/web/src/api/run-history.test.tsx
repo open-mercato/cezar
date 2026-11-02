@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunHistoryContext, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
 import { getRunHistory, getRunHistoryContext } from './client'
@@ -509,6 +509,149 @@ describe('useRunHistory', () => {
     client.setQueryData(['run-history-context', 'default', 'run-1'], context())
     await waitFor(() => expect(result.current.fallback).toBe(true))
     vi.unstubAllGlobals()
+  })
+
+  describe('history-truncated refill (#882)', () => {
+    const lines = (...seqs: number[]) => seqs.map((seq) => page(seq).events[0]!)
+    const history = (seqs: number[], olderCursor?: string): RunHistoryPage => ({
+      ...page(seqs.at(-1)!, olderCursor ? { olderCursor, hasOlder: true } : {}),
+      events: lines(...seqs),
+    })
+    const frame = (seq: number) => JSON.stringify(page(seq).events[0])
+    const pages = (byCursor: Record<string, RunHistoryPage>) =>
+      mockHistory.mockImplementation(async (_id, cursor) => byCursor[cursor ?? 'tail']!)
+    const olderCalls = () => mockHistory.mock.calls.map(([, cursor]) => cursor).filter(Boolean)
+
+    /** The context request failing latches the cursorless stream, the only one the server truncates. */
+    async function openFallback(runId = 'run-1') {
+      FakeEventSource.instances = []
+      vi.stubGlobal('EventSource', FakeEventSource)
+      mockContext.mockRejectedValue(new Error('context unavailable'))
+      const { wrapper } = harness()
+      const view = renderHook(({ id }) => useRunHistory(id), { wrapper, initialProps: { id: runId } })
+      await waitFor(() => expect(view.result.current.fallback).toBe(true), { timeout: 3_000 })
+      await waitFor(() => expect(FakeEventSource.instances.at(-1)?.url).not.toContain('cursor'))
+      return { ...view, source: () => FakeEventSource.instances.at(-1)! }
+    }
+    afterEach(() => {
+      cleanup()
+      vi.unstubAllGlobals()
+    })
+
+    it('never reaches the optimized stream: a cursor resume is not truncated', async () => {
+      FakeEventSource.instances = []
+      vi.stubGlobal('EventSource', FakeEventSource)
+      mockHistory.mockResolvedValue(page(100))
+      mockContext.mockResolvedValue(context())
+      const { wrapper } = harness()
+      renderHook(() => useRunHistory('run-1'), { wrapper })
+      await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+      expect(FakeEventSource.instances[0]!.url).toContain('cursor=live-100')
+    })
+
+    it('fills a hole with events on both sides, and stops paging at the gap floor', async () => {
+      pages({
+        tail: history([60], 'o1'),
+        o1: history([50, 55], 'o2'),
+        o2: history([30, 40], 'o3'),
+        o3: history([10, 20, 25], 'o4'),
+      })
+      const { result, source } = await openFallback()
+
+      source().emit('run-event', frame(19))
+      source().emit('run-event', frame(20))
+      source().emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 20 }))
+      source().emit('run-event', frame(50))
+      source().emit('run-event', frame(55))
+
+      await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq))
+        .toEqual([19, 20, 25, 30, 40, 50, 55, 60]))
+      expect(olderCalls()).toEqual(['o1', 'o2', 'o3'])
+      // Nothing outside the reported range is pulled in from the pages it walked through.
+      expect(result.current.currentEvents.map(({ seq }) => seq)).not.toContain(10)
+    })
+
+    it('refills everything above afterSeq when the replay kept no event at all', async () => {
+      pages({ tail: history([60], 'o1'), o1: history([5, 30]) })
+      const { result, source } = await openFallback()
+
+      source().emit('history-truncated', JSON.stringify({ firstSeq: 0, afterSeq: 10 }))
+
+      await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq)).toEqual([30, 60]))
+    })
+
+    it('walks once for a repeated frame', async () => {
+      pages({ tail: history([60], 'o1'), o1: history([30]) })
+      const { result, source } = await openFallback()
+      const gap = JSON.stringify({ firstSeq: 50, afterSeq: 20 })
+
+      source().emit('history-truncated', gap)
+      source().emit('history-truncated', gap)
+      await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq)).toEqual([30, 60]))
+      source().emit('history-truncated', gap)
+
+      await act(async () => undefined)
+      expect(olderCalls()).toEqual(['o1'])
+    })
+
+    it('queues a reconnect\'s new range behind an in-flight page, one walker at a time', async () => {
+      pages({ tail: history([90]) })
+      const { result, source } = await openFallback()
+      let release!: () => void
+      const held = new Promise<void>((resolve) => { release = resolve })
+      let inFlight = 0
+      let peak = 0
+      const before = mockHistory.mock.calls.length
+      mockHistory.mockImplementation(async (_id, cursor) => {
+        inFlight += 1
+        peak = Math.max(peak, inFlight)
+        if (cursor === undefined) await held
+        inFlight -= 1
+        return cursor === undefined ? history([90], 'o1') : history([30, 70])
+      })
+
+      source().emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 20 }))
+      await waitFor(() => expect(mockHistory.mock.calls.length).toBe(before + 1))
+      // The socket drops mid-page; its replacement reports a second, newer hole.
+      source().close()
+      act(() => document.dispatchEvent(new Event('visibilitychange')))
+      await waitFor(() => expect(FakeEventSource.instances.at(-1)?.readyState).toBe(0))
+      source().emit('history-truncated', JSON.stringify({ firstSeq: 80, afterSeq: 60 }))
+      expect(mockHistory.mock.calls.length).toBe(before + 1)
+
+      release()
+      await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq)).toEqual([30, 70, 90]))
+      expect(peak).toBe(1)
+    })
+
+    it('keeps a failed range, reports it, and retries until it lands', async () => {
+      pages({ tail: history([60]) })
+      const { result, source } = await openFallback()
+      mockHistory.mockRejectedValueOnce(new Error('offline'))
+      mockHistory.mockImplementation(async () => history([30, 60]))
+
+      source().emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 20 }))
+      await waitFor(() => expect(result.current.olderError).toBe('Could not load earlier items'))
+
+      await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq)).toEqual([30, 60]), { timeout: 3_000 })
+      expect(result.current.olderError).toBeUndefined()
+    })
+
+    it('drops an in-flight refill when the run changes', async () => {
+      pages({ tail: history([60]) })
+      const { result, rerender, source } = await openFallback()
+      let release!: (value: RunHistoryPage) => void
+      mockHistory.mockImplementation((id) => id === 'run-1'
+        ? new Promise((resolve) => { release = resolve })
+        : Promise.resolve(history([200])))
+      source().emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 20 }))
+      await waitFor(() => expect(release).toBeDefined())
+
+      rerender({ id: 'run-2' })
+      await act(async () => release(history([30])))
+
+      expect(result.current.visibleEvents.map(({ seq }) => seq)).not.toContain(30)
+    })
   })
 
   it('compares compaction with the newest cursorless page, not an older page high-water mark', async () => {
