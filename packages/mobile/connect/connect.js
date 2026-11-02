@@ -1,6 +1,6 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
-import { lockRow, screenFor, startLockRow } from './screens.js';
+import { lockRow, relayField, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
@@ -8,6 +8,7 @@ let context = {};
 // Android only for now. iOS keeps the URL form until its client compiles.
 let pairing = false;
 let lock = null;
+let relayDefault;
 let lockScreen = null;
 let lockChanging = false;
 
@@ -54,6 +55,7 @@ function show(outcome) {
   servers = outcome.servers ?? servers;
   pairing = outcome.pairing ?? pairing;
   lock = outcome.lock ?? lock;
+  relayDefault = outcome.relayDefault ?? relayDefault;
   const screen = screenFor(outcome, context);
   if (screen.name === 'pair-waiting') drawPairWaiting(screen);
   else if (screen.name === 'pair-confirm') drawPairConfirm(screen);
@@ -140,13 +142,20 @@ function drawStart(lockNotice) {
 }
 
 function drawCode({ code, relay, notice: text }) {
+  const address = relayField(relayDefault, relay);
   const form = element(
     'form',
     {},
     notice(text),
     field('Code', 'code', { value: code ?? '', placeholder: 'XXXX-XXXX-XXXX', required: true, autocapitalize: 'characters' }),
-    field('Relay address', 'relay', { type: 'url', inputMode: 'url', value: relay ?? '', placeholder: 'https://relay.example.com', required: true }),
-    element('p', { className: 'muted', textContent: 'Your computer shows the address beside the code. A QR code is safer if you can use one.' }),
+    element('p', { className: 'muted', textContent: 'A QR code is safer if you can use one.' }),
+    element(
+      'details',
+      { open: address.open },
+      element('summary', { textContent: 'Advanced' }),
+      field('Relay address', 'relay', { inputMode: 'url', value: address.value, placeholder: address.placeholder }),
+      element('p', { className: 'muted', textContent: address.note }),
+    ),
     element('div', { className: 'actions' }, button('Back', () => drawList()), element('button', { className: 'primary', textContent: 'Connect' })),
   );
   form.onsubmit = (event) => {

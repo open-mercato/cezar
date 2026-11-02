@@ -452,10 +452,10 @@ locatorBytes = okm[0..32]
 psk          = okm[32..64]
 ```
 
-A typed code cannot carry the relay address, and the app has no default host while QR1 is open. So desktop
-shows the address beside the code, and the app's Enter code screen has a relay address field. The field
-takes an `origin` under the table above, and `https://` is assumed if the user typed no scheme. The
-same field may be prefilled, or hidden, the day the app has a default host.
+A typed code cannot carry the relay address, so the app uses its built-in default. Desktop shows the address
+beside the code, and the app's Enter code screen keeps a relay address field under Advanced for a custom
+relay. The field takes an `origin` under the table above, `https://` is assumed if the user typed no scheme,
+and an empty field means the default.
 
 `locator = base64url(locatorBytes)`. Vectors: `qr.json`, `code.json`.
 

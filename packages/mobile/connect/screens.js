@@ -33,7 +33,7 @@ const PAIR_FAILURES = {
   'qr-invalid': 'This is not a cezar pairing code.',
   'qr-cleartext': 'This code points at an unencrypted relay, which this app refuses.',
   'code-invalid': 'Check the code: it has 12 letters and digits.',
-  'relay-invalid': 'Enter the relay address shown beside the code on your computer.',
+  'relay-invalid': 'That relay address is not valid. Use the one shown beside the code on your computer.',
   'relay-cleartext': 'The relay address must start with https://.',
   internal: 'Pairing failed. Show a new code on your computer.',
 };
@@ -61,6 +61,16 @@ export function lockRow(lock) {
 
 /** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
 export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
+
+/** Enter code's Advanced field, as on desktop. The address comes from native, and native reads empty as its default. */
+export function relayField(relayDefault, relay) {
+  return {
+    open: Boolean(relay),
+    value: relay ?? relayDefault ?? '',
+    placeholder: relayDefault ?? 'https://relay.example.com',
+    note: 'Change this only if your computer shows a different relay address beside the code.',
+  };
+}
 
 /** Turns a native outcome into the screen to draw. `context` is what the user last asked for. */
 export function screenFor(outcome, context = {}) {
