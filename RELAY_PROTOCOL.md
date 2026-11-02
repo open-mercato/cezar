@@ -51,8 +51,8 @@ correlate it.
 
 A relay address is an **origin**: `https://host[:port]`, or `http://` under the rule in
 [§9.1](#91-qr-string). It has no path. Sockets use the same host and port, with `https` becoming
-`wss` and `http` becoming `ws`. `CEZ_RELAY_URL` holds exactly this form. One trailing `/` is accepted
-there and removed.
+`wss` and `http` becoming `ws`. cezar's relay address, from Settings or `CEZ_RELAY_URL`, holds exactly
+this form. One trailing `/` is accepted there and removed.
 
 | Endpoint | Role | Proves | Lifetime |
 | --- | --- | --- | --- |
@@ -410,11 +410,11 @@ runs. See the spec's QR9. A parser reads `version` first, as the digits between 
 | `http` | Exactly `127.0.0.1`, `localhost` or `[::1]` | **No** | Yes |
 | `http` | Anything else | No | No |
 
-`http` means `ws`. cezar applies the host rows to `CEZ_RELAY_URL` too. An emulator reaches a relay on the
+`http` means `ws`. cezar applies the host rows to its relay address too. An emulator reaches a relay on the
 host through `http://127.0.0.1:<port>` and `adb reverse tcp:<port> tcp:<port>`: `10.0.2.2` is not
-allowed, because cezar on the host cannot reach that emulator-only alias and one `CEZ_RELAY_URL`
-is both its address and the QR's. With `CEZ_RELAY_URL` unset or
-invalid, `capabilities.phonePairing` is false. No relay host is built in.
+allowed, because cezar on the host cannot reach that emulator-only alias and one relay address
+is both cezar's own and the QR's. With no valid address, cezar opens no connection and shows no QR
+code. No relay host is built in.
 
 ### 9.2 Secrets
 
