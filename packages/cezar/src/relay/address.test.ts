@@ -209,14 +209,69 @@ describe('changing the relay address', () => {
     expect(service.list().relayOrigin).toBe(OLD);
   });
 
-  it('another process moving the address closes this one\'s socket on the next read', async () => {
+  it('another cezar on this home moving the address closes this one\'s socket, and it cannot restore the rows', async () => {
     const service = make();
-    await pairOne(service);
-    store.value = NEW;
+    const phone = await pairOne(service);
+    await make().setAddress(NEW, true);
+    expect(service.list().phones).toEqual([]);
+    expect(service.rename(phone.deviceId, 'x')).toBe(false);
+    expect(devicesFile().devices).toEqual([]);
     await service.refreshAddress();
     expect(old.cezarConnected).toBe(false);
-    expect(service.list().relayOrigin).toBe(NEW);
+    expect(service.list()).toMatchObject({ relayOrigin: NEW, relay: { status: 'off' } });
     expect(next.opened).toEqual([]);
+  });
+
+  it('a hand edit or a failed read leaves the socket of a paired phone alone', async () => {
+    const service = make();
+    await pairOne(service);
+    store.value = null;
+    await service.refreshAddress();
+    expect(old.cezarConnected).toBe(true);
+    expect(service.list().phones).toHaveLength(1);
+  });
+
+  it('a pairing whose keychain prompt outlasts a save does not open on the relay it left', async () => {
+    let held = false;
+    let release = () => {};
+    const slow = keys();
+    const ensure = slow.ensure.bind(slow);
+    slow.ensure = async () => { await new Promise<void>((resolve) => { release = resolve; held = true; }); return ensure(); };
+    const service = new RelayService({ directory, env: {}, open, addressStore: store, identity: slow });
+    services.push(service);
+    const starting = service.startPairing();
+    await waitFor(() => held, 'the keychain wait');
+    await service.setAddress(NEW, false);
+    release();
+    await expect(starting).rejects.toThrow('address changed');
+    expect(old.opened).toEqual([]);
+  });
+
+  it('a boot whose keychain prompt outlasts a save opens no socket', async () => {
+    await pairOne(make());
+    let held = false;
+    let release = () => {};
+    const slow = keys();
+    const load = slow.load.bind(slow);
+    slow.load = async () => { await new Promise<void>((resolve) => { release = resolve; held = true; }); return load(); };
+    const service = new RelayService({ directory, env: {}, open, addressStore: store, identity: slow });
+    services.push(service);
+    const opened = old.opened.length;
+    const starting = service.start();
+    await waitFor(() => held, 'the keychain wait');
+    await service.setAddress(NEW, true);
+    release();
+    await starting;
+    expect(old.opened.length).toBe(opened);
+    expect(next.opened).toEqual([]);
+  });
+
+  it('two saves at once: one wins, one is refused', async () => {
+    const service = make();
+    await pairOne(service);
+    const results = await Promise.allSettled([service.setAddress(NEW, true), service.setAddress(null, true)]);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(store.value).toBe(NEW);
   });
 
   it('CEZ_RELAY_URL owns it, valid or not', async () => {

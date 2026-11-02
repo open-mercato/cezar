@@ -56,10 +56,10 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
   const paired = phones.phones.length
 
   const test = useMutation({
-    mutationFn: () => testRelayAddress(address),
+    mutationFn: (tested: string) => testRelayAddress(tested),
     onMutate: () => { setPassed(null); setMessage(null) },
-    onSuccess: (result) => {
-      if (result.ok) setPassed(address)
+    onSuccess: (result, tested) => {
+      if (result.ok) setPassed(tested)
       else setMessage(TEST_FAILURES[result.reason])
     },
     onError: (failure: Error) => setMessage(failure.message),
@@ -92,7 +92,7 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
           className="max-w-xl"
           value={source === 'env-invalid' ? '' : value}
           placeholder={fromEnv ? undefined : 'https://relay.example.com'}
-          readOnly={fromEnv}
+          readOnly={fromEnv || test.isPending}
           inputMode="url"
           autoCapitalize="none"
           autoCorrect="off"
@@ -104,7 +104,7 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
       {fromEnv ? <ReadOnlyReason source={source} /> : null}
       <div className="flex flex-wrap gap-2">
         {source === 'env-invalid' ? null : (
-          <Button variant="outline" size="sm" disabled={!address || test.isPending} onClick={() => test.mutate()}>
+          <Button variant="outline" size="sm" disabled={!address || test.isPending} onClick={() => test.mutate(address)}>
             {test.isPending ? 'Testing…' : 'Test'}
           </Button>
         )}

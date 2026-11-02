@@ -204,6 +204,7 @@ export function PhonesSection() {
   const relay = list.data?.relay
   const phones = list.data?.phones ?? []
   const noRelay = list.data !== undefined && list.data.relayOrigin === ''
+  const canAddRelay = noRelay && list.data?.relaySource !== 'env-invalid'
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -235,7 +236,7 @@ export function PhonesSection() {
             <p className="text-sm text-muted-foreground">
               Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
             </p>
-            {noRelay ? (
+            {canAddRelay ? (
               <p className="text-sm">
                 Connecting a phone needs a relay address. No relay is built in yet, so add one below.
               </p>
