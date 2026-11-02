@@ -5,6 +5,9 @@ import type { z } from 'zod';
 import type {
   phoneOkResponseSchema,
   phonePairingCodeResponseSchema,
+  setRelayAddressInputSchema,
+  testRelayAddressInputSchema,
+  testRelayAddressResponseSchema,
   phonesResponseSchema,
   renamePhoneInputSchema,
   startPhonePairingResponseSchema,
@@ -32,6 +35,10 @@ describe('src/contract/phones.ts matches the phones routes exactly', () => {
     Assert<Mutual<Ok, InferResponseType<Phones[':deviceId']['$patch'], 200>>>,
     Assert<Mutual<Ok, InferResponseType<Phones[':deviceId']['$delete'], 200>>>,
     Assert<Mutual<z.input<typeof renamePhoneInputSchema>, InferRequestType<Phones[':deviceId']['$patch']>['json']>>,
+    Assert<Mutual<z.infer<typeof phonesResponseSchema>, InferResponseType<Phones['relay']['$put'], 200>>>,
+    Assert<Mutual<z.input<typeof setRelayAddressInputSchema>, InferRequestType<Phones['relay']['$put']>['json']>>,
+    Assert<Mutual<z.infer<typeof testRelayAddressResponseSchema>, InferResponseType<Phones['relay']['test']['$post'], 200>>>,
+    Assert<Mutual<z.input<typeof testRelayAddressInputSchema>, InferRequestType<Phones['relay']['test']['$post']>['json']>>,
   ];
 
   it('is enforced by the compiler', () => {

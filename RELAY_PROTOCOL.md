@@ -51,8 +51,8 @@ correlate it.
 
 A relay address is an **origin**: `https://host[:port]`, or `http://` under the rule in
 [§9.1](#91-qr-string). It has no path. Sockets use the same host and port, with `https` becoming
-`wss` and `http` becoming `ws`. `CEZ_RELAY_URL` holds exactly this form. One trailing `/` is accepted
-there and removed.
+`wss` and `http` becoming `ws`. cezar's relay address, built in or from Settings or `CEZ_RELAY_URL`, holds exactly
+this form. One trailing `/` is accepted there and removed.
 
 | Endpoint | Role | Proves | Lifetime |
 | --- | --- | --- | --- |
@@ -410,11 +410,11 @@ runs. See the spec's QR9. A parser reads `version` first, as the digits between 
 | `http` | Exactly `127.0.0.1`, `localhost` or `[::1]` | **No** | Yes |
 | `http` | Anything else | No | No |
 
-`http` means `ws`. cezar applies the host rows to `CEZ_RELAY_URL` too. An emulator reaches a relay on the
+`http` means `ws`. cezar applies the host rows to its relay address too. An emulator reaches a relay on the
 host through `http://127.0.0.1:<port>` and `adb reverse tcp:<port> tcp:<port>`: `10.0.2.2` is not
-allowed, because cezar on the host cannot reach that emulator-only alias and one `CEZ_RELAY_URL`
-is both its address and the QR's. With `CEZ_RELAY_URL` unset or
-invalid, `capabilities.phonePairing` is false. No relay host is built in.
+allowed, because cezar on the host cannot reach that emulator-only alias and one relay address
+is both cezar's own and the QR's. cezar has a default host, and a set but invalid `CEZ_RELAY_URL`
+wins over it, in which case cezar opens no connection and shows no QR code.
 
 ### 9.2 Secrets
 
@@ -447,10 +447,10 @@ locatorBytes = okm[0..32]
 psk          = okm[32..64]
 ```
 
-A typed code cannot carry the relay address, and no default host exists while QR1 is open. So desktop
+A typed code cannot carry the relay address, and the app has no default host while QR1 is open. So desktop
 shows the address beside the code, and the app's Enter code screen has a relay address field. The field
 takes an `origin` under the table above, and `https://` is assumed if the user typed no scheme. The
-same field may be prefilled, or hidden, the day a default host exists.
+same field may be prefilled, or hidden, the day the app has a default host.
 
 `locator = base64url(locatorBytes)`. Vectors: `qr.json`, `code.json`.
 

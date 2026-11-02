@@ -252,6 +252,10 @@ const workspaceConfigSchema = z
     /** Global instructions: read by every agent step in every project, merged BEFORE the
      *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
     systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
+    /** A custom phone relay, from Settings. Absent means the default, so a new default reaches
+     *  whoever never chose. `CEZ_RELAY_URL` wins over it. Checked where it is
+     *  read (`resolveRelayAddress`), not here, so a form a newer cezar accepts survives this one. */
+    relayAddress: z.string().max(300).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -383,10 +387,17 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
   return readWorkspaceConfig(path, false);
 }
 
+/** For a caller that must tell "not set" from "could not tell": a file that exists but
+ *  neither reads, parses nor restores throws, while a missing one is still the default. */
+export async function loadWorkspaceConfigOrThrow(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  return readWorkspaceConfig(path, true, true);
+}
+
 /** `strict` (merge-writes): a file that exists but cannot be read throws
  *  instead of degrading to defaults, which the write would then persist over
- *  both the config and its snapshot — the Windows registry wipe this guards. */
-async function readWorkspaceConfig(path: string, strict: boolean): Promise<WorkspaceConfig> {
+ *  both the config and its snapshot — the Windows registry wipe this guards.
+ *  `refuseCorrupt` throws for a malformed file too; a merge-write replaces one. */
+async function readWorkspaceConfig(path: string, strict: boolean, refuseCorrupt = false): Promise<WorkspaceConfig> {
   let raw: string | null = null;
   let unreadable: { path: string; error: unknown } | undefined;
   try {
@@ -421,6 +432,7 @@ async function readWorkspaceConfig(path: string, strict: boolean): Promise<Works
     return defaultWorkspaceConfig();
   }
   if (raw === null) return defaultWorkspaceConfig();
+  if (refuseCorrupt) throw new WorkspaceConfigUnreadableError(`[cez] ${path} is corrupt`);
   console.warn(
     `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
   );

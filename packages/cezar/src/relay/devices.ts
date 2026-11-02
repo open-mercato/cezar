@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { atomicWriteJsonSync } from '../workspace/config.ts';
@@ -44,6 +44,7 @@ function salvage<T>(schema: z.ZodType<T>, value: unknown): T[] {
 
 export class RelayDevices {
   private state: DeviceFile | undefined;
+  private stamp = 0;
   private warned = false;
   private readonly path: string;
 
@@ -51,8 +52,19 @@ export class RelayDevices {
     this.path = join(directory, 'devices.json');
   }
 
+  private fileStamp(): number {
+    try {
+      return statSync(this.path).mtimeMs;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Another `cezar serve` on this home may have written, and a stale write would restore its rows. */
   private read(): DeviceFile {
-    if (this.state) return this.state;
+    const stamp = this.fileStamp();
+    if (this.state && stamp === this.stamp) return this.state;
+    this.stamp = stamp;
     let raw: Record<string, unknown> = {};
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.path, 'utf8'));
@@ -72,7 +84,8 @@ export class RelayDevices {
   }
 
   private write(): void {
-    atomicWriteJsonSync(this.path, { version: 1, ...this.read() });
+    atomicWriteJsonSync(this.path, { version: 1, ...this.state });
+    this.stamp = this.fileStamp();
   }
 
   list(): readonly RelayDevice[] {
@@ -102,13 +115,34 @@ export class RelayDevices {
   /** Deletes the row and remembers the relay command until its `ack`, § 4 cezar's obligations. */
   remove(deviceId: string): PendingRemoval | undefined {
     const state = this.read();
-    const device = this.get(deviceId);
+    const device = state.devices.find((row) => row.deviceId === deviceId);
     if (!device) return undefined;
     const removal = { deviceId, grants: device.grants };
     state.devices = state.devices.filter((row) => row !== device);
     state.pendingRemovals = [...state.pendingRemovals.filter((row) => row.deviceId !== deviceId), removal];
     this.write();
     return removal;
+  }
+
+  /**
+   * Every row and every queued removal belong to the relay being left, so neither survives a new
+   * address: a queued removal would open a socket to, and name a phone to, a relay it never knew.
+   * All at once or not at all, and the caller gets them to tell the old relay if it still can.
+   */
+  forgetAll(): PendingRemoval[] {
+    const state = this.read();
+    const removals = [...state.pendingRemovals, ...state.devices.map((device) => ({ deviceId: device.deviceId, grants: device.grants }))];
+    if (removals.length === 0) return [];
+    const { devices, pendingRemovals } = state;
+    state.devices = [];
+    state.pendingRemovals = [];
+    try {
+      this.write();
+    } catch (error) {
+      Object.assign(state, { devices, pendingRemovals });
+      throw error;
+    }
+    return removals;
   }
 
   pendingRemovals(): readonly PendingRemoval[] {
