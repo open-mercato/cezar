@@ -932,9 +932,9 @@ so forgetting the last server cannot leave it stuck on.
   show the page. Back leaves the app. Cancel and failure stay on the shield with an Unlock button, offered
   automatically once per return, so a cancel cannot loop.
 - **Entry points.** The launcher, returning from the background and `RestartActivity` all land on a `Host`
-  activity. `launch` waits for the unlock, so a locked app opens no server and consumes no route: that is what
+  activity. `launch` waits for the unlock, so a locked launch opens no server and consumes no route: that is what
   stops `DebugPairActivity`, which release builds do not have anyway. Any other activity in the process is
-  closed while locked, which is the scanner. `CezarApplication` installs the lock before any activity, so a
+  closed while locked, which is the scanner. A pairing approved while locked can still open `ServerActivity`, which starts behind its own shield. `CezarApplication` installs the lock before any activity, so a
   process restored at any of them is covered.
 - **App switcher.** With the lock on there is no snapshot of the content: `setRecentsScreenshotEnabled(false)`
   on API 33+, `FLAG_SECURE` below it. The snapshot is taken on the way out, before any shield could show.
@@ -965,8 +965,8 @@ reconnects behind a prompt. Follow-up, if the threat ever calls for it.
 **iOS: nothing is built.** It needs a LocalAuthentication gate (`LAContext`,
 `.deviceOwnerAuthentication`, which falls back to the passcode) with the same policy ported to Swift: a process
 start prompts, 60 seconds using a monotonic clock such as `ProcessInfo.systemUptime`. It also needs a cover view
-in `sceneWillResignActive` for the switcher snapshot, `NSFaceIDUsageDescription`, the same wait in `launch`, and
-a `lock` field in the plugin's list. `connect/` already draws the row when native sends that field.
+in `sceneWillResignActive` for the switcher snapshot, `NSFaceIDUsageDescription`, the same wait in `launch`,
+`lockSet` and a `lock` field in the plugin's list. `connect/` already draws the row when native sends that field.
 
 ### QR4: May Manual servers use the relay for push?
 
