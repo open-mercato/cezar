@@ -74,6 +74,8 @@ button {
   color: inherit;
   font: inherit;
 }
+button:disabled { opacity: 0.5; }
+
 button.primary {
   border-color: var(--accent);
   background: var(--accent);

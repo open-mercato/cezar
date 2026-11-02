@@ -6,14 +6,16 @@ import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebView;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.WebViewListener;
+import com.openmercato.cezar.mobile.shell.AppLock;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ShellConnector;
 import com.openmercato.cezar.mobile.shell.ShellRoute;
 
 /** Framework adapter: hosts the connect page and nothing else. */
-public class MainActivity extends BridgeActivity {
+public class MainActivity extends BridgeActivity implements AppLock.Host {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        AppLock.install(this);
         registerPlugin(ConnectionPlugin.class);
         if (getIntent().getBooleanExtra(RestartActivity.EXTRA_SHOW_LIST, false)) ShellRoute.set(ShellConnector.LIST, null);
         super.onCreate(savedInstanceState);

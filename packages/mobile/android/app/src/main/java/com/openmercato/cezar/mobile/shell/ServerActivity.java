@@ -53,7 +53,7 @@ import java.util.concurrent.Executors;
  * by construction (spec "No native bridge on server pages"). The framework's webview only ever
  * shows the bundled connect page.
  */
-public final class ServerActivity extends AppCompatActivity {
+public final class ServerActivity extends AppCompatActivity implements AppLock.Host {
     public static final String EXTRA_SERVER_ID = "serverId";
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_NOTE = "note";
@@ -110,6 +110,7 @@ public final class ServerActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        AppLock.install(this);
         super.onCreate(savedInstanceState);
         openCount++;
         everOpened = true;
