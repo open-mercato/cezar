@@ -57,7 +57,7 @@ Goals: an installable app on both platforms, Manager on first launch, approvals 
 and credentials held safely across several servers.
 
 Non-goals: running agents on the phone, a local or offline mode, approving from a notification, a cross-project task list (the Manager's `/tasks`
-command is that list), tablets as a designed target, a React Native client, a biometric lock,
+command is that list), tablets as a designed target, a React Native client, an always-on biometric lock (the optional one is the relay spec's QR3),
 shell telemetry for now, and direct APK or F-Droid builds in v1.
 
 ## Dependencies
@@ -103,15 +103,15 @@ listens on `/workspace/events`. The task thread already pages history with a cur
 fallback. It is open, mergeable and labelled `do-not-merge`, `needs-qa`, `risk-high`.
 
 Long task threads opened from a card are the exposed path, so M2 measures one on a real device over
-a tunnel. What happens to #1821 is open: see [Q11](#q11-what-becomes-of-pr-1821s-do-not-merge).
+a tunnel. #1821 keeps `do-not-merge` until the client side is fixed (decided 2026-11-02): see [Q11](#q11-what-becomes-of-pr-1821s-do-not-merge).
 
 ## Decision 1: the shell
 
 Why not to bundle the cockpit stands, and the relay spec's Decision 1 extends it:
 `.ai/specs/2026-11-01-relay-qr-pairing.md#decision-1-how-the-cockpit-loads`.
 
-**Recommendation: Capacitor, loading the server's cockpit from the server.** Still open: see
-[Q2](#q2-accept-capacitor).
+**Decision: Capacitor, loading the server's cockpit from the server.** Accepted 2026-11-02, subject to the
+iPhone proxy test: see [Q2](#q2-accept-capacitor).
 
 | | Tauri 2 mobile | Capacitor |
 | --- | --- | --- |
@@ -295,19 +295,19 @@ const isPhone = () =>
 Otherwise the existing restore runs unchanged. It stores and validates the last project page as it
 does today.
 
-Condition 2 is load-bearing. `ModeSwitch`'s Code link and several "Back to tasks" links point at
+Condition 2 is load-bearing. `ModeSwitch`'s Tasks link and several "Back to tasks" links point at
 `/`. Without the flag they would bounce back to Manager and a phone user could never reach tasks.
 
 | Server | Phone browser gets |
 | --- | --- |
 | Has Manager, managers exist | `/manager` |
-| Has Manager, no managers yet | `/manager`, showing first-manager setup. The drawer's Code link leaves it |
+| Has Manager, no managers yet | `/manager`, showing first-manager setup. The drawer's Tasks link leaves it |
 | `CEZ_MANAGERS=0` | The existing restore, with no note. `ManagersGate` still sends a pasted `/manager` to `/` |
 | Older server | Its own older cockpit, which has no such rule. An absent capability reads as false in any case |
 | Health request fails | The existing restore |
 
 **What this replaces.** `/` restored your last page on a fresh load. On a phone, that no longer
-happens at `/`: the restore moves one tap away, behind Code in the drawer. Reopening a deep link or
+happens at `/`: the restore moves one tap away, behind Tasks in the drawer. Reopening a deep link or
 a tab the browser restored keeps its URL, so only someone opening the bare root is affected.
 
 The manifest keeps `start_url: "/"`, so one rule covers tabs and PWAs. A phone PWA reaches Manager
@@ -583,7 +583,7 @@ minimum server version. An old server still works, without Manager.
 
 **Demo server.** Host it on a small Ubuntu VPS under Open Mercato, with the existing `ubuntu-vps`
 install. Cloudflare does not fit, because cezar needs a long-running Node process. The Worker relay
-is separate. The provider, and whether the demo is reviewers-only, are still open: see
+is separate. Decided 2026-11-02: reviewers only, on Hetzner, reset nightly. See
 [Q10](#q10-where-does-the-demo-server-run-and-who-may-use-it).
 
 The demo must run with `CEZ_DRY_RUN=1`, because a real cockpit gives shell access to anyone holding
@@ -602,7 +602,7 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | # | Task | Ships | Depends on | Size |
 | --- | --- | --- | --- | --- |
 | M1 | **Installable cockpit (#1762).** Manifest with `start_url: "/"` and `crossorigin="use-credentials"` so it loads behind Basic auth, icons, no `/api` caching. Check iOS install behind Basic auth and service worker registration | **First thing a user can install** | None | S |
-| M2 | **Shell spike.** Runs first. Throwaway build on the team's own devices with local signing and no store accounts, proving every item below | Go or no-go report by the rule below, which decides Q2 | None | M |
+| M2 | **Shell spike.** Runs first. Throwaway build on the team's own devices with local signing and no store accounts, proving every item below | Go or no-go report by the rule below, which can still overturn Q2 | None | M |
 | M3 | **Land Manager.** PR #1880, on by default | Manager on `main` | Maintainer | Outside this work |
 | M4 | **Phone chat.** One-row header, composer leftovers, keyboard inset, chips, measure streaming | Better chat in every phone browser | M3 | M |
 | M5 | **Approvals.** Confirmation sheet and dialog, the Settings section with one switch per type (default all on), 44pt buttons, per-card state, refusal on card, pill, `pending=1` | Safer approvals at every width, on phones first | M3 | M |
@@ -614,7 +614,7 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | M11 | **The sink's relay output.** Narrowed: the relay itself is R2, and this work is delegated to R5 of the relay spec | Native notifications | M10, R5 | M |
 | M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | R5, R6, Q10 | M, plus review time |
 
-Native push is required before M12 on both stores. M2 runs first, and M1 can start alongside it. M7 can run in parallel with M4 and M5. M4 and M5 both edit
+Native push is required before M12 on both stores. Platform order is Android first, then iOS (decided 2026-11-02): a task covering both ships on Android first. M2 runs first, and M1 can start alongside it. M7 can run in parallel with M4 and M5. M4 and M5 both edit
 `manager-chat.tsx`, so land one before starting the other.
 
 **M2 must answer, on real iOS and Android devices:**
@@ -647,13 +647,13 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
 | Risk | Likelihood | Effect | Response |
 | --- | --- | --- | --- |
 | #1880 changes shape before landing | Medium | Dependency table goes stale | Re-check the table at M3. It already moved once, closing the composer gap |
-| Phone rule catches the wrong device or traps a user | Low | Wrong landing, or no way to tasks | Tests for each device case and for the Code link |
+| Phone rule catches the wrong device or traps a user | Low | Wrong landing, or no way to tasks | Tests for each device case and for the Tasks link |
 | [M] Capacitor claims turn out wrong | Medium | Shell plan changes | M2 runs first; fallback is plain native |
 | Page script reaches the keychain | Low | Credential theft by agent output | No bridge on server pages, plus a test |
 | Apple rejects under 4.2 | Medium | No public iOS listing | Push first; TestFlight and PWA unaffected |
 | Relay fails or is neglected | Medium | Push outage | Small store with no user data, owned by Open Mercato |
 | Mis-tapped merge | Low | Unwanted merge | Confirmation on by default, plus server pins |
-| Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain. A biometric lock is deferred |
+| Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain. An optional phone lock is planned before public release (relay spec QR3) |
 
 ## Backward compatibility
 
@@ -676,8 +676,8 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
   `pending=1` (spec rule: a pass-through needs a test on empty input), and sink payloads carrying no
   user text.
 - Phone rule, each pinned: phone, landscape phone, narrow desktop window, tablet, no `matchMedia`,
-  managers false, absent, health failed, unfinished first run, `/?x`, and the Code link not bouncing
-  back. Prove the Code-link test fails without the one-shot flag.
+  managers false, absent, health failed, unfinished first run, `/?x`, and the Tasks link not bouncing
+  back. Prove the Tasks-link test fails without the one-shot flag.
 - Confirmation setting: absent and unknown types confirm, a switched-off type sends directly, and the
   `decision` request is identical either way.
 - E2E: the existing dry-run Manager walk at a phone viewport, extended for the sheet and bottom bar.
@@ -690,11 +690,15 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
 
 ## Open questions for the maintainer
 
-These three stay open. The decisions already taken follow in the [Decisions](#decisions) table.
+All three were decided on 2026-11-02 and are recorded in the [Decisions](#decisions) table. The relay spec's
+open questions (QR1, QR2, QR4, QR6, QR10) are still open.
 
 ### Q2: Accept Capacitor?
 
-**Pending the M2 spike. Recommended: yes, if M2 passes.** M2 runs first, built with Capacitor on the
+**Decided 2026-11-02: yes, Capacitor is kept, subject to the iPhone proxy test** (the loopback proxy check,
+relay spec QR5/R0, which is still to do). Platform order is Android first, then iOS.
+
+M2 runs first, built with Capacitor on the
 team's own devices with local signing and no store accounts. The shell work in M7 starts only if it
 passes.
 
@@ -707,7 +711,7 @@ inside the webview. Tauri cannot in wry 0.55.1 [V]. That Capacitor can is [M], f
 | Plain Swift and Kotlin | Full control, no bridge at all, no framework upgrades | Two small codebases with no sharing, and the connect screen is written twice | No bundled page. Push written by hand |
 | Tauri with a patched wry | Matches the desktop toolchain | A fork to carry across upgrades, plus an NDK build. Sharing is config only | A Rust mobile build in CI |
 
-M2's questions 1 to 4 and 6 settle it. If question 3 fails, the choice moves to plain native, not to
+M2's questions 1 to 4 and 6 can still overturn it. If question 3 fails, the choice moves to plain native, not to
 Tauri. If question 6 finds a hook in current wry, Tauri needs a second look, though Capacitor would
 still lead on push.
 
@@ -716,14 +720,13 @@ depend on this choice.
 
 ### Q10: Where does the demo server run, and who may use it?
 
-**Recommended: reviewers only, on a small Ubuntu VPS under Open Mercato.** The `ubuntu-vps` install is
-decided. The provider is unconfirmed, and so is whether the demo is reviewers-only. A public demo
-would need its login published, and a shared dry-run cockpit would need more than a nightly reset to
-stay presentable. M12 cannot finish until this is answered.
+**Decided 2026-11-02: reviewers only, on Hetzner, reset nightly.** The `ubuntu-vps` install is decided. A
+public demo would need its login published, and a shared dry-run cockpit would need more than a nightly
+reset to stay presentable, so the audience is reviewers.
 
 ### Q11: What becomes of PR #1821's do-not-merge?
 
-**Recommended: keep `do-not-merge`, and fix the client gap before merging.** This replaces the earlier
+**Decided 2026-11-02: keep `do-not-merge`, and fix the client side first.** This replaces the earlier
 answer of waiting for M2, because the review finding below hits phones in particular. It still does
 not block the Manager screens.
 
@@ -750,6 +753,7 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | # | Decision | Answer |
 | --- | --- | --- |
 | Q1 | How does Manager land, and is it on by default? | Through its own PR, #1880, with the mobile work stacked on it. On by default |
+| Q2 | Accept Capacitor? | Yes, subject to the iPhone proxy test (relay spec QR5/R0, still to do). 2026-11-02 |
 | Q3 | Who owns the store accounts? | Open Mercato |
 | Q4 | Bundle ID | `com.openmercato.cezar.mobile` accepted |
 | Q5 | Allow plain HTTP for LAN or Tailscale addresses? | No in v1. Users without a public server use HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. Tailscale cannot be made invisible to the user |
@@ -757,12 +761,16 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | Q7 | Is push required before a public listing? | Yes |
 | Q8 | Should a phone browser tab also start at `/manager`? | Yes, changed from the original recommendation. See [In a phone browser](#in-a-phone-browser) |
 | Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0`. Extended by the relay spec's QR2 |
-| Q12 | Optional biometric lock | Reopened by the relay spec's QR3 |
+| Q10 | Demo server | Reviewers only, on Hetzner, reset nightly. 2026-11-02 |
+| Q11 | PR #1821's do-not-merge | Keeps `do-not-merge`; the client side is fixed first. 2026-11-02 |
+| Q12 | Optional biometric lock | Yes, optional, off by default, shipped before public release. Settled by the relay spec's QR3, 2026-11-02 |
 | Q13 | Which approvals need confirmation? | Changed: a user setting per type, default on for merges, automations and jobs. See [Confirmation setting](#confirmation-setting) |
 | Q14 | Shell telemetry | None now, planned for later |
 | Q15 | Direct APK or F-Droid build | Not in v1 |
 | Q16 | Public store name | Cezar if available, otherwise Cezar Cockpit. It can change later, unlike the bundle ID |
 | Q17 | May public listings wait on M12? | Yes |
+| Order | Platform order | Android first, then iOS. 2026-11-02 |
+| Privacy | Privacy policy | The manager drafts it; Open Mercato approves and hosts it. 2026-11-02 |
 
 ## Changelog
 
@@ -775,4 +783,5 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 - 2026-11-01: Applied the relay spec's amendments. The relay non-goal is gone, a hosted server and the URL
   form are the Advanced path, M11 narrows to the sink's relay output, M12 depends on R5 and R6, Q9 extends
   and Q12 reopens.
+- 2026-11-02: Recorded maintainer decisions: Android first then iOS; Capacitor kept subject to the iPhone proxy test (Q2); demo server reviewers-only on Hetzner, reset nightly (Q10); #1821 keeps do-not-merge until the client side is fixed (Q11); optional phone lock settled through QR3 (Q12); the manager drafts the privacy policy and Open Mercato approves and hosts it. Finished the Code to Tasks rename.
 - 2026-11-01: M7 (#1883) departures. Server pages run in a separate plain webview instead of a subclassed Capacitor client, and the bundled connect page sees the password during entry. Android answers one challenge per server view, for the start URL, because its callback has no port and a redirect hop skips `shouldInterceptRequest`. Forget server restarts the Android process to end its auth cache; iOS has no known way yet. Servers is reachable only from the connection-error screen until M6.

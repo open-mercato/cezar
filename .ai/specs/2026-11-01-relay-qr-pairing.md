@@ -336,7 +336,7 @@ grants access.**
 | Photo plus a hostile relay, QR flow | Cannot impersonate cezar: the phone pins the key, and the attacker lacks its private half |
 | Typed code read in time, plus a hostile relay | **Residual risk.** No pinned key, and an attacker on both legs could grind ephemeral keys until the 6 digits match. It needs the code within 2 minutes and control of the relay. Accepted for a fallback, and the UI says to prefer the QR code |
 | Screen recording or screen share | Same as a photo |
-| System camera opens the link, hostile relay reads the fragment | **Not the same as a photo.** The relay's page script has the secret and cezar's key, runs `XXpsk3`, reaches Approve and shows the same six digits, so they warn nobody. Only the user's attention at Approve stands against it, and Approve adds a device that can start tasks. Open question [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open) |
+| System camera opens the link, hostile relay reads the fragment | **Not the same as a photo.** The relay's page script has the secret and cezar's key, runs `XXpsk3`, reaches Approve and shows the same six digits, so they warn nobody. Only the user's attention at Approve stands against it, and Approve adds a device that can start tasks. Decided 2026-11-02, change pending: [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open) |
 
 A code is shown only after a click, and never appears in a notification, log or `.ai/cezar/`. At most one
 pairing is pending, and cezar allows 5 per hour. Each opens two rendezvous, so that exactly fits the relay's
@@ -779,20 +779,21 @@ repository.
 
 | # | Task | Ships | Depends on | Size |
 | --- | --- | --- | --- | --- |
-| R0 | **Transport spike** on real iPhones and Android phones: the questions below | Go or no-go report | A working iOS build from #1883 | M |
+| R0 | **Transport spike** on real Android phones first, then iPhones: the questions below | Go or no-go report for each platform | A working build from #1883, Android first, then iOS | M |
 | R1 | **Public protocol.** `RELAY_PROTOCOL.md`, shared test vectors, parent spec amendments, BC entries | The contract other work builds on | This spec | S |
 | R2 | **Relay in `patzick/rome`.** Contract, conformance against R1's vectors, hibernation test, metric, staging. Confirms Cloudflare pricing and limits | Staging relay | R1. Already started on the contract above | L |
 | R3 | **cezar client.** `narrowForRelay`, keys, device store, dispatcher, routes, Settings UI, quiet tests | Desktop half, behind `capabilities.phonePairing` until R4 | R1. Stubbed sockets until R2 | L |
-| R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds | R0, R2, R3, M7 | L |
+| R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds, Android first | R0 on the same platform, R2, R3, M7 | L |
 | R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10, QR10 | M |
-| R6 | **Public release additions.** Demo code, privacy policy, export answers. Extends M12 | Reviewable build | R5, Q10, QR7 | M |
+| R6 | **Public release additions.** Demo code, privacy policy (the manager drafts it, Open Mercato approves and hosts it), export answers, the optional phone lock (QR3), the independent Noise review (QR8) and the non-https QR link (QR9). Extends M12 | Reviewable build | R5, Q10, QR7 | L, several PRs |
 
 **Ships before the relay, unchanged:** M1 installable PWA, M4 phone chat, M5 approvals, M6 Manager first,
 M7 shell with the Manual path, M8 CI, M9 test tracks, and M10 Web Push. Testers with a hosted server need
 nothing here. R3's `narrowForRelay` seam changes nothing until a relay scope exists, so it can land early.
 
-**R1 and R2 run in parallel with everything.** R0 should start as soon as an iOS build exists, because a
-no on it changes Decision 1. M12 depends on R5, since the parent spec requires native push before a public
+**Platform order (decided 2026-11-02): Android first, then iOS.** R0 and R4 run on Android first and repeat
+on iOS. **R1 and R2 run in parallel with everything.** The iPhone proxy test (QR5, R0's question 1 on iOS) is still
+to do and should start as soon as an iOS build exists, because a no on it changes Decision 1. M12 depends on R5, since the parent spec requires native push before a public
 listing.
 
 **R0 must answer, on real devices:**
@@ -859,7 +860,7 @@ R1 made these edits in `.ai/specs/2026-10-31-mobile-apps-manager-first.md`.
 | Decision 2, adding a server | Moves under Advanced. "HTTP is refused" stays for remote traffic |
 | Decision 5, relay trust and M11 | Point at the contract here. Grants stay, in the room |
 | Q9 | Extended by [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule) |
-| Q12 | Reopened by [QR3](#qr3-does-a-phone-need-its-own-lock) |
+| Q12 | Settled by [QR3](#qr3-does-a-phone-need-its-own-lock): optional lock, off by default, before public release |
 | Plan | M11 narrows to the sink's relay output, delegated to R5. M12 depends on R5 and R6 |
 
 ## Testing
@@ -892,7 +893,8 @@ R1 made these edits in `.ai/specs/2026-10-31-mobile-apps-manager-first.md`.
 
 ## Open questions for the maintainer
 
-Each has a recommendation, and the work proceeds on it unless told otherwise.
+QR1, QR2, QR4, QR6 and QR10 are open: each has a recommendation, and the work proceeds on it unless told
+otherwise. QR3, QR5, QR7, QR8 and QR9 were decided on 2026-11-02 and are marked below.
 
 ### QR1: What is the relay's hostname, and who owns its accounts?
 
@@ -909,8 +911,8 @@ blocks it. A separate env opt-in would defeat zero-setup pairing.
 
 ### QR3: Does a phone need its own lock?
 
-**Recommended: reopen Q12, and ship an optional biometric or device-passcode lock before a public listing,
-off by default.** The parent spec deferred it when a phone needed a hosted password. Now a phone unlocked for
+**Decided 2026-11-02: ship an optional biometric or device-passcode lock before a public listing, off by
+default.** This settles Q12 in the parent spec, which had deferred it when a phone needed a hosted password. Now a phone unlocked for
 a moment can run tasks on a personal laptop, with no password anywhere. Keys already need the phone to be
 unlocked. The list's Remove covers loss but not a borrowed phone.
 
@@ -921,7 +923,8 @@ Otherwise Manual users have no native push at all, and the parent spec requires 
 
 ### QR5: Accept the loopback proxy, pending R0?
 
-**Recommended: yes.** Rejecting it reopens bundling, and bundling still needs a transport.
+**Decided 2026-11-02: yes, subject to the iPhone proxy test (R0 question 1, on iOS), which is still to do.**
+Rejecting it reopens bundling, and bundling still needs a transport.
 
 ### QR6: Are these quotas right for a free service?
 
@@ -930,24 +933,26 @@ The `hello` frame lets them change without a release.
 
 ### QR7: Who owns export compliance?
 
-**Recommended: Open Mercato answers it as standard encryption, and someone qualified confirms that before
-R6.** It is a legal filing. Everything said about it here is [M].
+**Decided 2026-11-02: Open Mercato answers it as standard encryption, and someone qualified confirms that
+before R6.** It is a legal filing. Everything said about it here is [M].
 
 ### QR8: Should the Noise code be independently reviewed before a public listing?
 
-**Recommended: yes, a focused review of the handshake, tunnel and proxy.** End-to-end encryption is the
+**Decided 2026-11-02: yes, an independent review of the handshake, tunnel and proxy is required before public
+release.** End-to-end encryption is the
 promise of this feature, and the claim that anyone can check it is only as good as someone having done so.
 
 ### QR9: Should the QR code be something a browser does not open?
 
-**Recommended: yes, a non-https scheme such as `cezar-pair:1.<origin>.<secret>.<key>`, before any relay the user does not run.**
+**Decided 2026-11-02: yes, a non-https QR link, for example `cezar-pair:1.<origin>.<secret>.<key>`, before any relay the user does not run. This records the decision only: a later PR changes the protocol and
+updates [§9.1](../../RELAY_PROTOCOL.md#91-qr-string) and the vectors.**
 A system camera that opens `https://<relay>/p#secret` hands the secret to a page the relay serves, and a
 hostile relay's script can pair as a phone and show the same six digits (R1 review F1). The user's
 attention at Approve is then the only defence. The trade-off: a system camera no longer reaches `GET /p`,
 so someone with no app gets no "how to get the app" page, and the code works only inside the app's
-scanner. Until decided, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
-acceptable only for a relay the user runs. **The built-in default is not one**, so this is open for every
-default user, and the warning to scan inside the app is all that stands in for it. It changes QR bytes, so decide before the public relay.
+scanner. Until that PR lands, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
+acceptable only for a relay the user runs. **The built-in default is not one**, so every
+default user is exposed until then, and the warning to scan inside the app is all that stands in for it. It changes QR bytes, so it lands before the public relay.
 
 ### QR10: How does a genuine revoke survive a full stranger denial pool?
 
@@ -986,6 +991,7 @@ wire shape changes either way.
 - 2026-11-01: R3. The start route returns no code: `POST /workspace/phones/pairing/:id/code` opens that rendezvous on request. `outsideRelayScope` sits at run start, `ManagerEngine.enqueue` and its timers, `refreshHealth`, topic start, automation reschedule, webhook service resolution and lazy context builds. Audit: the only values a scope changes are `localHandoff`, `terminal`, `designMode`, `managerSystemNotifications`, `phonePairing`, the accounts closure and `isHostedMode`, so a site matters only if deferred work can reach one of those. A phone's rendezvous-side rollback also removes the row when the phone left before hearing `approved`.
 - 2026-11-02: cezar has a built-in default relay, `DEFAULT_RELAY_ORIGIN`, so Connect a phone needs no setup, and a custom address sits behind Advanced. Reverses "no host is built in" for cezar only. The app still has none. A socket now closes whenever its address moves.
 - 2026-11-02: The relay address is a setting, see [Relay address](#relay-address). `capabilities.phonePairing` now means only that `CEZ_RELAY=0` is not set, and `CEZ_RELAY_URL` overrides the setting. The wire contract did not change, and protocol version stays 1.
+- 2026-11-02: Recorded maintainer decisions. QR3: optional phone lock, off by default, before public release, and parent Q12 settled to match. QR5: loopback proxy accepted, subject to the iPhone proxy test, still to do. QR7: Open Mercato answers export compliance, confirmed by someone qualified. QR8: independent Noise review required before public release. QR9: a non-https QR link, decision only; a later PR changes the protocol. Android first, then iOS. Also parent Q2, Q10, Q11 and the privacy policy (the manager drafts it, Open Mercato approves and hosts it). QR1, QR2, QR4, QR6 and QR10 stay open. The plan follows: R0 and R4 go Android first, and R6 owns QR3, QR8 and QR9. The contract did not change.
 - 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
   parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol
   errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone

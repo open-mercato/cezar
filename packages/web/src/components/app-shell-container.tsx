@@ -79,7 +79,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // it the nav must not offer a tab whose every request would 409.
   const automationsAvailable = health.data?.capabilities.automations === true
   const todos = useTodos(inboxAvailable)
-  // Mounted for the session: the switch's dot and the notification path read this cache in Code
+  // Mounted for the session: the switch's dot and the notification path read this cache in Tasks
   // mode too, and the workspace stream keeps it current.
   const managersAvailable = health.data?.capabilities.managers === true
   const managers = useManagers(managersAvailable)
