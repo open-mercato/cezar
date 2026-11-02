@@ -295,19 +295,19 @@ const isPhone = () =>
 Otherwise the existing restore runs unchanged. It stores and validates the last project page as it
 does today.
 
-Condition 2 is load-bearing. `ModeSwitch`'s Code link and several "Back to tasks" links point at
+Condition 2 is load-bearing. `ModeSwitch`'s Tasks link and several "Back to tasks" links point at
 `/`. Without the flag they would bounce back to Manager and a phone user could never reach tasks.
 
 | Server | Phone browser gets |
 | --- | --- |
 | Has Manager, managers exist | `/manager` |
-| Has Manager, no managers yet | `/manager`, showing first-manager setup. The drawer's Code link leaves it |
+| Has Manager, no managers yet | `/manager`, showing first-manager setup. The drawer's Tasks link leaves it |
 | `CEZ_MANAGERS=0` | The existing restore, with no note. `ManagersGate` still sends a pasted `/manager` to `/` |
 | Older server | Its own older cockpit, which has no such rule. An absent capability reads as false in any case |
 | Health request fails | The existing restore |
 
 **What this replaces.** `/` restored your last page on a fresh load. On a phone, that no longer
-happens at `/`: the restore moves one tap away, behind Code in the drawer. Reopening a deep link or
+happens at `/`: the restore moves one tap away, behind Tasks in the drawer. Reopening a deep link or
 a tab the browser restored keeps its URL, so only someone opening the bare root is affected.
 
 The manifest keeps `start_url: "/"`, so one rule covers tabs and PWAs. A phone PWA reaches Manager
@@ -647,7 +647,7 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
 | Risk | Likelihood | Effect | Response |
 | --- | --- | --- | --- |
 | #1880 changes shape before landing | Medium | Dependency table goes stale | Re-check the table at M3. It already moved once, closing the composer gap |
-| Phone rule catches the wrong device or traps a user | Low | Wrong landing, or no way to tasks | Tests for each device case and for the Code link |
+| Phone rule catches the wrong device or traps a user | Low | Wrong landing, or no way to tasks | Tests for each device case and for the Tasks link |
 | [M] Capacitor claims turn out wrong | Medium | Shell plan changes | M2 runs first; fallback is plain native |
 | Page script reaches the keychain | Low | Credential theft by agent output | No bridge on server pages, plus a test |
 | Apple rejects under 4.2 | Medium | No public iOS listing | Push first; TestFlight and PWA unaffected |
@@ -676,8 +676,8 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
   `pending=1` (spec rule: a pass-through needs a test on empty input), and sink payloads carrying no
   user text.
 - Phone rule, each pinned: phone, landscape phone, narrow desktop window, tablet, no `matchMedia`,
-  managers false, absent, health failed, unfinished first run, `/?x`, and the Code link not bouncing
-  back. Prove the Code-link test fails without the one-shot flag.
+  managers false, absent, health failed, unfinished first run, `/?x`, and the Tasks link not bouncing
+  back. Prove the Tasks-link test fails without the one-shot flag.
 - Confirmation setting: absent and unknown types confirm, a switched-off type sends directly, and the
   `decision` request is identical either way.
 - E2E: the existing dry-run Manager walk at a phone viewport, extended for the sheet and bottom bar.
