@@ -106,7 +106,7 @@ describe('PhoneBottomBar', () => {
     },
   )
 
-  it('leaves /manager/new its ways out: it has no route of its own to Code', () => {
+  it('leaves /manager/new its ways out: it has no route of its own to Tasks', () => {
     device()
     renderShell('/manager/new')
     expect(bar()).not.toBeNull()
@@ -119,7 +119,7 @@ describe('PhoneBottomBar', () => {
     expect(bar()).not.toBeNull()
   })
 
-  it('carries the attention dot, where the menu button only does in Code mode', () => {
+  it('carries the attention dot, where the menu button only does in Tasks mode', () => {
     device()
     renderShell('/manager', { managerAttention: true })
     expect(bar()!.querySelector('[data-slot="bottom-bar-attention"]')).not.toBeNull()

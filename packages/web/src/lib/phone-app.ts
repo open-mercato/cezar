@@ -31,7 +31,7 @@ export function rememberFirstLocation(key: string): void {
   firstLocationKey ??= key
 }
 
-/** A key, not a cleared flag: an effect would clear it after the render a Code link lands in. */
+/** A key, not a cleared flag: an effect would clear it after the render a Tasks link lands in. */
 export function isFirstLocation(key: string): boolean {
   return key === firstLocationKey
 }
