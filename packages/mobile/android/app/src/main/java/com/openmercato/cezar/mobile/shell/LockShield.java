@@ -41,7 +41,8 @@ final class LockShield extends LinearLayout {
                 ((Activity) activity).moveTaskToBack(true);
             }
         };
-        activity.getOnBackPressedDispatcher().addCallback(back);
+        // Bound, as ServerActivity's is: an unbound one ranks below it after ON_START re-adds it.
+        activity.getOnBackPressedDispatcher().addCallback(activity, back);
     }
 
     void show(String text) {

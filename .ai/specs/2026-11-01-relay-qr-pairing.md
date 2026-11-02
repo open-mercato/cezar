@@ -919,7 +919,8 @@ unlocked. The list's Remove covers loss but not a borrowed phone.
 **Built on Android (`shell/AppLock`, `LockPolicy`, `LockSetting`, `LockShield`).** The Servers list has one
 row, Turn on app lock. It starts off, and both directions need a passed prompt. With no screen lock on the
 phone the row explains that and cannot be pressed. While the lock is on, the start screen shows the row too,
-so forgetting the last server cannot leave it stuck on.
+so forgetting the last server cannot leave it stuck on. The row is read again whenever the page returns to the
+foreground, so a screen lock set in the phone's Settings shows without a relaunch.
 
 - **Credential.** `androidx.biometric` with `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`, the one mix it supports
   from API 24 up. Weak is enough because no key is released (below).
@@ -947,8 +948,10 @@ so forgetting the last server cannot leave it stuck on.
 authentication, and the setting is an empty file in `noBackupFilesDir`, so no secret enters it. Consequences:
 
 - Keys stay usable while locked. When the app returns to a screen that was already open, `ServerActivity`
-  starts its foreground socket and its page keeps running, invisible, behind the shield. Only a fresh launch
-  waits. Backgrounded, nothing changes: the socket closes on stop and the proxy answers 503.
+  starts its foreground socket and its page keeps running, invisible, behind the shield. A `ServerActivity`
+  restored after process death does the same: it loads its page and starts its socket before the unlock. Only
+  `launch`, the bundled page's path to a server, waits. Backgrounded, nothing changes: the socket closes on
+  stop and the proxy answers 503.
 - Android has no push yet. When it ships, a signal arrives while locked. The relay's push is text-free, so the
   notification must stay generic, and opening it passes through the lock like any return.
 - A person holding the unlocked phone, without its credential, cannot see or use the app. With an authorised
