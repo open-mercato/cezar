@@ -231,11 +231,11 @@ describe('/manager/:id', () => {
     bar.remove()
   })
 
-  it('drops the inert + on phones, and sizes the controls for a thumb', async () => {
+  it('keeps the working + on phones, and sizes the controls for a thumb', async () => {
     seedChat()
     renderAt('/manager/global')
     await screen.findByRole('heading', { name: 'Global Manager' })
-    expect(screen.getByRole('button', { name: 'Attach files' }).className).toContain('max-md:hidden')
+    expect(screen.getByRole('button', { name: 'Attach files' }).className).not.toContain('max-md:hidden')
     expect(composer().className).toContain('max-md:max-h-[calc((100dvh-var(--kb,0px))*0.35)]')
     expect(screen.getByRole('button', { name: 'Send' }).className).toContain('pointer-coarse:max-md:h-11')
   })
