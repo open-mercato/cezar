@@ -245,6 +245,8 @@ export async function runAutomationCommand(
   args: string[],
   env: AutomationCliEnv = process.env,
   io: AutomationCliIo = { fetch, log: console.log, error: console.error },
+  /** A manager's agent (spec 2026-10-31-managers): nothing it writes is ever enabled. */
+  options: { neverEnable?: boolean } = {},
 ): Promise<number> {
   const [command, ...rest] = args;
   if (!command || command === 'help' || command === '--help') {
@@ -273,7 +275,9 @@ export async function runAutomationCommand(
     io.fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
   const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   /** `create` and `add` share one POST and one report; the flags only differ in how the body is built. */
-  const createFrom = async (body: Record<string, unknown>): Promise<number> => {
+  const createFrom = async (requested: Record<string, unknown>): Promise<number> => {
+    const { enable, ...paused } = requested;
+    const body = options.neverEnable ? paused : requested;
     const response = await json(`${api.scope}/automations`, { method: 'POST', body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
     const { automation } = (await response.json()) as AutomationResponse;
@@ -379,7 +383,7 @@ export async function runAutomationCommand(
         // A PUT restates `enabled` (an edit may not silently pause a running automation) and
         // echoes the revision it read, so a concurrent edit in the cockpit is a 409, not a clobber.
         withTrackerAccess(body, automation);
-        body.enabled = 'enabled' in patch ? patch.enabled : automation.enabled;
+        body.enabled = options.neverEnable ? false : 'enabled' in patch ? patch.enabled : automation.enabled;
         body.expectedRevision = automation.revision;
         const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) });
         if (!response.ok) throw new Error(`update refused — ${await readError(response)}`);

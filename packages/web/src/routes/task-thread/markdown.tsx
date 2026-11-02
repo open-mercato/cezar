@@ -1,4 +1,4 @@
-import { memo, useState, type ComponentProps } from 'react'
+import { memo, useState, type ComponentProps, type ComponentType } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
@@ -178,7 +178,7 @@ const TRANSCRIPT_REHYPE_PLUGINS = Object.entries(defaultRehypePlugins).flatMap(
 type TranscriptLinkProps = ComponentProps<'a'>
 
 /** A markdown link with the transcript's local-only destination policy applied. */
-function TranscriptLink({ href, children, className, ...props }: TranscriptLinkProps) {
+export function TranscriptLink({ href, children, className, ...props }: TranscriptLinkProps) {
   const [isOpen, setIsOpen] = useState(false)
 
   if (!href || isLocalFilesystemDestination(href)) {
@@ -258,12 +258,15 @@ export const Markdown = memo(function Markdown({
   inline = false,
   variant = 'chat',
   urlTransform,
+  components,
 }: {
   children: string
   breaks?: boolean
   inline?: boolean
   variant?: 'chat' | 'document'
   urlTransform?: UrlTransform
+  /** Replaces the transcript's element overrides. Pass a stable object, like `urlTransform`. */
+  components?: { a: ComponentType<ComponentProps<'a'>> }
 }) {
   return (
     <Streamdown
@@ -280,7 +283,7 @@ export const Markdown = memo(function Markdown({
       rehypePlugins={urlTransform ? undefined : TRANSCRIPT_REHYPE_PLUGINS}
       allowedElements={inline ? INLINE_ELEMENTS : undefined}
       unwrapDisallowed={inline || undefined}
-      components={inline ? INLINE_COMPONENTS : MARKDOWN_COMPONENTS}
+      components={inline ? INLINE_COMPONENTS : (components ?? MARKDOWN_COMPONENTS)}
       urlTransform={transcriptUrlTransform}
       linkSafety={LINK_SAFETY}
       // Spread, not `urlTransform={undefined}`: an explicit undefined could displace

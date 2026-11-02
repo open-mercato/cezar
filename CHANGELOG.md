@@ -1,3 +1,12 @@
+# Unreleased
+
+## ✨ Features
+- ✨ Managers: create global agents in the new Manager mode, connect repositories, and chat with them. A manager refreshes on a cadence (a check with nothing new makes no model call), runs saved jobs, starts and steers tasks, and proposes merges and automation enables that wait for your approval. `CEZ_MANAGERS=0` turns them off. (#1880) *(@patzick)*
+
+## 👥 Contributors
+
+- @patzick
+
 # 0.17.0 (2026-10-29)
 
 ## Highlights

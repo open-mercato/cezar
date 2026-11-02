@@ -42,6 +42,12 @@ vi.mock('node:child_process', async (importOriginal) => {
  * shared by both runners).
  */
 describe('buildClaudeArgs systemPrompt', () => {
+  it('passes effort through, and only when set', () => {
+    const spec = { userPrompt: 'x', cwd: '/tmp' };
+    expect(buildClaudeArgs({ ...spec, effort: 'high' })).toEqual(expect.arrayContaining(['--effort', 'high']));
+    expect(buildClaudeArgs(spec)).not.toContain('--effort');
+  });
+
   const spec = { userPrompt: 'do it', cwd: '/tmp' };
 
   it('emits --append-system-prompt with the exact text', () => {

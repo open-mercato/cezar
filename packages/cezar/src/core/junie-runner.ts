@@ -102,6 +102,12 @@ export class JunieRunner implements AgentRunner {
   }
 }
 
+/** Refuse an ACP permission prompt with the agent's own reject option, else cancel it. */
+export function readOnlyPermissionOutcome(options: Array<Record<string, unknown>>): { outcome: 'selected'; optionId: string } | { outcome: 'cancelled' } {
+  const reject = options.find((option) => option.kind === 'reject_once') ?? options.find((option) => option.kind === 'reject_always');
+  return typeof reject?.optionId === 'string' ? { outcome: 'selected', optionId: reject.optionId } : { outcome: 'cancelled' };
+}
+
 /** One live `junie --acp=true` process driving a single session. */
 class JunieSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
@@ -362,9 +368,11 @@ class JunieSession implements AgentSession {
       // Zero-config full-auto (#430's documented posture): best-effort — a
       // future protocol revision that drops this configId must not abort the
       // whole session over an internal nicety.
-      await this.rpc
-        .request('session/set_config_option', { sessionId, configId: 'brave_mode', value: 'on' })
-        .catch(() => undefined);
+      if (!this.spec.readOnly) {
+        await this.rpc
+          .request('session/set_config_option', { sessionId, configId: 'brave_mode', value: 'on' })
+          .catch(() => undefined);
+      }
 
       // Junie's model ids are opaque, junie-catalog strings (e.g.
       // `v1:12:jetbrains-ai:claude-sonnet-5`), never `provider/model` — a bad
@@ -457,6 +465,11 @@ class JunieSession implements AgentSession {
    *  per-run full-auto must not persist a grant that outlives the run. */
   private handlePermissionRequest(id: number | string, params: Record<string, unknown>): void {
     const options = (Array.isArray(params.options) ? params.options : []).filter(isRecord);
+    if (this.spec.readOnly) {
+      // Without brave_mode this is the fence: anything Junie must ask for is not a read.
+      this.rpc.respond({ id, result: { outcome: readOnlyPermissionOutcome(options) } });
+      return;
+    }
     const allow =
       options.find((option) => option.kind === 'allow_once') ??
       options.find((option) => option.kind === 'allow_always');

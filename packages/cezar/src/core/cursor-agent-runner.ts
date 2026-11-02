@@ -90,12 +90,14 @@ export type BuildCursorArgsInput = {
   userPrompt: string;
   systemPrompt?: string;
   model?: string;
+  readOnly?: boolean;
 };
 
 /** CLI argv for headless write mode (prompt is the final positional). */
 export function buildCursorArgs(input: BuildCursorArgsInput): string[] {
   const prompt = prependSystemPrompt(input.systemPrompt, input.userPrompt);
-  const args = ['-p', '--force', '--trust', '--output-format', 'stream-json'];
+  // `--force` is what lets it run anything, so ask mode goes without it.
+  const args = ['-p', ...(input.readOnly ? ['--mode', 'ask'] : ['--force']), '--trust', '--output-format', 'stream-json'];
   if (input.model?.trim()) {
     args.push('--model', input.model.trim());
   }
@@ -173,6 +175,7 @@ export class CursorAgentRunner implements AgentRunner {
       userPrompt: spec.userPrompt,
       systemPrompt: spec.systemPrompt,
       model: spec.model,
+      ...(spec.readOnly ? { readOnly: true } : {}),
     });
 
     let child: ChildProcessWithoutNullStreams;

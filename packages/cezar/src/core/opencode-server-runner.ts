@@ -32,7 +32,7 @@ import {
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
-import { opencodeConfigContent } from './private-mcp.ts';
+import { opencodeConfigContent, opencodeReadOnlyConfig } from './private-mcp.ts';
 import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 export interface OpencodeRunnerOptions {
@@ -368,6 +368,7 @@ class OpencodeSession implements AgentSession {
       if (this.spec.mcpServers?.length) {
         env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
       }
+      if (this.spec.readOnly) env.OPENCODE_CONFIG_CONTENT = opencodeReadOnlyConfig(env.OPENCODE_CONFIG_CONTENT);
       const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
       child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env });
     } catch (err) {

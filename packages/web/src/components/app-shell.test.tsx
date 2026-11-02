@@ -1137,3 +1137,45 @@ describe('Dashboard active navigation', () => {
     expect(link.classList.contains('bg-muted')).toBe(false)
   })
 })
+
+describe('AppShell manager mode (spec 2026-10-31-managers)', () => {
+  const manager = { managersAvailable: true, managerSidebar: <p>manager rows</p>, hostWidget: <p>host glance</p> }
+
+  it('has no switch while health says no', () => {
+    renderShell('/manager', { hostWidget: <p>host glance</p> })
+    expect(document.querySelector('[data-slot="mode-switch"]')).toBeNull()
+    expect(screen.getAllByText('host glance').length).toBeGreaterThan(0)
+    expect(document.querySelector('[data-slot="manager-sidebar"]')).toBeNull()
+  })
+
+  it('keeps the Tasks sidebar on any other URL', () => {
+    renderShell('/p/alpha/', manager)
+    expect(document.querySelector('[data-slot="mode-switch"]')).not.toBeNull()
+    expect(within(document.querySelector('[data-slot="mode-switch"]') as HTMLElement).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getAllByText('New task').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('host glance').length).toBeGreaterThan(0)
+    expect(screen.queryByText('manager rows')).toBeNull()
+  })
+
+  it('swaps the body from the URL and keeps only the footer controls', () => {
+    renderShell('/manager/global', manager)
+    expect(screen.getByRole('link', { name: 'Manager' }).getAttribute('aria-current')).toBe('page')
+    expect(screen.getByText('manager rows')).toBeTruthy()
+    expect(screen.queryByText('New task')).toBeNull()
+    expect(screen.queryByText('host glance')).toBeNull()
+    expect(document.querySelector('[data-slot="command-palette-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="global-settings-link"]')).not.toBeNull()
+  })
+
+  it('puts the dot on the switch and, in Tasks mode, on the phone menu', () => {
+    renderShell('/p/alpha/', { ...manager, managerAttention: true })
+    expect(document.querySelector('[data-slot="manager-attention"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="mobile-manager-attention"]')).not.toBeNull()
+  })
+
+  it('titles the phone bar', () => {
+    renderShell('/manager', manager)
+    expect(within(document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement).getByText('Manager')).toBeTruthy()
+  })
+})
+
