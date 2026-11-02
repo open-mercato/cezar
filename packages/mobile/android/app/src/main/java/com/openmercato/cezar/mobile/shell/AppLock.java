@@ -46,12 +46,7 @@ public final class AppLock implements Application.ActivityLifecycleCallbacks {
         application.registerActivityLifecycleCallbacks(this);
     }
 
-    /** Before super.onCreate, in every Host: a restored process may start at either one. */
-    public static synchronized AppLock install(Activity activity) {
-        if (instance == null) instance = new AppLock(activity.getApplication());
-        return instance;
-    }
-
+    /** First called from CezarApplication: a restored process may start at any activity, the scanner included. */
     public static synchronized AppLock get(Context context) {
         if (instance == null) instance = new AppLock((Application) context.getApplicationContext());
         return instance;

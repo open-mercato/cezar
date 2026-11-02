@@ -23,4 +23,8 @@ The mobile app connects to a cezar you host and shows that server's own cockpit,
 
 The server must run in hosted mode. Links that leave your server open in the system browser.
 
+## App lock
+
+On Android, **Turn on app lock** on the server list asks for your fingerprint, face or screen lock each time the app starts and after a minute in the background. It is off by default and needs a screen lock on the phone. It only hides the app: anyone who knows the phone's screen lock can open it, and your login is stored the same way with the lock on or off. iOS has no app lock yet.
+
 > **Good to know**: Plain `http://` is refused. Without a public server, reach cezar over HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. A temporary `trycloudflare.com` tunnel loads the cockpit, but live updates do not arrive through it. The Android debug build has been tested on an emulator. The iOS code has not been compiled yet.

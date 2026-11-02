@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NO_HTTP, lockRow, screenFor } from '../connect/screens.js';
+import { NO_HTTP, lockRow, screenFor, startLockRow } from '../connect/screens.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -80,6 +80,12 @@ test('the lock row is absent where native has no lock, as on iOS', () => {
 test('the lock row turns the lock on or off', () => {
   assert.equal(lockRow({ enabled: false, available: true }).enable, true);
   assert.equal(lockRow({ enabled: true, available: true }).enable, false);
+});
+
+test('with no servers the row stays only while the lock is on, so it can still be turned off', () => {
+  assert.equal(startLockRow(undefined), null);
+  assert.equal(startLockRow({ enabled: false, available: true }), null);
+  assert.equal(startLockRow({ enabled: true, available: true }).enable, false);
 });
 
 test('with no screen lock the row explains itself and cannot be pressed', () => {

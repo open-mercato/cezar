@@ -110,7 +110,6 @@ public final class ServerActivity extends AppCompatActivity implements AppLock.H
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        AppLock.install(this);
         super.onCreate(savedInstanceState);
         openCount++;
         everOpened = true;
