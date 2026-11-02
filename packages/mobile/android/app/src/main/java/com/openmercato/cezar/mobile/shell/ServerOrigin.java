@@ -5,7 +5,7 @@ import java.net.URISyntaxException;
 import java.util.Locale;
 
 /** An https scheme, host and port: the only identity a saved server has (spec Decision 2). */
-public final class ServerOrigin {
+public final class ServerOrigin implements PageOrigin {
     public enum Problem { CLEARTEXT, INVALID }
 
     public static final class InvalidUrl extends Exception {
@@ -47,23 +47,32 @@ public final class ServerOrigin {
         return new ServerOrigin(uri.getHost().toLowerCase(Locale.ROOT), uri.getPort() == -1 ? 443 : uri.getPort());
     }
 
+    @Override
     public String origin() {
         return port == 443 ? "https://" + host : "https://" + host + ":" + port;
     }
 
+    @Override
     public String url(String path) {
         return origin() + path;
     }
 
     /** False for anything without a readable authority, so an odd URL can never pass as this server. */
+    @Override
     public boolean sameOrigin(String url) {
         UrlParts parts = UrlParts.parse(url);
         if (parts == null || !"https".equals(parts.scheme) || !host.equals(parts.host)) return false;
         return port == (parts.port == -1 ? 443 : parts.port);
     }
 
+    @Override
     public boolean sameHost(String url) {
         UrlParts parts = UrlParts.parse(url);
         return parts != null && host.equals(parts.host);
+    }
+
+    @Override
+    public boolean allowsSso() {
+        return true;
     }
 }
