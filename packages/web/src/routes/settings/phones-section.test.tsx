@@ -193,6 +193,18 @@ describe('the relay address', () => {
     expect(button('Save').disabled).toBe(true)
   })
 
+  it('locks the field during Test, so the result belongs to the value tested', async () => {
+    let finish: (result: unknown) => void = () => {}
+    api.testRelayAddress.mockReturnValue(new Promise((resolve) => { finish = resolve }))
+    show()
+    await type(NEXT)
+    fireEvent.click(button('Test'))
+    await waitFor(async () => expect((await field()).readOnly).toBe(true))
+    finish({ ok: true, origin: NEXT, protocol: 1 })
+    await screen.findByText(/speaks a compatible protocol version/)
+    expect((await field()).readOnly).toBe(false)
+  })
+
   it('saves with no warning when no phone is paired', async () => {
     show()
     await passTest()
@@ -239,6 +251,7 @@ describe('the relay address', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('not a valid relay address')
     expect((await field()).readOnly).toBe(true)
     expect(button('Connect a phone').disabled).toBe(true)
+    expect(screen.queryByText(/add one below/)).toBeNull()
   })
 
   it('states what the relay sees and where to scan, with or without an address', async () => {

@@ -119,10 +119,14 @@ export class RelayService {
   /** Reconnects at boot only if there is something to do. Never fails boot. */
   async start(): Promise<void> {
     await this.refreshAddress();
-    if (!this.origin || this.disposed) return;
+    const origin = this.origin;
+    if (!origin || this.disposed) return;
+    const idle = () => this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0;
     try {
-      if (this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0) return;
+      if (idle()) return;
       const identity = await this.identityStore.load();
+      // A keychain prompt can outlast a save, and that save left this relay.
+      if (this.origin !== origin || idle()) return;
       if (!identity) {
         this.setStatus('error', 'the keys for this computer are gone, so pair your phones again');
         return;
@@ -306,7 +310,8 @@ export class RelayService {
 
   /**
    * Read per request, so a save needs no restart and every `cezar serve` on this home converges.
-   * One that moved under us leaves the old relay without telling it: whoever saved has done that.
+   * Rows that went with the move mean whoever saved told the old relay, so this one only closes.
+   * Rows still here mean a hand edit or a failed read: nothing was agreed, and the socket stays.
    */
   async refreshAddress(): Promise<void> {
     const writes = this.addressWrites;
@@ -323,9 +328,7 @@ export class RelayService {
     this.addressLoaded = true;
     if (!loaded || this.origin === before) return;
     this.pairing?.cancel();
-    this.connection?.stop();
-    this.connection = undefined;
-    this.devices.reload();
+    this.closeIfIdle();
     this.onChange();
   }
 
@@ -341,8 +344,8 @@ export class RelayService {
       }
       const origin = address === null ? null : parseRelayOrigin(address);
       if (address !== null && !origin) throw new RelayAddressError(INVALID_ADDRESS, 400);
-      if (this.changingAddress) throw new RelayAddressError('The relay address is already changing.', 409);
       await this.refreshAddress();
+      if (this.changingAddress) throw new RelayAddressError('The relay address is already changing.', 409);
       if (origin === parseRelayOrigin(this.savedAddress ?? undefined)) return;
       if (this.devices.list().length > 0 && !dropPhones) {
         throw new RelayAddressError('Paired phones must pair again after this change, so confirm it first.', 409);
@@ -461,6 +464,7 @@ export class RelayService {
       } catch {
         throw new PairingStartError('Could not read the keys for this computer. Unlock the keychain and try again.');
       }
+      if (this.changingAddress || this.origin !== origin) throw new PairingStartError('The relay address changed. Try again.');
       this.identity = identity;
       this.pairingStarts.push(now);
       const pairing: Pairing = new Pairing({

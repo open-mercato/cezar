@@ -547,10 +547,11 @@ to, a relay that never knew it. **The identity stays.** It is this home's, not t
 keys and a Manual server's grants are unchanged. The cost is that two relay operators comparing notes can
 see one computer used both. No socket opens to the new relay until a phone next pairs.
 
-A second `cezar serve` on this home sees the move at its next `/workspace/phones` request or restart, and
-then closes its socket. Until then a socket it holds stays up and serves the rows it has in memory.
-A change made outside Settings, such as editing `CEZ_RELAY_URL` between restarts, keeps the rows as it always
-did, so `device-sync` lists them to the new relay at the next boot.
+A second `cezar serve` on this home re-reads `devices.json` when it changes, so it refuses a new session at
+once and cannot write the rows back. It sees the address move at its next `/workspace/phones` request or
+restart, and only then closes its socket, so a session already live there lasts until that or its lease. A
+change made outside Settings, such as editing `CEZ_RELAY_URL` or `config.json`, keeps the rows and the socket
+as it always did, and `device-sync` lists those rows to the new relay at the next boot.
 
 ### Removal
 
