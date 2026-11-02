@@ -64,8 +64,8 @@ export function parseRelayOrigin(value: string | undefined): string | null {
   return `${scheme}://${host}${port ? `:${port}` : ''}`;
 }
 
-/** No host is built in while QR1 is open. The one place a project default goes. */
-export const DEFAULT_RELAY_ORIGIN: string | null = null;
+/** The relay used when nothing names another. Swap for the final Open Mercato hostname before public release (QR1). */
+export const DEFAULT_RELAY_ORIGIN = 'https://rome.patzick.workers.dev';
 
 export const relayBlocked = (env: NodeJS.ProcessEnv = process.env): boolean => env.CEZ_RELAY === '0';
 
@@ -85,8 +85,7 @@ export function resolveRelayAddress(env: NodeJS.ProcessEnv, saved: string | null
     return { origin, source: origin ? 'env' : 'env-invalid' };
   }
   const origin = parseRelayOrigin(saved ?? undefined);
-  if (origin) return { origin, source: 'settings' };
-  return DEFAULT_RELAY_ORIGIN ? { origin: DEFAULT_RELAY_ORIGIN, source: 'default' } : { origin: null, source: 'none' };
+  return origin ? { origin, source: 'settings' } : { origin: DEFAULT_RELAY_ORIGIN, source: 'default' };
 }
 
 export const socketOrigin = (origin: string): string => origin.replace(/^http/, 'ws');

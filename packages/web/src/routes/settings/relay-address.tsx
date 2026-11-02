@@ -42,7 +42,7 @@ function ReadOnlyReason({ source }: { source: PhonesResponse['relaySource'] }) {
   )
 }
 
-/** Nothing here reaches a relay but the Test button, and Save stays off until that passes. */
+/** Behind Advanced. Nothing here reaches a relay but the Test button, and Save stays off until that passes. */
 export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; onSaved: () => void }) {
   const queryClient = useQueryClient()
   const { relayOrigin: origin, relaySource: source } = phones
@@ -73,7 +73,7 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
       setMessage(null)
       setConfirming(null)
       onSaved()
-      toast(updated.relayOrigin ? 'Relay address saved' : 'Relay address cleared')
+      toast(updated.relaySource === 'settings' ? 'Relay address saved' : 'Using the default relay')
     },
     onError: (failure: Error) => { setConfirming(null); setMessage(failure.message) },
   })
@@ -83,8 +83,7 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
   }
 
   return (
-    <section aria-labelledby="relay-address" className="space-y-3">
-      <h2 id="relay-address" className="text-sm font-medium">Relay</h2>
+    <div className="space-y-3 pt-2">
       <div className="space-y-1">
         <label htmlFor="relay-address-input" className="text-sm">Relay address</label>
         <Input
@@ -101,7 +100,9 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
           onChange={(event) => { setDraft(event.target.value); setPassed(null); setMessage(null) }}
         />
       </div>
-      {fromEnv ? <ReadOnlyReason source={source} /> : null}
+      {fromEnv ? <ReadOnlyReason source={source} /> : (
+        <p className="text-sm text-muted-foreground">Only needed to use your own relay.</p>
+      )}
       <div className="flex flex-wrap gap-2">
         {source === 'env-invalid' ? null : (
           <Button variant="outline" size="sm" disabled={!address || test.isPending} onClick={() => test.mutate(address)}>
@@ -112,22 +113,16 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
           <Button size="sm" disabled={passed !== address || address === origin || save.isPending} onClick={() => ask(address)}>Save</Button>
         )}
         {source === 'settings' ? (
-          <Button variant="ghost" size="sm" disabled={save.isPending} onClick={() => ask(null)}>Clear</Button>
+          <Button variant="ghost" size="sm" disabled={save.isPending} onClick={() => ask(null)}>Use default</Button>
         ) : null}
       </div>
       {passed === address && address ? <p role="status" className="text-sm text-muted-foreground">This relay answered and speaks a compatible protocol version.</p> : null}
       {message ? <p role="alert" className="text-sm text-destructive">{message}</p> : null}
-      <p className="text-sm text-muted-foreground">
-        The relay is end-to-end encrypted, so it cannot read prompts, code or keys. It does see IP addresses and the timing and volume of traffic.
-      </p>
-      <p className="text-sm text-muted-foreground">
-        Scan only inside the Cezar app. A camera app opens the code in a browser, where a relay you do not run could read it and pair as a phone.
-      </p>
 
       <AlertDialog open={confirming !== null} onOpenChange={(open) => { if (!open) setConfirming(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{confirming?.address === null ? 'Clear the relay address?' : 'Change the relay address?'}</AlertDialogTitle>
+            <AlertDialogTitle>{confirming?.address === null ? 'Use the default relay?' : 'Change the relay address?'}</AlertDialogTitle>
             <AlertDialogDescription>
               {paired === 1 ? 'Your phone disconnects now and leaves the list.' : `All ${paired} phones disconnect now and leave the list.`} To use {paired === 1 ? 'it' : 'them'} again, pair {paired === 1 ? 'it' : 'them'} again.
             </AlertDialogDescription>
@@ -135,11 +130,11 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
           <AlertDialogFooter>
             <AlertDialogCancel disabled={save.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction disabled={save.isPending} onClick={() => { if (confirming) save.mutate(confirming.address) }}>
-              {confirming?.address === null ? 'Clear and disconnect' : 'Change and disconnect'}
+              {confirming?.address === null ? 'Use default and disconnect' : 'Change and disconnect'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </section>
+    </div>
   )
 }

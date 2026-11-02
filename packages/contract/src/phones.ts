@@ -46,12 +46,12 @@ export const phoneSchema = z.object({
 });
 export type Phone = z.infer<typeof phoneSchema>;
 
-/** Where `relayOrigin` came from. `env-invalid` is a set `CEZ_RELAY_URL` that § 9.1 refuses. */
+/** Where `relayOrigin` came from. `env-invalid` is a set `CEZ_RELAY_URL` that § 9.1 refuses; `none` is `CEZ_RELAY=0`. */
 export const relayAddressSourceSchema = z.enum(['env', 'env-invalid', 'settings', 'default', 'none']);
 export type RelayAddressSource = z.infer<typeof relayAddressSourceSchema>;
 
 export const phonesResponseSchema = z.object({
-  /** Empty with no usable address, which `relaySource` explains. */
+  /** Empty only for an invalid `CEZ_RELAY_URL`, which `relaySource` says. */
   relayOrigin: z.string(),
   relaySource: relayAddressSourceSchema,
   relay: z.object({ status: relayStatusSchema, detail: z.string().optional() }),
@@ -80,7 +80,7 @@ export type RenamePhoneInput = z.infer<typeof renamePhoneInputSchema>;
 
 const relayAddressSchema = z.string().trim().min(1).max(300);
 
-/** `null` clears it. `dropPhones` is the user's answer to the warning: without it, paired phones refuse the change. */
+/** `null` goes back to the default. `dropPhones` is the user's answer to the warning: without it, paired phones refuse the change. */
 export const setRelayAddressInputSchema = z.object({
   address: relayAddressSchema.nullable(),
   dropPhones: z.boolean().optional(),

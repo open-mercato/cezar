@@ -252,7 +252,8 @@ const workspaceConfigSchema = z
     /** Global instructions: read by every agent step in every project, merged BEFORE the
      *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
     systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
-    /** The phone relay's address, from Settings. `CEZ_RELAY_URL` wins over it. Checked where it is
+    /** A custom phone relay, from Settings. Absent means the default, so a new default reaches
+     *  whoever never chose. `CEZ_RELAY_URL` wins over it. Checked where it is
      *  read (`resolveRelayAddress`), not here, so a form a newer cezar accepts survives this one. */
     relayAddress: z.string().max(300).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes

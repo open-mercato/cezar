@@ -5,38 +5,6 @@ description: "Pair the Cezar app with this computer through an encrypted relay, 
 
 Connect a phone pairs the Cezar app with the cezar on your computer. You need no server, domain or password: both connect out to a relay, and traffic crosses it end-to-end encrypted. The relay can drop traffic. It cannot read it.
 
-## Choose a relay
-
-No relay is built in yet, so give cezar one to use. You need no environment variable and no restart.
-
-1. Open **Settings → Connect a phone** and enter the address under **Relay address**.
-2. Select **Test**. cezar checks that the relay answers and speaks a compatible protocol version, using a throwaway key rather than this computer's.
-3. Select **Save**. It stays off until **Test** passes for that exact address.
-
-`https://` works anywhere. `http://` works only for `127.0.0.1`, `localhost` and `[::1]`, for a relay on your own machine. An address has no path. Until one is saved, **Connect a phone** is disabled.
-
-The address is saved in `~/.cezar/config.json` and survives a restart. Nothing contacts a relay until you select **Test** or **Connect a phone**.
-
-To set it from outside, start cezar with `CEZ_RELAY_URL`:
-
-```bash
-CEZ_RELAY_URL=https://relay.example.com cezar
-```
-
-That wins over the field, which then shows the value read-only. If it is set but not a valid address, phones cannot connect until you fix or unset it, because cezar will not fall back to another relay. Either way, your saved address is kept for when you unset it.
-
-## Change or clear the relay
-
-Changing or clearing the address disconnects every phone. If any are paired, cezar warns you first. A phone is tied to the relay it paired through, so it cannot follow you to a new one.
-
-When you confirm, cezar:
-
-- removes every phone from the list, and asks the old relay to drop them. If that relay does not answer within five seconds, cezar moves on, because it refuses those phones either way.
-- closes its connection to the old relay. It connects to the new one only when you next pair a phone.
-- keeps this computer's identity in `~/.cezar/relay/`, so nothing needs setting up again but the phones.
-
-Pair each phone again to use it.
-
 ## Pair a phone
 
 1. Open **Settings → Connect a phone** and select **Connect a phone**. Nothing reaches the relay before this.
@@ -47,7 +15,39 @@ The phone can now run tasks on this computer, with everything a task can do.
 
 If the app cannot scan, select **Type a code instead** and enter the code and the relay address in the app. The QR code is safer, because only it lets the app check that it reached this computer.
 
-> **Good to know**: approve only a phone you are holding. A system camera opens the QR link in a browser, where a hostile relay could read it, so a scan outside the app is safe only with a relay you run yourself.
+> **Good to know**: approve only a phone you are holding. A system camera opens the QR link in a browser, where a hostile relay could read it, so a scan outside the app is safe only with a relay you run yourself. The built-in relay is not one you run, so always scan inside the app.
+
+## Use your own relay
+
+You do not need this. cezar uses a built-in relay unless you name another.
+
+1. Open **Settings → Connect a phone** and expand **Advanced**.
+2. Enter the address under **Relay address** and select **Test**. cezar checks that the relay answers and speaks a compatible protocol version, using a throwaway key rather than this computer's.
+3. Select **Save**. It stays off until **Test** passes for that exact address.
+
+`https://` works anywhere. `http://` works only for `127.0.0.1`, `localhost` and `[::1]`, for a relay on your own machine. An address has no path.
+
+The address is saved in `~/.cezar/config.json` and survives a restart. **Use default** removes it, so you follow the built-in relay again, including if that address changes in a later version. Nothing contacts a relay until you select **Test** or **Connect a phone**.
+
+To set it from outside, start cezar with `CEZ_RELAY_URL`:
+
+```bash
+CEZ_RELAY_URL=https://relay.example.com cezar
+```
+
+That wins over the built-in relay and over Advanced, which then shows the value read-only. If it is set but not a valid address, phones cannot connect until you fix or unset it, because cezar will not fall back to another relay. Your saved address is kept for when you unset it.
+
+### Change relay with phones paired
+
+Changing the address or selecting **Use default** disconnects every phone, and cezar warns you first. A phone is tied to the relay it paired through, so it cannot follow you to a new one.
+
+When you confirm, cezar:
+
+- removes every phone from the list, and asks the old relay to drop them. If that relay does not answer within five seconds, cezar moves on, because it refuses those phones either way.
+- closes its connection to the old relay. It connects to the new one only when you next pair a phone.
+- keeps this computer's identity in `~/.cezar/relay/`, so nothing needs setting up again but the phones.
+
+Pair each phone again to use it.
 
 ## What a phone can do
 
