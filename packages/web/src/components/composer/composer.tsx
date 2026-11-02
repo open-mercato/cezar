@@ -922,9 +922,10 @@ function AttachButton({
         aria-label="Attach files"
         title="Attach images or files (or paste a screenshot)"
         disabled={disabled}
+        // The footer's other controls stay 32px, so there the 44px target is an invisible hit area, not a taller row.
         className={compact
-          ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
-          : 'size-8 text-muted-foreground'}
+          ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
+          : 'size-8 text-muted-foreground pointer-coarse:max-md:relative pointer-coarse:max-md:after:absolute pointer-coarse:max-md:after:-inset-1.5'}
         onClick={() => inputRef.current?.click()}
       >
         {compact ? <PlusIcon aria-hidden="true" className="size-4" /> : <PaperclipIcon aria-hidden="true" className="size-[15px]" />}
