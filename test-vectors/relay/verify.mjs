@@ -62,7 +62,7 @@ for (const post of proofs.posts) {
 const DEBUG_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]'])
 function parseQr(qr) {
   const version = /^cezar-pair:([0-9]+)(?:\.|$)/.exec(qr)?.[1]
-  if (version === undefined) return { refused: /^https?:\/\/.*\/p#[0-9]/.test(qr) ? 'old-link' : 'grammar' }
+  if (version === undefined) return { refused: /^https?:\/\/.*\/p#[0-9]/s.test(qr) ? 'old-link' : 'grammar' }
   if (version !== '1') return { refused: 'version' }
   const match = /^cezar-pair:1\.([^.]*)\.([^.]*)\.(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?$/.exec(qr)
   if (!match) return { refused: 'grammar' }
