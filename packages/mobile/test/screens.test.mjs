@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NO_HTTP, lockRow, screenFor, startLockRow } from '../connect/screens.js';
+import { readFileSync } from 'node:fs';
+import { NO_HTTP, lockRow, relayField, screenFor, startLockRow } from '../connect/screens.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -93,4 +94,30 @@ test('with no screen lock the row explains itself and cannot be pressed', () => 
   assert.equal(off.disabled, true);
   assert.match(off.note, /Set a screen lock/);
   assert.match(lockRow({ enabled: true, available: false }).note, /Paused/);
+});
+
+const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8');
+const origin = (source, name) => source.match(new RegExp(`${name} = '?"?(https://[^'"]+)`))?.[1];
+
+test('Enter code starts on the default relay with the field closed', () => {
+  const field = relayField('https://relay.example.test');
+  assert.equal(field.open, false);
+  assert.equal(field.value, 'https://relay.example.test');
+});
+
+test('a custom address opens the field and survives a redraw', () => {
+  const field = relayField('https://relay.example.test', 'https://mine.example.test');
+  assert.equal(field.open, true);
+  assert.equal(field.value, 'https://mine.example.test');
+});
+
+test('with no address from native the field stays empty, which native reads as its default', () => {
+  assert.equal(relayField(undefined).value, '');
+});
+
+test('the Android constant matches cezar, and the connect screens repeat neither', () => {
+  const android = origin(read('../android/app/src/main/java/com/openmercato/cezar/mobile/shell/relay/RelayOrigin.java'), 'DEFAULT_ORIGIN');
+  assert.ok(android);
+  assert.equal(android, origin(read('../../cezar/src/relay/wire.ts'), 'DEFAULT_RELAY_ORIGIN'));
+  for (const file of ['connect.js', 'screens.js', 'index.html']) assert.ok(!read(`../connect/${file}`).includes(new URL(android).host), file);
 });

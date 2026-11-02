@@ -313,6 +313,31 @@ public class PairingClientTest {
         assertEquals("wss://relay.example.test/v1/pair/" + locator + "?role=phone", fake.url);
     }
 
+    private void assertTypedCodeOpens(String field, String socketOrigin) throws Exception {
+        fake.events = null;
+        new PairingFlow(fake, "Pixel", false, (relay, state, device) -> { }).startCode("QRFX-7KMD-2NVB", field);
+        for (int i = 0; i < 400 && fake.events == null; i++) Thread.sleep(5);
+        assertTrue(fake.url, fake.url.startsWith(socketOrigin + "/v1/pair/"));
+    }
+
+    /** Advanced stayed shut or was emptied: the code goes to the default relay, as a QR from a default cezar does. */
+    @Test
+    public void aTypedCodeWithNoAddressUsesTheDefaultRelay() throws Exception {
+        String socket = RelayOrigin.parse(RelayOrigin.DEFAULT_ORIGIN, false).socketOrigin;
+        assertTypedCodeOpens("", socket);
+        assertTypedCodeOpens("   ", socket);
+        assertTypedCodeOpens(null, socket);
+        assertTypedCodeOpens(RelayOrigin.DEFAULT_ORIGIN, socket);
+    }
+
+    @Test
+    public void aCustomAddressKeepsTheTypedRules() throws Exception {
+        assertTypedCodeOpens("https://relay.example.test/", "wss://relay.example.test");
+        PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> { });
+        assertEquals("relay-cleartext", flow.startCode("QRFX-7KMD-2NVB", "http://relay.example.test").reason);
+        assertEquals("relay-invalid", flow.startCode("QRFX-7KMD-2NVB", "https://relay.example.test/path").reason);
+    }
+
     /** Spec QR9: any app can claim a scheme, so ours must never route the secret through an intent. */
     @Test
     public void theAppClaimsNoPairingScheme() throws Exception {

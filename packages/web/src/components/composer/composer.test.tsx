@@ -737,6 +737,21 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
   })
 })
 
+describe('attach button', () => {
+  const attachClasses = () => screen.getByLabelText('Attach files').className.split(/\s+/)
+
+  it('is a 44px target on a phone in the compact composer and stays 32px on desktop', () => {
+    renderComposer({ compact: true })
+    expect(attachClasses()).toEqual(expect.arrayContaining(['size-10', 'pointer-coarse:max-md:size-11', 'md:size-8']))
+  })
+
+  it('gains a 44px hit area on a phone in the footer without growing the 32px button', () => {
+    renderComposer()
+    expect(attachClasses()).toEqual(expect.arrayContaining(['size-8', 'pointer-coarse:max-md:relative', 'pointer-coarse:max-md:mr-0.5', 'pointer-coarse:max-md:after:absolute', 'pointer-coarse:max-md:after:-inset-1.5']))
+    expect(attachClasses()).not.toContain('pointer-coarse:max-md:size-11')
+  })
+})
+
 describe('disabled state', () => {
   it('disables everything and explains itself in the placeholder', () => {
     renderComposer({
