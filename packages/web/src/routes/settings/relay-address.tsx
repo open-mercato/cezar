@@ -89,6 +89,7 @@ export function RelayAddressForm({ phones, onSaved }: { phones: PhonesResponse; 
         <label htmlFor="relay-address-input" className="text-sm">Relay address</label>
         <Input
           id="relay-address-input"
+          className="max-w-xl"
           value={source === 'env-invalid' ? '' : value}
           placeholder={fromEnv ? undefined : 'https://relay.example.com'}
           readOnly={fromEnv}

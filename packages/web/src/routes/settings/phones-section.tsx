@@ -206,7 +206,7 @@ export function PhonesSection() {
   const noRelay = list.data !== undefined && list.data.relayOrigin === ''
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-4 md:p-6">
       <section aria-labelledby="connect-phone" className="space-y-3">
         <h2 id="connect-phone" className="text-sm font-medium">Connect a phone</h2>
         {showing ? (
