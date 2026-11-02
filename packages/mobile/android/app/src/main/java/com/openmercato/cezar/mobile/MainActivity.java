@@ -15,7 +15,6 @@ import com.openmercato.cezar.mobile.shell.ShellRoute;
 public class MainActivity extends BridgeActivity implements AppLock.Host {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        AppLock.install(this);
         registerPlugin(ConnectionPlugin.class);
         if (getIntent().getBooleanExtra(RestartActivity.EXTRA_SHOW_LIST, false)) ShellRoute.set(ShellConnector.LIST, null);
         super.onCreate(savedInstanceState);

@@ -1,6 +1,6 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
-import { lockRow, screenFor } from './screens.js';
+import { lockRow, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
@@ -64,8 +64,7 @@ function show(outcome) {
   else drawList();
 }
 
-function lockSection(text) {
-  const row = lockRow(lock);
+function lockSection(row, text) {
   if (!row) return null;
   const toggle = button(row.label, async () => {
     toggle.disabled = true;
@@ -82,7 +81,7 @@ function lockSection(text) {
 }
 
 function drawList(lockNotice) {
-  if (!servers.length) return pairing ? drawStart() : drawAdd({});
+  if (!servers.length) return pairing ? drawStart(lockNotice) : drawAdd({});
   const rows = servers.map((server) =>
     element(
       'li',
@@ -96,7 +95,7 @@ function drawList(lockNotice) {
       button('Forget', () => drawForget(server)),
     ),
   );
-  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockNotice));
+  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
 }
 
 function drawForget(server) {
@@ -112,13 +111,14 @@ function drawForget(server) {
   );
 }
 
-function drawStart() {
+function drawStart(lockNotice) {
   const advanced = element('details', {}, element('summary', { textContent: 'Advanced' }), addForm({}));
   draw(
     element('h1', { textContent: 'Connect to cezar' }),
     element('p', { className: 'muted', textContent: 'On your computer, open Settings, then Connect a phone.' }),
     element('div', { className: 'stack' }, button('Scan QR code', () => run('scan', {}, {}), 'primary'), button('Enter code', () => drawCode({}))),
     advanced,
+    lockSection(startLockRow(lock), lockNotice),
   );
 }
 

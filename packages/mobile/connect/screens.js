@@ -59,6 +59,9 @@ export function lockRow(lock) {
   };
 }
 
+/** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
+export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
+
 /** Turns a native outcome into the screen to draw. `context` is what the user last asked for. */
 export function screenFor(outcome, context = {}) {
   const server = outcome.servers?.find((row) => row.id === (outcome.serverId ?? context.serverId));
