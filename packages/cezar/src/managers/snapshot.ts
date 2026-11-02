@@ -9,6 +9,7 @@ import type {
 } from '@open-mercato/cezar-contract';
 import { byLastActivityDesc, lastActivityAt } from '../runs/run-index.ts';
 import type { RunRecord } from '../runs/store.ts';
+import { lifecycleBusy } from '../worktree-lifecycle/coordinator.ts';
 
 /**
  * What a manager sees (spec 2026-10-31-managers § Watching). A snapshot reads what the stores and
@@ -78,6 +79,11 @@ export function taskDetailRows(runs: RunRecord[], runId: string): { task: Manage
   };
 }
 
+const WORKTREE_RECOVERY = 'Worktree scripts need attention: use Retry, Start task anyway or Cancel in the Worktrees settings';
+
+const waitDetail = (run: RunRecord): string | undefined =>
+  run.attentionRequest?.questions[0]?.question ?? (run.dispatch?.overBudget ? 'Budget reached' : undefined);
+
 const unseenSince = (run: RunRecord, at: string | undefined): boolean =>
   at !== undefined && (run.seenAt === undefined || Date.parse(run.seenAt) < Date.parse(at));
 
@@ -88,11 +94,20 @@ export function taskAttention(projectId: string, runs: RunRecord[], now: number)
     if (run.archived) continue;
     const title = run.titleSummary ?? run.title;
     const base = { projectId, title, runId: run.id };
-    if (run.status === 'waiting' && run.awaitingAnswerSince !== undefined) {
-      items.push({ ...base, key: `task-needs-you:${projectId}:${run.id}:${run.awaitingAnswerSince}`, kind: 'task-needs-you', since: run.awaitingAnswerSince });
+    const gate = run.worktreeLifecycle;
+    if (gate?.needsAttention) {
+      // A retry reuses the operation, so the revision is what makes its next failure a new wait.
+      const operation = gate.activeOperationId ? `${gate.activeOperationId}:${gate.revision ?? 0}` : `${gate.worktreeId}:${gate.generation}`;
+      items.push({ ...base, key: `task-needs-you:${projectId}:${run.id}:worktree:${operation}`, kind: 'task-needs-you', detail: WORKTREE_RECOVERY, ...(run.waitingSince ? { since: run.waitingSince } : {}) });
+      // A finished task keeps its outcome; an open wait comes back once the worktree is sorted.
+      if (run.status === 'waiting' || run.awaitingAnswerSince !== undefined) continue;
+    } else if ((run.status === 'waiting' && !lifecycleBusy(gate)) || (run.status === 'failed' && run.awaitingAnswerSince !== undefined)) {
+      const since = run.waitingSince ?? run.awaitingAnswerSince ?? lastActivityAt(run);
+      const detail = waitDetail(run);
+      items.push({ ...base, key: `task-needs-you:${projectId}:${run.id}:${since}`, kind: 'task-needs-you', since, ...(detail ? { detail } : {}) });
       continue;
     }
-    // A dispatched child reports to its parent; only a question reaches the human.
+    // A dispatched child reports to its parent; only a wait on the user reaches the human.
     if (run.dispatch?.parentRunId) continue;
     const finished = run.finishedAt;
     if (run.status === 'failed' && unseenSince(run, finished) && now - Date.parse(finished ?? '') < RECENT_FAILURE_MS) {
