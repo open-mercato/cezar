@@ -3,8 +3,6 @@ package com.openmercato.cezar.mobile.shell;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import org.json.JSONArray;
@@ -90,7 +88,7 @@ public final class ServerListStore {
 
     private JSONObject read() {
         try {
-            return new JSONObject(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+            return new JSONObject(new String(FileBytes.read(file), StandardCharsets.UTF_8));
         } catch (IOException | JSONException e) {
             return new JSONObject();
         }
@@ -116,8 +114,9 @@ public final class ServerListStore {
             JSONObject root = new JSONObject().put("servers", rows)
                     .put("lastUsedId", lastUsedId == null ? JSONObject.NULL : lastUsedId);
             File tmp = new File(file.getPath() + ".tmp");
-            Files.write(tmp.toPath(), root.toString().getBytes(StandardCharsets.UTF_8));
-            Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            FileBytes.write(tmp, root.toString().getBytes(StandardCharsets.UTF_8));
+            // rename(2): replaces the old list atomically, within one directory.
+            if (!tmp.renameTo(file)) throw new IOException("cannot replace " + file);
         } catch (IOException | JSONException e) {
             throw new IllegalStateException("cannot save the server list", e);
         }
