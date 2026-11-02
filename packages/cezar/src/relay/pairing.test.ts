@@ -44,7 +44,8 @@ describe('pairing', () => {
 
   it('pairs by QR: both sides show one number, and a row appears only on Approve', async () => {
     const started = await service.startPairing();
-    expect(started.qr.startsWith(`${ORIGIN}/p#1.`)).toBe(true);
+    expect(started.qr.startsWith('cezar-pair:1.')).toBe(true);
+    expect(started.qr.endsWith(`.${ORIGIN}`)).toBe(true);
     const phone = new PhoneSim(relay.open);
     const { digits, pending } = await phone.pairWithQr(started.qr);
     await until('confirm');
@@ -144,7 +145,9 @@ describe('pairing', () => {
 
   it('a phone that pins another key never sends its identity', async () => {
     const started = await service.startPairing();
-    const swapped = started.qr.replace(/\.[^.]+$/, `.${Buffer.alloc(32, 7).toString('base64url')}`);
+    const fields = started.qr.split('.');
+    fields[2] = Buffer.alloc(32, 7).toString('base64url');
+    const swapped = fields.join('.');
     await expect(new PhoneSim(relay.open).pairWithQr(swapped)).rejects.toThrow('pin mismatch');
     await settle();
     expect(service.list().pairing?.phone).toBeUndefined();
@@ -318,7 +321,7 @@ describe('pairing', () => {
     await phone.outcome();
     await until('approved');
     vi.restoreAllMocks();
-    const secret = started.qr.split('#1.')[1]!.split('.')[0]!;
+    const secret = started.qr.split('.')[1]!;
     const code = typed!.code;
     const files = readdirSync(directory).map((name) => readFileSync(join(directory, name), 'utf8'));
     for (const haystack of [...lines, ...views, ...files]) {

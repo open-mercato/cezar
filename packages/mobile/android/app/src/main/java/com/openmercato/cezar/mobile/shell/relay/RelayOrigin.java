@@ -6,7 +6,7 @@ import java.util.regex.Pattern;
 /** A relay address: scheme, host and port, no path (RELAY_PROTOCOL.md § 3, § 9.1). */
 public final class RelayOrigin {
     public static final class Refused extends Exception {
-        /** `version`, `cleartext` or `grammar`, the reasons in qr.json. */
+        /** `version`, `old-link`, `cleartext` or `grammar`, the reasons in qr.json. */
         public final String reason;
 
         public Refused(String reason) {

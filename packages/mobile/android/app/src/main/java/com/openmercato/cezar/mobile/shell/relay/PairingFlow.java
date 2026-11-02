@@ -47,7 +47,16 @@ public final class PairingFlow {
         try {
             return start(PairSecret.fromQr(text == null ? "" : text.trim(), debugBuild));
         } catch (RelayOrigin.Refused refused) {
-            return refused(refused.reason.equals("version") ? "update-app" : refused.reason.equals("cleartext") ? "qr-cleartext" : "qr-invalid");
+            return refused(qrRefusal(refused.reason));
+        }
+    }
+
+    private static String qrRefusal(String reason) {
+        switch (reason) {
+            case "version": return "update-app";
+            case "old-link": return "update-cezar";
+            case "cleartext": return "qr-cleartext";
+            default: return "qr-invalid";
         }
     }
 
