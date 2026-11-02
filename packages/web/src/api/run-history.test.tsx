@@ -612,6 +612,7 @@ describe('useRunHistory', () => {
 
       source().emit('history-truncated', JSON.stringify({ firstSeq: 50, afterSeq: 20 }))
       await waitFor(() => expect(mockHistory.mock.calls.length).toBe(before + 1))
+      await waitFor(() => expect(result.current.isFetchingOlder).toBe(true))
       // The socket drops mid-page; its replacement reports a second, newer hole.
       source().close()
       act(() => document.dispatchEvent(new Event('visibilitychange')))
@@ -621,6 +622,7 @@ describe('useRunHistory', () => {
 
       release()
       await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq)).toEqual([30, 70, 90]))
+      await waitFor(() => expect(result.current.isFetchingOlder).toBe(false))
       expect(peak).toBe(1)
     })
 
