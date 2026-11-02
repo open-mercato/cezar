@@ -311,10 +311,10 @@ over it, and splits the output into locator and pre-shared key. A QR secret uses
 it is already 256 bits. Steps 3 to 7 are identical, except that no key can be pinned in step 4, so the
 6-digit match matters more.
 
-**A typed code needs a relay address while [QR1](#qr1-what-is-the-relays-hostname-and-who-owns-its-accounts)
-is open.** A code cannot carry the address, and the app has no default host until QR1 settles, even
-though cezar has one. So desktop shows the address beside the code, and the app's Enter code screen has a
-relay address field. The field goes away the day the app ships a default. Exact labels and derivations are in [§9](../../RELAY_PROTOCOL.md#9-pairing).
+**A typed code uses the app's default relay.** A code cannot carry the address, so the app ships the same
+default as cezar, one constant per platform, and Enter code keeps the address under Advanced, as desktop does.
+Desktop still shows the address beside the code, for a custom relay. If [QR1](#qr1-what-is-the-relays-hostname-and-who-owns-its-accounts)
+moves the host, both constants move with it. Exact labels and derivations are in [§9](../../RELAY_PROTOCOL.md#9-pairing).
 
 PBKDF2 was chosen because Node, CommonCrypto and the JDK all have it [M for the last two].
 
@@ -1056,6 +1056,7 @@ wire shape changes either way.
 - 2026-11-02: cezar has a built-in default relay, `DEFAULT_RELAY_ORIGIN`, so Connect a phone needs no setup, and a custom address sits behind Advanced. Reverses "no host is built in" for cezar only. The app still has none. A socket now closes whenever its address moves.
 - 2026-11-02: The relay address is a setting, see [Relay address](#relay-address). `capabilities.phonePairing` now means only that `CEZ_RELAY=0` is not set, and `CEZ_RELAY_URL` overrides the setting. The wire contract did not change, and protocol version stays 1.
 - 2026-11-02: Recorded maintainer decisions. QR3: optional phone lock, off by default, before public release, and parent Q12 settled to match. QR5: loopback proxy accepted, subject to the iPhone proxy test, still to do. QR7: Open Mercato answers export compliance, confirmed by someone qualified. QR8: independent Noise review required before public release. QR9: a non-https QR link, decision only; a later PR changes the protocol. Android first, then iOS. Also parent Q2, Q10, Q11 and the privacy policy (the manager drafts it, Open Mercato approves and hosts it). QR1, QR2, QR4, QR6 and QR10 stay open. The plan follows: R0 and R4 go Android first, and R6 owns QR3, QR8 and QR9. The contract did not change.
+- 2026-11-02: The Android app has a default relay, `RelayOrigin.DEFAULT_ORIGIN`, so Enter code needs only the code, and the address sits under Advanced as on desktop. A custom address keeps the typed rules. Reverses "no default host until QR1 settles" for the app, and iOS adds its constant with its client.
 - 2026-11-02: QR9 done. The QR string is `cezar-pair:1.<secret>.<key>.<origin>`, `old-link` joins the refusals, `GET /p` is optional and out of the QR path, and the threat row is rewritten. No intent filter. QR `version` and relay `protocol` stay 1, as no parser has shipped. Typed codes are unchanged.
 - 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
   parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol

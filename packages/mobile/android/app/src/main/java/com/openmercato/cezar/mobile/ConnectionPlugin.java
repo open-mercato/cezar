@@ -23,6 +23,7 @@ import com.openmercato.cezar.mobile.shell.ShellRoute;
 import com.openmercato.cezar.mobile.shell.ShellServices;
 import com.openmercato.cezar.mobile.shell.relay.PairingClient;
 import com.openmercato.cezar.mobile.shell.relay.PairingFlow;
+import com.openmercato.cezar.mobile.shell.relay.RelayOrigin;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Function;
@@ -243,6 +244,7 @@ public class ConnectionPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("servers", servers);
         result.put("pairing", true);
+        result.put("relayDefault", RelayOrigin.DEFAULT_ORIGIN);
         AppLock lock = AppLock.get(getContext());
         result.put("lock", new JSObject().put("enabled", lock.enabled()).put("available", lock.available()));
         return result;

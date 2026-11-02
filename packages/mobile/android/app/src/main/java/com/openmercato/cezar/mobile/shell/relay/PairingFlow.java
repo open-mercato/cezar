@@ -64,7 +64,7 @@ public final class PairingFlow {
     public Snapshot startCode(String code, String relayAddress) {
         RelayOrigin relay;
         try {
-            relay = RelayOrigin.parseTyped(relayAddress, debugBuild);
+            relay = RelayOrigin.parseTypedOrDefault(relayAddress, debugBuild);
         } catch (RelayOrigin.Refused refused) {
             return refused(refused.reason.equals("cleartext") ? "relay-cleartext" : "relay-invalid");
         }

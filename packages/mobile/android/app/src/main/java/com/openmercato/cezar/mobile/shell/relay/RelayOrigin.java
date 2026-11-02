@@ -15,6 +15,9 @@ public final class RelayOrigin {
         }
     }
 
+    /** The app's one copy of the default relay, the twin of cezar's DEFAULT_RELAY_ORIGIN. */
+    public static final String DEFAULT_ORIGIN = "https://rome.patzick.workers.dev";
+
     static final Pattern ORIGIN = Pattern.compile("(https|http)://([a-z0-9.-]+|\\[::1\\])(?::([1-9][0-9]{0,4}))?");
 
     public final String origin;
@@ -48,6 +51,11 @@ public final class RelayOrigin {
         if (typed.endsWith("/")) typed = typed.substring(0, typed.length() - 1);
         if (!typed.contains("://")) typed = "https://" + typed;
         return parse(typed, debugBuild);
+    }
+
+    /** Enter code's address: an empty field is the default relay, anything else stays under the typed rules. */
+    public static RelayOrigin parseTypedOrDefault(String text, boolean debugBuild) throws Refused {
+        return text == null || text.trim().isEmpty() ? parse(DEFAULT_ORIGIN, debugBuild) : parseTyped(text, debugBuild);
     }
 
     private static boolean isDevHost(String host) {
