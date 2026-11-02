@@ -3,7 +3,7 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 import type { PhonePairingCodeResponse, PhonesResponse, RelayStatus, StartPhonePairingResponse, TestRelayAddressResponse } from '@open-mercato/cezar-contract';
 import { cezarHomeDir } from '../paths.ts';
-import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { loadWorkspaceConfigOrThrow, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { RelayCommandError, RelayConnection, COMMAND_TIMEOUT_MS } from './connection.ts';
 import { RelayDevices, type PendingRemoval } from './devices.ts';
 import { RelayIdentityStore, RelayKeysLocked, type RelayIdentity } from './identity.ts';
@@ -29,7 +29,7 @@ export interface RelayAddressStore {
 }
 
 const workspaceAddressStore: RelayAddressStore = {
-  read: async () => (await loadWorkspaceConfig()).relayAddress ?? null,
+  read: async () => (await loadWorkspaceConfigOrThrow()).relayAddress ?? null,
   write: async (address) => {
     await mergeWriteWorkspaceConfig((config) => {
       if (address === null) delete config.relayAddress;
@@ -116,6 +116,11 @@ export class RelayService {
     return this.address.origin;
   }
 
+  /** A config that cannot be read is not "no address": the default would be a relay nobody named. */
+  private get addressKnown(): boolean {
+    return this.addressLoaded || this.address.source === 'env';
+  }
+
   /** Reconnects at boot only if there is something to do. Never fails boot. */
   async start(): Promise<void> {
     await this.refreshAddress();
@@ -124,6 +129,10 @@ export class RelayService {
     const idle = () => this.devices.list().length === 0 && this.devices.pendingRemovals().length === 0;
     try {
       if (idle()) return;
+      if (!this.addressKnown) {
+        this.setStatus('error', 'could not read the saved relay address, so fix ~/.cezar/config.json and restart cezar');
+        return;
+      }
       const identity = await this.identityStore.load();
       // A keychain prompt can outlast a save, and that save left this relay.
       if (this.origin !== origin || idle()) return;
@@ -451,6 +460,7 @@ export class RelayService {
       await this.refreshAddress();
       const origin = this.origin;
       if (!origin) throw new PairingStartError(this.address.source === 'env-invalid' ? 'CEZ_RELAY_URL is not a valid relay address.' : 'Phone pairing is off.');
+      if (!this.addressKnown) throw new PairingStartError('Could not read the saved relay address. Fix ~/.cezar/config.json and try again.');
       if (this.changingAddress) throw new PairingStartError('The relay address is changing. Try again in a moment.');
       if (this.pairing && !this.pairing.canReplace) throw new PairingStartError('A phone is waiting for your answer.');
       const now = this.now();

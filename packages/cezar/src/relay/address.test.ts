@@ -1,7 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { workspaceConfigPath } from '../paths.ts';
+import { workspaceConfigBackupPath } from '../workspace/config.ts';
 import { FakeRelay } from './fake-relay.testkit.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { probeRelay } from './probe.ts';
@@ -230,6 +232,51 @@ describe('changing the relay address', () => {
     await service.refreshAddress();
     expect(old.cezarConnected).toBe(true);
     expect(service.list().phones).toHaveLength(1);
+  });
+
+  describe('the real address store, on a config.json it cannot read', () => {
+    const phone = { deviceId: 'a'.repeat(22), label: 'Phone', platform: 'android', relayKey: 'b'.repeat(43), noiseKey: 'c'.repeat(43), addedAt: '', grants: [] };
+    const real = (env: NodeJS.ProcessEnv = {}) => {
+      const service = new RelayService({ directory, env, open, label: 'Test Mac', identity: keys() });
+      services.push(service);
+      return service;
+    };
+
+    beforeEach(async () => {
+      await keys().ensure();
+      writeFileSync(join(directory, 'devices.json'), JSON.stringify({ version: 1, devices: [phone] }));
+      mkdirSync(dirname(workspaceConfigPath()), { recursive: true });
+      rmSync(workspaceConfigBackupPath(), { force: true });
+      writeFileSync(workspaceConfigPath(), '{"relayAddress":"https://old.exam');
+    });
+
+    afterEach(() => {
+      rmSync(workspaceConfigPath(), { force: true });
+      rmSync(workspaceConfigBackupPath(), { force: true });
+    });
+
+    it('a boot lists no phone to the default, and says why', async () => {
+      const service = real();
+      await service.start();
+      expect(next.opened).toEqual([]);
+      expect(service.list().relay).toMatchObject({ status: 'error', detail: expect.stringContaining('saved relay address') });
+    });
+
+    it('a pairing refuses rather than go through the default', async () => {
+      await expect(real().startPairing()).rejects.toThrow('saved relay address');
+      expect(next.opened).toEqual([]);
+    });
+
+    it('CEZ_RELAY_URL needs no config.json, so its boot still connects', async () => {
+      await real({ CEZ_RELAY_URL: OLD }).start();
+      await waitFor(() => old.opened.length === 1, 'the socket to the named relay');
+    });
+
+    it('a missing config.json is the default, not a failure', async () => {
+      rmSync(workspaceConfigPath());
+      await real().start();
+      await waitFor(() => next.opened.length === 1, 'the socket to the default');
+    });
   });
 
   it('a hand edit closes the socket and says so, and never lists a phone to the new relay', async () => {
