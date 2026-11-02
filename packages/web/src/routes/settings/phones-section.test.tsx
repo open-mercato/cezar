@@ -40,7 +40,8 @@ vi.mock('@/api/phones', async (original) => {
 })
 
 const base: PhonesResponse = { relayOrigin: 'https://relay.example.test', relaySource: 'settings', relay: { status: 'off' }, phones: [], pairing: null }
-const unset: PhonesResponse = { ...base, relayOrigin: '', relaySource: 'none' }
+const DEFAULT = 'https://rome.patzick.workers.dev'
+const unset: PhonesResponse = { ...base, relayOrigin: DEFAULT, relaySource: 'default' }
 const paired: PhonesResponse = { ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }] }
 const NEXT = 'https://own.example.test'
 const QR = `https://relay.example.test/p#1.${'a'.repeat(43)}.${'b'.repeat(43)}`
@@ -146,7 +147,11 @@ describe('PhonesSection', () => {
 })
 
 describe('the relay address', () => {
-  const field = () => screen.findByLabelText('Relay address') as Promise<HTMLInputElement>
+  const advanced = async () => fireEvent.click(await screen.findByRole('button', { name: 'Advanced' }))
+  const field = async () => {
+    if (!screen.queryByLabelText('Relay address')) await advanced()
+    return screen.findByLabelText('Relay address') as Promise<HTMLInputElement>
+  }
   const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
   const type = async (value: string) => fireEvent.change(await field(), { target: { value } })
   const passTest = async () => {
@@ -163,15 +168,34 @@ describe('the relay address', () => {
   })
   afterEach(cleanup)
 
-  it('with no address says one is needed, disables Connect a phone and contacts nothing', async () => {
+  it('works out of the box: Advanced starts collapsed, with no address on the page', async () => {
     api.getPhones.mockResolvedValue(unset)
     show()
-    await screen.findByText(/needs a relay address/)
-    expect(button('Connect a phone').disabled).toBe(true)
-    expect(button('Test').disabled).toBe(true)
+    const toggle = await screen.findByRole('button', { name: 'Advanced' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByLabelText('Relay address')).toBeNull()
+    expect(screen.queryByText(DEFAULT)).toBeNull()
+    expect(button('Connect a phone').disabled).toBe(false)
     expect(api.testRelayAddress).not.toHaveBeenCalled()
     expect(api.startPhonePairing).not.toHaveBeenCalled()
     expect(api.setRelayAddress).not.toHaveBeenCalled()
+  })
+
+  it('Advanced shows the current address, and the default has nothing to go back to', async () => {
+    api.getPhones.mockResolvedValue(unset)
+    show()
+    expect((await field()).value).toBe(DEFAULT)
+    expect(screen.queryByRole('button', { name: 'Use default' })).toBeNull()
+    expect(button('Save').disabled).toBe(true)
+  })
+
+  it('Use default clears a custom address, with no Test and no warning when no phone is paired', async () => {
+    api.setRelayAddress.mockResolvedValue(unset)
+    show()
+    expect((await field()).value).toBe(base.relayOrigin)
+    fireEvent.click(button('Use default'))
+    await waitFor(() => expect(api.setRelayAddress).toHaveBeenCalledWith(null, false))
+    expect(api.testRelayAddress).not.toHaveBeenCalled()
   })
 
   it('Save stays off until Test passes for exactly this value', async () => {
@@ -226,12 +250,12 @@ describe('the relay address', () => {
     await waitFor(() => expect(api.setRelayAddress).toHaveBeenCalledWith(NEXT, true))
   })
 
-  it('clearing warns the same way', async () => {
+  it('Use default warns the same way', async () => {
     api.getPhones.mockResolvedValue(paired)
     show()
     await field()
-    fireEvent.click(button('Clear'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Clear and disconnect' }))
+    fireEvent.click(button('Use default'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use default and disconnect' }))
     await waitFor(() => expect(api.setRelayAddress).toHaveBeenCalledWith(null, true))
   })
 
@@ -241,7 +265,7 @@ describe('the relay address', () => {
     expect((await field()).readOnly).toBe(true)
     expect(screen.getByText(/Unset it and restart cezar/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Use default' })).toBeNull()
     expect(button('Test').disabled).toBe(false)
   })
 
@@ -249,12 +273,12 @@ describe('the relay address', () => {
     api.getPhones.mockResolvedValue({ ...unset, relaySource: 'env-invalid' })
     show()
     expect((await screen.findByRole('alert')).textContent).toContain('not a valid relay address')
+    expect(button('Connect a phone').disabled).toBe(true)
     expect((await field()).readOnly).toBe(true)
     expect(button('Connect a phone').disabled).toBe(true)
-    expect(screen.queryByText(/add one below/)).toBeNull()
   })
 
-  it('states what the relay sees and where to scan, with or without an address', async () => {
+  it('states what the relay sees and where to scan, before anything is expanded', async () => {
     api.getPhones.mockResolvedValue(unset)
     show()
     await screen.findByText(/end-to-end encrypted/)

@@ -13,6 +13,7 @@ import { FakeRelay } from './fake-relay.testkit.ts';
 import { PhoneSim } from './phone-sim.testkit.ts';
 import { inRelayScope, narrowForRelay, outsideRelayScope, runInRelayScope } from './scope.ts';
 import { RelayService } from './service.ts';
+import { DEFAULT_RELAY_ORIGIN } from './wire.ts';
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 
 vi.mock('../core/backend-detect.ts', () => ({ detectEnvironment: async () => [] }));
@@ -210,13 +211,12 @@ describe('a relay request is a hosted request', () => {
       expect((await loadWorkspaceConfig()).relayAddress).toBeUndefined();
     });
 
-    it('lists with no address, and pairing asks for one', async () => {
+    it('lists the default with nothing set, having contacted nothing', async () => {
       delete process.env.CEZ_RELAY_URL;
-      const app = makeApp();
-      expect(await (await apiRequest(app, '/api/v1/workspace/phones')).json()).toMatchObject({ relayOrigin: '', relaySource: 'none' });
-      const start = await apiRequest(app, '/api/v1/workspace/phones/pairing', { method: 'POST' });
-      expect(start.status).toBe(409);
-      expect(await start.json()).toEqual({ error: 'Add a relay address first.' });
+      const relay = new FakeRelay();
+      const app = makeApp({ relay: new RelayService({ directory: join(home, 'r'), open: relay.open }) });
+      expect(await (await apiRequest(app, '/api/v1/workspace/phones')).json()).toMatchObject({ relayOrigin: DEFAULT_RELAY_ORIGIN, relaySource: 'default' });
+      expect(relay.opened).toEqual([]);
     });
 
     it('lists for a desktop', async () => {
@@ -272,6 +272,14 @@ describe('a relay request is a hosted request', () => {
       expect((await asPhone(app, '/api/v1/workspace/config', put({ relayAddress: 'https://evil.example.test' }))).status).toBe(200);
       expect(await (await asPhone(app, '/api/v1/workspace/config')).text()).not.toContain('own.example.test');
       expect((await loadWorkspaceConfig()).relayAddress).toBe(OWN);
+    });
+
+    it('Use default removes the key, so a later default reaches this user', async () => {
+      const app = makeApp();
+      await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address: OWN }));
+      const back = await apiRequest(app, '/api/v1/workspace/phones/relay', put({ address: null }));
+      expect(await back.json()).toMatchObject({ relayOrigin: DEFAULT_RELAY_ORIGIN, relaySource: 'default' });
+      expect((await loadWorkspaceConfig()).relayAddress).toBeUndefined();
     });
 
     it('a hosted request may change it, as with PUT /workspace/config', async () => {

@@ -8,7 +8,7 @@ import { probeRelay } from './probe.ts';
 import { RelayIdentityStore } from './identity.ts';
 import { RelayAddressError, RelayService, type RelayAddressStore } from './service.ts';
 import type { SocketFactory, SocketHandlers } from './socket.ts';
-import { CLOSE, DEFAULT_RELAY_ORIGIN, resolveRelayAddress } from './wire.ts';
+import { CLOSE, DEFAULT_RELAY_ORIGIN, parseRelayOrigin, resolveRelayAddress } from './wire.ts';
 
 const OLD = 'https://old.example.test';
 const NEW = 'https://new.example.test';
@@ -38,10 +38,11 @@ describe('resolveRelayAddress', () => {
     expect(resolveRelayAddress({ CEZ_RELAY_URL: '' }, saved).source).toBe('settings');
   });
 
-  it('no address and no default is none, and a bad saved value is ignored', () => {
-    expect(DEFAULT_RELAY_ORIGIN).toBeNull();
-    expect(resolveRelayAddress({}, null)).toEqual({ origin: null, source: 'none' });
-    expect(resolveRelayAddress({}, 'http://relay.example.test')).toEqual({ origin: null, source: 'none' });
+  it('unset means the default, a bad saved value is ignored, and the default itself is valid', () => {
+    expect(parseRelayOrigin(DEFAULT_RELAY_ORIGIN)).toBe(DEFAULT_RELAY_ORIGIN);
+    expect(resolveRelayAddress({}, null)).toEqual({ origin: DEFAULT_RELAY_ORIGIN, source: 'default' });
+    expect(resolveRelayAddress({}, undefined)).toEqual({ origin: DEFAULT_RELAY_ORIGIN, source: 'default' });
+    expect(resolveRelayAddress({}, 'http://relay.example.test')).toEqual({ origin: DEFAULT_RELAY_ORIGIN, source: 'default' });
   });
 });
 
@@ -222,13 +223,73 @@ describe('changing the relay address', () => {
     expect(next.opened).toEqual([]);
   });
 
-  it('a hand edit or a failed read leaves the socket of a paired phone alone', async () => {
+  it('a failed read leaves the socket of a paired phone alone', async () => {
     const service = make();
     await pairOne(service);
-    store.value = null;
+    store.read = async () => { throw new Error('unreadable'); };
     await service.refreshAddress();
     expect(old.cezarConnected).toBe(true);
     expect(service.list().phones).toHaveLength(1);
+  });
+
+  it('a hand edit closes the socket and says so, and never lists a phone to the new relay', async () => {
+    const service = make();
+    await pairOne(service);
+    store.value = NEW;
+    await service.refreshAddress();
+    expect(old.cezarConnected).toBe(false);
+    expect(service.list().relay.status).toBe('error');
+    expect(service.list().phones).toHaveLength(1);
+    expect(next.opened).toEqual([]);
+  });
+
+  it('a phone paired after another cezar moved the address never reaches the old relay', async () => {
+    const stale = make();
+    await pairOne(stale);
+    const other = make();
+    await other.setAddress(NEW, true);
+    const phone = await pairOne(other);
+    await stale.refreshAddress();
+    expect(old.cezarConnected).toBe(false);
+    expect(old.allowlist.has(phone.deviceId)).toBe(false);
+    expect(next.allowlist.has(phone.deviceId)).toBe(true);
+  });
+
+  it('pairing after a hand edit adds the phone on the relay in its QR code', async () => {
+    const service = make();
+    await pairOne(service);
+    store.value = NEW;
+    const phone = await pairOne(service);
+    expect(next.allowlist.has(phone.deviceId)).toBe(true);
+    expect(old.allowlist.has(phone.deviceId)).toBe(false);
+  });
+
+  it('with nothing set it pairs through the default, out of the box', async () => {
+    store.value = null;
+    const service = make();
+    expect(service.list()).toMatchObject({ relaySource: 'default' });
+    const started = await service.startPairing();
+    expect(started.relayOrigin).toBe(DEFAULT_RELAY_ORIGIN);
+    expect(started.qr.startsWith(`${DEFAULT_RELAY_ORIGIN}/p#1.`)).toBe(true);
+  });
+
+  it('Use default and naming the default both store nothing, so a later default reaches this user', async () => {
+    const service = make();
+    await service.setAddress(null, false);
+    expect(store.value).toBeNull();
+    await service.setAddress(NEW, false);
+    await service.setAddress(DEFAULT_RELAY_ORIGIN, false);
+    expect(store.value).toBeNull();
+    expect(service.list()).toMatchObject({ relayOrigin: DEFAULT_RELAY_ORIGIN, relaySource: 'default' });
+  });
+
+  it('Use default on the default changes nothing, and keeps the phones', async () => {
+    store.value = null;
+    const service = make();
+    await pairOne(service);
+    await service.setAddress(null, false);
+    expect(service.list().phones).toHaveLength(1);
+    expect(next.cezarConnected).toBe(true);
   });
 
   it('a pairing whose keychain prompt outlasts a save does not open on the relay it left', async () => {

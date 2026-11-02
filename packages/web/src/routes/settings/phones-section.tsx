@@ -1,6 +1,6 @@
 import type { Phone, PhonePairing, PhonePairingFailure, RelayStatus, StartPhonePairingResponse } from '@open-mercato/cezar-api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { PencilIcon, SmartphoneIcon, Trash2Icon } from 'lucide-react'
+import { ChevronRightIcon, PencilIcon, SmartphoneIcon, Trash2Icon } from 'lucide-react'
 import qrcode from 'qrcode-generator'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -18,6 +18,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
 import { RelayAddressForm } from './relay-address'
@@ -203,8 +204,7 @@ export function PhonesSection() {
   const expired = credentials !== null && !showing && (mine === null || mine.status === 'expired' || mine.status === 'waiting')
   const relay = list.data?.relay
   const phones = list.data?.phones ?? []
-  const noRelay = list.data !== undefined && list.data.relayOrigin === ''
-  const canAddRelay = noRelay && list.data?.relaySource !== 'env-invalid'
+  const badRelay = list.data?.relaySource === 'env-invalid'
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -236,12 +236,18 @@ export function PhonesSection() {
             <p className="text-sm text-muted-foreground">
               Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
             </p>
-            {canAddRelay ? (
-              <p className="text-sm">
-                Connecting a phone needs a relay address. No relay is built in yet, so add one below.
+            <p className="text-sm text-muted-foreground">
+              The relay is end-to-end encrypted, so it cannot read prompts, code or keys. It does see IP addresses and the timing and volume of traffic.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Scan only inside the Cezar app. A camera app opens the code in a browser, where a relay you do not run could read it and pair as a phone.
+            </p>
+            {badRelay ? (
+              <p role="alert" className="text-sm text-destructive">
+                <code>CEZ_RELAY_URL</code> is not a valid relay address. Fix or unset it, then restart cezar.
               </p>
             ) : null}
-            <Button disabled={start.isPending || noRelay} onClick={() => start.mutate()}>
+            <Button disabled={start.isPending || badRelay} onClick={() => start.mutate()}>
               {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
             </Button>
           </div>
@@ -251,8 +257,6 @@ export function PhonesSection() {
         {failed ?? denied ? <p role="status" className="text-sm text-muted-foreground">{failed ?? denied}</p> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       </section>
-
-      {list.data ? <RelayAddressForm phones={list.data} onSaved={() => { setCredentials(null); setCode(null); setError(null) }} /> : null}
 
       <section aria-labelledby="your-phones" className="space-y-2">
         <h2 id="your-phones" className="text-sm font-medium">Your phones</h2>
@@ -275,6 +279,20 @@ export function PhonesSection() {
         <p className="text-sm text-muted-foreground">
           Relay: {RELAY_STATUS[relay.status]}{relay.detail ? ` (${relay.detail})` : ''}
         </p>
+      ) : null}
+
+      {list.data ? (
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button variant="ghost" size="sm" className="group -ml-2">
+              <ChevronRightIcon className="size-4 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
+              Advanced
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <RelayAddressForm phones={list.data} onSaved={() => { setCredentials(null); setCode(null); setError(null) }} />
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
 
       {pairing?.status === 'confirm' ? (

@@ -312,9 +312,9 @@ it is already 256 bits. Steps 3 to 7 are identical, except that no key can be pi
 6-digit match matters more.
 
 **A typed code needs a relay address while [QR1](#qr1-what-is-the-relays-hostname-and-who-owns-its-accounts)
-is open.** A code cannot carry the address and no default host exists, so desktop shows the address
-beside the code, and the app's Enter code screen has a relay address field. The field goes away the day
-a default host ships. Exact labels and derivations are in [§9](../../RELAY_PROTOCOL.md#9-pairing).
+is open.** A code cannot carry the address, and the app has no default host until QR1 settles, even
+though cezar has one. So desktop shows the address beside the code, and the app's Enter code screen has a
+relay address field. The field goes away the day the app ships a default. Exact labels and derivations are in [§9](../../RELAY_PROTOCOL.md#9-pairing).
 
 PBKDF2 was chosen because Node, CommonCrypto and the JDK all have it [M for the last two].
 
@@ -524,14 +524,16 @@ whole workspace.
 | Question | Decision |
 | --- | --- |
 | Where it lives | `relayAddress` in `~/.cezar/config.json`, read per `/workspace/phones` request and at boot, so a save needs no restart and a restart keeps it |
-| Precedence | `CEZ_RELAY=0` blocks, then `CEZ_RELAY_URL`, then the saved address, then `DEFAULT_RELAY_ORIGIN` in `relay/wire.ts`, which is `null` until QR1 settles and is the one place a project default goes |
+| Default | `DEFAULT_RELAY_ORIGIN` in `relay/wire.ts`, `https://rome.patzick.workers.dev`, the one constant to swap for the final Open Mercato hostname before public release (QR1). Connect a phone works with no setup |
+| Precedence | `CEZ_RELAY=0` blocks, then `CEZ_RELAY_URL`, then the saved address, then the default. Unset means the default and is never written down, so a new default reaches whoever never chose. **Use default**, and saving the default's own address, both remove the key |
+| Where it shows | Behind a collapsed **Advanced** control: the field prefilled with the current address, Test, Save and Use default. The main section is pairing and phones, plus what the relay sees and where to scan. `CEZ_RELAY_URL` shows read-only inside Advanced |
 | An invalid `CEZ_RELAY_URL` | Still wins, read-only, with no origin. Falling through would pair through a relay nobody named. The value is not echoed, since it may hold a credential |
 | Validation | `parseRelayOrigin`, stored without the trailing `/` |
 | Test | Opens a rendezvous and reads `hello`, the only frame stating `protocol`, then closes. A random key per process proves it, so an unchosen relay never learns `cezarId`, the identity is not created, and repeated checks cost one first-seen id and that key's own `rendezvousPerHour` |
 | Save | The cockpit enables it only after Test passes for that exact value. The route cannot probe itself, because a save must not contact a relay. So this is a guard in the UI, not a check on the route |
 | Who may change it | A phone may not read, write or test it: it sits in the `/workspace/phones` family. A hosted request may, as with `PUT /workspace/config`: both are the authenticated owner, and `browseRoot` draws the same line. The field is on neither side of `/workspace/config` |
 
-A new address, or clearing it, runs in this order. With phones paired the route refuses unless `dropPhones`
+A new address, or going back to the default, runs in this order. With phones paired the route refuses unless `dropPhones`
 is true, which is the user's answer to the warning. It also refuses while a phone awaits a decision.
 
 1. An undecided pairing on the old relay is cancelled.
@@ -550,8 +552,11 @@ see one computer used both. No socket opens to the new relay until a phone next 
 A second `cezar serve` on this home re-reads `devices.json` when it changes, so it refuses a new session at
 once and cannot write the rows back. It sees the address move at its next `/workspace/phones` request or
 restart, and only then closes its socket, so a session already live there lasts until that or its lease. A
-change made outside Settings, such as editing `CEZ_RELAY_URL` or `config.json`, keeps the rows and the socket
-as it always did, and `device-sync` lists those rows to the new relay at the next boot.
+socket never outlives its address. Editing `config.json` while running closes it with the rows kept, and
+Settings says so, because a reconnect would list later phones to the relay the user left. A change between
+restarts, such as editing `CEZ_RELAY_URL` or unsetting it to reach the default, keeps the rows as it always
+did, and `device-sync` lists them to the new relay at the next boot. Going from no address to the default
+is such a change for a home that paired through `CEZ_RELAY_URL`.
 
 ### Removal
 
@@ -593,9 +598,8 @@ Connecting a cezar to a relay widens exposure, so it needs a recorded decision u
 § Zero config. Nothing reaches a relay until the user clicks **Test** or **Connect a phone**, apart from `POST /v1/push`
 on a Manual server, which has its own per-server toggle and `CEZ_PUSH=0`. The socket exists
 from the first Approve, while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
-all of it. The [relay address](#relay-address) goes in the QR. No host is built in while QR1 is open, so
-with none saved and `CEZ_RELAY_URL` unset, the section explains that one is needed and **Connect a phone**
-is disabled. Both variables go in `.env.example` and
+all of it. The [relay address](#relay-address) goes in the QR, and the built-in default means no setup,
+so the click stays the whole opt-in. Both variables go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
 the same commit. See [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule).
 
@@ -938,7 +942,8 @@ hostile relay's script can pair as a phone and show the same six digits (R1 revi
 attention at Approve is then the only defence. The trade-off: a system camera no longer reaches `GET /p`,
 so someone with no app gets no "how to get the app" page, and the code works only inside the app's
 scanner. Until decided, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
-acceptable only for a relay the user runs. It changes QR bytes, so decide before the public relay.
+acceptable only for a relay the user runs. **The built-in default is not one**, so this is open for every
+default user, and the warning to scan inside the app is all that stands in for it. It changes QR bytes, so decide before the public relay.
 
 ### QR10: How does a genuine revoke survive a full stranger denial pool?
 
@@ -975,6 +980,7 @@ wire shape changes either way.
   seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
   and "MUST NOT use" `permessage-deflate`.
 - 2026-11-01: R3. The start route returns no code: `POST /workspace/phones/pairing/:id/code` opens that rendezvous on request. `outsideRelayScope` sits at run start, `ManagerEngine.enqueue` and its timers, `refreshHealth`, topic start, automation reschedule, webhook service resolution and lazy context builds. Audit: the only values a scope changes are `localHandoff`, `terminal`, `designMode`, `managerSystemNotifications`, `phonePairing`, the accounts closure and `isHostedMode`, so a site matters only if deferred work can reach one of those. A phone's rendezvous-side rollback also removes the row when the phone left before hearing `approved`.
+- 2026-11-02: cezar has a built-in default relay, `DEFAULT_RELAY_ORIGIN`, so Connect a phone needs no setup, and a custom address sits behind Advanced. Reverses "no host is built in" for cezar only. The app still has none. A socket now closes whenever its address moves.
 - 2026-11-02: The relay address is a setting, see [Relay address](#relay-address). `capabilities.phonePairing` now means only that `CEZ_RELAY=0` is not set, and `CEZ_RELAY_URL` overrides the setting. The wire contract did not change, and protocol version stays 1.
 - 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
   parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol

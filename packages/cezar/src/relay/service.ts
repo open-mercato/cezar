@@ -13,7 +13,7 @@ import type { PairedPhone } from './rendezvous.ts';
 import { outsideRelayScope, runInRelayScope } from './scope.ts';
 import { PhoneSession } from './session.ts';
 import { openWebSocket, type SocketFactory } from './socket.ts';
-import { CLOSE, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
+import { CLOSE, DEFAULT_RELAY_ORIGIN, fromB64u, parseRelayOrigin, resolveRelayAddress, type RelayAddress } from './wire.ts';
 
 export const PAIRINGS_PER_HOUR = 5;
 const INVALID_ADDRESS = 'Use https://host, or http:// only for 127.0.0.1, localhost or [::1], with no path.';
@@ -310,8 +310,8 @@ export class RelayService {
 
   /**
    * Read per request, so a save needs no restart and every `cezar serve` on this home converges.
-   * Rows that went with the move mean whoever saved told the old relay, so this one only closes.
-   * Rows still here mean a hand edit or a failed read: nothing was agreed, and the socket stays.
+   * A socket never outlives its address: left open, a reconnect would list new phones to a relay
+   * the user left. Whoever saved told that relay, so this one only closes. A failed read moves nothing.
    */
   async refreshAddress(): Promise<void> {
     const writes = this.addressWrites;
@@ -328,7 +328,9 @@ export class RelayService {
     this.addressLoaded = true;
     if (!loaded || this.origin === before) return;
     this.pairing?.cancel();
-    this.closeIfIdle();
+    this.connection?.stop();
+    this.connection = undefined;
+    if (this.devices.list().length > 0) this.setStatus('error', 'the relay address changed, so pair these phones again or restart cezar');
     this.onChange();
   }
 
@@ -346,7 +348,9 @@ export class RelayService {
       if (address !== null && !origin) throw new RelayAddressError(INVALID_ADDRESS, 400);
       await this.refreshAddress();
       if (this.changingAddress) throw new RelayAddressError('The relay address is already changing.', 409);
-      if (origin === parseRelayOrigin(this.savedAddress ?? undefined)) return;
+      // Naming the default is not choosing, so a later default still reaches this user.
+      const saved = origin === DEFAULT_RELAY_ORIGIN ? null : origin;
+      if ((saved ?? DEFAULT_RELAY_ORIGIN) === this.origin) return;
       if (this.devices.list().length > 0 && !dropPhones) {
         throw new RelayAddressError('Paired phones must pair again after this change, so confirm it first.', 409);
       }
@@ -361,9 +365,9 @@ export class RelayService {
           throw new RelayAddressError('Could not update the phone list, so nothing changed.', 409);
         }
         try {
-          await this.addressStore.write(origin);
+          await this.addressStore.write(saved);
           this.addressWrites += 1;
-          this.savedAddress = origin;
+          this.savedAddress = saved;
         } catch {
           throw new RelayAddressError('Could not save the relay address.', 409);
         } finally {
@@ -446,7 +450,7 @@ export class RelayService {
     return outsideRelayScope(async () => {
       await this.refreshAddress();
       const origin = this.origin;
-      if (!origin) throw new PairingStartError(this.address.source === 'env-invalid' ? 'CEZ_RELAY_URL is not a valid relay address.' : 'Add a relay address first.');
+      if (!origin) throw new PairingStartError(this.address.source === 'env-invalid' ? 'CEZ_RELAY_URL is not a valid relay address.' : 'Phone pairing is off.');
       if (this.changingAddress) throw new PairingStartError('The relay address is changing. Try again in a moment.');
       if (this.pairing && !this.pairing.canReplace) throw new PairingStartError('A phone is waiting for your answer.');
       const now = this.now();
