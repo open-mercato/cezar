@@ -602,7 +602,7 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | # | Task | Ships | Depends on | Size |
 | --- | --- | --- | --- | --- |
 | M1 | **Installable cockpit (#1762).** Manifest with `start_url: "/"` and `crossorigin="use-credentials"` so it loads behind Basic auth, icons, no `/api` caching. Check iOS install behind Basic auth and service worker registration | **First thing a user can install** | None | S |
-| M2 | **Shell spike.** Runs first. Throwaway build on the team's own devices with local signing and no store accounts, proving every item below | Go or no-go report by the rule below, which decides Q2 | None | M |
+| M2 | **Shell spike.** Runs first. Throwaway build on the team's own devices with local signing and no store accounts, proving every item below | Go or no-go report by the rule below, which can still overturn Q2 | None | M |
 | M3 | **Land Manager.** PR #1880, on by default | Manager on `main` | Maintainer | Outside this work |
 | M4 | **Phone chat.** One-row header, composer leftovers, keyboard inset, chips, measure streaming | Better chat in every phone browser | M3 | M |
 | M5 | **Approvals.** Confirmation sheet and dialog, the Settings section with one switch per type (default all on), 44pt buttons, per-card state, refusal on card, pill, `pending=1` | Safer approvals at every width, on phones first | M3 | M |
@@ -614,7 +614,7 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | M11 | **The sink's relay output.** Narrowed: the relay itself is R2, and this work is delegated to R5 of the relay spec | Native notifications | M10, R5 | M |
 | M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | R5, R6, Q10 | M, plus review time |
 
-Native push is required before M12 on both stores. M2 runs first, and M1 can start alongside it. M7 can run in parallel with M4 and M5. M4 and M5 both edit
+Native push is required before M12 on both stores. Platform order is Android first, then iOS (decided 2026-11-02): a task covering both ships on Android first. M2 runs first, and M1 can start alongside it. M7 can run in parallel with M4 and M5. M4 and M5 both edit
 `manager-chat.tsx`, so land one before starting the other.
 
 **M2 must answer, on real iOS and Android devices:**
@@ -711,7 +711,7 @@ inside the webview. Tauri cannot in wry 0.55.1 [V]. That Capacitor can is [M], f
 | Plain Swift and Kotlin | Full control, no bridge at all, no framework upgrades | Two small codebases with no sharing, and the connect screen is written twice | No bundled page. Push written by hand |
 | Tauri with a patched wry | Matches the desktop toolchain | A fork to carry across upgrades, plus an NDK build. Sharing is config only | A Rust mobile build in CI |
 
-M2's questions 1 to 4 and 6 settle it. If question 3 fails, the choice moves to plain native, not to
+M2's questions 1 to 4 and 6 can still overturn it. If question 3 fails, the choice moves to plain native, not to
 Tauri. If question 6 finds a hook in current wry, Tauri needs a second look, though Capacitor would
 still lead on push.
 
@@ -753,6 +753,7 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | # | Decision | Answer |
 | --- | --- | --- |
 | Q1 | How does Manager land, and is it on by default? | Through its own PR, #1880, with the mobile work stacked on it. On by default |
+| Q2 | Accept Capacitor? | Yes, subject to the iPhone proxy test (relay spec QR5/R0, still to do). 2026-11-02 |
 | Q3 | Who owns the store accounts? | Open Mercato |
 | Q4 | Bundle ID | `com.openmercato.cezar.mobile` accepted |
 | Q5 | Allow plain HTTP for LAN or Tailscale addresses? | No in v1. Users without a public server use HTTPS through ngrok, a Cloudflare Tunnel or `tailscale serve`. Tailscale cannot be made invisible to the user |
@@ -760,17 +761,16 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | Q7 | Is push required before a public listing? | Yes |
 | Q8 | Should a phone browser tab also start at `/manager`? | Yes, changed from the original recommendation. See [In a phone browser](#in-a-phone-browser) |
 | Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0`. Extended by the relay spec's QR2 |
-| Q2 | Accept Capacitor? | Yes, subject to the iPhone proxy test (relay spec QR5/R0, still to do). 2026-11-02 |
 | Q10 | Demo server | Reviewers only, on Hetzner, reset nightly. 2026-11-02 |
 | Q11 | PR #1821's do-not-merge | Keeps `do-not-merge`; the client side is fixed first. 2026-11-02 |
 | Q12 | Optional biometric lock | Yes, optional, off by default, shipped before public release. Settled by the relay spec's QR3, 2026-11-02 |
-| Order | Platform order | Android first, then iOS. 2026-11-02 |
-| Privacy | Privacy policy | The manager drafts it; Open Mercato approves and hosts it. 2026-11-02 |
 | Q13 | Which approvals need confirmation? | Changed: a user setting per type, default on for merges, automations and jobs. See [Confirmation setting](#confirmation-setting) |
 | Q14 | Shell telemetry | None now, planned for later |
 | Q15 | Direct APK or F-Droid build | Not in v1 |
 | Q16 | Public store name | Cezar if available, otherwise Cezar Cockpit. It can change later, unlike the bundle ID |
 | Q17 | May public listings wait on M12? | Yes |
+| Order | Platform order | Android first, then iOS. 2026-11-02 |
+| Privacy | Privacy policy | The manager drafts it; Open Mercato approves and hosts it. 2026-11-02 |
 
 ## Changelog
 
