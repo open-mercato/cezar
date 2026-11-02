@@ -289,8 +289,8 @@ generates its device key before its first grant. Only the X25519 keys protect co
 1. The user opens **Settings > Connect a phone**. cezar generates a 32-byte secret and a code, and
    opens a [rendezvous](../../RELAY_PROTOCOL.md#5-rendezvous). The QR code lasts 2 minutes, and it does not rotate by itself. When
    it expires the screen offers **Show a new code**, so a forgotten tab shows nothing usable.
-2. The QR holds `<relay origin>/p#1.<secret>.<cezar X25519 key>`, and the origin comes from
-   `CEZ_RELAY_URL`, under the grammar in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string). A browser does not send the
+2. The QR holds `<relay origin>/p#1.<secret>.<cezar X25519 key>`, and the origin comes from the
+   [relay address](#relay-address), under the grammar in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string). A browser does not send the
    fragment, and a system camera that opens the link reaches a page explaining how to get the app. That
    page has no script, but a hostile relay could serve one that reads the fragment and pair as a phone
    itself. That is worse than a [photo](#what-if-the-qr-code-is-photographed): see [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open).
@@ -512,8 +512,45 @@ New routes, contract first, in one chained workspace-level family and listed in 
 | `PATCH /workspace/phones/:deviceId` | Rename |
 | `DELETE /workspace/phones/:deviceId` | Remove |
 
-A `phone-pairing` event on `/workspace/events` drives the screen. `capabilities.phonePairing` hides the
-section, and it lives in Settings' global side, since a phone reaches the whole workspace.
+| `PUT /workspace/phones/relay` | Save or clear the [relay address](#relay-address) |
+| `POST /workspace/phones/relay/test` | Check an address without saving it |
+
+A `phone-pairing` event on `/workspace/events` drives the screen. `capabilities.phonePairing`, false only
+under `CEZ_RELAY=0`, hides the section, and it lives in Settings' global side, since a phone reaches the
+whole workspace.
+
+### Relay address
+
+| Question | Decision |
+| --- | --- |
+| Where it lives | `relayAddress` in `~/.cezar/config.json`, read per `/workspace/phones` request and at boot, so a save needs no restart and a restart keeps it |
+| Precedence | `CEZ_RELAY=0` blocks, then `CEZ_RELAY_URL`, then the saved address, then `DEFAULT_RELAY_ORIGIN` in `relay/wire.ts`, which is `null` until QR1 settles and is the one place a project default goes |
+| An invalid `CEZ_RELAY_URL` | Still wins, read-only, with no origin. Falling through would pair through a relay nobody named. The value is not echoed, since it may hold a credential |
+| Validation | `parseRelayOrigin`, stored without the trailing `/` |
+| Test | Opens a rendezvous and reads `hello`, the only frame stating `protocol`, then closes. A random key per process proves it, so an unchosen relay never learns `cezarId`, the identity is not created, and repeated checks cost one first-seen id and that key's own `rendezvousPerHour` |
+| Save | The cockpit enables it only after Test passes for that exact value. The route cannot probe itself, because a save must not contact a relay. So this is a guard in the UI, not a check on the route |
+| Who may change it | A phone may not read, write or test it: it sits in the `/workspace/phones` family. A hosted request may, as with `PUT /workspace/config`: both are the authenticated owner, and `browseRoot` draws the same line. The field is on neither side of `/workspace/config` |
+
+A new address, or clearing it, runs in this order. With phones paired the route refuses unless `dropPhones`
+is true, which is the user's answer to the warning. It also refuses while a phone awaits a decision.
+
+1. An undecided pairing on the old relay is cancelled.
+2. `devices.json` loses every row and every queued removal, in one write. If that fails, nothing changed.
+3. The address is saved.
+4. Each live session gets `CLOSE` `device-removed`, then the old relay gets `device-remove` for each phone,
+   bounded at 5 s in all, and its socket closes. A relay that did not answer keeps a stale allowlist, which
+   is only a cost filter (see [Removal](#removal)). The grants of a removal it did not acknowledge move to
+   `undeniedGrants`.
+
+**A queued removal never carries over:** at the next connect it would open a socket to, and name a phone
+to, a relay that never knew it. **The identity stays.** It is this home's, not the relay's: `cezarId`, both
+keys and a Manual server's grants are unchanged. The cost is that two relay operators comparing notes can
+see one computer used both. No socket opens to the new relay until a phone next pairs.
+
+A second `cezar serve` on this home sees the move at its next `/workspace/phones` request or restart, and
+then closes its socket. Until then a socket it holds stays up and serves the rows it has in memory.
+A change made outside Settings, such as editing `CEZ_RELAY_URL` between restarts, keeps the rows as it always
+did, so `device-sync` lists them to the new relay at the next boot.
 
 ### Removal
 
@@ -552,11 +589,12 @@ that this phone can run tasks on this computer. The list stays usable from any n
 ### Consent and zero config
 
 Connecting a cezar to a relay widens exposure, so it needs a recorded decision under AGENTS.md
-§ Zero config. Nothing reaches the relay until the user clicks **Connect a phone**, apart from `POST /v1/push`
+§ Zero config. Nothing reaches a relay until the user clicks **Test** or **Connect a phone**, apart from `POST /v1/push`
 on a Manual server, which has its own per-server toggle and `CEZ_PUSH=0`. The socket exists
 from the first Approve, while at least one device is paired, and it closes when the last is removed. `CEZ_RELAY=0` blocks
-all of it. `CEZ_RELAY_URL` sets the relay origin, which goes in the QR. No host is built in while QR1 is
-open, so with it unset `capabilities.phonePairing` is false. Both go in `.env.example` and
+all of it. The [relay address](#relay-address) goes in the QR. No host is built in while QR1 is open, so
+with none saved and `CEZ_RELAY_URL` unset, the section explains that one is needed and **Connect a phone**
+is disabled. Both variables go in `.env.example` and
 `docs/reference.md` in the commit that adds them, and the click-to-enable exception goes in AGENTS.md in
 the same commit. See [QR2](#qr2-does-a-click-satisfy-the-network-opt-in-rule).
 
@@ -936,6 +974,7 @@ wire shape changes either way.
   seen by a rendezvous relay, typed-code rendezvous on request, no `10.0.2.2`, `x-cezar-runtime-handoff`
   and "MUST NOT use" `permessage-deflate`.
 - 2026-11-01: R3. The start route returns no code: `POST /workspace/phones/pairing/:id/code` opens that rendezvous on request. `outsideRelayScope` sits at run start, `ManagerEngine.enqueue` and its timers, `refreshHealth`, topic start, automation reschedule, webhook service resolution and lazy context builds. Audit: the only values a scope changes are `localHandoff`, `terminal`, `designMode`, `managerSystemNotifications`, `phonePairing`, the accounts closure and `isHostedMode`, so a site matters only if deferred work can reach one of those. A phone's rendezvous-side rollback also removes the row when the phone left before hearing `approved`.
+- 2026-11-02: The relay address is a setting, see [Relay address](#relay-address). `capabilities.phonePairing` now means only that `CEZ_RELAY=0` is not set, and `CEZ_RELAY_URL` overrides the setting. The wire contract did not change, and protocol version stays 1.
 - 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
   parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol
   errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone

@@ -144,7 +144,7 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, type PhonePairingEvent } from '@open-mercato/cezar-contract';
+import { phoneDeviceParamSchema, phonePairingParamSchema, renamePhoneInputSchema, setRelayAddressInputSchema, testRelayAddressInputSchema, type PhonePairingEvent } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { resolveCursorAgentBin } from '../core/cursor-bin.ts';
 import { resolveAntigravityBin } from '../core/antigravity-runner.ts';
@@ -364,7 +364,7 @@ import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, cezarHomeDir, expandTilde, isAbsolutePath } from '../paths.ts';
 import { renameWithRetry } from '../fs-rename.ts';
 import { narrowForRelay, inRelayScope, outsideRelayScope } from '../relay/scope.ts';
-import { PairingStartError, RelayService } from '../relay/service.ts';
+import { PairingStartError, RelayAddressError, RelayService } from '../relay/service.ts';
 import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { applyKeepAlive } from './keep-alive.ts';
@@ -8708,11 +8708,13 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: phones (workspace-level, spec 2026-11-01-relay-qr-pairing) ----
   const phonePairing = deps.relay ?? new RelayService();
   deps.onDispose?.(() => phonePairing.dispose());
-  // A phone never reaches this family, so it cannot pair another phone or remove one. The 403 comes
-  // first: `phonePairing` is false in a relay scope, which would read as "the feature is off".
+  // A phone never reaches this family, so it cannot pair another phone, remove one or move the
+  // relay. The 403 comes first: `phonePairing` is false in a relay scope, which would read as "the
+  // feature is off". A hosted request is let through, as for `PUT /workspace/config`.
   const requirePhones = async (c: Context, next: Next) => {
     if (inRelayScope()) return c.json({ error: 'phones are managed from the computer' }, 403);
-    if (!capabilities().phonePairing) return c.json({ error: 'phone pairing is off: set CEZ_RELAY_URL' }, 409);
+    if (!capabilities().phonePairing) return c.json({ error: 'phone pairing is off: CEZ_RELAY=0 blocks it' }, 409);
+    await phonePairing.refreshAddress();
     await next();
   };
   const PHONE_NOT_FOUND = { error: 'phone not found' } as const;
@@ -8721,6 +8723,18 @@ export function createApp(deps: ServerDeps) {
     .use('/workspace/phones', requirePhones)
     .use('/workspace/phones/*', requirePhones)
     .get('/workspace/phones', (c) => c.json(phonePairing.list()))
+    .put('/workspace/phones/relay', jsonZodValidator(setRelayAddressInputSchema), async (c) => {
+      const { address, dropPhones } = c.req.valid('json');
+      try {
+        await phonePairing.setAddress(address, dropPhones === true);
+        return c.json(phonePairing.list());
+      } catch (error) {
+        if (!(error instanceof RelayAddressError)) throw error;
+        return c.json({ error: error.message }, error.status);
+      }
+    })
+    .post('/workspace/phones/relay/test', jsonZodValidator(testRelayAddressInputSchema), async (c) =>
+      c.json(await phonePairing.testAddress(c.req.valid('json').address)))
     .post('/workspace/phones/pairing', async (c) => {
       c.header('Cache-Control', 'no-store');
       try {

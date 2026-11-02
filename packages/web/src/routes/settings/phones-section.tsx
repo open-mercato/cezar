@@ -20,6 +20,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { RelayAddressForm } from './relay-address'
 
 const RELAY_STATUS: Record<RelayStatus, string> = {
   off: 'not connected, because no phone is paired',
@@ -202,6 +203,7 @@ export function PhonesSection() {
   const expired = credentials !== null && !showing && (mine === null || mine.status === 'expired' || mine.status === 'waiting')
   const relay = list.data?.relay
   const phones = list.data?.phones ?? []
+  const noRelay = list.data !== undefined && list.data.relayOrigin === ''
 
   return (
     <div className="space-y-6">
@@ -233,7 +235,12 @@ export function PhonesSection() {
             <p className="text-sm text-muted-foreground">
               Traffic crosses the relay encrypted. The relay can drop it, not read it. You confirm each phone here.
             </p>
-            <Button disabled={start.isPending} onClick={() => start.mutate()}>
+            {noRelay ? (
+              <p className="text-sm">
+                Connecting a phone needs a relay address. No relay is built in yet, so add one below.
+              </p>
+            ) : null}
+            <Button disabled={start.isPending || noRelay} onClick={() => start.mutate()}>
               {expired || failed || denied ? 'Show a new code' : 'Connect a phone'}
             </Button>
           </div>
@@ -243,6 +250,8 @@ export function PhonesSection() {
         {failed ?? denied ? <p role="status" className="text-sm text-muted-foreground">{failed ?? denied}</p> : null}
         {error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}
       </section>
+
+      {list.data ? <RelayAddressForm phones={list.data} onSaved={() => { setCredentials(null); setCode(null); setError(null) }} /> : null}
 
       <section aria-labelledby="your-phones" className="space-y-2">
         <h2 id="your-phones" className="text-sm font-medium">Your phones</h2>
