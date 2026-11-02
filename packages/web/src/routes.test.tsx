@@ -858,22 +858,22 @@ describe('a fresh load of / on a phone (spec 2026-10-31-mobile-apps-manager-firs
     expect(currentPathname()).toBe('/p/other/git/commits')
   })
 
-  function codeLink() {
-    return screen.getByRole('link', { name: 'Code' })
+  function tasksLink() {
+    return screen.getByRole('link', { name: 'Tasks' })
   }
 
-  it('the Code link reaches the tasks after the redirect', async () => {
+  it('the Tasks link reaches the tasks after the redirect', async () => {
     device()
     load('/', { extra: <ModeSwitch manager attention={false} /> })
     expect(currentPathname()).toBe('/manager')
-    fireEvent.click(codeLink())
+    fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
   })
 
-  it('the Code link reaches the tasks from a page loaded at /manager', async () => {
+  it('the Tasks link reaches the tasks from a page loaded at /manager', async () => {
     device()
     load('/manager', { extra: <ModeSwitch manager attention={false} /> })
-    fireEvent.click(codeLink())
+    fireEvent.click(tasksLink())
     await waitFor(() => expect(currentPathname()).toBe('/p/other/git'))
   })
 })
