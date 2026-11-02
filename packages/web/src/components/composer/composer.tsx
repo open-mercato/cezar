@@ -809,11 +809,11 @@ export function Composer({
           ) : compact ? null : (
             // The footer may WRAP (the /new pill row on narrow widths), but the trailing
             // controls stay one unbreakable group so the send button never strands alone.
-            <div className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
+            <div className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 pointer-coarse:max-md:pt-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
               {/* The paperclip shares ONE wrapping row with the footer pills — otherwise the
                   pill group is a single flex item that wraps as a block, stranding the
                   paperclip alone on the line above it (#composer-attach-line). */}
-              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1">
+              <div data-slot="composer-footer-start" className="flex min-w-0 flex-wrap items-center gap-1 pointer-coarse:max-md:gap-y-1.5">
                 {attachments ? <AttachButton disabled={disabled} onFiles={addFiles} /> : null}
                 {footerStart}
               </div>
@@ -922,10 +922,11 @@ function AttachButton({
         aria-label="Attach files"
         title="Attach images or files (or paste a screenshot)"
         disabled={disabled}
-        // The footer's other controls stay 32px, so there the 44px target is an invisible hit area, not a taller row.
+        // The footer's other controls stay 32px, so there the 44px target is an invisible hit area; the footer
+        // gives it 6px clear on every side, so it covers no neighbour.
         className={compact
           ? 'size-10 shrink-0 rounded-full bg-muted text-muted-foreground pointer-coarse:max-md:size-11 md:mb-0.5 md:size-8 md:rounded-md md:bg-transparent'
-          : 'size-8 text-muted-foreground pointer-coarse:max-md:relative pointer-coarse:max-md:after:absolute pointer-coarse:max-md:after:-inset-1.5'}
+          : 'size-8 text-muted-foreground pointer-coarse:max-md:relative pointer-coarse:max-md:mr-0.5 pointer-coarse:max-md:after:absolute pointer-coarse:max-md:after:-inset-1.5'}
         onClick={() => inputRef.current?.click()}
       >
         {compact ? <PlusIcon aria-hidden="true" className="size-4" /> : <PaperclipIcon aria-hidden="true" className="size-[15px]" />}

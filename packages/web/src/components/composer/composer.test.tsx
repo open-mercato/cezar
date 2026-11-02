@@ -747,7 +747,7 @@ describe('attach button', () => {
 
   it('gains a 44px hit area on a phone in the footer without growing the 32px button', () => {
     renderComposer()
-    expect(attachClasses()).toEqual(expect.arrayContaining(['size-8', 'pointer-coarse:max-md:relative', 'pointer-coarse:max-md:after:absolute', 'pointer-coarse:max-md:after:-inset-1.5']))
+    expect(attachClasses()).toEqual(expect.arrayContaining(['size-8', 'pointer-coarse:max-md:relative', 'pointer-coarse:max-md:mr-0.5', 'pointer-coarse:max-md:after:absolute', 'pointer-coarse:max-md:after:-inset-1.5']))
     expect(attachClasses()).not.toContain('pointer-coarse:max-md:size-11')
   })
 })
