@@ -31,11 +31,12 @@ const WAIT_MS = 10_000;
 
 export function parseQr(qr: string): { origin: string; secret: Buffer; key: Buffer } | { refused: string } {
   // `version` first, whatever follows it, § 9.1.
-  const version = /\/p#([0-9]+)(?:\.|$)/.exec(qr)?.[1];
-  if (version !== undefined && version !== '1') return { refused: 'version' };
-  const match = /^(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?\/p#1\.([^.]*)\.([^.]*)$/.exec(qr);
+  const version = /^cezar-pair:([0-9]+)(?:\.|$)/.exec(qr)?.[1];
+  if (version === undefined) return { refused: /^https?:\/\/.*\/p#[0-9]/s.test(qr) ? 'old-link' : 'grammar' };
+  if (version !== '1') return { refused: 'version' };
+  const match = /^cezar-pair:1\.([^.]*)\.([^.]*)\.(https?):\/\/([a-z0-9.-]+|\[::1\])(?::([1-9][0-9]{0,4}))?$/.exec(qr);
   if (!match) return { refused: 'grammar' };
-  const [, scheme, host, port, secretText, keyText] = match as unknown as [string, string, string, string | undefined, string, string];
+  const [, secretText, keyText, scheme, host, port] = match as unknown as [string, string, string, string, string, string | undefined];
   if (port && Number(port) > 65535) return { refused: 'grammar' };
   const secret = fromB64u(secretText, 32);
   const key = fromB64u(keyText, 32);

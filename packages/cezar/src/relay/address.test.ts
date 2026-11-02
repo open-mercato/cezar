@@ -109,7 +109,7 @@ describe('changing the relay address', () => {
     expect(store.value).toBe(NEW);
     const started = await service.startPairing();
     expect(started.relayOrigin).toBe(NEW);
-    expect(started.qr.startsWith(`${NEW}/p#1.`)).toBe(true);
+    expect(started.qr.endsWith(`.${NEW}`)).toBe(true);
     const restarted = make();
     await restarted.start();
     expect(restarted.list()).toMatchObject({ relayOrigin: NEW, relaySource: 'settings' });
@@ -152,7 +152,7 @@ describe('changing the relay address', () => {
   it('the same phone can pair again through the new relay, under the same identity', async () => {
     const service = make();
     const first = await service.startPairing();
-    const cezarKey = first.qr.split('.').pop();
+    const cezarKey = first.qr.split('.')[2];
     const phone = new PhoneSim(open);
     await phone.pairWithQr(first.qr);
     await waitFor(() => service.list().pairing?.status === 'confirm');
@@ -164,7 +164,7 @@ describe('changing the relay address', () => {
     expect(service.list().phones).toHaveLength(1);
     expect(next.allowlist.has(again.deviceId)).toBe(true);
     const third = await service.startPairing();
-    expect(third.qr.split('.').pop()).toBe(cezarKey);
+    expect(third.qr.split('.')[2]).toBe(cezarKey);
   });
 
   it('a queued removal stays with the old relay, so the new one never hears of that phone', async () => {
@@ -317,7 +317,7 @@ describe('changing the relay address', () => {
     expect(service.list()).toMatchObject({ relaySource: 'default' });
     const started = await service.startPairing();
     expect(started.relayOrigin).toBe(DEFAULT_RELAY_ORIGIN);
-    expect(started.qr.startsWith(`${DEFAULT_RELAY_ORIGIN}/p#1.`)).toBe(true);
+    expect(started.qr.endsWith(`.${DEFAULT_RELAY_ORIGIN}`)).toBe(true);
   });
 
   it('Use default and naming the default both store nothing, so a later default reaches this user', async () => {

@@ -15,7 +15,8 @@ webview ─ loopback proxy ─ Noise ═══ relay ═══ Noise ─ dispatc
 
 The relay is assumed hostile. It is trusted for availability and nothing else: it can drop, delay and
 inject, and every injected byte fails decryption. Nothing here depends on it for confidentiality of the
-tunnel. For authorization, one path does: a system-camera scan of the QR code (§9.1). The relay
+tunnel. For authorization, a QR code needs nothing from it, because the relay never sees the string
+(§9.1). A typed code has one residual risk, in the spec's threat model. The relay
 implementation is private; this document describes its behaviour only.
 
 Terms: a **room** is the relay's per-cezar state, one per `cezarId`. A **rendezvous** is a short-lived
@@ -63,7 +64,7 @@ this form. One trailing `/` is accepted there and removed.
 | `POST /v1/push-grants` | Phone | A device key | Request |
 | `POST /v1/push-grants/revoke` | Phone | The device key sealed in the grant | Request |
 | `POST /v1/push` | cezar or a hosted server | The key sealed in the grant | Request |
-| `GET /p` | Anyone | Nothing | A static page with no script saying how to get the app. Clients never call it |
+| `GET /p` | Anyone | Nothing | Optional. A static page with no script saying how to get the app. Clients never call it, and no QR code leads there (§9.1) |
 
 One WebSocket message is one frame. There is no subprotocol, and clients MUST NOT use
 `permessage-deflate`, and a client that cannot stop its library offering it MUST NOT accept it. A client sends nothing until it has read `hello`.
@@ -383,26 +384,30 @@ A `frameBytes` under 16,384 is a broken relay: the client closes with 1000 and r
 ### 9.1 QR string
 
 ```abnf
-qr       = origin "/p#" version "." secret "." cezarkey
+qr       = "cezar-pair:" version "." secret "." cezarkey "." origin
+version  = 1*DIGIT                           ; "1" today
+secret   = 43base64url                       ; 32 random bytes
+cezarkey = 43base64url                       ; cezar's X25519 public key
 origin   = ("https" / "http") "://" host [":" port]
 host     = 1*(%x61-7A / DIGIT / "-" / ".")   ; lowercase ASCII, punycode for IDN
          / "[::1]"
 port     = %x31-39 *4DIGIT                   ; 1 to 65535
-version  = 1*DIGIT                           ; "1" today
-secret   = 43base64url                       ; 32 random bytes
-cezarkey = 43base64url                       ; cezar's X25519 public key
 ```
 
-String literals in this grammar are case-sensitive, unlike plain ABNF. There is no user info, no other
-path and no query. The parser is strict, and anything else is
-refused. A browser never sends the fragment, so a system camera that opens the link reaches `GET /p`
-with no secret. **A hostile relay can serve script there that reads the fragment.** With the secret and
-cezar's key it runs `XXpsk3` itself, pairs as a phone and shows cezar's Approve dialog the same six
-digits, so the digits warn nobody. This is not the same as a photographed code, where the attacker
-lacks the relay: only the user's attention at Approve stands against it, and Approve adds a device
-that can start tasks as the user. A system-camera scan is therefore safe only with a relay the user
-runs. See the spec's QR9. A parser reads `version` first, as the digits between `/p#` and the next `.`, and any `version` other than
-1 shows "Update the app" whatever follows it.
+String literals in this grammar are case-sensitive, unlike plain ABNF. `origin` comes last because it
+holds dots, and neither base64url field can, so the first three dots end the three fields before it.
+There is no user info, no path, no query and no fragment. The parser is strict, and anything else is
+refused.
+
+`cezar-pair` is not a web scheme, so a system camera cannot open the string as a page, and no relay
+page ever sees it. The app MUST NOT register the scheme with the operating system: any other app could
+claim it too and receive the secret. The string works only inside the app's own scanner. See the spec's
+QR9.
+
+A parser reads `version` first, as the digits between `cezar-pair:` and the next `.` or the end, and any
+`version` other than 1 shows "Update the app" whatever follows it. The older
+`<origin>/p#<version>.<secret>.<cezarkey>` form is never parsed. An app recognizes it only to show
+"Update cezar".
 
 | Scheme | Host | Release app | Debug app |
 | --- | --- | --- | --- |

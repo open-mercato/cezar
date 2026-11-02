@@ -44,7 +44,7 @@ const DEFAULT = 'https://rome.patzick.workers.dev'
 const unset: PhonesResponse = { ...base, relayOrigin: DEFAULT, relaySource: 'default' }
 const paired: PhonesResponse = { ...base, phones: [{ deviceId: 'd'.repeat(22), label: 'Pixel 9', platform: 'android', addedAt: '', connected: true }] }
 const NEXT = 'https://own.example.test'
-const QR = `https://relay.example.test/p#1.${'a'.repeat(43)}.${'b'.repeat(43)}`
+const QR = `cezar-pair:1.${'a'.repeat(43)}.${'b'.repeat(43)}.https://relay.example.test`
 const started = { id: '11111111-1111-4111-8111-111111111111', qr: QR, relayOrigin: base.relayOrigin, expiresAt: new Date(Date.now() + 120_000).toISOString() }
 const waiting: PhonePairing = { id: started.id, status: 'waiting', expiresAt: started.expiresAt }
 const confirm: PhonePairing = { ...waiting, status: 'confirm', digits: '412751', method: 'qr', phone: { name: 'Pixel 9', platform: 'android' } }
@@ -283,7 +283,7 @@ describe('the relay address', () => {
     show()
     await screen.findByText(/end-to-end encrypted/)
     expect(screen.getByText(/see IP addresses and the timing/)).toBeTruthy()
-    expect(screen.getByText(/Scan only inside the Cezar app/)).toBeTruthy()
+    expect(screen.getByText(/Scan the code inside the Cezar app/)).toBeTruthy()
   })
 })
 
