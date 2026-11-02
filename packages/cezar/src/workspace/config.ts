@@ -377,10 +377,17 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
   return readWorkspaceConfig(path, false);
 }
 
+/** For a caller that must tell "not set" from "could not tell": a file that exists but
+ *  neither reads, parses nor restores throws, while a missing one is still the default. */
+export async function loadWorkspaceConfigOrThrow(path: string = workspaceConfigPath()): Promise<WorkspaceConfig> {
+  return readWorkspaceConfig(path, true, true);
+}
+
 /** `strict` (merge-writes): a file that exists but cannot be read throws
  *  instead of degrading to defaults, which the write would then persist over
- *  both the config and its snapshot — the Windows registry wipe this guards. */
-async function readWorkspaceConfig(path: string, strict: boolean): Promise<WorkspaceConfig> {
+ *  both the config and its snapshot — the Windows registry wipe this guards.
+ *  `refuseCorrupt` throws for a malformed file too; a merge-write replaces one. */
+async function readWorkspaceConfig(path: string, strict: boolean, refuseCorrupt = false): Promise<WorkspaceConfig> {
   let raw: string | null = null;
   let unreadable: { path: string; error: unknown } | undefined;
   try {
@@ -415,6 +422,7 @@ async function readWorkspaceConfig(path: string, strict: boolean): Promise<Works
     return defaultWorkspaceConfig();
   }
   if (raw === null) return defaultWorkspaceConfig();
+  if (refuseCorrupt) throw new WorkspaceConfigUnreadableError(`[cez] ${path} is corrupt`);
   console.warn(
     `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
   );
