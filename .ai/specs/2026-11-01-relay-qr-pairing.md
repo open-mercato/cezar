@@ -252,7 +252,7 @@ is normative in `RELAY_PROTOCOL.md`.
 | Retry a revoke on 429 or 503, only 204 means stored | Adopted | §7 |
 | Every rendezvous frame counts, text included | Adopted | §5 |
 | Relay host in the QR | Adopted | §9.1, with scheme and port |
-| `GET /p` is live | Adopted | §3 |
+| `GET /p` is live | Adopted, optional since QR9 | §3 |
 | Update spec rule 1 | Adopted | Above |
 
 ### What R1 added
@@ -289,11 +289,11 @@ generates its device key before its first grant. Only the X25519 keys protect co
 1. The user opens **Settings > Connect a phone**. cezar generates a 32-byte secret and a code, and
    opens a [rendezvous](../../RELAY_PROTOCOL.md#5-rendezvous). The QR code lasts 2 minutes, and it does not rotate by itself. When
    it expires the screen offers **Show a new code**, so a forgotten tab shows nothing usable.
-2. The QR holds `<relay origin>/p#1.<secret>.<cezar X25519 key>`, and the origin comes from the
-   [relay address](#relay-address), under the grammar in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string). A browser does not send the
-   fragment, and a system camera that opens the link reaches a page explaining how to get the app. That
-   page has no script, but a hostile relay could serve one that reads the fragment and pair as a phone
-   itself. That is worse than a [photo](#what-if-the-qr-code-is-photographed): see [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open).
+2. The QR holds `cezar-pair:1.<secret>.<cezar X25519 key>.<relay origin>`, and the origin comes from the
+   [relay address](#relay-address), under the grammar in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string). The scheme
+   is not a web one, so a system camera cannot open it as a page and no relay page sees it. The app
+   registers no intent filter for it, so the code works only inside the app's scanner. See
+   [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open).
 3. The app scans it, derives the locator and pre-shared key, and joins the rendezvous.
 4. The two run `Noise_XXpsk3_25519_ChaChaPoly_SHA256`, with the phone as initiator. The phone checks
    that the key from the handshake equals the one in the QR.
@@ -336,7 +336,7 @@ grants access.**
 | Photo plus a hostile relay, QR flow | Cannot impersonate cezar: the phone pins the key, and the attacker lacks its private half |
 | Typed code read in time, plus a hostile relay | **Residual risk.** No pinned key, and an attacker on both legs could grind ephemeral keys until the 6 digits match. It needs the code within 2 minutes and control of the relay. Accepted for a fallback, and the UI says to prefer the QR code |
 | Screen recording or screen share | Same as a photo |
-| System camera opens the link, hostile relay reads the fragment | **Not the same as a photo.** The relay's page script has the secret and cezar's key, runs `XXpsk3`, reaches Approve and shows the same six digits, so they warn nobody. Only the user's attention at Approve stands against it, and Approve adds a device that can start tasks. Decided 2026-11-02, change pending: [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open) |
+| System camera sees the code | **Closed for the relay.** `cezar-pair:` is not a web link, so no page runs and the relay learns nothing. What remains is the phone's: an app that claims the scheme gets the string if the user picks it, and a camera that offers a web search can send it to a search engine. Either party then holds what a [photo](#what-if-the-qr-code-is-photographed) gives, and pairing still needs Approve within the code's 2 minutes. Copy says to scan only inside the app. See [QR9](#qr9-should-the-qr-code-be-something-a-browser-does-not-open) |
 
 A code is shown only after a click, and never appears in a notification, log or `.ai/cezar/`. At most one
 pairing is pending, and cezar allows 5 per hour. Each opens two rendezvous, so that exactly fits the relay's
@@ -944,15 +944,24 @@ promise of this feature, and the claim that anyone can check it is only as good 
 
 ### QR9: Should the QR code be something a browser does not open?
 
-**Decided 2026-11-02: yes, a non-https QR link, for example `cezar-pair:1.<origin>.<secret>.<key>`, before any relay the user does not run. This records the decision only: a later PR changes the protocol and
-updates [§9.1](../../RELAY_PROTOCOL.md#91-qr-string) and the vectors.**
-A system camera that opens `https://<relay>/p#secret` hands the secret to a page the relay serves, and a
-hostile relay's script can pair as a phone and show the same six digits (R1 review F1). The user's
-attention at Approve is then the only defence. The trade-off: a system camera no longer reaches `GET /p`,
-so someone with no app gets no "how to get the app" page, and the code works only inside the app's
-scanner. Until that PR lands, the string stays as in [§9.1](../../RELAY_PROTOCOL.md#91-qr-string), which is
-acceptable only for a relay the user runs. **The built-in default is not one**, so every
-default user is exposed until then, and the warning to scan inside the app is all that stands in for it. It changes QR bytes, so it lands before the public relay.
+**Decided 2026-11-02 and done: yes. The QR string is `cezar-pair:1.<secret>.<key>.<origin>`, see
+[§9.1](../../RELAY_PROTOCOL.md#91-qr-string).** A system camera that opened the old
+`https://<relay>/p#secret` handed the secret to a page the relay served, and a hostile relay's script could
+pair as a phone and show the same six digits (R1 review F1). A non-web scheme removes that page.
+
+- **Origin last.** It holds dots and the two base64url fields cannot, so nothing needs encoding, and the
+  string is 9 bytes longer than before: version 8-M at the default relay, the size it already was.
+- **No intent filter, on Android or iOS.** Any other app could claim the scheme and receive the secret. A
+  test on the Android manifest pins this.
+- **Versions stay 1.** The QR `version` guards a parser in the field, and none has shipped. The new prefix
+  already separates the two forms, the secret, HKDF inputs and handshake are unchanged, and the prologue
+  binds the locator, not the QR string. The relay contract gains nothing and its `protocol` stays 1.
+- **The old form is refused, not parsed.** `old-link` shows "Update cezar", since only an older cezar shows it.
+- **The trade-off.** A system camera reaches no page, so someone with no app gets no "how to get the app"
+  page, and the code works only inside the app's scanner. Nothing yet says where to get the app, because
+  it has no store listing. The page or docs that link it will have to.
+- **`GET /p`.** It is out of the QR path and nothing in cezar calls it. It stays in the relay contract as
+  optional, and it is `patzick/rome`'s to keep or drop.
 
 ### QR10: How does a genuine revoke survive a full stranger denial pool?
 
@@ -992,6 +1001,7 @@ wire shape changes either way.
 - 2026-11-02: cezar has a built-in default relay, `DEFAULT_RELAY_ORIGIN`, so Connect a phone needs no setup, and a custom address sits behind Advanced. Reverses "no host is built in" for cezar only. The app still has none. A socket now closes whenever its address moves.
 - 2026-11-02: The relay address is a setting, see [Relay address](#relay-address). `capabilities.phonePairing` now means only that `CEZ_RELAY=0` is not set, and `CEZ_RELAY_URL` overrides the setting. The wire contract did not change, and protocol version stays 1.
 - 2026-11-02: Recorded maintainer decisions. QR3: optional phone lock, off by default, before public release, and parent Q12 settled to match. QR5: loopback proxy accepted, subject to the iPhone proxy test, still to do. QR7: Open Mercato answers export compliance, confirmed by someone qualified. QR8: independent Noise review required before public release. QR9: a non-https QR link, decision only; a later PR changes the protocol. Android first, then iOS. Also parent Q2, Q10, Q11 and the privacy policy (the manager drafts it, Open Mercato approves and hosts it). QR1, QR2, QR4, QR6 and QR10 stay open. The plan follows: R0 and R4 go Android first, and R6 owns QR3, QR8 and QR9. The contract did not change.
+- 2026-11-02: QR9 done. The QR string is `cezar-pair:1.<secret>.<key>.<origin>`, `old-link` joins the refusals, `GET /p` is optional and out of the QR path, and the threat row is rewritten. No intent filter. QR `version` and relay `protocol` stay 1, as no parser has shipped. Typed codes are unchanged.
 - 2026-11-01: R1 independent review. A phone waiting for a `KK` reply filters stale frames by length, a QR
   parser reads `version` first, `target` and header charsets are stated, stream-state violations are protocol
   errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone

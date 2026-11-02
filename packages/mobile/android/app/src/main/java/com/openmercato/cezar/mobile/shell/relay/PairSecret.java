@@ -11,8 +11,10 @@ public final class PairSecret {
     private static final byte[] CODE_SALT = Bytes.ascii("cezar-pair-code-v1");
     private static final int CODE_ITERATIONS = 200000;
     private static final String ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-    private static final Pattern QR = Pattern.compile("(.*?)/p#([0-9]+)\\.(.*)");
-    private static final Pattern FIELDS = Pattern.compile("([A-Za-z0-9_-]{43})\\.([A-Za-z0-9_-]{43})");
+    private static final Pattern QR = Pattern.compile("cezar-pair:([0-9]+)(?:\\.(.*))?", Pattern.DOTALL);
+    private static final Pattern FIELDS = Pattern.compile("([A-Za-z0-9_-]{43})\\.([A-Za-z0-9_-]{43})\\.(.*)", Pattern.DOTALL);
+    /** Recognized for its message only, never parsed: an older cezar shows it (spec QR9). */
+    private static final Pattern OLD_LINK = Pattern.compile("https?://.*/p#[0-9].*", Pattern.DOTALL);
 
     public final RelayOrigin relay;
     public final byte[] locatorBytes;
@@ -33,16 +35,16 @@ public final class PairSecret {
 
     /** The strict § 9.1 parser. `version` is read first, so a later layout still says "Update the app". */
     public static PairSecret fromQr(String text, boolean debugBuild) throws RelayOrigin.Refused {
-        Matcher match = QR.matcher(text == null ? "" : text);
-        if (!match.matches()) throw new RelayOrigin.Refused("grammar");
-        RelayOrigin.matched(match.group(1));
-        if (!match.group(2).equals("1")) throw new RelayOrigin.Refused("version");
-        Matcher fields = FIELDS.matcher(match.group(3));
+        String qr = text == null ? "" : text;
+        Matcher match = QR.matcher(qr);
+        if (!match.matches()) throw new RelayOrigin.Refused(OLD_LINK.matcher(qr).matches() ? "old-link" : "grammar");
+        if (!match.group(1).equals("1")) throw new RelayOrigin.Refused("version");
+        Matcher fields = FIELDS.matcher(match.group(2) == null ? "" : match.group(2));
         if (!fields.matches()) throw new RelayOrigin.Refused("grammar");
         byte[] secret = Bytes.fromBase64url(fields.group(1), 32);
         byte[] key = Bytes.fromBase64url(fields.group(2), 32);
         if (secret == null || key == null) throw new RelayOrigin.Refused("grammar");
-        RelayOrigin relay = RelayOrigin.parse(match.group(1), debugBuild);
+        RelayOrigin relay = RelayOrigin.parse(fields.group(3), debugBuild);
         return new PairSecret(relay, hkdfLabel(secret, "cezar-pair-locator-v1"), hkdfLabel(secret, "cezar-pair-psk-v1"), key);
     }
 

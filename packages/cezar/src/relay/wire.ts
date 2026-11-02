@@ -91,7 +91,7 @@ export function resolveRelayAddress(env: NodeJS.ProcessEnv, saved: string | null
 export const socketOrigin = (origin: string): string => origin.replace(/^http/, 'ws');
 
 export const qrString = (origin: string, secret: Buffer, cezarKey: Buffer): string =>
-  `${origin}/p#1.${b64u(secret)}.${b64u(cezarKey)}`;
+  `cezar-pair:1.${b64u(secret)}.${b64u(cezarKey)}.${origin}`;
 
 // ---- pairing secrets (§ 9.2) --------------------------------------------------------------------
 

@@ -9,7 +9,7 @@ Bytes are lowercase hex unless a field is a wire string, which stays `base64url`
 | File | Covers |
 | --- | --- |
 | `proof.json` | Ids and relay proofs for sockets and `POST`s. Its first case is the spec's vector |
-| `qr.json` | QR parsing, accepted per app build, refused with a reason, and the HKDF derivations |
+| `qr.json` | The `cezar-pair:` string: accepted per app build, refused with a reason (`version`, `old-link`, `cleartext`, `grammar`), and the HKDF derivations |
 | `code.json` | Typed code normalization and PBKDF2 |
 | `sas.json` | The six digits |
 | `handshake-xxpsk3.json` | One full pairing, with fixed keys and ephemerals, and the messages after it |

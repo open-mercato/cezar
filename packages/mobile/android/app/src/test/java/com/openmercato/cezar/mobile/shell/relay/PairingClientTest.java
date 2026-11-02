@@ -2,11 +2,14 @@ package com.openmercato.cezar.mobile.shell.relay;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -50,8 +53,12 @@ public class PairingClientTest {
     private final LinkedBlockingQueue<PairingClient.State> states = new LinkedBlockingQueue<>();
     private final DeviceKeys keys = DeviceKeys.generate();
 
+    private static String qrString(byte[] pinned) {
+        return "cezar-pair:1." + Bytes.base64url(RelayCrypto.random(32)) + "." + Bytes.base64url(pinned) + ".https://relay.example.test";
+    }
+
     private PairSecret qrSecret(byte[] pinned) throws Exception {
-        return PairSecret.fromQr("https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + Bytes.base64url(pinned), false);
+        return PairSecret.fromQr(qrString(pinned), false);
     }
 
     private PairingClient client(PairSecret secret) throws Exception {
@@ -246,7 +253,7 @@ public class PairingClientTest {
     /** cezar already holds this phone, so the page must end rather than wait on Confirm for ever. */
     @Test
     public void aSaveThatFailsEndsThePairing() throws Exception {
-        String qr = "https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + Bytes.base64url(RelayCrypto.x25519Public(cezarSecret));
+        String qr = qrString(RelayCrypto.x25519Public(cezarSecret));
         PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> {
             throw new IllegalStateException("disk full");
         });
@@ -264,9 +271,9 @@ public class PairingClientTest {
     public void aReplacedPairingCannotReportOverTheNewOne() throws Exception {
         PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> { });
         String pin = Bytes.base64url(RelayCrypto.x25519Public(cezarSecret));
-        flow.startQr("https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + pin);
+        flow.startQr("cezar-pair:1." + Bytes.base64url(RelayCrypto.random(32)) + "." + pin + ".https://relay.example.test");
         for (int i = 0; i < 200 && fake.events == null; i++) Thread.sleep(5);
-        PairingFlow.Snapshot second = flow.startQr("https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + pin);
+        PairingFlow.Snapshot second = flow.startQr("cezar-pair:1." + Bytes.base64url(RelayCrypto.random(32)) + "." + pin + ".https://relay.example.test");
         PairingFlow.Snapshot after = second;
         for (int i = 0; i < 4; i++) after = flow.next(after.seq, 100);
         assertEquals(PairingClient.Phase.CONNECTING, after.phase);
@@ -283,5 +290,34 @@ public class PairingClientTest {
         deliver(cezar, pending().replace("Test Mac", "Other"));
         deliver(cezar, "{\"t\":\"approved\"}");
         assertEquals("Test Mac", states.poll(2, TimeUnit.SECONDS).label);
+    }
+
+    /** Spec QR9: the older link says what to do, and anything else is simply not a pairing code. */
+    @Test
+    public void aRefusedQrSaysWhatToDo() {
+        PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> { });
+        String old = "https://relay.example.test/p#1." + Bytes.base64url(RelayCrypto.random(32)) + "." + Bytes.base64url(RelayCrypto.x25519Public(cezarSecret));
+        assertEquals("update-cezar", flow.startQr(old).reason);
+        assertEquals("qr-invalid", flow.startQr("https://relay.example.test/").reason);
+        assertEquals("update-app", flow.startQr("cezar-pair:2.anything").reason);
+        assertNull(fake.events);
+    }
+
+    /** Spec QR9 changed only what is scanned: a typed code reaches the same rendezvous route as before. */
+    @Test
+    public void aTypedCodeStillOpensItsRendezvous() throws Exception {
+        PairingFlow flow = new PairingFlow(fake, "Pixel", false, (relay, state, device) -> { });
+        flow.startCode("QRFX-7KMD-2NVB", "relay.example.test");
+        for (int i = 0; i < 400 && fake.events == null; i++) Thread.sleep(5);
+        String locator = PairSecret.fromCode("QRFX-7KMD-2NVB", RelayOrigin.parse("https://relay.example.test", false)).locator();
+        assertEquals("wss://relay.example.test/v1/pair/" + locator + "?role=phone", fake.url);
+    }
+
+    /** Spec QR9: any app can claim a scheme, so ours must never route the secret through an intent. */
+    @Test
+    public void theAppClaimsNoPairingScheme() throws Exception {
+        String manifest = new String(Files.readAllBytes(Paths.get("src/main/AndroidManifest.xml")), StandardCharsets.UTF_8);
+        assertFalse(manifest.contains("android:scheme"));
+        assertFalse(manifest.contains("cezar-pair"));
     }
 }
