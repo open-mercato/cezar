@@ -343,9 +343,12 @@ export function NoteLine({ note }: { note: ThreadNote }) {
     <div
       data-slot="note-line"
       data-tone={note.tone}
-      className={cn('px-0.5 text-xs', note.tone === 'danger' ? 'text-danger' : 'text-soft-foreground')}
+      className={cn(
+        'px-0.5 text-xs',
+        note.tone === 'danger' ? 'text-danger' : note.tone === 'info' ? 'text-foreground' : 'text-soft-foreground',
+      )}
     >
-      {note.tone === 'danger' ? '✗ ' : '· '}
+      {note.tone === 'danger' ? '✗ ' : note.tone === 'info' ? '⇄ ' : '· '}
       {note.text}
     </div>
   )
@@ -359,6 +362,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  antigravity: 'Antigravity CLI',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */

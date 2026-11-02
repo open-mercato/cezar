@@ -5,6 +5,7 @@ import type { RunRecord, RunStatus, StepState } from '@open-mercato/cezar-api-cl
 import { isUnread } from '@/lib/read-state'
 
 import {
+  canRemoveTaskWorktree,
   cliTargetResumes,
   finishTitle,
   isRunActive,
@@ -39,6 +40,24 @@ const run = (status: RunStatus, extra: Partial<RunRecord> = {}): RunRecord => ({
   ...extra,
 })
 
+describe('completed task worktree removal (#1600)', () => {
+  it.each(['done', 'failed', 'cancelled', 'review'] as const)('offers reclaim for %s legacy and managed worktrees', status => {
+    expect(canRemoveTaskWorktree(run(status, { worktreePath: '/wt/r1' }))).toBe(true)
+    expect(canRemoveTaskWorktree(run(status, { worktreePath: '/wt/r1', worktreeLifecycle: { worktreeId: 'w1', generation: 1, needsAttention: false } }))).toBe(true)
+  })
+  it.each(['queued', 'running', 'waiting'] as const)('refuses an active %s task', status => {
+    expect(canRemoveTaskWorktree(run(status, { worktreePath: '/wt/r1' }))).toBe(false)
+  })
+  it.each([
+    {},
+    { worktreePath: '/project', worktree: false as const },
+    { worktreePath: '/wt/r1', worktreeReclaimedAt: '2026-10-30T12:00:00Z' },
+    { worktreePath: '/wt/r1', worktreeLifecycle: { worktreeId: 'w1', generation: 1, activeOperationId: 'op1', needsAttention: true } },
+  ])('refuses absent, in-place, reclaimed or lifecycle-owned checkout %j', extra => {
+    expect(canRemoveTaskWorktree(run('done', extra))).toBe(false)
+  })
+})
+
 describe('runActionFlags — the visibility matrix, all 7 statuses × archived', () => {
   // The legacy header's rules verbatim (web/app.js `updateDetail`):
   //   active(running|queued|waiting) → cancel, no delete/archive/continue/terminal;
@@ -47,25 +66,27 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
   // `pin` (#935) is the one flag `archived` does turn off, since archiving retires the pin: the
   // archived rows below assert exactly that, and every live row offers it whatever the status,
   // because a pin is about what YOU are working on rather than what the engine is doing.
+  // `promote` ("Run First") is offered only to a live queued run: it is a place in the queue, and an
+  // archived run is not in the queue.
   // `markUnread` (#775) and its twin `markRead` are false in every cell of this matrix because the fixture carries no
   // `finishedAt` — a record with no finish instant can never wear the unread marker, whatever
   // its status says. The flag's real matrix is the FINISHED one in its own describe below.
   const matrix: Array<{ status: RunStatus; expected: Omit<ReturnType<typeof runActionFlags>, 'notes'> }> = [
-    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, cancel: true, deleteRun: false } },
-    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, cancel: true, deleteRun: false } },
-    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, cancel: true, deleteRun: false } },
-    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
-    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
-    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
-    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, promote: true, cancel: true, deleteRun: false } },
+    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, promote: false, cancel: true, deleteRun: false } },
+    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, markRead: false, pin: true, promote: false, cancel: true, deleteRun: false } },
+    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, promote: false, cancel: false, deleteRun: true } },
+    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, promote: false, cancel: false, deleteRun: true } },
+    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, promote: false, cancel: false, deleteRun: true } },
+    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, markRead: false, pin: true, promote: false, cancel: false, deleteRun: true } },
   ]
 
   it.each(matrix)('$status (live)', ({ status, expected }) => {
     expect(runActionFlags(run(status))).toEqual({ ...expected, notes: true })
   })
 
-  it.each(matrix)('$status (archived — same flags but the pin, and the Archive label flips)', ({ status, expected }) => {
-    expect(runActionFlags(run(status, { archived: true }))).toEqual({ ...expected, notes: true, pin: false })
+  it.each(matrix)('$status (archived — same flags but the pin and Run First, and the Archive label flips)', ({ status, expected }) => {
+    expect(runActionFlags(run(status, { archived: true }))).toEqual({ ...expected, notes: true, pin: false, promote: false })
   })
 
   it('cancel and delete are mutually exclusive in every cell', () => {

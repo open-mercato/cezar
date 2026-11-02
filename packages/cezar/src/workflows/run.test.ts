@@ -591,6 +591,28 @@ describe('RunManager.continueRun override', () => {
     expect(store.getRun(record.id)?.model).toBe('anthropic/claude-sonnet-5');
   });
 
+  it('a runner-only switch never carries an Antigravity model name to another backend, or back', () => {
+    // The live failure: agy signed out, the cockpit fell back to claude, and the run's
+    // `Gemini 3.8 Flash (High)` pin reached `claude --model`.
+    const record = store.createRun({
+      title: 't',
+      workflow: 'quick-task',
+      task: 't',
+      runner: 'antigravity',
+      model: 'Gemini 3.8 Flash (High)',
+      steps: [{ id: 's1', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'done', finishedAt: new Date().toISOString() });
+    store.updateStep(record.id, 's1', { sessionId: 'sess-1', backend: 'antigravity' });
+    expect(manager.continueRun(record.id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.runner).toBe('claude');
+    expect(store.getRun(record.id)?.model).toBeUndefined();
+
+    const id = resumableRun(); // claude/sonnet
+    expect(manager.continueRun(id, { runner: 'antigravity' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.model).toBeUndefined();
+  });
+
   it('a runner-only continue on the SAME backend keeps the pin (no spurious clear)', () => {
     const id = resumableRun(); // claude/sonnet
     expect(manager.continueRun(id, { runner: 'claude' })).toEqual({ ok: true });

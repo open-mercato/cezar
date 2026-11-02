@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, FileTextIcon, LayoutTemplateIcon, Settings2Icon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
-import type { AutomationListEntry, AutomationsResponse } from '@open-mercato/cezar-api-client'
+import { MAX_AUTOMATION_SCHEDULES, type AutomationListEntry, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 import { ApiError, createAutomation, updateAutomation } from '@/api/client'
 import { useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import { Chip } from '@/components/chip'
@@ -39,7 +39,7 @@ import { EditorGithubFields } from './editor-github-fields'
 import { EditorRunAs } from './editor-run-as'
 import { EditorScheduleFields } from './editor-schedule-fields'
 import { PLACEHOLDERS, draftSentence, railSteps } from './editor-sentence'
-import { LastRunCard } from './last-run-card'
+import { RecentRunsCard } from './recent-runs-card'
 import { NextRunsPreview } from './next-runs-preview'
 import { TemplatePalette } from './template-palette'
 import { automationsQueryKey, type AutomationActions } from './use-automations'
@@ -320,7 +320,27 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
             </div>
             <div className="mt-5">
               {draft.kind === 'schedule' ? (
-                <EditorScheduleFields schedule={draft.schedule} timeZone={timeZone} onChange={(schedule) => patch({ schedule })} />
+                <div className="flex flex-col gap-4">
+                  {[draft.schedule, ...(draft.schedules?.slice(1) ?? [])].map((schedule, index, schedules) => (
+                    <fieldset key={index} className="min-w-0 rounded-md border p-3">
+                      <legend className="px-1 text-xs text-muted-foreground">Schedule {index + 1}</legend>
+                      <EditorScheduleFields schedule={schedule} timeZone={timeZone} allowOnce={schedules.length === 1} onChange={(value) => {
+                        const next = schedules.map((item, i) => i === index ? value : item)
+                        const first = next[0]
+                        if (first) patch({ schedule: first, schedules: next.length > 1 ? next : undefined })
+                      }} />
+                      {schedules.length > 1 ? <Button variant="ghost" size="sm" aria-label={`Remove schedule ${index + 1}`} onClick={() => {
+                        const next = schedules.filter((_, i) => i !== index)
+                        const first = next[0]
+                        if (first) patch({ schedule: first, schedules: next.length > 1 ? next : undefined })
+                      }}>Remove schedule</Button> : null}
+                    </fieldset>
+                  ))}
+                  <Button variant="outline" size="sm" disabled={(draft.schedules?.length ?? 1) >= MAX_AUTOMATION_SCHEDULES || draft.schedule.type === 'once'} onClick={() => patch({
+                    schedules: [draft.schedule, ...(draft.schedules?.slice(1) ?? []), { type: 'daily', hour: 4, minute: 0 }],
+                  })}>Add schedule</Button>
+                  <p className="text-xs text-muted-foreground">Times that coincide start one task. One-time schedules run on their own.</p>
+                </div>
               ) : draft.kind === 'tracker' ? (
                 <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
               ) : (
@@ -335,7 +355,7 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
             {/* A poll already says how it polls in its own sentence; the schedule's next runs are the preview worth a card. */}
             {draft.kind === 'schedule' ? (
               <div className="mt-5">
-                <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
+                <NextRunsPreview kind={draft.kind} schedule={draft.schedule} schedules={draft.schedules} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
               </div>
             ) : null}
             {error?.section === 'when' ? <InlineAlert>{error.message}</InlineAlert> : null}
@@ -449,11 +469,11 @@ export function AutomationEditor({ data, automation, actions, initialKind, onBac
                   Preview saved matches
                 </Button>
               ) : null}
-              {automation?.lastRun ? (
-                <LastRunCard
-                  lastRun={automation.lastRun}
+              {automation ? (
+                <RecentRunsCard
+                  automationId={automation.id}
                   busy={actions?.busy}
-                  onRunNow={() => void actions?.runNow(automation)}
+                  onRunNow={actions ? () => void actions.runNow(automation) : undefined}
                   onLog={onLog}
                 />
               ) : null}

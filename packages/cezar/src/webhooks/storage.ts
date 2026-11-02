@@ -74,11 +74,16 @@ export async function atomicWrite(directory: string, name: string, value: unknow
   try { prepared.publish(); await prepared.finish(); } finally { await prepared.discard(); }
 }
 export class StateIntegrityError extends Error {}
-export async function readState<T>(directory: string, name: string, schema: z.ZodType<T>): Promise<T | undefined> {
+export async function readState<T>(
+  directory: string,
+  name: string,
+  schema: z.ZodType<T>,
+  maxBytes = 256 * 1024 * 1024,
+): Promise<T | undefined> {
   try {
     const file = await open(statePath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
-      if ((await file.stat()).size > 256 * 1024 * 1024) throw new Error('State too large');
+      if ((await file.stat()).size > maxBytes) throw new Error('State too large');
       const raw = await file.readFile('utf8');
       let parsed: unknown;
       try { parsed = JSON.parse(raw); } catch { throw new StateIntegrityError(`Invalid webhook state: ${name}`); }

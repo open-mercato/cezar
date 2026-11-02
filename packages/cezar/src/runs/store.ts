@@ -1,4 +1,4 @@
-import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
 import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
@@ -200,6 +200,11 @@ export const runRecordSchema = z.object({
    *  own selection — an override for Claude says nothing about which Codex account a mixed
    *  workflow's codex step should use. Absent = follow the project. */
   agentProfile: z.string().optional(),
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
+  }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
    *  Deliberately NOT the full composed prompt — skill bodies and the handoff
@@ -255,6 +260,8 @@ export const runRecordSchema = z.object({
       event: trackerAutomationEventSchema.optional(),
       timestamp: z.string().optional(),
       change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string().url(),
     })
@@ -337,6 +344,19 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Accounts this run exhausted before a fallback moved it on (spec 2026-10-20-agent-usage-limit-fallback):
+   *  known reset times also persist in the workspace hold store, independently of this run. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional().catch(undefined),
+  /** The current unattended fallback episode: every provider:account already tried (the starting one
+   *  included) and the continuation step reserved for the successor. Reset by a human Continue. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    /** Selection ended without a successor, or was cancelled; automatic recovery must not reopen it. */
+    done: z.boolean().optional(),
+  }).optional().catch(undefined),
   /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
    *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
   autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
@@ -439,6 +459,10 @@ export const runRecordSchema = z.object({
    *  the key rather than persist a `false` older cezars never wrote. */
   pinned: z.boolean().optional(),
   pinnedAt: z.string().optional(),
+  /** "Run First" (brief 2026-09-23-queued-task-run-next): the ISO time a queued run was
+   *  promoted to the front of its queue. Present only while the run is still `queued` —
+   *  `updateRun` retires it on any other status — so it survives a restart and nothing else. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -933,6 +957,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
   if (run.status !== 'waiting') run.askParked = undefined;
+  // A "Run First" place is a place in the QUEUE — the `failed` written above for readers that do
+  // not recover gives it up, exactly as `updateRun` retires it on any other status. Left behind,
+  // a later Continue would re-queue the run carrying a mark the user never renewed.
+  if (run.status !== 'queued') run.promotedAt = undefined;
   if (run.status !== 'waiting') run.attentionRequest = undefined;
   if (run.status !== 'done') run.completionReason = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
@@ -1328,6 +1356,7 @@ export class RunStore extends EventEmitter {
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
+    fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
     worktree?: false;
@@ -1349,6 +1378,7 @@ export class RunStore extends EventEmitter {
       model: input.model,
       runner: input.runner,
       agentProfile: input.agentProfile,
+      fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
       worktree: input.worktree,
@@ -1403,6 +1433,13 @@ export class RunStore extends EventEmitter {
     // enforcing the invariant here spares every one of those callers the bookkeeping.
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
+    }
+    // "Run First" (brief 2026-09-23-queued-task-run-next) is a place in the QUEUE, so any run
+    // leaving it — starting, cancelled, failed — gives the place up. A run that later comes back
+    // (a Continue deferred for capacity, a usage-limit send-back) re-enters at the tail like
+    // everyone else instead of silently jumping the line on a stale mark.
+    if (normalized.status && normalized.status !== 'queued') {
+      normalized.promotedAt = undefined;
     }
     // An unanswered question belongs to the `failed` run its closed session left behind: the
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
@@ -2004,16 +2041,7 @@ export class RunStore extends EventEmitter {
   deleteRun(id: string): boolean {
     const existed = this.forget(id);
     if (existed) {
-      try {
-        rmSync(this.eventsPath(id), { force: true });
-        rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
-        rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
-        // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
-        // unreachable by definition, and it may be holding megabytes of pasted screenshots.
-        deleteRunDrafts(this.dataDir, id);
-      } catch {
-        // best effort — the index is authoritative
-      }
+      this.deleteRunFiles(id);
       this.seqs.delete(id);
       this.scheduleSave();
     }
@@ -2169,15 +2197,25 @@ export class RunStore extends EventEmitter {
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
-      try {
-        rmSync(this.eventsPath(stale.id), { force: true });
-        rmSync(this.handoffPath(stale.id), { force: true });
-        rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
-        deleteRunDrafts(this.dataDir, stale.id);
-        deleteRunLayouts(this.dataDir, stale.id); // spec 2026-10-07-task-workspace §5.3
-      } catch {
-        // best effort
-      }
+      this.deleteRunFiles(stale.id);
+    }
+  }
+
+  /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
+  private deleteRunFiles(id: string): void {
+    try {
+      rmSync(this.eventsPath(id), { force: true });
+      rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
+      rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+      // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
+      // unreachable by definition, and it may be holding megabytes of pasted screenshots.
+      deleteRunDrafts(this.dataDir, id);
+      deleteRunLayouts(this.dataDir, id); // spec 2026-10-07-task-workspace §5.3
+      // Mediated tracker state (server/tracker/task-access.ts paths): issue text and comment bodies.
+      rmSync(join(this.dataDir, 'runs', `${id}.tracker-context.json`), { force: true });
+      rmSync(join(this.dataDir, 'runs', `${id}.tracker-operations`), { recursive: true, force: true });
+    } catch {
+      // best effort — the index is authoritative
     }
   }
 

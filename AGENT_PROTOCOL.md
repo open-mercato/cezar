@@ -66,7 +66,8 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout.
+  `pi --mode rpc` over JSONL stdin/stdout; antigravity = `agy --input-format stream-json --output-format stream-json`
+  over NDJSON stdin/stdout.
 
 ### `AgentSession`
 
@@ -327,6 +328,15 @@ transport into `UiEvent`s. The authoritative table is
 | `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | `TodoWrite` via `tool_call.function` — **tool name/shape not confirmed against a live CLI transcript** (#807) | the native `plan` update (`entries[] {content, priority, status}`) |
 | subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | *(none — print-mode wire has no parent attribution; the task-kind tool item is the matrix cell)* | `_meta["github.com/copilot"].agentId`, which IS the delegating `task` call's `toolCallId` |
 | `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | *(none — the documented terminal `result` frame carries no `usage`/`total_cost_usd` field)* | the `session/prompt` result's top-level `usage` (no USD). Its separate `usage_update` frame is a context-window gauge (`{used, size}`), NOT token counts, and is deliberately unmapped |
+
+`antigravity` speaks agy's own stream-json (`core/antigravity-ui-mapper.ts`): `init` →
+`session.started`, each stdin message's `user_input` step → `turn.started`, `agent_response` steps →
+message items (`text_delta`), `tool` / `subagent` steps → tool / task items, `result` →
+`turn.completed`. Turn usage is the sum of the steps' own `usage` — `result.usage` is
+cumulative for the whole conversation. The wire carries no plan, no reasoning text, no edit
+content and no parent attribution; `__fixtures__/antigravity/README.md` records the live
+captures behind each of those parity exceptions. Private MCP is a launch-side exception: agy has
+no launch-time MCP channel, so `antigravity` is not in `PRIVATE_MCP_RUNNERS`.
 
 `copilot` shares one vendor-neutral transport and mapper with any future ACP backend
 (`core/acp-client.ts`, `core/acp-ui-mapper.ts`); what differs per agent is a small `AcpDialect`

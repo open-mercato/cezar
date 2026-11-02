@@ -6,6 +6,8 @@ import {
   trackerAutomationEventSchema,
   trackerAssociationSchema,
   automationScheduleSchema,
+  automationSchedulesSchema,
+  automationScheduleIssue,
   type AutomationSchedule,
 } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -90,7 +92,7 @@ export const automationTaskSchema = z
 const fillGithubDefaults = (raw: unknown): unknown => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
   const record = raw as Record<string, unknown>;
-  if (record.kind === 'schedule') return raw;
+  if (record.kind === 'schedule') return { ...record, schedule: record.schedule ?? (Array.isArray(record.schedules) ? record.schedules[0] : undefined) };
   return {
     ...record,
     intervalSeconds: record.intervalSeconds ?? (record.kind === 'tracker' ? 1800 : 300),
@@ -113,6 +115,7 @@ export const automationDefinitionObjectSchema = z
     filters: automationFiltersSchema.optional(),
     trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
+    schedules: automationSchedulesSchema.optional(),
     task: automationTaskSchema,
     deferredStart: deferredStartStateSchema.optional(),
     createdAt: z.string().datetime(),
@@ -120,6 +123,8 @@ export const automationDefinitionObjectSchema = z
   })
   .passthrough()
   .superRefine((definition, ctx) => {
+    const scheduleIssue = automationScheduleIssue(definition, definition.kind);
+    if (scheduleIssue) ctx.addIssue({ code: 'custom', path: ['schedules'], message: scheduleIssue });
     // `checkout`/`allowForkHeads` (spec 2026-10-06-agentic-e2e-checks Phase 3) name a pull
     // request's head, so they mean something only where every event IS a pull request.
     const prHeadKeys = (['checkout', 'allowForkHeads'] as const).filter((key) => definition.task[key] !== undefined);
