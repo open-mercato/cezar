@@ -20,6 +20,8 @@ cannot: the server list, the login in the OS keychain, and later push. Everythin
 - **Notifications:** no push in the first TestFlight build. Push is required before a public
   listing on either store, and native push requires a Cloudflare Worker relay the project runs.
 - **First installable thing:** the web app manifest from #1762, which needs no store account.
+- **Relay:** a hosted cezar is now the Advanced path. The default is the relay in
+  `.ai/specs/2026-11-01-relay-qr-pairing.md`.
 
 ## Evidence and its limits
 
@@ -54,8 +56,7 @@ and a phone has neither.
 Goals: an installable app on both platforms, Manager on first launch, approvals usable one-handed,
 and credentials held safely across several servers.
 
-Non-goals: running agents on the phone, a local or offline mode, a relay that tunnels traffic to
-the server, approving from a notification, a cross-project task list (the Manager's `/tasks`
+Non-goals: running agents on the phone, a local or offline mode, approving from a notification, a cross-project task list (the Manager's `/tasks`
 command is that list), tablets as a designed target, a React Native client, a biometric lock,
 shell telemetry for now, and direct APK or F-Droid builds in v1.
 
@@ -87,6 +88,8 @@ Manager's own "Not in v1" list stands: no attachments in the composer, no autono
 
 ### On a hosted server
 
+This is now the Advanced path. The default is the relay in `.ai/specs/2026-11-01-relay-qr-pairing.md`.
+
 A phone needs an `https://` cezar in hosted mode. Both installers set `CEZ_REMOTE=1`
 (`ubuntu-vps.ts:851`, `macosx-ngrok.ts:248`). A loopback cockpit tunnelled by hand without that flag
 answers 403 "unexpected Host header", including on health (`server.ts:1736`), and the shell must
@@ -103,6 +106,9 @@ Long task threads opened from a card are the exposed path, so M2 measures one on
 a tunnel. What happens to #1821 is open: see [Q11](#q11-what-becomes-of-pr-1821s-do-not-merge).
 
 ## Decision 1: the shell
+
+Why not to bundle the cockpit stands, and the relay spec's Decision 1 extends it:
+`.ai/specs/2026-11-01-relay-qr-pairing.md#decision-1-how-the-cockpit-loads`.
 
 **Recommendation: Capacitor, loading the server's cockpit from the server.** Still open: see
 [Q2](#q2-accept-capacitor).
@@ -140,6 +146,8 @@ holding `connect/` (a small bundled page, like `packages/desktop/ui`), `ios/` an
 ## Decision 2: connection and auth
 
 ### Adding a server
+
+This flow moves under Advanced. "HTTP is refused" stays for remote traffic.
 
 1. The user enters a URL on the bundled connect screen. It must be `https://`.
 2. Native code sends `GET <url>/api/v1/health` with no credentials and without following redirects,
@@ -477,6 +485,8 @@ counter store; on-call ownership of a service, which this project does not have 
 policy that names it. The relay is a Cloudflare Worker owned by Open Mercato, which must hold the
 APNs and FCM keys, so neither the keys nor the relay can live in the app.
 
+The contract for all of this is `RELAY_PROTOCOL.md` § Push. Grants stay, and they live in the room.
+
 **Relay trust.** A self-hosted server must never be able to push to a phone that did not choose it,
 and must stop being able to once the user says so. That is why the relay cannot be fully stateless:
 revocation and per-grant rate limits both need a store.
@@ -601,8 +611,8 @@ Sizes: **S** up to 2 days, **M** up to a week, **L** two weeks or more. Each tas
 | M8 | **Mobile CI.** `mobile-check.yml`, `mobile-release.yml`, signing | Automated test builds | M7, Open Mercato accounts | M |
 | M9 | **Test tracks.** TestFlight internal and Play internal, privacy policy draft, store metadata | **First native install for testers** | M8, M4 to M6 | S |
 | M10 | **Push sink and Web Push.** `push/` sink on `alert`, device registry in `~/.cezar/`, routes, Settings toggle | PWA notifications | M3, M1 | M |
-| M11 | **Relay and native push.** Worker, keys, device grants, revocation, native switch and registration | Native notifications | M10, M9 | L |
-| M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | M11, Q10 | M, plus review time |
+| M11 | **The sink's relay output.** Narrowed: the relay itself is R2, and this work is delegated to R5 of the relay spec | Native notifications | M10, R5 | M |
+| M12 | **Public release.** Demo VPS, submission, review responses. Public listings may wait until here | Public listings | R5, R6, Q10 | M, plus review time |
 
 Native push is required before M12 on both stores. M2 runs first, and M1 can start alongside it. M7 can run in parallel with M4 and M5. M4 and M5 both edit
 `manager-chat.tsx`, so land one before starting the other.
@@ -746,8 +756,8 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | Q6 | Does the project run a push relay, and who owns it? | Yes, as a Cloudflare Worker owned by Open Mercato, which must hold the APNs and FCM keys, so it cannot live in the app |
 | Q7 | Is push required before a public listing? | Yes |
 | Q8 | Should a phone browser tab also start at `/manager`? | Yes, changed from the original recommendation. See [In a phone browser](#in-a-phone-browser) |
-| Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0` |
-| Q12 | Optional biometric lock | Deferred, out of the current plan |
+| Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0`. Extended by the relay spec's QR2 |
+| Q12 | Optional biometric lock | Reopened by the relay spec's QR3 |
 | Q13 | Which approvals need confirmation? | Changed: a user setting per type, default on for merges, automations and jobs. See [Confirmation setting](#confirmation-setting) |
 | Q14 | Shell telemetry | None now, planned for later |
 | Q15 | Direct APK or F-Droid build | Not in v1 |
@@ -762,3 +772,6 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 - 2026-11-01: Review fixes. Corrected the streaming note. Added cold-launch probe handling,
   `/manager?all=1`, relay grants and revocation, which give the relay a small store, and an M2
   decision rule. Needs-you task push moved after the relay.
+- 2026-11-01: Applied the relay spec's amendments. The relay non-goal is gone, a hosted server and the URL
+  form are the Advanced path, M11 narrows to the sink's relay output, M12 depends on R5 and R6, Q9 extends
+  and Q12 reopens.

@@ -1,0 +1,164 @@
+{
+  "description": "QR parsing and the HKDF derivations. `release` and `debug` say whether that app build may connect.",
+  "secret": "98bbcadf05e5334c6734bd7cca3b6ad98f48becf9d0c681b2872c25fa8117c92",
+  "cezarX25519": "b5ccfa231fe715f60961b8ca44757e8a147288738c78db960f2c848597ddcb13",
+  "locator": "kdex4F9AEAix6sRGykR5-pX0wGKLrMCwkPXxwgkwEGU",
+  "locatorHex": "91d7b1e05f401008b1eac446ca4479fa95f4c0628bacc0b090f5f1c209301065",
+  "psk": "f86e034b2fbb6f452fedc8b08e24fd521fa71cfe29c144a323b6dfd5f5a47f1d",
+  "accepted": [
+    {
+      "qr": "https://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "relayOrigin": "https://relay.example.test",
+      "socketOrigin": "wss://relay.example.test",
+      "release": true,
+      "debug": true
+    },
+    {
+      "qr": "https://relay.example.test:8443/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "relayOrigin": "https://relay.example.test:8443",
+      "socketOrigin": "wss://relay.example.test:8443",
+      "release": true,
+      "debug": true
+    },
+    {
+      "qr": "https://cezar-relay.someone.workers.dev/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "relayOrigin": "https://cezar-relay.someone.workers.dev",
+      "socketOrigin": "wss://cezar-relay.someone.workers.dev",
+      "release": true,
+      "debug": true
+    },
+    {
+      "qr": "http://127.0.0.1:8787/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "relayOrigin": "http://127.0.0.1:8787",
+      "socketOrigin": "ws://127.0.0.1:8787",
+      "release": false,
+      "debug": true
+    },
+    {
+      "qr": "http://localhost:8787/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "relayOrigin": "http://localhost:8787",
+      "socketOrigin": "ws://localhost:8787",
+      "release": false,
+      "debug": true
+    },
+    {
+      "qr": "http://[::1]:8787/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "relayOrigin": "http://[::1]:8787",
+      "socketOrigin": "ws://[::1]:8787",
+      "release": false,
+      "debug": true
+    }
+  ],
+  "refused": [
+    {
+      "name": "unsupported version",
+      "qr": "https://relay.example.test/p#2.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "version"
+    },
+    {
+      "name": "unsupported version with another layout",
+      "qr": "https://relay.example.test/p#2.x",
+      "reason": "version"
+    },
+    {
+      "name": "cleartext to a public host",
+      "qr": "http://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "cleartext"
+    },
+    {
+      "name": "cleartext to another private address",
+      "qr": "http://192.168.1.10:8787/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "cleartext"
+    },
+    {
+      "name": "cleartext to the emulator alias",
+      "qr": "http://10.0.2.2:8787/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "cleartext"
+    },
+    {
+      "name": "other scheme",
+      "qr": "ftp://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "uppercase scheme",
+      "qr": "HTTPS://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "uppercase host",
+      "qr": "https://Relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "user info",
+      "qr": "https://user@relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "port zero",
+      "qr": "https://relay.example.test:0/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "port too large",
+      "qr": "https://relay.example.test:65536/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "port with a leading zero",
+      "qr": "https://relay.example.test:08443/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "other path",
+      "qr": "https://relay.example.test/x#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "path prefix",
+      "qr": "https://relay.example.test/relay/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "query",
+      "qr": "https://relay.example.test/p?x=1#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "no fragment",
+      "qr": "https://relay.example.test/p",
+      "reason": "grammar"
+    },
+    {
+      "name": "missing field",
+      "qr": "https://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI",
+      "reason": "grammar"
+    },
+    {
+      "name": "extra field",
+      "qr": "https://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM.x",
+      "reason": "grammar"
+    },
+    {
+      "name": "short secret",
+      "qr": "https://relay.example.test/p#1.u8rfBeUzTGc0vXzKO2rZj0i-z50MaBsocsJfqBF8kg.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "padded base64",
+      "qr": "https://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI=.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "standard base64 alphabet",
+      "qr": "https://relay.example.test/p#1.+LvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJI.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    },
+    {
+      "name": "non-canonical trailing bits",
+      "qr": "https://relay.example.test/p#1.mLvK3wXlM0xnNL18yjtq2Y9Ivs-dDGgbKHLCX6gRfJB.tcz6Ix_nFfYJYbjKRHV-ihRyiHOMeNuWDyyEhZfdyxM",
+      "reason": "grammar"
+    }
+  ]
+}
