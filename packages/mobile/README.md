@@ -22,6 +22,13 @@ Server pages get their **own** webview. Capacitor's webview shows only the conne
 Capacitor 8 on iOS injects its bridge into every main frame and its message handler checks no
 origin. Page script reaches native code only by navigating to `cezar://servers`.
 
+## App lock (Android)
+
+Optional and off by default, on the Servers list. It prompts on every process start and after 60
+seconds in the background, using the phone's biometrics or screen lock. `AppLock` watches the
+activities, `LockPolicy` is the pure decision, and `LockShield` is the screen (spec QR3). It is a UI
+gate: it holds no key, and keys and the relay work as before. iOS has no lock yet.
+
 ## The relay client (Android)
 
 `android/…/mobile/shell/relay/` is plain Java over BouncyCastle's lightweight API and OkHttp's

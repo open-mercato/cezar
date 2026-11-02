@@ -1,12 +1,15 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
-import { screenFor } from './screens.js';
+import { lockRow, screenFor, startLockRow } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
 let context = {};
 // Android only for now. iOS keeps the URL form until its client compiles.
 let pairing = false;
+let lock = null;
+let lockScreen = null;
+let lockChanging = false;
 
 const call = (method, options = {}) => window.Capacitor.nativePromise('Connection', method, options);
 
@@ -25,6 +28,7 @@ function field(label, name, props = {}) {
 const notice = (text) => (text ? element('p', { className: 'notice', textContent: text }) : null);
 
 function draw(...nodes) {
+  lockScreen = null;
   app.replaceChildren(...nodes.filter(Boolean));
 }
 
@@ -49,6 +53,7 @@ async function poll(seq) {
 function show(outcome) {
   servers = outcome.servers ?? servers;
   pairing = outcome.pairing ?? pairing;
+  lock = outcome.lock ?? lock;
   const screen = screenFor(outcome, context);
   if (screen.name === 'pair-waiting') drawPairWaiting(screen);
   else if (screen.name === 'pair-confirm') drawPairConfirm(screen);
@@ -62,8 +67,27 @@ function show(outcome) {
   else drawList();
 }
 
-function drawList() {
-  if (!servers.length) return pairing ? drawStart() : drawAdd({});
+function lockSection(row, text) {
+  if (!row) return null;
+  const toggle = button(row.label, async () => {
+    toggle.disabled = true;
+    lockChanging = true;
+    try {
+      const outcome = await call('lockSet', { enabled: row.enable });
+      show(outcome);
+      if (outcome.lockError) drawList(outcome.lockError);
+    } catch (error) {
+      drawList(String(error?.message ?? error));
+    } finally {
+      lockChanging = false;
+    }
+  });
+  toggle.disabled = Boolean(row.disabled);
+  return element('section', { className: 'stack' }, notice(text), toggle, element('p', { className: 'muted', textContent: row.note }));
+}
+
+function drawList(lockNotice) {
+  if (!servers.length) return pairing ? drawStart(lockNotice) : drawAdd({});
   const rows = servers.map((server) =>
     element(
       'li',
@@ -77,7 +101,18 @@ function drawList() {
       button('Forget', () => drawForget(server)),
     ),
   );
-  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'));
+  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
+  lockScreen = drawList;
+}
+
+// The phone's screen lock can change in Settings with this page alive. Only the row redraws, so no form loses its input.
+async function refreshLock() {
+  if (!lock || lockChanging || document.visibilityState !== 'visible') return;
+  const outcome = await call('list').catch(() => null);
+  if (!outcome?.lock || lockChanging || !lockScreen) return;
+  const changed = outcome.lock.enabled !== lock.enabled || outcome.lock.available !== lock.available;
+  lock = outcome.lock;
+  if (changed) lockScreen();
 }
 
 function drawForget(server) {
@@ -93,13 +128,14 @@ function drawForget(server) {
   );
 }
 
-function drawStart() {
+function drawStart(lockNotice) {
   const advanced = element('details', {}, element('summary', { textContent: 'Advanced' }), addForm({}));
   draw(
     element('h1', { textContent: 'Connect to cezar' }),
     element('p', { className: 'muted', textContent: 'On your computer, open Settings, then Connect a phone.' }),
     element('div', { className: 'stack' }, button('Scan QR code', () => run('scan', {}, {}), 'primary'), button('Enter code', () => drawCode({}))),
     advanced,
+    lockSection(startLockRow(lock), lockNotice),
   );
 }
 
@@ -202,4 +238,5 @@ function drawError({ serverId, message }) {
   );
 }
 
+document.addEventListener('visibilitychange', refreshLock);
 run('launch');

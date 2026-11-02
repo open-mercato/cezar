@@ -209,6 +209,13 @@ public class RelayServerTest {
         assertFalse("the debug QR intent is not in main", manifest.contains("DebugPairActivity"));
     }
 
+    /** Without it the lock installs from launch, after the first activity has started (spec QR3). */
+    @Test
+    public void theApplicationInstallsTheAppLock() throws IOException {
+        String manifest = new String(Files.readAllBytes(new File("src/main/AndroidManifest.xml").toPath()), StandardCharsets.UTF_8);
+        assertTrue(manifest, manifest.contains("android:name=\".CezarApplication\""));
+    }
+
     @Test
     public void onlyAdbCanStartTheDebugPairingEntry() throws IOException {
         String manifest = new String(Files.readAllBytes(new File("src/debug/AndroidManifest.xml").toPath()), StandardCharsets.UTF_8);

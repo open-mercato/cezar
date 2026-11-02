@@ -12,6 +12,7 @@ import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.journeyapps.barcodescanner.ScanIntentResult;
 import com.journeyapps.barcodescanner.ScanOptions;
+import com.openmercato.cezar.mobile.shell.AppLock;
 import com.openmercato.cezar.mobile.shell.OriginGate;
 import com.openmercato.cezar.mobile.shell.RestartActivity;
 import com.openmercato.cezar.mobile.shell.ProxyOrigin;
@@ -36,8 +37,13 @@ public class ConnectionPlugin extends Plugin {
     private final ExecutorService background = Executors.newSingleThreadExecutor();
     private final ExecutorService polls = Executors.newCachedThreadPool();
 
+    /** Waits for the lock, so a locked app opens no server and consumes no route behind it (spec QR3). */
     @PluginMethod
     public void launch(PluginCall call) {
+        getActivity().runOnUiThread(() -> AppLock.get(getContext()).whenUnlocked(() -> start(call)));
+    }
+
+    private void start(PluginCall call) {
         ShellRoute route = ShellRoute.take();
         if (route != null && BuildConfig.DEBUG && DEBUG_QR.equals(route.screen)) {
             run(call, connector -> pair(connector, ShellServices.pairing(getContext()).startQr(route.serverId)));
@@ -93,6 +99,25 @@ public class ConnectionPlugin extends Plugin {
             });
             return list(connector);
         });
+    }
+
+    @PluginMethod
+    public void lockSet(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled"));
+        getActivity().runOnUiThread(() -> {
+            if (!allowed(call)) return;
+            AppLock.get(getContext()).change(getActivity(), enabled, error -> run(call, connector -> {
+                JSObject result = list(connector);
+                result.put("lockError", error);
+                return result;
+            }));
+        });
+    }
+
+    /** Reads and opens nothing, unlike launch: the page calls it each time it returns to the foreground. */
+    @PluginMethod
+    public void list(PluginCall call) {
+        run(call, this::list);
     }
 
     /** The system camera path is out of reach here: zxing's own activity, needing no Play services. */
@@ -218,6 +243,8 @@ public class ConnectionPlugin extends Plugin {
         JSObject result = new JSObject();
         result.put("servers", servers);
         result.put("pairing", true);
+        AppLock lock = AppLock.get(getContext());
+        result.put("lock", new JSObject().put("enabled", lock.enabled()).put("available", lock.available()));
         return result;
     }
 

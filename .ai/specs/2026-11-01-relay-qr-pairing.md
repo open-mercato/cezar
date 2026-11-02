@@ -827,7 +827,7 @@ listing.
 | Loopback proxy fails on iOS | Medium | Decision 1 changes | R0 first, fallback named |
 | A change wakes rooms | Medium | Bill rises 24 times | Test plus metric |
 | New route reads `localHandoff` outside the closure | Medium | Phone gains a local power | Source-walking test |
-| Stolen unlocked phone | Medium | Tasks run on the user's computer, with everything a task can do | Remove, [QR3](#qr3-does-a-phone-need-its-own-lock) |
+| Stolen unlocked phone | Medium | Tasks run on the user's computer, with everything a task can do | Remove, and on Android the optional [QR3](#qr3-does-a-phone-need-its-own-lock) lock, which is off by default |
 | Hand-written Noise has a bug | Medium | Loss of confidentiality | No maintained library has `XXpsk3`, `KK` and `Rekey` on our platforms, so all three clients carry a thin, unaudited state machine over audited primitives. Published vectors, shared vectors, a second implementation (`snow`), and external review before public listing, see [QR8](#qr8-should-the-noise-code-be-independently-reviewed-before-a-public-listing) |
 | Relay becomes a free tunnel | Low | Cost | Daily quotas, kill switch |
 | One private key across all relay users | Low | Generic push spam, not content | Cloudflare secrets, rotation in `patzick/rome` |
@@ -915,6 +915,61 @@ blocks it. A separate env opt-in would defeat zero-setup pairing.
 default.** This settles Q12 in the parent spec, which had deferred it when a phone needed a hosted password. Now a phone unlocked for
 a moment can run tasks on a personal laptop, with no password anywhere. Keys already need the phone to be
 unlocked. The list's Remove covers loss but not a borrowed phone.
+
+**Built on Android (`shell/AppLock`, `LockPolicy`, `LockSetting`, `LockShield`).** The Servers list has one
+row, Turn on app lock. It starts off, and both directions need a passed prompt. With no screen lock on the
+phone the row explains that and cannot be pressed. While the lock is on, the start screen shows the row too,
+so forgetting the last server cannot leave it stuck on. The row is read again whenever the page returns to the
+foreground, so a screen lock set in the phone's Settings shows without a relaunch.
+
+- **Credential.** `androidx.biometric` with `BIOMETRIC_WEAK | DEVICE_CREDENTIAL`, the one mix it supports
+  from API 24 up. Weak is enough because no key is released (below).
+- **When.** On every process start, so a force-stop, process death and the restart after Forget all prompt,
+  and after **60 seconds** in the background (`LockPolicy.TIMEOUT_MS`, no setting). Away time is measured with
+  `elapsedRealtime`, so changing the clock moves nothing. A configuration change is not leaving. An idle app
+  in the foreground does not lock; the phone's own screen timeout sends it to the background.
+- **While locked.** `LockShield` covers the content, and everything under it is set invisible, so a key press
+  or a screen reader cannot reach the page. It goes on in `onActivityStarted`, before the frame that would
+  show the page. Back leaves the app. Cancel and failure stay on the shield with an Unlock button, offered
+  automatically once per return, so a cancel cannot loop.
+- **Entry points.** The launcher, returning from the background and `RestartActivity` all land on a `Host`
+  activity. `launch` waits for the unlock, so a locked launch opens no server and consumes no route: that is what
+  stops `DebugPairActivity`, which release builds do not have anyway. Any other activity in the process is
+  closed while locked, which is the scanner. A pairing approved while locked can still open `ServerActivity`, which starts behind its own shield. `CezarApplication` installs the lock before any activity, so a
+  process restored at any of them is covered.
+- **App switcher.** With the lock on there is no snapshot of the content: `setRecentsScreenshotEnabled(false)`
+  on API 33+, `FLAG_SECURE` below it. The snapshot is taken on the way out, before any shield could show.
+- **Credential removed later.** The lock goes dormant and the app opens, with the row saying it is paused. The
+  setting stays, so it returns when a screen lock does. Removing a screen lock takes that same credential, so
+  whoever could do that could also pass the prompt, and the phone itself is now open. Staying locked would add
+  nothing and could strand the user away from Forget.
+
+**This is a UI gate, not a key-release gate.** No key, credential or wrap changed, none is bound to an
+authentication, and the setting is an empty file in `noBackupFilesDir`, so no secret enters it. Consequences:
+
+- Keys stay usable while locked. When the app returns to a screen that was already open, `ServerActivity`
+  starts its foreground socket and its page keeps running, invisible, behind the shield. A `ServerActivity`
+  restored after process death does the same: it loads its page and starts its socket before the unlock. Only
+  `launch`, the bundled page's path to a server, waits. Backgrounded, nothing changes: the socket closes on
+  stop and the proxy answers 503.
+- Android has no push yet. When it ships, a signal arrives while locked. The relay's push is text-free, so the
+  notification must stay generic, and opening it passes through the lock like any return.
+- A person holding the unlocked phone, without its credential, cannot see or use the app. With an authorised
+  `adb` on a release build they can inject input, but only into the shield. `run-as`, backup and the WebView
+  inspector are closed, and shell cannot start `ServerActivity`, which is not exported. `pm clear` deletes
+  the lock and the keys together, so it opens nothing. That protection is the platform's, not the lock's.
+- A debug build gives none of that: `run-as` can delete the setting, and the inspector reaches the page.
+- A person who knows the phone's credential passes. So does root, which can read app memory.
+
+A key-bound design, with `setUserAuthenticationRequired` on the wrapping keys, would make the lock hold against
+root and memory reads. It was not built. It would change how keys are wrapped, need a migration, and block
+reconnects behind a prompt. Follow-up, if the threat ever calls for it.
+
+**iOS: nothing is built.** It needs a LocalAuthentication gate (`LAContext`,
+`.deviceOwnerAuthentication`, which falls back to the passcode) with the same policy ported to Swift: a process
+start prompts, 60 seconds using a monotonic clock such as `ProcessInfo.systemUptime`. It also needs a cover view
+in `sceneWillResignActive` for the switcher snapshot, `NSFaceIDUsageDescription`, the same wait in `launch`,
+`lockSet` and a `lock` field in the plugin's list. `connect/` already draws the row when native sends that field.
 
 ### QR4: May Manual servers use the relay for push?
 
@@ -1007,3 +1062,4 @@ wire shape changes either way.
   errors, `POST` bodies are the exception to ignoring unknown keys, room expiry skips an open socket, a phone
   has its own timer after message 3, Approve closes 15 s before the hard lifetime, and a revoke's retry has an
   exit. Opened QR10. Protocol version stays 1.
+- 2026-11-02: Built QR3 on Android: an optional UI lock with a 60 second background timeout, off by default. Key handling did not change. iOS is noted, not built.

@@ -46,6 +46,22 @@ const RELAY_SCREENS = {
   'update-cezar': 'Update cezar on your computer.',
 };
 
+/** The list's app lock row (spec QR3). Null where native has no lock yet. */
+export function lockRow(lock) {
+  if (!lock) return null;
+  if (!lock.available) {
+    return { disabled: true, label: 'App lock', note: lock.enabled ? 'Paused, because this phone has no screen lock. It comes back when you set one.' : 'Set a screen lock on this phone to use this.' };
+  }
+  return {
+    label: lock.enabled ? 'Turn off app lock' : 'Turn on app lock',
+    enable: !lock.enabled,
+    note: 'Asks for your fingerprint, face or screen lock when the app opens and after a minute away.',
+  };
+}
+
+/** The start screen has no list to hold the row, so it keeps one only to turn a running lock off. */
+export const startLockRow = (lock) => (lock?.enabled ? lockRow(lock) : null);
+
 /** Turns a native outcome into the screen to draw. `context` is what the user last asked for. */
 export function screenFor(outcome, context = {}) {
   const server = outcome.servers?.find((row) => row.id === (outcome.serverId ?? context.serverId));
