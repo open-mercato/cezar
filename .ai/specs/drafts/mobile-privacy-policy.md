@@ -61,7 +61,8 @@ the phone until you clear the app's storage or uninstall the app.
 **Phone lock.** The optional lock is off by default. It uses Android's own prompt for your biometrics
 or screen lock. The app never receives your fingerprint, face data or PIN. It only learns whether the
 prompt succeeded. The lock hides the app, but it does not change how keys are stored. With the lock
-on, the app is also hidden from the recent apps screen.
+on, the app's preview is hidden on the recent apps screen, although the app itself stays listed there.
+On Android 12 and older this also blocks screenshots of the app.
 
 ## Permissions
 
@@ -144,8 +145,11 @@ relay's processing]
   that is you. If someone else runs it, their own terms apply.
 - **The coding agents your Cezar runs** are chosen and configured by you on your computer. The app does
   not process that data and does not contact those services.
-- **GitHub.** On the cockpit's GitHub pages, your phone loads profile pictures directly from the
-  addresses GitHub gives, so GitHub can see your phone's IP address when that happens.
+- **Hosts of images shown in the cockpit.** Cockpit pages can show images stored elsewhere: GitHub
+  profile pictures, images inside issue, pull request and tracker text, images in your agents' messages,
+  and a project picture set by its address. Your phone loads each one directly from its host, so that
+  host can see your phone's IP address and the time. The relay does not hide this. Whoever wrote the
+  text chooses the host, and that can be someone you do not know.
 - **Your phone's browser.** Links that lead away from your server open in your browser, which has its
   own policy. A direct server that uses single sign-on shows that provider's login page in the app.
 
@@ -202,7 +206,7 @@ authority].
 Paths are relative to the repository root. `A/` means
 `packages/mobile/android/app/src/main/java/com/openmercato/cezar/mobile/`, `R/` means
 `packages/mobile/android/app/src/main/res/`, and `rome/` means the private relay copy at commit
-`7c3f6fb` (`~/cezar-mobile-test-tools/rome-relay`). The third column quotes the cited line, and every
+`7c3f6fb`. The third column quotes the cited line, and every
 quote was checked by a script against the file. A "nothing found" claim was checked by searching, as
 noted in the table after this one.
 
@@ -227,7 +231,7 @@ noted in the table after this one.
 | 17 | Lock is optional, off by default, 60 s | `packages/mobile/README.md:27` | `Optional and off by default` |
 | 18 | Lock uses the system prompt, biometric or credential | `A/shell/AppLock.java:32` | `BIOMETRIC_WEAK` |
 | 19 | Lock is a UI gate, not a key gate | `.ai/specs/2026-11-01-relay-qr-pairing.md:945` | `UI gate, not a key-release gate` |
-| 20 | Lock hides the app from recents | `A/shell/AppLock.java:180` | `setRecentsScreenshotEnabled` |
+| 20 | Lock hides the recents preview, Android 13 and later | `A/shell/AppLock.java:180` | `setRecentsScreenshotEnabled` |
 | 21 | Internet permission | `packages/mobile/android/app/src/main/AndroidManifest.xml:68` | `android.permission.INTERNET` |
 | 22 | Camera permission | `packages/mobile/android/app/src/main/AndroidManifest.xml:69` | `android.permission.CAMERA` |
 | 23 | Camera is the QR scanner | `A/ConnectionPlugin.java:123` | `ScanOptions.QR_CODE` |
@@ -308,6 +312,11 @@ noted in the table after this one.
 | 98 | Typed code exists as a fallback | `A/shell/relay/PairingFlow.java:64` | `startCode` |
 | 99 | Direct servers need HTTPS | `R/xml/network_security_config.xml:3` | `cleartextTrafficPermitted="false"` |
 | 100 | Fresh device keys for each pairing | `A/shell/relay/PairingFlow.java:84` | `DeviceKeys.generate()` |
+| 101 | Lock uses `FLAG_SECURE` on older Android | `A/shell/AppLock.java:182` | `FLAG_SECURE` |
+| 102 | Markdown keeps Streamdown's default sanitising plugins | `packages/web/src/routes/task-thread/markdown.tsx:174` | `Object.entries(defaultRehypePlugins)` |
+| 103 | Forge comment text renders through Markdown | `packages/web/src/routes/github/github.tsx:1779` | `<Markdown>{comment.body}</Markdown>` |
+| 104 | Tracker text renders through Markdown | `packages/web/src/routes/tracker/tracker.tsx:229` | `<Markdown>{item.body.trim()` |
+| 105 | The IP hash has no salt without the secret | `rome/src/app.ts:158` | `env.GRANT_SEAL_KEY ?? ""` |
 
 **Claims based on a search that found nothing:**
 
@@ -320,7 +329,8 @@ noted in the table after this one.
 | No logging in the relay | Searched `rome/src` for `console.`, no match |
 | No push in app or cezar | No Firebase dependency, no `POST_NOTIFICATIONS`, no token call. No grant-handover route in `packages/cezar/src/relay` |
 | Connect screen stores nothing itself | Searched `packages/mobile/connect` for `localStorage`, `sessionStorage`, `indexedDB`, `fetch(`, no match |
-| Avatars are a direct load | `github.tsx` passes `comment.avatarUrl` to an `<img>`. It is GitHub's `avatar_url` (`packages/cezar/src/server/forge/github.ts:1086`), and no CSP blocks it. Not tested on a phone. The policy says "the addresses GitHub gives" and names no host |
+| Avatars are a direct load | `github.tsx` passes `comment.avatarUrl` to an `<img>`. It is GitHub's `avatar_url` (`packages/cezar/src/server/forge/github.ts:1086`), and no CSP blocks it. Not tested on a phone. The policy names no host |
+| Markdown images are a direct load | Streamdown 2.5.0's default `harden` plugin sets `allowedImagePrefixes: ["*"]`, and `markdown.tsx` does not narrow it. The `content-security-policy` headers in `packages/cezar/src` are on sandboxed file responses and the Design Mode proxy, not the cockpit page. Not tested on a phone |
 
 # Appendix B: what Open Mercato must confirm, and store forms (remove before publishing)
 
@@ -338,8 +348,9 @@ noted in the table after this one.
    address (spec QR1). The policy's relay section must be corrected when it changes.
 10. Who holds the Cloudflare account, the data processing agreement, regions, and Cloudflare's own
     retention of request logs and Analytics Engine data.
-11. That the deployed relay matches commit `7c3f6fb`, and that `observability` stays off there. Only the
-    copy was read.
+11. That the deployed relay matches commit `7c3f6fb`, that `observability` stays off there, and that
+    `GRANT_SEAL_KEY` is set. Without that secret the IP hash has no salt, and the policy's "salted hash"
+    is false (claim 105). Only the copy was read.
 12. Whether the 90-day and one-hour periods may be promised. They are what the code does, not a
     commitment anyone has made. The sweep reads 100 rooms per shard per day, so a backlog can run past 90
     days, and a room with a live denial stays until the denial ends.
@@ -355,10 +366,17 @@ noted in the table after this one.
 - **Page data after Forget.** The WebView HTTP cache is not cleared, and for relay servers only page
   storage is cleared, not cookies. The policy says so. A fuller clear on forget would allow a stronger
   statement.
-- **Off-origin subresources.** A cockpit page can load images from other hosts, because the shell only
-  gates its own host. The cases found are GitHub avatars and a pasted project avatar URL
-  (`create-project-dialog.tsx`). Fonts are bundled. This was a search of `packages/web/src`, not a
-  network capture, so other cases may exist.
+- **Off-origin subresources.** A cockpit page can load images from any host, because the shell only
+  gates its own host (claim 78) and Markdown allows every image address (claims 102 to 104). The cases
+  found are GitHub avatars, images in Markdown from forges, trackers and agents, and a pasted project
+  avatar URL (`create-project-dialog.tsx`). A stranger's issue can therefore make a phone reveal its IP
+  address to a host of their choosing. The policy says so. A narrower image allowlist or an image proxy
+  on Cezar would allow a stronger statement. Fonts are bundled. This was a search of `packages/web/src`,
+  not a network capture, so other cases may exist.
+- **WebView defaults.** The manifest sets neither `android.webkit.WebView.MetricsOptOut` nor
+  `android.webkit.WebView.EnableSafeBrowsing`, and `ServerActivity` does not configure Safe Browsing, so
+  Android System WebView's defaults apply. These belong to the WebView, not to the app's code, and were
+  not examined. Confirm whether the policy and the Play form need to mention them.
 - **Relay `/p` page.** `rome/src/app.ts:19` still serves the landing page. On this branch the QR code is
   `cezar-pair:` and no longer points there (QR9), so the page is unused. The policy does not mention it.
 - **Typed codes.** The protocol notes one residual risk for a typed code against a hostile relay
