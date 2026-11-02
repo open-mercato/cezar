@@ -114,6 +114,12 @@ public class ConnectionPlugin extends Plugin {
         });
     }
 
+    /** Reads and opens nothing, unlike launch: the page calls it each time it returns to the foreground. */
+    @PluginMethod
+    public void list(PluginCall call) {
+        run(call, this::list);
+    }
+
     /** The system camera path is out of reach here: zxing's own activity, needing no Play services. */
     @PluginMethod
     public void scan(PluginCall call) {

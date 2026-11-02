@@ -8,6 +8,8 @@ let context = {};
 // Android only for now. iOS keeps the URL form until its client compiles.
 let pairing = false;
 let lock = null;
+let lockScreen = null;
+let lockChanging = false;
 
 const call = (method, options = {}) => window.Capacitor.nativePromise('Connection', method, options);
 
@@ -26,6 +28,7 @@ function field(label, name, props = {}) {
 const notice = (text) => (text ? element('p', { className: 'notice', textContent: text }) : null);
 
 function draw(...nodes) {
+  lockScreen = null;
   app.replaceChildren(...nodes.filter(Boolean));
 }
 
@@ -68,12 +71,15 @@ function lockSection(row, text) {
   if (!row) return null;
   const toggle = button(row.label, async () => {
     toggle.disabled = true;
+    lockChanging = true;
     try {
       const outcome = await call('lockSet', { enabled: row.enable });
       show(outcome);
       if (outcome.lockError) drawList(outcome.lockError);
     } catch (error) {
       drawList(String(error?.message ?? error));
+    } finally {
+      lockChanging = false;
     }
   });
   toggle.disabled = Boolean(row.disabled);
@@ -96,6 +102,17 @@ function drawList(lockNotice) {
     ),
   );
   draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockRow(lock), lockNotice));
+  lockScreen = drawList;
+}
+
+// The phone's screen lock can change in Settings with this page alive. Only the row redraws, so no form loses its input.
+async function refreshLock() {
+  if (!lock || lockChanging || document.visibilityState !== 'visible') return;
+  const outcome = await call('list').catch(() => null);
+  if (!outcome?.lock || lockChanging || !lockScreen) return;
+  const changed = outcome.lock.enabled !== lock.enabled || outcome.lock.available !== lock.available;
+  lock = outcome.lock;
+  if (changed) lockScreen();
 }
 
 function drawForget(server) {
@@ -221,4 +238,5 @@ function drawError({ serverId, message }) {
   );
 }
 
+document.addEventListener('visibilitychange', refreshLock);
 run('launch');
