@@ -1147,6 +1147,8 @@ describe('TasksOverview — mobile cards and FAB', () => {
     const fab = document.querySelector('[data-slot="new-task-fab"]')
     expect(fab?.getAttribute('href')).toBe('/new')
     expect(fab?.getAttribute('aria-label')).toBe('New task')
+    // Fixed to the viewport, so it has to clear the phone bottom bar itself.
+    expect(fab?.className).toContain('var(--phone-bar,0px)')
   })
 })
 

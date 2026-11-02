@@ -6,6 +6,7 @@ import {
   LayoutDashboardIcon,
   MenuIcon,
   PlusIcon,
+  ServerIcon,
   SettingsIcon,
   XIcon,
 } from 'lucide-react'
@@ -25,10 +26,12 @@ import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { shortcutsBlocked } from '@/lib/keybindings'
 import { useCommandShortcut } from '@/lib/use-command-shortcut'
 import { isManagerPathname } from '@/lib/managers'
+import { isCezarShell, showsBottomBar } from '@/lib/phone-app'
 import { isSettingsPathname } from '@/lib/settings-path'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
 import { ModeSwitch } from '@/components/mode-switch'
+import { PhoneBottomBar } from '@/components/phone-bottom-bar'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -120,7 +123,7 @@ export type AppShellProps = {
   projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
-  /** Managers gating (spec 2026-10-31-managers): the Code | Manager switch exists only when health
+  /** Managers gating (spec 2026-10-31-managers): the Tasks | Manager switch exists only when health
    *  says so. Defaults off, unlike the nav gates: the switch is new chrome, not a nav item. */
   managersAvailable?: boolean
   /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
@@ -232,8 +235,13 @@ export const AppShell = React.memo(function AppShell({
   // it) and so does the bottom safe-area row. `data-chromeless` marks the mode.
   const chromeless = isSettingsPathname(pathname)
   const managerMode = managersAvailable && isManagerPathname(pathname)
+  // The Back to manager link is the way home from here (spec 2026-10-31-mobile-apps-manager-first).
+  const inTaskThread = matchPath({ path: '/tasks/:id/*', end: true }, areaPathname) !== null
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
+  const openMenu = React.useCallback(() => setMenuOpen(true), [])
+  const [phoneApp] = React.useState(showsBottomBar)
+  const bottomBar = phoneApp && managersAvailable && !chromeless && !inTaskThread
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788) — one preference shared with the settings sidebar.
@@ -309,6 +317,8 @@ export const AppShell = React.memo(function AppShell({
       data-slot="app-shell"
       data-desktop={desktop ?? undefined}
       data-chromeless={chromeless ? '' : undefined}
+      // The New-task FAB is fixed to the viewport: this lifts it off the bar's More item.
+      style={bottomBar ? ({ '--phone-bar': '3.5rem' } as React.CSSProperties) : undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
     >
       {/* Desktop shell (packages/desktop, macOS): the native title bar is a transparent overlay
@@ -369,6 +379,9 @@ export const AppShell = React.memo(function AppShell({
           className="row-start-4 pb-[env(safe-area-inset-bottom)]"
         >
           {footerBanner}
+          {bottomBar ? (
+            <PhoneBottomBar manager={managerMode} attention={managerAttention} menuOpen={menuOpen} onMore={openMenu} />
+          ) : null}
         </div>
       </div>
     </div>
@@ -701,7 +714,7 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        {/* CPU/RAM and search are Code-mode chrome (spec 2026-10-31-managers). */}
+        {/* CPU/RAM and search are Tasks-mode chrome (spec 2026-10-31-managers). */}
         {managerMode ? null : (
           <>
             {whatsNew}
@@ -709,6 +722,7 @@ function SidebarContent({
             <CommandPaletteHint />
           </>
         )}
+        {isCezarShell() ? <ServersLink onNavigate={onNavigate} /> : null}
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
           <div data-slot="tools-menu" className="shrink-0">
@@ -830,6 +844,16 @@ function GlobalSettingsLink({
         <SettingsIcon className="size-4" aria-hidden="true" />
       </RouterLink>
     </Button>
+  )
+}
+
+/** The shell handles `cezar://`: a page can only ask for its server list by navigating there. */
+function ServersLink({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <a href="cezar://servers" data-slot="servers-link" onClick={onNavigate} className={SIDEBAR_SECTION_LINK_CLASS}>
+      <ServerIcon className={sidebarSectionIconClass(false)} aria-hidden="true" />
+      Servers
+    </a>
   )
 }
 
