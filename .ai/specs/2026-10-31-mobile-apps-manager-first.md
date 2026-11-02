@@ -57,7 +57,7 @@ Goals: an installable app on both platforms, Manager on first launch, approvals 
 and credentials held safely across several servers.
 
 Non-goals: running agents on the phone, a local or offline mode, approving from a notification, a cross-project task list (the Manager's `/tasks`
-command is that list), tablets as a designed target, a React Native client, a biometric lock,
+command is that list), tablets as a designed target, a React Native client, an always-on biometric lock (the optional one is the relay spec's QR3),
 shell telemetry for now, and direct APK or F-Droid builds in v1.
 
 ## Dependencies
@@ -103,15 +103,15 @@ listens on `/workspace/events`. The task thread already pages history with a cur
 fallback. It is open, mergeable and labelled `do-not-merge`, `needs-qa`, `risk-high`.
 
 Long task threads opened from a card are the exposed path, so M2 measures one on a real device over
-a tunnel. What happens to #1821 is open: see [Q11](#q11-what-becomes-of-pr-1821s-do-not-merge).
+a tunnel. #1821 keeps `do-not-merge` until the client side is fixed (decided 2026-11-02): see [Q11](#q11-what-becomes-of-pr-1821s-do-not-merge).
 
 ## Decision 1: the shell
 
 Why not to bundle the cockpit stands, and the relay spec's Decision 1 extends it:
 `.ai/specs/2026-11-01-relay-qr-pairing.md#decision-1-how-the-cockpit-loads`.
 
-**Recommendation: Capacitor, loading the server's cockpit from the server.** Still open: see
-[Q2](#q2-accept-capacitor).
+**Decision: Capacitor, loading the server's cockpit from the server.** Accepted 2026-11-02, subject to the
+iPhone proxy test: see [Q2](#q2-accept-capacitor).
 
 | | Tauri 2 mobile | Capacitor |
 | --- | --- | --- |
@@ -583,7 +583,7 @@ minimum server version. An old server still works, without Manager.
 
 **Demo server.** Host it on a small Ubuntu VPS under Open Mercato, with the existing `ubuntu-vps`
 install. Cloudflare does not fit, because cezar needs a long-running Node process. The Worker relay
-is separate. The provider, and whether the demo is reviewers-only, are still open: see
+is separate. Decided 2026-11-02: reviewers only, on Hetzner, reset nightly. See
 [Q10](#q10-where-does-the-demo-server-run-and-who-may-use-it).
 
 The demo must run with `CEZ_DRY_RUN=1`, because a real cockpit gives shell access to anyone holding
@@ -653,7 +653,7 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
 | Apple rejects under 4.2 | Medium | No public iOS listing | Push first; TestFlight and PWA unaffected |
 | Relay fails or is neglected | Medium | Push outage | Small store with no user data, owned by Open Mercato |
 | Mis-tapped merge | Low | Unwanted merge | Confirmation on by default, plus server pins |
-| Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain. A biometric lock is deferred |
+| Hosted cockpit password shared with a phone that is lost | Medium | Shell access to the server | This-device-only keychain. An optional phone lock is planned before public release (relay spec QR3) |
 
 ## Backward compatibility
 
@@ -690,11 +690,13 @@ Native push is required before M12 on both stores. M2 runs first, and M1 can sta
 
 ## Open questions for the maintainer
 
-These three stay open. The decisions already taken follow in the [Decisions](#decisions) table.
+All three were decided on 2026-11-02 and are recorded in the [Decisions](#decisions) table. The relay spec's
+open questions (QR1, QR2, QR4, QR6, QR10) are still open.
 
 ### Q2: Accept Capacitor?
 
-**Pending the M2 spike. Recommended: yes, if M2 passes.** M2 runs first, built with Capacitor on the
+**Decided 2026-11-02: yes, Capacitor is kept, subject to the iPhone proxy test** (the loopback proxy check,
+relay spec QR5/R0, which is still to do). Platform order is Android first, then iOS. Original text: M2 runs first, built with Capacitor on the
 team's own devices with local signing and no store accounts. The shell work in M7 starts only if it
 passes.
 
@@ -716,14 +718,13 @@ depend on this choice.
 
 ### Q10: Where does the demo server run, and who may use it?
 
-**Recommended: reviewers only, on a small Ubuntu VPS under Open Mercato.** The `ubuntu-vps` install is
-decided. The provider is unconfirmed, and so is whether the demo is reviewers-only. A public demo
-would need its login published, and a shared dry-run cockpit would need more than a nightly reset to
-stay presentable. M12 cannot finish until this is answered.
+**Decided 2026-11-02: reviewers only, on Hetzner, reset nightly.** The `ubuntu-vps` install is decided. A
+public demo would need its login published, and a shared dry-run cockpit would need more than a nightly
+reset to stay presentable, so the audience is reviewers.
 
 ### Q11: What becomes of PR #1821's do-not-merge?
 
-**Recommended: keep `do-not-merge`, and fix the client gap before merging.** This replaces the earlier
+**Decided 2026-11-02: keep `do-not-merge`, and fix the client side first.** This replaces the earlier
 answer of waiting for M2, because the review finding below hits phones in particular. It still does
 not block the Manager screens.
 
@@ -757,7 +758,12 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 | Q7 | Is push required before a public listing? | Yes |
 | Q8 | Should a phone browser tab also start at `/manager`? | Yes, changed from the original recommendation. See [In a phone browser](#in-a-phone-browser) |
 | Q9 | Does an in-app toggle satisfy the network opt-in rule? | Yes: in-app toggle plus `CEZ_PUSH=0`. Extended by the relay spec's QR2 |
-| Q12 | Optional biometric lock | Reopened by the relay spec's QR3 |
+| Q2 | Accept Capacitor? | Yes, subject to the iPhone proxy test (relay spec QR5/R0, still to do). 2026-11-02 |
+| Q10 | Demo server | Reviewers only, on Hetzner, reset nightly. 2026-11-02 |
+| Q11 | PR #1821's do-not-merge | Keeps `do-not-merge`; the client side is fixed first. 2026-11-02 |
+| Q12 | Optional biometric lock | Yes, optional, off by default, shipped before public release. Settled by the relay spec's QR3, 2026-11-02 |
+| Order | Platform order | Android first, then iOS. 2026-11-02 |
+| Privacy | Privacy policy | The manager drafts it; Open Mercato approves and hosts it. 2026-11-02 |
 | Q13 | Which approvals need confirmation? | Changed: a user setting per type, default on for merges, automations and jobs. See [Confirmation setting](#confirmation-setting) |
 | Q14 | Shell telemetry | None now, planned for later |
 | Q15 | Direct APK or F-Droid build | Not in v1 |
@@ -775,4 +781,5 @@ an independent fix and M9 proceeds. #1821 is unrelated to #1880 and does not nee
 - 2026-11-01: Applied the relay spec's amendments. The relay non-goal is gone, a hosted server and the URL
   form are the Advanced path, M11 narrows to the sink's relay output, M12 depends on R5 and R6, Q9 extends
   and Q12 reopens.
+- 2026-11-02: Recorded maintainer decisions: Android first then iOS; Capacitor kept subject to the iPhone proxy test (Q2); demo server reviewers-only on Hetzner, reset nightly (Q10); #1821 keeps do-not-merge until the client side is fixed (Q11); optional phone lock settled through QR3 (Q12); the manager drafts the privacy policy and Open Mercato approves and hosts it. Finished the Code to Tasks rename.
 - 2026-11-01: M7 (#1883) departures. Server pages run in a separate plain webview instead of a subclassed Capacitor client, and the bundled connect page sees the password during entry. Android answers one challenge per server view, for the start URL, because its callback has no port and a redirect hop skips `shouldInterceptRequest`. Forget server restarts the Android process to end its auth cache; iOS has no known way yet. Servers is reachable only from the connection-error screen until M6.
