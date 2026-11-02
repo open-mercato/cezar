@@ -1,12 +1,13 @@
 // The bundled connect screen. It talks to native through the Connection plugin and nothing else;
 // server pages run in a separate webview with no bridge (spec Decision 2).
-import { screenFor } from './screens.js';
+import { lockRow, screenFor } from './screens.js';
 
 const app = document.getElementById('app');
 let servers = [];
 let context = {};
 // Android only for now. iOS keeps the URL form until its client compiles.
 let pairing = false;
+let lock = null;
 
 const call = (method, options = {}) => window.Capacitor.nativePromise('Connection', method, options);
 
@@ -49,6 +50,7 @@ async function poll(seq) {
 function show(outcome) {
   servers = outcome.servers ?? servers;
   pairing = outcome.pairing ?? pairing;
+  lock = outcome.lock ?? lock;
   const screen = screenFor(outcome, context);
   if (screen.name === 'pair-waiting') drawPairWaiting(screen);
   else if (screen.name === 'pair-confirm') drawPairConfirm(screen);
@@ -62,7 +64,24 @@ function show(outcome) {
   else drawList();
 }
 
-function drawList() {
+function lockSection(text) {
+  const row = lockRow(lock);
+  if (!row) return null;
+  const toggle = button(row.label, async () => {
+    toggle.disabled = true;
+    try {
+      const outcome = await call('lockSet', { enabled: row.enable });
+      show(outcome);
+      if (outcome.lockError) drawList(outcome.lockError);
+    } catch (error) {
+      drawList(String(error?.message ?? error));
+    }
+  });
+  toggle.disabled = Boolean(row.disabled);
+  return element('section', { className: 'stack' }, notice(text), toggle, element('p', { className: 'muted', textContent: row.note }));
+}
+
+function drawList(lockNotice) {
   if (!servers.length) return pairing ? drawStart() : drawAdd({});
   const rows = servers.map((server) =>
     element(
@@ -77,7 +96,7 @@ function drawList() {
       button('Forget', () => drawForget(server)),
     ),
   );
-  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'));
+  draw(element('h1', { textContent: 'Servers' }), element('ul', {}, ...rows), button('Add server', () => (pairing ? drawStart() : drawAdd({})), 'primary'), lockSection(lockNotice));
 }
 
 function drawForget(server) {

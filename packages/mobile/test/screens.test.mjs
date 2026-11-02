@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NO_HTTP, screenFor } from '../connect/screens.js';
+import { NO_HTTP, lockRow, screenFor } from '../connect/screens.js';
 
 const saved = { id: 'a', url: 'https://cezar.example.com', username: 'me' };
 
@@ -71,4 +71,20 @@ test('every pairing failure says something, and an unknown one still does', () =
 
 test('quota names the wait', () => {
   assert.match(screenFor({ screen: 'quota', status: 12, serverId: 'r', servers: [paired] }).message, /12 minutes/);
+});
+
+test('the lock row is absent where native has no lock, as on iOS', () => {
+  assert.equal(lockRow(undefined), null);
+});
+
+test('the lock row turns the lock on or off', () => {
+  assert.equal(lockRow({ enabled: false, available: true }).enable, true);
+  assert.equal(lockRow({ enabled: true, available: true }).enable, false);
+});
+
+test('with no screen lock the row explains itself and cannot be pressed', () => {
+  const off = lockRow({ enabled: false, available: false });
+  assert.equal(off.disabled, true);
+  assert.match(off.note, /Set a screen lock/);
+  assert.match(lockRow({ enabled: true, available: false }).note, /Paused/);
 });
