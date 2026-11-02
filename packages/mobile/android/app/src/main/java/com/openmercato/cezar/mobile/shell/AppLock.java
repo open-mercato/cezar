@@ -25,7 +25,10 @@ import java.util.function.Consumer;
  * gate: it holds no key and no key depends on it. Main thread, except the two getters.
  */
 public final class AppLock implements Application.ActivityLifecycleCallbacks {
-    /** An activity that can show the lock. Any other one is closed while locked, so the scanner cannot outlive it. */
+    /**
+     * An activity that can show the lock. Any other one is closed while locked, so the scanner cannot outlive it.
+     * Once installed, that is: a process restored on the scanner has no lock until a Host starts beneath it.
+     */
     public interface Host {}
 
     /** Weak with device credential is the one mix androidx.biometric supports from API 24 up. */
