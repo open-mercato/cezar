@@ -317,7 +317,7 @@ function PhoneFreshLoad() {
   return landing === 'manager' ? <Navigate to="/manager" replace /> : <LegacyPathRedirect />
 }
 
-/** Everything `/` and flat. Only the first location may count: the Code link and every Back to
+/** Everything `/` and flat. Only the first location may count: the Tasks link and every Back to
  *  tasks link point at `/`, and would bounce straight back to Manager otherwise. */
 function FlatPathRoute() {
   const location = useLocation()

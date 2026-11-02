@@ -123,7 +123,7 @@ export type AppShellProps = {
   projectGroups?: ReactNode
   brandName?: string
   brandLogoUrl?: string | null
-  /** Managers gating (spec 2026-10-31-managers): the Code | Manager switch exists only when health
+  /** Managers gating (spec 2026-10-31-managers): the Tasks | Manager switch exists only when health
    *  says so. Defaults off, unlike the nav gates: the switch is new chrome, not a nav item. */
   managersAvailable?: boolean
   /** Any manager unread or holding an approval: the dot on the switch and on the phone's menu. */
@@ -714,7 +714,7 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        {/* CPU/RAM and search are Code-mode chrome (spec 2026-10-31-managers). */}
+        {/* CPU/RAM and search are Tasks-mode chrome (spec 2026-10-31-managers). */}
         {managerMode ? null : (
           <>
             {whatsNew}
