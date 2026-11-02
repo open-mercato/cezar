@@ -785,7 +785,7 @@ repository.
 | R3 | **cezar client.** `narrowForRelay`, keys, device store, dispatcher, routes, Settings UI, quiet tests | Desktop half, behind `capabilities.phonePairing` until R4 | R1. Stubbed sockets until R2 | L |
 | R4 | **App client.** Noise, tunnel, proxy, scanner, connect screens, banners | Pairing on test builds | R0, R2, R3, M7 | L |
 | R5 | **Push through the relay.** Replaces M11's relay half. Names the route that hands a grant to cezar | Native notifications | R2, R4, M10, QR10 | M |
-| R6 | **Public release additions.** Demo code, privacy policy, export answers. Extends M12 | Reviewable build | R5, Q10, QR7 | M |
+| R6 | **Public release additions.** Demo code, privacy policy (the manager drafts it, Open Mercato approves and hosts it), export answers. Extends M12 | Reviewable build | R5, Q10, QR7 | M |
 
 **Ships before the relay, unchanged:** M1 installable PWA, M4 phone chat, M5 approvals, M6 Manager first,
 M7 shell with the Manual path, M8 CI, M9 test tracks, and M10 Web Push. Testers with a hosted server need
