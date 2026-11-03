@@ -2829,7 +2829,7 @@ export async function createDraftPr(input: DraftPrInput): Promise<DraftPrOutcome
   let push = await execTool(['push', '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   if (!push.ok && /\[rejected\]|non-fast-forward/.test(push.stderr)) {
     // A rebased branch is rejected as non-fast-forward; lease only against a tip this branch held (#1758).
-    const lease = await rewriteLeaseArg(worktree, remotes.push, branch);
+    const lease = await rewriteLeaseArg(worktree, remotes.push, branch, [run.baseBranch, prBase]);
     if (lease) push = await execTool(['push', lease, '-u', remotes.push, branch], worktree, 'git', PUSH_TIMEOUT_MS);
   }
   if (!push.ok) {

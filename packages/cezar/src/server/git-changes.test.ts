@@ -1489,6 +1489,20 @@ describe('pushCurrentBranch — a rebased branch (#1758)', () => {
     }
   });
 
+  it('never rewrites the task\'s own base branch, even one named neither main nor master', async () => {
+    const { remote, dir } = setup();
+    try {
+      g(dir, 'checkout', '-q', '-B', 'develop');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true, baseBranch: 'origin/develop' })).ok).toBe(true);
+      g(dir, 'commit', '--amend', '-m', 'develop, rewritten');
+      expect((await pushCurrentBranch(dir, { leaseRewrites: true, baseBranch: 'origin/develop' })).ok).toBe(false);
+      expect(g(remote, 'log', '-1', '--format=%s', 'develop').trim()).toBe('work');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
   it('never overwrites a remote tip this branch never held', async () => {
     const { remote, dir } = setup();
     const other = mkdtempSync(join(tmpdir(), 'cez-lease-other-'));
