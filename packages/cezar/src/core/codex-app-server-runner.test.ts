@@ -127,7 +127,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     ['mock:nested-limit', "You've hit your usage limit. Try again in 60 minutes. [usageLimitExceeded]"],
     ['mock:nested-error mock:usage-limit', 'exceeded retry limit, last status: 429 Too Many Requests [rateLimitExceeded]'],
   ])('prefers the terminal turn.error (%s)', async (scenario, message) => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     const session = runner.startSession(
       { userPrompt: `mock:turn-failed mock:turn-completed-failed ${scenario}`, cwd: process.cwd() },
@@ -139,7 +139,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
   }, 15_000);
 
   it('preserves a standalone Codex usage-limit error before the failed turn', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     const session = runner.startSession(
       { userPrompt: 'mock:turn-failed mock:usage-limit', cwd: process.cwd() },
