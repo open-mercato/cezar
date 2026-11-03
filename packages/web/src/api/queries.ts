@@ -537,7 +537,8 @@ export function useRunnerModelCatalogs(
   const copilot = useRunnerModels('copilot', enabled)
   const antigravity = useRunnerModels('antigravity', enabled)
   const gemini = useRunnerModels('gemini', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot, antigravity, gemini }
+  const kimi = useRunnerModels('kimi', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, antigravity, gemini, kimi }
 }
 
 export function useProviderStatus() {

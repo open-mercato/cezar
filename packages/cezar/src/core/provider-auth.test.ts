@@ -23,6 +23,11 @@ vi.mock('./cursor-bin.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./cursor-bin.ts')>(),
   resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
 }));
+// Same reason for Kimi: `kimi-runner.test.ts` covers the real resolver.
+vi.mock('./kimi-runner.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./kimi-runner.ts')>(),
+  resolveKimiExecutable: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_KIMI_BIN || 'kimi',
+}));
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
@@ -88,6 +93,11 @@ const connectedResults: Record<string, ProviderCommandResult> = {
   // `gemini --version`: Gemini CLI has no auth-status command, so this only proves the install; the
   // credentials come from the environment (`gemini-credentials.ts`).
   gemini: { stdout: '0.60.0\n', stderr: '', exitCode: 0 },
+  kimi: {
+    stdout: 'kimi type=kimi models=1\n',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
@@ -104,6 +114,7 @@ const originalEnv = {
   CEZ_GEMINI_BIN: process.env.CEZ_GEMINI_BIN,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME,
+  CEZ_KIMI_BIN: process.env.CEZ_KIMI_BIN,
 };
 
 beforeEach(() => {
@@ -121,6 +132,7 @@ beforeEach(() => {
   // Gemini's connected-ness is an environment read (the setup file strips the host's): give every
   // case a key so "all connected" still means every provider. The gemini block below removes it.
   process.env.GEMINI_API_KEY = 'AIza-test-key';
+  delete process.env.CEZ_KIMI_BIN;
 });
 
 afterEach(() => {
@@ -144,6 +156,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable.includes('copilot')) return connectedResults.copilot!;
   if (executable === 'agy') return connectedResults.antigravity!;
   if (executable.includes('gemini')) return connectedResults.gemini!;
+  if (executable.includes('kimi')) return connectedResults.kimi!;
   return connectedResults.pi!;
 }
 
@@ -1011,6 +1024,7 @@ describe('ProviderAuthService', () => {
         { provider: 'copilot' },
         { provider: 'antigravity' },
         { provider: 'gemini' },
+        { provider: 'kimi' },
       ],
     });
   });
@@ -1037,6 +1051,7 @@ describe('ProviderAuthService', () => {
       { executable: 'copilot', args: ['--acp', '--no-auto-update'], timeoutMs: 10_000 },
       { executable: 'agy', args: ['models'], timeoutMs: 10_000 },
       { executable: 'gemini', args: ['--version'], timeoutMs: 10_000 },
+      { executable: 'kimi', args: ['provider', 'list'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1568,6 +1583,7 @@ describe('ProviderAuthService', () => {
         { provider: 'copilot', status: 'connected' },
         { provider: 'antigravity', status: 'connected' },
         { provider: 'gemini', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1683,6 +1699,7 @@ describe('ProviderAuthService', () => {
         { provider: 'copilot', status: 'connected' },
         { provider: 'antigravity', status: 'connected' },
         { provider: 'gemini', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

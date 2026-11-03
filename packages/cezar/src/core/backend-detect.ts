@@ -8,6 +8,7 @@ import { cliVersionFrom } from './provider-auth.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
 import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { ghEnv } from './gh-env.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
@@ -41,6 +42,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeAntigravity(),
     probeCopilot(),
     probeGemini(),
+    probeKimi(),
     probeGh(),
     probeGit(),
   ]);
@@ -290,6 +292,28 @@ async function probeGemini(): Promise<BackendCheck> {
       name: 'gemini',
       available: false,
       hint: `optional: install Gemini CLI (npm i -g @google/gemini-cli) to use the Gemini runner. ${GEMINI_AUTH_HINT}`,
+    };
+  }
+}
+
+async function probeKimi(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'kimi', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveKimiExecutable();
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'kimi',
+      available: true,
+      version: stdout.trim(),
+      hint: 'if not authenticated, run `kimi login`',
+    };
+  } catch {
+    return {
+      name: 'kimi',
+      available: false,
+      hint: 'optional: install Kimi Code (https://moonshotai.github.io/kimi-code/) and run `kimi login` to use the Kimi runner',
     };
   }
 }

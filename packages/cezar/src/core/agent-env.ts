@@ -251,6 +251,7 @@ export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // also reads are exact names below — a `GOOGLE_` prefix would hand it every Google credential on
   // the host.
   gemini: ['GEMINI_'],
+  kimi: ['KIMI_'],
 };
 
 /**

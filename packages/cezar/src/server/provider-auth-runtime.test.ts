@@ -54,10 +54,11 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   antigravity: 'Please sign in',
   // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
   gemini: '0.60.0',
+  kimi: 'kimi-code  type=oauth  models=3  source=default',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'kimi') return executable;
   if (executable === 'agent') return 'cursor';
   if (executable === 'gemini') return 'gemini';
   throw new Error(`unexpected executable: ${executable}`);

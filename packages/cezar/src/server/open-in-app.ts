@@ -149,6 +149,7 @@ const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: st
   { runner: 'antigravity', label: 'Antigravity CLI', icon: 'antigravity', bin: 'agy', envBin: () => process.env.CEZ_AGY_BIN },
   { runner: 'copilot', label: 'Copilot CLI', icon: 'copilot', bin: 'copilot', envBin: () => process.env.CEZ_COPILOT_BIN },
   { runner: 'gemini', label: 'Gemini CLI', icon: 'gemini', bin: 'gemini', envBin: () => process.env.CEZ_GEMINI_BIN },
+  { runner: 'kimi', label: 'Kimi CLI', icon: 'kimi', bin: 'kimi', envBin: () => process.env.CEZ_KIMI_BIN },
 ];
 
 /**

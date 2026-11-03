@@ -364,6 +364,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity CLI',
   gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */
@@ -436,7 +437,7 @@ function AccountAuthRequiredCard({
 /** The CLIs with a self-update cezar can run (`updateArgs` in `provider-auth.ts`); the rest
  *  update the way they were installed, so the card says so instead of offering a 409. */
 const SELF_UPDATING: Record<ThreadProviderAuthRequired['provider'], boolean> = {
-  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, antigravity: false, gemini: false,
+  claude: true, codex: false, junie: false, opencode: true, cursor: true, pi: false, copilot: false, antigravity: false, gemini: false, kimi: false,
 }
 
 /** Follows an agent error saying its CLI is too old: hands the CLI's own update to a terminal,

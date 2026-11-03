@@ -11,6 +11,7 @@ import { resolveAntigravityBin } from './antigravity-runner.ts';
 import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
 import { geminiHasCredentials } from './gemini-credentials.ts';
 import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
@@ -444,6 +445,16 @@ function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefi
     + 'program named `copilot` comes first on PATH.';
 }
 
+/** `kimi provider list`: one `<name>  type=…  models=N  source=…` row per provider, or
+ *  "No providers configured." before `kimi login`. */
+function parseKimiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
+  const lines = normalizedLines(result.stdout);
+  if (lines.some((line) => /\stype=\S+\s+models=[1-9]\d*/.test(line))) return 'connected';
+  if (lines.some((line) => line.includes('no providers configured'))) return 'disconnected';
+  return null;
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -540,7 +551,7 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     overrideEnv: 'CEZ_AGY_BIN',
     executable: () => resolveAntigravityBin(),
     // `agy models` needs a session: signed in it lists the account's models and exits 0 (agy 1.4.0),
-    // signed out it exits 1 asking to sign in — without prompting and without spending a request.
+    // signed out it exits 1 asking to sign in - without prompting and without spending a request.
     statusArgs: ['models'],
     // agy has no login subcommand; the first interactive `agy` launch runs the Google sign-in.
     loginArgs: [],
@@ -558,6 +569,15 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
     parse: parseGeminiStatus,
     unknownHint: GEMINI_AUTH_HINT,
+  },
+  {
+    id: 'kimi',
+    overrideEnv: 'CEZ_KIMI_BIN',
+    executable: () => resolveKimiExecutable(),
+    statusArgs: ['provider', 'list'],
+    loginArgs: ['login'],
+    installHint: 'Install Kimi Code, then run `kimi login`.',
+    parse: parseKimiStatus,
   },
 ];
 

@@ -59,6 +59,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
   { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
   { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP)' },
+  { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
 ]
 
 export interface ModelPreset {
@@ -125,6 +126,9 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview', desc: 'Preview Flash model' },
     { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', desc: 'Fastest, cheapest' },
     { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro', desc: 'Deeper reasoning (paid tiers)' },
+  ],
+  kimi: [
+    { id: '', label: 'auto', desc: 'Use your Kimi default model' },
   ],
 }
 
@@ -227,6 +231,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   junie: 'Junie',
   cursor: 'Cursor',
   antigravity: 'Antigravity',
+  kimi: 'Kimi',
 }
 
 export function modelCatalogStatus(

@@ -4,6 +4,7 @@ import { ClaudeCliRunner } from './claude-cli-runner.ts';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 import { JunieRunner } from './junie-runner.ts';
 import { CopilotAcpRunner } from './copilot-acp-runner.ts';
+import { KimiRunner } from './kimi-runner.ts';
 import { OpencodeServerRunner } from './opencode-server-runner.ts';
 import { CursorAgentRunner } from './cursor-agent-runner.ts';
 import { GeminiAcpRunner } from './gemini-acp-runner.ts';
@@ -39,6 +40,8 @@ function createBareRunner(backend: AgentBackend | RunnerId | undefined): AgentRu
       return new AntigravityRunner();
     case 'gemini':
       return new GeminiAcpRunner();
+    case 'kimi':
+      return new KimiRunner();
     case 'claude':
     case 'claude-cli':
     case undefined:

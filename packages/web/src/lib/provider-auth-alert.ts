@@ -16,6 +16,7 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 export interface ProviderAuthIncident {

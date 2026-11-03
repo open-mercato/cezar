@@ -12,6 +12,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */

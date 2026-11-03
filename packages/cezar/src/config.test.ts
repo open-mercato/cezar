@@ -368,6 +368,13 @@ describe('loadConfig machine-wide agent defaults', () => {
     expect(config.defaultModels).toEqual({ claude: 'repo-claude', codex: 'machine-codex' });
   });
 
+  it('drops one malformed machine model without discarding the others — kimi included', async () => {
+    // An unvalidated blank `kimi` reached the repo schema, whose `.catch` dropped every model.
+    writeMachine({ models: { codex: 'machine-codex', kimi: '   ' } });
+    const config = await loadConfig(repoRoot);
+    expect(config.defaultModels).toEqual({ codex: 'machine-codex' });
+  });
+
   it('changes nothing when the machine has no opinion — the zero-config path', async () => {
     writeRepo({ systemPrompt: 'be brief' });
     const config = await loadConfig(repoRoot);

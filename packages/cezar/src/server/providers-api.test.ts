@@ -64,6 +64,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   antigravity: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)',
   // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
   gemini: '0.60.0',
+  kimi: 'kimi-code  type=oauth  models=3  source=default',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -82,15 +83,17 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
   antigravity: 'Please sign in',
   gemini: '0.60.0',
+  kimi: 'No providers configured.',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
-  if (executable === 'agy') return 'antigravity';
-  if (executable === 'gemini') return 'gemini';
+  const name = basename(executable);
+  if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'kimi') return name as ProviderId;
+  if (name === 'agy') return 'antigravity';
+  if (name === 'gemini') return 'gemini';
   // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
   // Cursor installed (#1503), so match it too or the suite fails only on such machines.
-  if (executable === 'agent' || basename(executable) === 'cursor-agent') return 'cursor';
+  if (name === 'agent' || name === 'cursor-agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
 
@@ -230,6 +233,7 @@ describe('workspace provider API', () => {
         { provider: 'copilot', status: 'connected', enabled: true },
         { provider: 'antigravity', status: 'connected', enabled: true },
         { provider: 'gemini', status: 'connected', enabled: true },
+        { provider: 'kimi', status: 'connected', enabled: true },
       ],
     });
   });
@@ -237,7 +241,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot', 'kimi']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -255,6 +259,7 @@ describe('workspace provider API', () => {
         { provider: 'copilot', status: 'connected', enabled: true },
         { provider: 'antigravity', status: 'connected', enabled: true },
         { provider: 'gemini', status: 'connected', enabled: true },
+        { provider: 'kimi', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

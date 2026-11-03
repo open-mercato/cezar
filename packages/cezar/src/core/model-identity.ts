@@ -126,6 +126,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // Gemini CLI serves Google's models only; a bare id (`gemini-3-flash-preview`) is Google's and
   // goes to `--model` bare (#581).
   gemini: { defaultProvider: 'google' },
+  // Kimi Code selects a model by the alias of a `[models."<alias>"]` table in its config.toml, and
+  // its own aliases are already `provider/model`-shaped (`kimi-code/k3`). No default provider, so
+  // a bare alias passes through unchanged.
+  kimi: {},
 };
 
 const SLASH = '/';

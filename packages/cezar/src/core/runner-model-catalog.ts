@@ -157,6 +157,7 @@ const RUNNER_LABEL: Record<RunnerId, string> = {
   copilot: 'GitHub Copilot',
   antigravity: 'Antigravity',
   gemini: 'Gemini CLI',
+  kimi: 'Kimi',
 };
 
 function unavailableReason(runner: RunnerId): string {
