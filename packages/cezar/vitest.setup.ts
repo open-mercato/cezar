@@ -46,6 +46,9 @@ if (insideGitWorkTree(realpathSync(tmpdir()))) {
 // deletes the variable inside its own body (see `src/paths.test.ts`) — that still
 // works, because this hook runs after the test, not during it. The write guard in
 // `assertCezarHomeWriteIsSandboxed` catches whatever still slips through.
+// A developer's installed simlock must not change the agent env and prompts cases pin.
+process.env.CEZ_SIMLOCK = '0'
+
 // Fixture repos commit constantly; a developer's global `commit.gpgsign=true` turns each
 // commit into a gpg round-trip (~0.35s) and pushes git-heavy cases past the 5s timeout
 // under parallel load. Signing is irrelevant to every fixture, so switch it off here —
