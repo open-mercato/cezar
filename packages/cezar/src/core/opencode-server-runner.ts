@@ -257,7 +257,8 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut && !this.retryGaveUp && this.serverOpen) {
+        // `stopped`, not `serverOpen`: a child that exits on its own also closes the server (#1396).
+        if (!this.timedOut && !this.retryGaveUp && !this.stopped) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
