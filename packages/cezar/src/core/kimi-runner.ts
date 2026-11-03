@@ -13,7 +13,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS } from './claude-cli-runner.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
@@ -124,6 +124,7 @@ export class KimiRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('kimi', spec.reasoningEffort);
     const session = new KimiSession(
       this.bin,
       spec.timeoutMs ?? this.timeoutMs,

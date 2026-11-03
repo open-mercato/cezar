@@ -22,6 +22,8 @@ const trackerAssociation = { kind: 'jira' as const, connectionId: 'c', source: {
  */
 describe('RunManager agent-profile resolution', () => {
   const savedHome = process.env.CEZ_HOME;
+  const savedApiUrl = process.env.CEZ_API_URL;
+  const savedBin = process.env.CEZ_BIN;
   let home: string;
   let repoRoot: string;
   let store: RunStore;
@@ -56,6 +58,10 @@ describe('RunManager agent-profile resolution', () => {
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
+    if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+    else process.env.CEZ_API_URL = savedApiUrl;
+    if (savedBin === undefined) delete process.env.CEZ_BIN;
+    else process.env.CEZ_BIN = savedBin;
   });
 
   const addAccount = async (id: string, provider: 'claude' | 'codex', dir: string) => {

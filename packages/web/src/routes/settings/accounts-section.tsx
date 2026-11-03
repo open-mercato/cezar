@@ -100,6 +100,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
 }
 
@@ -113,6 +114,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   pi: 'https://github.com/badlogic/pi-mono',
   copilot: 'npm i -g @github/copilot',
   antigravity: 'https://antigravity.google/docs/cli/',
+  gemini: 'npm i -g @google/gemini-cli',
   kimi: 'https://moonshotai.github.io/kimi-code/',
 }
 
