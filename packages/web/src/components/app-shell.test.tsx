@@ -1,4 +1,4 @@
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -142,6 +142,7 @@ describe('AppShell', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -153,6 +154,7 @@ describe('AppShell', () => {
       '/inbox',
       '/git',
       '/github',
+      '/assets',
       '/automations',
       '/skills',
       '/workflows',
@@ -189,6 +191,7 @@ describe('AppShell', () => {
       ['/', 'Tasks'],
       ['/git', 'Git'],
       ['/skills', 'Skills'],
+      ['/assets', 'Assets'],
       // Tasks stays lit while a task thread is open (spec's "Task list & table").
       ['/tasks/abc123', 'Tasks'],
     ]
@@ -670,6 +673,64 @@ describe('AppShell', () => {
 
   })
 
+  describe('foldable sidebar', () => {
+    it('folds into a rail, remembers it, and unfolds with focus on the fold button', () => {
+      renderShell()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      const unfold = screen.getByRole('button', { name: 'Show sidebar' })
+      expect(document.activeElement).toBe(unfold)
+      expect(localStorage.getItem('cez-sidebar-folded')).toBe('1')
+
+      fireEvent.click(unfold)
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    })
+
+    it('toggles with Mod+B', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+    })
+
+    it('Mod+B from a focused textarea keeps focus there', () => {
+      renderShell('/', {}, <textarea aria-label="composer" />)
+      const composer = screen.getByRole('textbox', { name: 'composer' })
+      composer.focus()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).toBe(composer)
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(composer)
+    })
+
+    it('ignores a held Mod+B and one pressed behind a dialog', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', repeat: true, ...mod })
+      expect(sidebar()).toBeTruthy()
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      document.body.append(dialog)
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      dialog.remove()
+    })
+
+    it('loads folded without stealing focus', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell()
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Show sidebar' }))
+    })
+  })
+
   /** The resizable desktop column (#788, option C). jsdom has no layout engine, so these assert
    *  the state machine and the accessibility contract; the drag itself is exercised for real in
    *  `e2e/sidebar-resize.e2e.ts`. */
@@ -1077,5 +1138,33 @@ describe('Dashboard active navigation', () => {
     const link = screen.getByRole('link', { name: 'Dashboard' })
     expect(link.getAttribute('aria-current')).toBeNull()
     expect(link.classList.contains('bg-muted')).toBe(false)
+  })
+})
+
+describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2)', () => {
+  it('folds the sidebar to an icon rail while a view holds it, and the rail asks the holder to let go', async () => {
+    const { holdSidebarRail } = await import('@/lib/sidebar-rail')
+    renderShell('/tasks/r1/assets')
+    expect(sidebar()).toBeTruthy()
+
+    const onExit = vi.fn()
+    let release = () => {}
+    act(() => {
+      release = holdSidebarRail(onExit)
+    })
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+    const rail = document.querySelector('[data-slot="focus-sidebar-rail"]') as HTMLElement
+    expect(rail).toBeTruthy()
+    // The rail still navigates: every nav item as an icon link, Tasks lit for a task URL.
+    expect(within(rail).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+    // The project Assets page (Phase 3) is in the rail as well as the expanded nav.
+    expect(within(rail).getByRole('link', { name: 'Assets' }).getAttribute('href')).toBe('/assets')
+
+    fireEvent.click(within(rail).getByRole('button', { name: 'Show sidebar' }))
+    expect(onExit).toHaveBeenCalledTimes(1)
+
+    act(() => release())
+    expect(sidebar()).toBeTruthy()
+    expect(document.querySelector('[data-slot="focus-sidebar-rail"]')).toBeNull()
   })
 })

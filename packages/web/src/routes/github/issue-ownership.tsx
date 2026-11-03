@@ -7,7 +7,7 @@ export function IssueOwnership({ item }: { item: GithubItem }) {
   if (item.kind !== 'issue' || (item.assignees === undefined && item.linkedPrs === undefined)) return null
   const chip = 'inline-flex min-w-0 max-w-full items-center gap-1 rounded border border-border/70 px-1.5 py-0.5'
   return (
-    <div aria-label={`Issue #${item.number} ownership`} role="group" className="flex min-w-0 flex-wrap items-center gap-1 px-2.5 pb-2 pl-8 text-[10.5px] text-muted-foreground">
+    <div aria-label={`Issue #${item.number} ownership`} role="group" className="flex min-w-0 flex-wrap items-center gap-1 px-2.5 pb-2 pl-8 text-meta text-muted-foreground">
       {item.assignees !== undefined ? (
         <span className={chip} title={item.assignees.length ? `Assigned to ${item.assignees.map(login => `@${login}`).join(', ')}` : undefined}>
           <UserRoundIcon aria-hidden="true" className="size-3 shrink-0" />

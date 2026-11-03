@@ -1,6 +1,6 @@
 import { GithubIcon } from '@/components/icons'
 import {
-  occurrencesBetween,
+  scheduleOccurrencesBetween,
   zonedParts,
   zonedWallTimeToUtc,
   type AutomationListEntry,
@@ -59,7 +59,7 @@ export function occurrencesIn(
   const out: CalendarOccurrence[] = []
   for (const automation of automations) {
     if (automation.kind !== 'schedule' || !automation.schedule) continue
-    for (const at of occurrencesBetween(automation.schedule, fromMs, toMs, timeZone)) {
+    for (const at of scheduleOccurrencesBetween(automation, fromMs, toMs, timeZone)) {
       const parts = zonedParts(at, timeZone)
       if (parts) out.push({ automation, at, parts })
     }
