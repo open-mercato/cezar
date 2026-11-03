@@ -78,6 +78,25 @@ export function isUsageLimitMessage(message: string): boolean {
   return CLAUDE_MARKER_RE.test(message) || LIMIT_PHRASE_RE.test(message);
 }
 
+/** An exhausted plan allowance, as opposed to a throttle. Rate-limit wording is excluded on purpose. */
+const EXHAUSTION_PHRASE_RE =
+  /\bhit\s+your\s+(?:(?:usage|session|weekly|monthly|daily|hourly|5[\s-]?hour)\s+)?limit\b|\b(?:usage|weekly|monthly|daily|5[\s-]?hour)[\s-]?limit\b|\b(?:session|hourly)\s+limit\s+reached\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
+/** A billing quota that is gone, even when the provider reports it as an HTTP 429 (OpenAI does). */
+const QUOTA_GONE_RE = /\binsufficient[_\s]quota\b|\bexceeded\s+your\s+current\s+quota\b/i;
+const THROTTLE_RE = /\b(?:rate[\s_-]?limit|per[\s-]?minute|requests?\s+per|tokens?\s+per\s+minute|too\s+many\s+requests|429)\b/i;
+
+/**
+ * Whether the error proves the account's allowance is spent — the only failure that may move a task
+ * to another provider (spec 2026-10-20-agent-usage-limit-fallback §Detection). Claude's marker and a
+ * spent billing quota always count; other prose counts only when it names exhaustion and does not
+ * read as a transient throttle.
+ */
+export function isUsageExhaustion(message: string | undefined): boolean {
+  if (!message) return false;
+  if (CLAUDE_MARKER_RE.test(message) || QUOTA_GONE_RE.test(message)) return true;
+  return EXHAUSTION_PHRASE_RE.test(message) && !THROTTLE_RE.test(message);
+}
+
 /**
  * Read a usage limit out of a terminal error message, or `null` when it is not one (or carries no
  * usable reset instant). `now` is injected so callers and tests share one clock.

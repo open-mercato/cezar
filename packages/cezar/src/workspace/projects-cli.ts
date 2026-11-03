@@ -158,10 +158,10 @@ async function removeCommand(id: string | undefined, io: ProjectsCommandIo): Pro
   // Unlike `DELETE /api/v1/projects/:projectId`, there is no boot-project
   // refusal here: that rule exists because a running server would break its own
   // sidebar, and the CLI runs with no server and no boot project. Removing the
-  // repo you normally serve is therefore allowed — and, since boot registration
-  // became seed-once (`shouldAutoRegisterProject`), it STAYS removed: the next
-  // `cezar serve` in it will serve the folder without re-registering it. The
-  // line below says what was and was not touched; `add` puts it back.
+  // repo you normally serve is therefore allowed. A later normal `cezar serve`
+  // in that eligible root adds it back because serve is an explicit add/open
+  // gesture; headless/non-serve boot still uses `shouldAutoRegisterProject`.
+  // The line below says exactly what this command did and did not touch.
   if (!(await removeProject(id))) {
     io.error(`unknown project: ${id}`);
     return 1;
