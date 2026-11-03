@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Composer sandbox picker</title><link rel="stylesheet" href="mockup.css">
+<style>
+.stage{flex:1;display:flex;flex-direction:column;align-items:center;padding-top:60px}
+.stage h1{font-size:36px;font-weight:500;margin:0}
+.box{width:720px;margin-top:26px;border:1px solid #7c6cf0;border-radius:14px;background:#141414;padding:14px 14px 10px;box-shadow:0 0 0 3px #6d5ce722}
+.box .txt{padding:4px 6px 14px}
+.pills{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pills .pill{font-size:12.5px;padding:3px 10px;border-radius:8px}
+.pill.sel{border-color:#7c6cf0;color:#fff;background:#1c1736}
+.menu{position:absolute;width:420px;background:#18181b;border:1px solid #34343a;border-radius:12px;padding:6px;box-shadow:0 20px 50px #000b}
+.mi{display:flex;gap:10px;padding:8px 10px;border-radius:8px;align-items:flex-start}
+.mi.on{background:#26262b}
+.mi .r{width:14px;height:14px;border-radius:50%;border:1px solid #52525b;margin-top:3px;flex:none}
+.mi.on .r{border:4px solid #8f86e8}
+.sep{height:1px;background:#262626;margin:5px 4px}
+.mh{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8b8b93;padding:6px 10px 2px}
+</style></head>
+<body>
+<aside class="side">
+  <div class="brand">cezar <small></small></div>
+  <div class="nav on" style="background:#e5e5e5;color:#111;justify-content:center">＋ New task</div>
+  <div class="nav"><span class="ic">▦</span>Dashboard</div><div class="nav"><span class="ic">☰</span>Tasks</div><div class="nav"><span class="ic">⑂</span>Git</div><div class="nav"><span class="ic">◎</span>GitHub</div><div class="nav"><span class="ic">ϟ</span>Automations</div><div class="nav"><span class="ic">⚙</span>Settings</div>
+</aside>
+<main class="main" style="position:relative">
+  <div class="stage">
+    <h1>What should the agent work on?</h1>
+    <p class="muted" style="margin:8px 0 0">Runs in a fresh <b style="color:#c4b5fd">microsandbox VM</b>. Review everything before it lands.</p>
+    <div class="box">
+      <div class="txt">Test every way to install and set up Open Mercato from the README in a clean environment. Fix each warning or error at its root cause and write a report.</div>
+      <div class="pills">
+        <span class="pill">📎</span><span class="pill">＋ Skill ▾</span><span class="pill">claude ▾</span><span class="pill">auto ▾</span><span class="pill">×1 ▾</span>
+        <span class="muted">|</span>
+        <span class="pill sel">✓ Worktree</span><span class="pill sel">⬡ Ubuntu · 4 vCPU · 16 GB ▾</span><span class="pill">☐ Autonomous</span>
+      </div>
+      <div class="pills" style="margin-top:8px;justify-content:space-between"><span class="pill">base: main ▾</span><span class="btn primary" style="padding:5px 12px">↑</span></div>
+    </div>
+  </div>
+  <div class="menu" style="left:648px;top:282px">
+    <div class="mh">Run this task in</div>
+    <div class="mi"><span class="r"></span><div><b>This computer</b><div class="muted sm">Today's behavior: the worktree on your machine, with your Docker, databases and caches.</div></div></div>
+    <div class="sep"></div>
+    <div class="mh">microsandbox · local</div>
+    <div class="mi on"><span class="r"></span><div class="grow"><b>Ubuntu · 4 vCPU · 16 GB</b> <span class="pill violet" style="font-size:10.5px">project default</span><div class="muted sm mono">ubuntu:24.04 · disk 40 GiB · net public</div></div></div>
+    <div class="mi"><span class="r"></span><div><b>Node 24 small</b><div class="muted sm mono">node:24-bookworm-slim · 2 vCPU · 4 GiB</div></div></div>
+    <div class="mi"><span class="r"></span><div><b>Offline review box</b><div class="muted sm mono">2 vCPU · 4 GiB · net: agent API only</div></div></div>
+    <div class="sep"></div>
+    <div class="mh">Daytona · Acme work org (eu)</div>
+    <div class="mi"><span class="r"></span><div><b>Cloud large (EU)</b> <span class="pill off" style="font-size:10.5px">billed</span><div class="muted sm mono">daytona-large · 4 vCPU · 8 GiB · 10 GiB</div></div></div>
+    <div class="sep"></div>
+    <div class="mi muted sm" style="padding:6px 10px">⚙ Manage sandbox types…</div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

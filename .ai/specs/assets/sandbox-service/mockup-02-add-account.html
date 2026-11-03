@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Add sandbox account</title><link rel="stylesheet" href="mockup.css"></head>
+<body>
+<aside class="side"><div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div><div class="nav on"><span class="ic">⬡</span>Sandboxes</div></aside>
+<main class="main"><div class="top"><h1>Sandboxes</h1></div></main>
+<div class="overlay"><div class="dialog">
+  <h3>Add sandbox account</h3>
+  <p class="muted sm" style="margin:0 0 14px">Choose a provider. You can add the same provider more than once, for example a work org and a personal one.</p>
+  <div class="grid2" style="gap:10px">
+    <div class="choice"><div class="logo msb">msb</div><div><b>microsandbox</b><div class="muted sm">Local microVMs on this machine. Free and open source. Needs Apple Silicon, or Linux with KVM.</div><div style="margin-top:6px"><span class="pill ok"><span class="dot"></span>Detected v0.7.13</span></div></div></div>
+    <div class="choice on"><div class="logo dt">D</div><div><b>Daytona</b><div class="muted sm">Cloud sandboxes, billed by Daytona for the vCPU, memory and disk they use.</div><div style="margin-top:6px"><span class="pill violet">selected</span></div></div></div>
+  </div>
+  <label class="f">Name</label>
+  <div class="input">Acme work org</div>
+  <label class="f">API key</label>
+  <div class="input focus mono">dtn_••••••••••••••••••••••••7f3a <span class="muted sm">paste</span></div>
+  <div class="hint">Encrypted in ~/.cezar/secrets and never passed to agents. Create one at app.daytona.io → Keys.</div>
+  <div class="grid3">
+    <div><label class="f">Region</label><div class="input">eu <span class="muted">▾</span></div></div>
+    <div><label class="f">Organization ID <span class="muted">(optional)</span></label><div class="input muted">—</div></div>
+    <div><label class="f">API URL</label><div class="input mono muted sm">app.daytona.io/api</div></div>
+  </div>
+  <div style="margin-top:14px" class="pill ok"><span class="dot"></span>Key works — organization “Acme” · region eu</div>
+  <div class="foot"><span class="btn ghost">Cancel</span><span class="btn">Test connection</span><span class="btn primary">Add account</span></div>
+</div></div>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Sandbox type editor</title><link rel="stylesheet" href="mockup.css">
+<style>.dialog{width:700px}.dialog .grid2{gap:0 18px}</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div><div class="nav on"><span class="ic">⬡</span>Sandboxes</div></aside>
+<main class="main"><div class="top"><h1>Sandboxes</h1></div></main>
+<div class="overlay"><div class="dialog">
+  <h3>New sandbox type</h3>
+  <p class="muted sm" style="margin:0 0 6px">Only the fields this provider supports are shown.</p>
+  <div class="grid2">
+    <div><label class="f">Name</label><div class="input">Ubuntu · 4 vCPU · 16 GB</div></div>
+    <div><label class="f">Account</label><div class="input"><span><span class="logo msb" style="display:inline-grid;width:20px;height:20px;font-size:9px;border-radius:5px;vertical-align:middle">msb</span>&nbsp; microsandbox (local)</span><span class="muted">▾</span></div></div>
+  </div>
+  <label class="f">Image</label>
+  <div class="input mono">ubuntu:24.04 <span class="muted sm">OCI image · Docker Hub, GHCR, …</span></div>
+  <div class="hint">cezar installs the task's agent CLI (same version as on this computer) and git into the image on first boot, then caches the result as a snapshot.</div>
+  <div class="grid3" style="margin-top:4px">
+    <div><label class="f">vCPU</label><div class="slider"><i style="width:40%"></i><b style="left:38%"></b></div><div class="mono sm">4 <span class="muted">/ 10 on this machine</span></div></div>
+    <div><label class="f">Memory</label><div class="slider"><i style="width:50%"></i><b style="left:48%"></b></div><div class="mono sm">16 GiB <span class="muted">/ 128 GiB</span></div></div>
+    <div><label class="f">Root disk</label><div class="slider"><i style="width:30%"></i><b style="left:28%"></b></div><div class="mono sm">40 GiB</div></div>
+  </div>
+  <label class="f">Network</label>
+  <div class="seg"><span>None</span><span>Agent API only</span><span class="on">Public internet</span><span>Allow-list…</span></div>
+  <div class="hint">"Agent API only" allows only the selected agent's model endpoint and the git remote.</div>
+  <div class="grid2">
+    <div><label class="f">Stop after idle</label><div class="input">30 min <span class="muted">▾</span></div></div>
+    <div><label class="f">Max lifetime</label><div class="input">8 h <span class="muted">▾</span></div></div>
+  </div>
+  <label class="f">Setup script <span class="muted">(runs once per sandbox, before the agent)</span></label>
+  <div class="input mono sm" style="display:block;white-space:pre;color:#b4b4bb">apt-get update &amp;&amp; apt-get install -y nodejs npm postgresql-client
+corepack enable</div>
+  <div class="grid2"><div><label class="f">Environment</label><div class="input mono sm">NODE_ENV=development <span class="muted">+ 1</span></div></div>
+  <div><label class="f">Secrets</label><div class="input sm">2 workspace secrets <span class="muted">▾</span></div></div></div>
+  <div class="foot"><span class="btn ghost">Cancel</span><span class="btn">Boot a test sandbox</span><span class="btn primary">Save sandbox type</span></div>
+</div></div>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

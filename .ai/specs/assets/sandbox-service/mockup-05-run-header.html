@@ -1,0 +1,52 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Run header with sandbox</title><link rel="stylesheet" href="mockup.css">
+<style>
+.hdr{padding:18px 26px;border-bottom:1px solid #262626}
+.hdr h1{font-size:20px;margin:0 0 10px;font-weight:600}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips .pill{border-radius:7px}
+.pop{margin:14px 26px 0;width:470px;background:#18181b;border:1px solid #34343a;border-radius:12px;padding:14px 16px;box-shadow:0 20px 50px #000b}
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 10px;font-size:13px}
+.kv div:nth-child(odd){color:#9a9aa3}
+.feed{margin:18px 26px;border:1px solid #262626;border-radius:12px;background:#121212;padding:12px 14px;font-size:13px}
+.ev{display:flex;gap:10px;padding:5px 0}
+.ev .t{color:#71717a;width:58px;flex:none}
+</style></head>
+<body>
+<aside class="side">
+  <div class="brand">cezar <small></small></div>
+  <div class="group">Active</div>
+  <div class="nav on"><span class="ic" style="color:#86efac">●</span>Test Open Mercato setup paths</div>
+  <div class="nav"><span class="ic">○</span>Fix flaky worktree cleanup</div>
+</aside>
+<main class="main">
+  <div class="hdr">
+    <h1>Test Open Mercato setup paths</h1>
+    <div class="chips">
+      <span class="pill">quick-task</span><span class="pill mono">⑂ cez/2afe116d</span><span class="pill">claude · opus</span>
+      <span class="pill violet">⬡ microsandbox · Ubuntu · 4 vCPU · 16 GB · <span style="color:#86efac">● running</span></span>
+      <span class="pill mono">+412 −37</span><span class="pill">$1.84</span>
+    </div>
+  </div>
+  <div class="pop">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b>Sandbox</b><span class="pill ok"><span class="dot"></span>running · 23 min</span></div>
+    <div class="kv">
+      <div>Provider</div><div>microsandbox (local) · v0.7.13</div>
+      <div>Sandbox</div><div class="mono">cez-2afe116d</div>
+      <div>Image</div><div class="mono">ubuntu:24.04 + claude 2.1.235</div>
+      <div>Resources</div><div class="mono">4 vCPU · 16 GiB · 40 GiB · net public</div>
+      <div>Workspace</div><div class="mono">/workspace ⇄ .ai/cezar/worktrees/2afe116d</div>
+      <div>Usage now</div><div class="mono">CPU 61% · RAM 9.8 / 16 GiB</div>
+      <div>Stops</div><div>after 30 min idle · removed when the task lands or is archived</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px"><span class="btn">Open shell</span><span class="btn">Stop sandbox</span><span class="btn ghost">Logs</span></div>
+  </div>
+  <div class="feed">
+    <div class="ev"><span class="t">14:02:11</span><span>⬡ Sandbox <code>cez-2afe116d</code> booted in 1.8 s (cached snapshot)</span></div>
+    <div class="ev"><span class="t">14:02:13</span><span>⬡ Setup script finished (exit 0)</span></div>
+    <div class="ev"><span class="t">14:02:14</span><span>▶ claude started inside the sandbox · cwd /workspace</span></div>
+    <div class="ev"><span class="t">14:09:40</span><span class="muted">$ yarn install && yarn setup   <span style="color:#86efac">✓ fresh environment: no host services reachable</span></span></div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>
