@@ -1108,6 +1108,9 @@ const archiveSchema = z.object({
 // `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
 // route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
 // "absent means do the thing" would be one more rule for a client to remember.
+/** Cap on a fresh cursorless SSE replay; older events stay reachable through `history` (#882). */
+const INITIAL_REPLAY_MAX_BYTES = 1_500_000;
+
 const pinSchema = z.object({
   pinned: z.boolean().optional(),
   surface: taskActionSurfaceSchema.optional(),
@@ -1117,9 +1120,6 @@ const pinSchema = z.object({
 // localhost request from being unbounded (the largest legit body is one message's
 // attachments, ≤ MAX_ATTACHMENTS_TOTAL_BASE64 in total); the ui-state PUT gets a much tighter cap since
 // it only ever carries small GUI prefs.
-/** Cap on a cursorless SSE replay; older events stay reachable through `history` (#882). */
-const INITIAL_REPLAY_MAX_BYTES = 1_500_000;
-
 const GLOBAL_BODY_LIMIT = 32 * 1024 * 1024; // 32 MiB
 // JSON like every other refusal (#1735): the bare "Payload Too Large" text told the cockpit nothing.
 const bodyTooLarge = (c: Context) =>
@@ -6621,12 +6621,14 @@ export function createApp(deps: ServerDeps) {
           offRun();
         });
 
-        // Cursorless: read only the newest INITIAL_REPLAY_MAX_BYTES, newest-first from the file end,
-        // and say so when older events were left out (#882). The cockpit pages `history` instead.
+        // Cursorless: read newest-first from the file end so the cost is the bytes returned (#882).
+        // A fresh connect is capped and flagged; a resume (`afterSeq`/`Last-Event-ID`) gets its whole
+        // gap, since a reconnecting client has no way to fill a hole it was never told about.
         let replay: { events: AsyncIterable<RunEvent> | RunEvent[]; boundarySeq: number };
         if (query.cursor) replay = await readEventsAfterLiveCursor(eventsPath, query.cursor);
         else {
-          const tail = await readEventsTail(eventsPath, { afterSeq: requestedAfter, maxBytes: INITIAL_REPLAY_MAX_BYTES });
+          const maxBytes = requestedAfter > 0 ? Number.POSITIVE_INFINITY : INITIAL_REPLAY_MAX_BYTES;
+          const tail = await readEventsTail(eventsPath, { afterSeq: requestedAfter, maxBytes });
           if (tail.truncated) {
             const frame: RunEventsTruncatedFrame = { firstSeq: tail.events[0]?.seq ?? 0, afterSeq: requestedAfter };
             await stream.writeSSE({ event: 'history-truncated', data: JSON.stringify(frame) });

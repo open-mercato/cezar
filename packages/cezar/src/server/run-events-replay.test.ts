@@ -95,4 +95,19 @@ describe('per-run SSE replay without a live cursor', () => {
     expect(resumed).not.toMatch(/^event: history-truncated$/m);
     expect([...resumed.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]))).toEqual([1199, 1200]);
   });
+
+  it('replays the whole gap on a resume, however large, so a reconnect never leaves a silent hole (#882)', async () => {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    for (let i = 0; i < 450; i += 1) store.appendEvent(run.id, { type: 'note', message: 'x'.repeat(4_000) }); // ~1.8 MB, past the cap
+    store.flush();
+
+    for (const resumed of [
+      await replayBody(`/api/v1/runs/${run.id}/events`, { 'Last-Event-ID': '10' }),
+      await replayBody(`/api/v1/runs/${run.id}/events?afterSeq=10`),
+    ]) {
+      expect(resumed).not.toMatch(/^event: history-truncated$/m);
+      const ids = [...resumed.matchAll(/^id: (\d+)$/gm)].map((m) => Number(m[1]));
+      expect(ids).toEqual(Array.from({ length: 440 }, (_, i) => 11 + i));
+    }
+  }, 30_000);
 });
