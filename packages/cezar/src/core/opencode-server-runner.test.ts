@@ -18,6 +18,7 @@ import {
   SERVER_START_MAX_MS,
   TURN_IDLE_GRACE_MS,
   opencodePermissionReply,
+  isUsageLimitRejection,
   unsupportedServerMessage,
 } from './opencode-server-runner.ts';
 
@@ -378,7 +379,40 @@ describe('2d01c3c9 opencode serve that starts without the expected URL line', ()
   }, 30_000);
 });
 
-describe('dc1a91a6 an OpenCode 2.x server', () => {
+describe('#1756 cost on a turn a usage limit rejected', () => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+  const costs = async (marker: string): Promise<number[]> => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: `work ${marker}`, cwd: process.cwd() },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    return events.flatMap((e) => (e.type === 'cost' ? [e.usd] : []));
+  };
+
+  it('keeps what was spent before the limit but not the rejected message', async () => {
+    expect(await costs('#limit-cost')).toEqual([0.02]);
+  }, 30_000);
+
+  it('still counts the cost of a message that failed for another reason (#1346)', async () => {
+    const usd = await costs('#fail-cost');
+    expect(usd.reduce((a, b) => a + b, 0)).toBeCloseTo(0.0205, 6);
+  }, 30_000);
+
+  it.each([
+    [{ name: 'APIError', data: { statusCode: 429 } }, true],
+    [{ name: 'FreeUsageLimitError', data: {} }, true],
+    [{ name: 'APIError', data: { message: 'Daily quota exceeded' } }, true],
+    [{ name: 'APIError', data: { statusCode: 500, message: 'stream closed' } }, false],
+    [undefined, false],
+  ])('classifies %j as a usage-limit rejection: %s', (error, expected) => {
+    expect(isUsageLimitRejection(error)).toBe(expected);
+  });
+});
+
+describe('dc1a91a6 a server with neither the 2.x probe nor the 1.x session route', () => {
   const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
 
   it('fails with an actionable message instead of a bare 405', async () => {
@@ -392,12 +426,15 @@ describe('dc1a91a6 an OpenCode 2.x server', () => {
     expect(events.filter((e) => e.type === 'error')).toEqual([
       { type: 'error', message: `opencode: ${unsupportedServerMessage(405)}` },
     ]);
-    expect(unsupportedServerMessage(405)).toMatch(/OpenCode 2\.x .* not supported yet — install OpenCode 1\.x/);
+    expect(unsupportedServerMessage(405)).not.toMatch(/not supported yet/);
   }, 30_000);
 });
 
-describe('1193 reopening a stored OpenCode session', () => {
-  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
+describe.each([
+  ['1.x', 'mock-opencode-serve.mjs', 'ses_mock_1'],
+  ['2.x', 'mock-opencode-v2-serve.mjs', 'ses_v2_mock'],
+])('1193 reopening a stored OpenCode %s session', (_api, fixture, storedId) => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', fixture);
   const run = async (sessionId: string) => {
     const events: AgentEvent[] = [];
     const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
@@ -410,8 +447,8 @@ describe('1193 reopening a stored OpenCode session', () => {
   };
 
   it('reuses the stored session when the server still has it', async () => {
-    const events = await run('ses_mock_1');
-    expect(events).toContainEqual({ type: 'session', sessionId: 'ses_mock_1' });
+    const events = await run(storedId);
+    expect(events).toContainEqual({ type: 'session', sessionId: storedId });
     expect(events.filter((e) => e.type === 'error')).toEqual([]);
   }, 30_000);
 

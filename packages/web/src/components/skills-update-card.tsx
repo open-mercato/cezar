@@ -185,7 +185,7 @@ export function SkillsUpdateCard({
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <p className="text-[13px] font-medium text-foreground">{message}</p>
+            <p className="text-ui font-medium text-foreground">{message}</p>
             {state?.checkedAt ? (
               <p className="mt-1 text-xs text-soft-foreground">
                 Last checked {new Date(state.checkedAt).toLocaleString()}.

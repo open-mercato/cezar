@@ -118,6 +118,7 @@ describe('parseUsageLimit', () => {
 
   it('is null for a limit with no recoverable instant — guessing would be a retry loop', () => {
     expect(parseUsageLimit('You have hit your usage limit. Upgrade to continue.', NOW)).toBeNull();
+    expect(parseUsageLimit("You've hit your 5-hour limit · resets 3:10pm (UTC)", NOW)?.evidence).toBe('clock');
     expect(parseUsageLimit('429 {"type":"rate_limit_error"}', NOW)).toBeNull();
   });
 });
