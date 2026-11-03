@@ -93,9 +93,9 @@ export function PickerPill({
   const renderOption = (option: { value: string; label: string; desc?: string }) => (
     <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
       <span className="flex min-w-0 flex-col">
-        <span className="text-[12.5px] font-medium">{option.label}</span>
+        <span className="text-label font-medium">{option.label}</span>
         {option.desc ? (
-          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-[11.5px] text-muted-foreground md:max-w-96">
+          <span className="max-w-[calc(100vw-3rem)] whitespace-normal break-words text-meta text-muted-foreground md:max-w-96">
             {option.desc}
           </span>
         ) : null}
@@ -188,7 +188,7 @@ export function PickerPill({
           <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
         ) : null}
         {status ? (
-          <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
+          <DropdownMenuItem disabled className="border-t border-border text-meta text-muted-foreground">
             {status}
           </DropdownMenuItem>
         ) : null}

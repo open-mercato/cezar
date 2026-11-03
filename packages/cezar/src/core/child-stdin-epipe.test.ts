@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeCliRunner } from './claude-cli-runner.ts';
 import { CopilotAcpRunner } from './copilot-acp-runner.ts';
+import { GeminiAcpRunner } from './gemini-acp-runner.ts';
 import { discoverOpencodeModels } from './opencode-model-catalog.ts';
 import { PiRunner } from './pi-runner.ts';
 
@@ -70,6 +71,12 @@ describe('an EPIPE on a child stdin never escapes as an uncaught error (acfb01e4
 
   it('copilot runner', () => {
     const session = new CopilotAcpRunner({ bin: 'copilot', timeoutMs: 0 }).startSession(spec);
+    void session.result.catch(() => undefined);
+    expect(() => lastChild().stdin.emit('error', epipe())).not.toThrow();
+  });
+
+  it('gemini runner', () => {
+    const session = new GeminiAcpRunner({ bin: 'gemini', timeoutMs: 0 }).startSession(spec);
     void session.result.catch(() => undefined);
     expect(() => lastChild().stdin.emit('error', epipe())).not.toThrow();
   });

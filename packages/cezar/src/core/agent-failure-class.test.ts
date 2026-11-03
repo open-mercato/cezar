@@ -13,6 +13,8 @@ describe('classifyAgentFailure — the agent CLIs\' own words (telemetry fingerp
     ['API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com', 'transient'], // 76aa46a9
     ['API Error: No response from API (waited 3m). If a proxy or gateway on your network holds responses until they complete, raise API_TIMEOUT_MS or CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS to wait longer.', 'transient'], // 9dd88886
     ['Selected model is at capacity. Please try a different model.', 'transient'], // a1c2fcc2 codex
+    ['API Error: 402 {"error":{"message":"This request requires more credits, or fewer max_tokens."}}', 'billing'], // cb147fae
+    ["You've hit your 5-hour limit · resets 3:10pm (UTC)", 'usage_limit'], // d1523f7c
     ['Error running remote compact task: workspace routing discovery failed', 'transient'], // 5919c71a codex
     ['Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again', 'transient'], // 204c5e03
     ['opencode: Provider is overloaded — retry at 2026-10-26T07:00:00.000Z', 'transient'],

@@ -85,7 +85,7 @@ export function ReferenceOverflow({
           onClick={() => {
             openedByHover.current = false
           }}
-          className="shrink-0 rounded-full px-1 text-[11px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="shrink-0 rounded-full px-1 text-meta font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           +{hidden}
         </button>
@@ -103,7 +103,7 @@ export function ReferenceOverflow({
           if (openedByHover.current) event.preventDefault()
         }}
       >
-        <p className="px-1 pb-1.5 text-[10.5px] text-soft-foreground">References</p>
+        <p className="px-1 pb-1.5 text-micro text-soft-foreground">References</p>
         <span className="flex flex-col items-start gap-1">
           {references.map((reference) => (
             <ReferenceChip

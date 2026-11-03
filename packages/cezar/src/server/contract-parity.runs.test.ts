@@ -23,6 +23,10 @@ import type {
   removeWorktreeResponseSchema,
   runCommitsResponseSchema,
   runRecordSchema,
+  runArtifactsResponseSchema,
+  startImpactResponseSchema,
+  artifactsBySubjectResponseSchema,
+  projectAssetsResponseSchema,
   startNowResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
@@ -57,6 +61,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type RunCreate201 = InferResponseType<Runs['$post'], 201>;
   type RunArchive200 = InferResponseType<Run['archive']['$post'], 200>;
   type RunPin200 = InferResponseType<Run['pin']['$post'], 200>;
+  type RunPromote200 = InferResponseType<Run['promote']['$post'], 200>;
   type RunRead200 = InferResponseType<Run['read']['$post'], 200>;
   type RunUnread200 = InferResponseType<Run['unread']['$post'], 200>;
   type RunPatch200 = InferResponseType<Run['$patch'], 200>;
@@ -78,6 +83,10 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type AdoptPr200 = InferResponseType<Run['pr']['adopt']['$post'], 200>;
   type RemoveWorktree200 = InferResponseType<Run['remove-worktree']['$post'], 200>;
   type DeleteRun200 = InferResponseType<Run['$delete'], 200>;
+  type Artifacts200 = InferResponseType<Run['artifacts']['$get'], 200>;
+  type Impact201 = InferResponseType<typeof client.api.v1.impact.$post, 201>;
+  type BySubject200 = InferResponseType<typeof client.api.v1.artifacts.$get, 200>;
+  type Assets200 = InferResponseType<typeof client.api.v1.assets.$get, 200>;
 
   type _Checks = [
     // the record, in both of its two forms
@@ -87,6 +96,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     // the pin (#935) answers the record too — pinned here is what stops it drifting into a
     // bespoke `{pinned: true}` payload the moment someone finds that shorter to write
     Assert<Exact<z.infer<typeof runRecordSchema>, RunPin200>>,
+    // "Run First" answers the record the same way
+    Assert<Exact<z.infer<typeof runRecordSchema>, RunPromote200>>,
     Assert<Exact<z.infer<typeof runRecordSchema>, RunPatch200>>,
     // the read receipt and its inverse (#unread-done-items, #775) — both answer the record, and
     // pinning them here is what stops either drifting into a bespoke payload
@@ -121,6 +132,11 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof gitPushResponseSchema>, GitPush200>>,
     Assert<Exact<z.infer<typeof gitStatusResponseSchema>, GitStatus200>>,
     Assert<Exact<z.infer<typeof removeWorktreeResponseSchema>, RemoveWorktree200>>,
+    Assert<Exact<z.infer<typeof runArtifactsResponseSchema>, Artifacts200>>,
+    // Assess Impact (spec 2026-10-22-html-artifacts-and-impact)
+    Assert<Exact<z.infer<typeof startImpactResponseSchema>, Impact201>>,
+    Assert<Exact<z.infer<typeof artifactsBySubjectResponseSchema>, BySubject200>>,
+    Assert<Exact<z.infer<typeof projectAssetsResponseSchema>, Assets200>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {
