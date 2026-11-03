@@ -28,6 +28,8 @@ import {
 import { geminiResumeWaitMs } from './gemini-sessions.ts';
 import type { UiEvent } from './ui-events.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
+import { spawnableCommand } from './windows-shim.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage, type InactivityDeadline } from './inactivity-deadline.ts';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 /** `initialize` / `session/new` / `session/load` are handshakes: bounded, unlike a prompt. */
@@ -43,7 +45,7 @@ const AUTO_END_DELAY_MS = 250;
 export interface GeminiAcpRunnerOptions {
   /** Override the binary; defaults to `gemini` on PATH (`CEZ_GEMINI_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms), with a hard ceiling; per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -102,12 +104,16 @@ export function buildGeminiEnv(backend: AgentBackend, extraEnv?: Record<string, 
 }
 
 /** A cezar-authored line for an exit outside a prompt (spec § Phase 2 "Exit codes"). */
-export function geminiExitMessage(exitCode: number | null, stderr: string): string {
+export function geminiExitMessage(exitCode: number | null, stderr: string, midTurn = false): string {
   if (exitCode === 41 || isGeminiAuthFailure(stderr)) return GEMINI_AUTH_FAILURE_MESSAGE;
   if (exitCode === 52) return 'Gemini CLI exited 52: its configuration is invalid — check ~/.gemini/settings.json and the project .gemini/settings.json';
   if (exitCode === 55) return 'Gemini CLI exited 55: the workspace is not trusted (cezar sets GEMINI_CLI_TRUST_WORKSPACE=true; something overrode it)';
   const detail = stderr.trim().split('\n').slice(-3).join(' | ');
-  return `Gemini CLI exited with code ${exitCode}${detail ? ` — ${truncate(detail, 400)}` : ''}`;
+  // Mid-turn, a bare "exited with code 0" reads as success; it is a dropped prompt (telemetry 2e3b122d).
+  const head = midTurn
+    ? `Gemini CLI quit mid-turn without answering the prompt (exit code ${exitCode})`
+    : `Gemini CLI exited with code ${exitCode}`;
+  return `${head}${detail ? ` — ${truncate(detail, 400)}` : ''}`;
 }
 
 class GeminiAcpSession implements AgentSession {
@@ -128,7 +134,9 @@ class GeminiAcpSession implements AgentSession {
   private turnsCompleted = 0;
   private readonly queue: AcpContentBlock[][] = [];
   private terminatedByCezar = false;
+  private endedByCezar = false;
   private timedOut = false;
+  private deadline: InactivityDeadline = armInactivityDeadline(0, () => {});
   private failed: string | null = null;
   private replayDone: (() => void) | null = null;
 
@@ -156,9 +164,13 @@ class GeminiAcpSession implements AgentSession {
     private readonly opts: SessionOptions,
   ) {
     this.childEnv = buildGeminiEnv(backend, spec.env);
-    this.child = nodeSpawn(bin, buildGeminiArgs(spec), { cwd: spec.cwd, env: this.childEnv });
+    // npm installs `gemini.cmd` on Windows, which Node cannot spawn bare (#1460).
+    const [file, argv] = spawnableCommand(bin, buildGeminiArgs(spec));
+    this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env: this.childEnv });
     this.pid = this.child.pid;
     this.hasExited = trackChildExit(this.child);
+    // EPIPE from a write racing the child's exit arrives as an async 'error' (acfb01e4).
+    this.child.stdin.on('error', () => {});
     this.child.on('error', (error: NodeJS.ErrnoException) => {
       this.spawnError =
         error.code === 'ENOENT'
@@ -173,14 +185,10 @@ class GeminiAcpSession implements AgentSession {
       onUnparseable: (line) => this.emit({ type: 'note', message: `gemini: skipped unparseable ACP line: ${truncate(line, 200)}` }),
     });
 
-    if (this.limitMs > 0) {
-      const deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-      }, this.limitMs);
-      deadline.unref?.();
-      this.timers.push(deadline);
-    }
+    this.deadline = armInactivityDeadline(this.limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+    });
     this.result = this.lifecycle();
   }
 
@@ -203,6 +211,7 @@ class GeminiAcpSession implements AgentSession {
   end(): void {
     if (!this.isOpen) return;
     this.isOpen = false;
+    this.endedByCezar = true;
     this.terminate(false);
   }
 
@@ -228,6 +237,7 @@ class GeminiAcpSession implements AgentSession {
 
     await reading;
     const exitCode = await exited;
+    this.deadline.clear();
     for (const timer of this.timers) clearTimeout(timer);
     if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
     this.isOpen = false;
@@ -239,9 +249,9 @@ class GeminiAcpSession implements AgentSession {
       // The agent died with a prompt unanswered: the transport rejected it, the wire never will.
       this.turnInFlight = false;
       if (this.timedOut) this.applyUi(abortAcpTurn(this.ui, geminiDialect, 'timeout'));
-      else if (this.terminatedByCezar) this.applyUi(abortAcpTurn(this.ui, geminiDialect, 'cancelled'));
+      else if (this.terminatedByCezar || this.endedByCezar) this.applyUi(abortAcpTurn(this.ui, geminiDialect, 'cancelled'));
       else {
-        const reason = geminiExitMessage(exitCode, this.stderrText());
+        const reason = geminiExitMessage(exitCode, this.stderrText(), true);
         this.applyUi(abortAcpTurn(this.ui, geminiDialect, 'error', reason));
         this.fail(reason);
       }
@@ -254,8 +264,7 @@ class GeminiAcpSession implements AgentSession {
     });
 
     if (this.timedOut) {
-      const minutes = Math.round((this.limitMs / 60_000) * 10) / 10;
-      this.emit({ type: 'error', message: `Gemini CLI timed out after ${minutes}m and was killed` });
+      this.emit({ type: 'error', message: inactivityTimeoutMessage('Gemini CLI', this.limitMs, this.deadline.expiredBy) });
       this.emit({ type: 'done' });
       return summary();
     }
@@ -381,6 +390,7 @@ class GeminiAcpSession implements AgentSession {
   // ---- wire → events --------------------------------------------------------------------
 
   private onFrame(dir: 'in' | 'out', frame: AcpMessage): void {
+    if (dir === 'in') this.deadline.touch();
     if (dir === 'in' && this.replayDone && isRecord(frame.params) && isRecord(frame.params.update) && frame.params.update.sessionUpdate === 'available_commands_update') {
       const done = this.replayDone;
       this.replayDone = null;

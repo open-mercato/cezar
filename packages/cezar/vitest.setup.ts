@@ -119,7 +119,7 @@ beforeEach(pinSandboxHome)
 // which needs the real CLI to find the operator's own credentials.
 if (process.env.CEZ_GEMINI_SMOKE !== '1') {
   process.env.GEMINI_CLI_HOME = sandboxHome
-  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GEMINI_BASE_URL', 'GOOGLE_GENAI_USE_VERTEXAI']) {
+  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GEMINI_BASE_URL', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA']) {
     delete process.env[name]
   }
 }

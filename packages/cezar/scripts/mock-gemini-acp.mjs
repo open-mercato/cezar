@@ -9,6 +9,8 @@
 //   CEZ_MOCK_GEMINI_PERMISSION=1 ask session/request_permission before the shell tool
 //   CEZ_MOCK_GEMINI_SLOW=1      stream a long thought and wait for session/cancel
 //   CEZ_MOCK_GEMINI_DIE_MID_TURN=1 exit(1) in the middle of the first prompt
+//   CEZ_MOCK_GEMINI_EXIT_MID_TURN=1 exit(0) in the middle of the first prompt, answering nothing
+//   CEZ_MOCK_GEMINI_EXIT_ON_EOF=1 exit(0) as soon as stdin closes, even mid-turn
 //   CEZ_MOCK_GEMINI_NO_LOAD=1   advertise loadSession: false
 import { randomUUID } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
@@ -65,6 +67,7 @@ async function prompt(id, params) {
   }
   update(sessionId, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: '**Planning the change**\nRead the file first.' } });
   if (env.CEZ_MOCK_GEMINI_DIE_MID_TURN === '1') process.exit(1);
+  if (env.CEZ_MOCK_GEMINI_EXIT_MID_TURN === '1') process.exit(0);
   update(sessionId, { sessionUpdate: 'tool_call', toolCallId: `read_file__call_${promptCount}1`, status: 'in_progress', title: 'README.md', content: [], locations: [{ path: 'README.md' }], kind: 'read' });
   update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId: `read_file__call_${promptCount}1`, status: 'completed', title: 'README.md', content: [], locations: [{ path: 'README.md' }], kind: 'read' });
   const shellId = `run_shell_command__call_${promptCount}2`;
@@ -132,6 +135,7 @@ async function prompt(id, params) {
   });
 }
 
+if (env.CEZ_MOCK_GEMINI_EXIT_ON_EOF === '1') process.stdin.on('end', () => process.exit(0));
 for await (const line of readline.createInterface({ input: process.stdin })) {
   let message;
   try {

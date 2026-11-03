@@ -23,6 +23,7 @@ const WORKING_AUTH_TYPES: ReadonlySet<string> = new Set([
  *
  * - `GEMINI_API_KEY` / `GOOGLE_API_KEY`, or a custom gateway (`GOOGLE_GEMINI_BASE_URL`);
  * - Vertex AI: `GOOGLE_GENAI_USE_VERTEXAI=true` with a project (`GOOGLE_CLOUD_PROJECT`);
+ * - Code Assist: `GOOGLE_GENAI_USE_GCA=true` (Workspace / Standard licences, Google sign-in);
  * - the `.env` the CLI loads on its own: `<gemini home>/.gemini/.env`, then `<gemini home>/.env`,
  *   where the gemini home is `GEMINI_CLI_HOME`, else the OS home (`homedir()` in the bundle);
  * - the auth method the user chose in the CLI (`security.auth.selectedType` in
@@ -38,6 +39,9 @@ const WORKING_AUTH_TYPES: ReadonlySet<string> = new Set([
 export function geminiHasCredentials(env: NodeJS.ProcessEnv = process.env): boolean {
   if (present(env.GEMINI_API_KEY) || present(env.GOOGLE_API_KEY) || present(env.GOOGLE_GEMINI_BASE_URL)) return true;
   if (env.GOOGLE_GENAI_USE_VERTEXAI === 'true' && present(env.GOOGLE_CLOUD_PROJECT)) return true;
+  // Code Assist (Workspace / Standard licences): the CLI's own selector; a bad sign-in still
+  // surfaces at run time as `provider-auth-required`.
+  if (env.GOOGLE_GENAI_USE_GCA === 'true') return true;
   const home = present(env.GEMINI_CLI_HOME) ? env.GEMINI_CLI_HOME! : homedir();
   if ([join(home, '.gemini', '.env'), join(home, '.env')].some(definesKey)) return true;
   const selected = selectedAuthType(join(home, '.gemini', 'settings.json'));

@@ -173,7 +173,10 @@ describe('GeminiAcpRunner — session lifecycle', () => {
     await new GeminiAcpRunner({ bin: MOCK }).startSession({ userPrompt: 'slow', cwd, timeoutMs: 1_500, env: { CEZ_MOCK_GEMINI_SLOW: '1' } }, c.onEvent, {
       onUiEvent: c.onUiEvent,
     }).result;
-    expect(c.events).toContainEqual({ type: 'error', message: 'Gemini CLI timed out after 0m and was killed' });
+    expect(c.events).toContainEqual({
+      type: 'error',
+      message: 'Gemini CLI timed out after 2s without any output and was killed — Continue picks the task up again',
+    });
     expect(c.ui).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'timeout' }));
   });
 });
@@ -202,8 +205,30 @@ describe('GeminiAcpRunner — failures', () => {
     await new GeminiAcpRunner({ bin: MOCK }).startSession({ userPrompt: 'x', cwd, env: { CEZ_MOCK_GEMINI_DIE_MID_TURN: '1' } }, c.onEvent, {
       onUiEvent: c.onUiEvent,
     }).result;
-    expect(c.events).toContainEqual({ type: 'error', message: 'Gemini CLI exited with code 1' });
+    expect(c.events).toContainEqual({ type: 'error', message: 'Gemini CLI quit mid-turn without answering the prompt (exit code 1)' });
     expect(c.ui).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'error' }));
+  });
+
+  it('a CLI that quits cleanly mid-turn on its own says the prompt went unanswered', async () => {
+    const c = collect();
+    await new GeminiAcpRunner({ bin: MOCK }).startSession({ userPrompt: 'x', cwd, env: { CEZ_MOCK_GEMINI_EXIT_MID_TURN: '1' } }, c.onEvent, {
+      onUiEvent: c.onUiEvent,
+    }).result;
+    expect(c.events).toContainEqual({ type: 'error', message: 'Gemini CLI quit mid-turn without answering the prompt (exit code 0)' });
+  });
+
+  it('end() mid-turn is cezar closing the session, not an agent failure', async () => {
+    const c = collect();
+    const session = new GeminiAcpRunner({ bin: MOCK }).startSession(
+      { userPrompt: 'slow', cwd, env: { CEZ_MOCK_GEMINI_SLOW: '1', CEZ_MOCK_GEMINI_EXIT_ON_EOF: '1' } },
+      c.onEvent,
+      { onUiEvent: c.onUiEvent },
+    );
+    await waitFor(() => c.ui.some((e) => e.type === 'item.started' && e.item.kind === 'tool'));
+    session.end();
+    await session.result;
+    expect(c.events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(c.ui).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'cancelled' }));
   });
 
   it('a missing binary is a clear install hint', async () => {
@@ -256,5 +281,6 @@ describe('gemini runner helpers', () => {
     expect(geminiExitMessage(52, '')).toContain('configuration is invalid');
     expect(geminiExitMessage(55, '')).toContain('not trusted');
     expect(geminiExitMessage(3, 'a\nb\nc\nd')).toBe('Gemini CLI exited with code 3 — b | c | d');
+    expect(geminiExitMessage(0, '', true)).toBe('Gemini CLI quit mid-turn without answering the prompt (exit code 0)');
   });
 });

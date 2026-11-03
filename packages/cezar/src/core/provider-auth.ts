@@ -192,9 +192,10 @@ const RUNTIME_AUTH_VERIFY_COOLDOWN_MS = 60_000;
  *  wrong answer, and it is now paid in the background; fixing it properly means per-provider
  *  timestamps and merging partial probe results. */
 function cacheTtlFor(rows: readonly ProviderStatus[]): number {
-  // Junie deliberately remains `unknown` after a successful handshake, so it must not force
-  // every other provider's cached credential result onto the short negative-answer window.
-  return rows.filter((row) => row.provider !== 'junie').every((row) => row.status === 'connected')
+  // Junie deliberately remains `unknown` after a successful handshake, and Gemini's status is an
+  // environment read that stays `unknown` without a visible key — neither may force every other
+  // provider's cached credential result onto the short negative-answer window.
+  return rows.filter((row) => row.provider !== 'junie' && row.provider !== 'gemini').every((row) => row.status === 'connected')
     ? CONNECTED_TTL_MS
     : UNSETTLED_TTL_MS;
 }

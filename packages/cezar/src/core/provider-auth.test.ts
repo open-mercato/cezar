@@ -1894,6 +1894,26 @@ describe('gemini provider status (#581): an environment read, never a login prob
     expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
   });
 
+  it('is connected when the Code Assist selector is on (Workspace / Standard licences)', async () => {
+    process.env.GOOGLE_GENAI_USE_GCA = 'true';
+    try {
+      const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+      expect(rows.gemini!.status).toBe('connected');
+    } finally {
+      delete process.env.GOOGLE_GENAI_USE_GCA;
+    }
+  });
+
+  it('a steady `unknown` Gemini does not shorten every other provider’s cache window', async () => {
+    let now = 1_000;
+    const runCommand = runner();
+    const service = new ProviderAuthService({ runCommand, platform: 'linux', now: () => now });
+    expect((await statuses(service)).gemini!.status).toBe('unknown');
+    now += 9 * 60_000;
+    await service.status();
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
+  });
+
   it('is unknown — never disconnected — with the API-key hint when no credential is visible', async () => {
     const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
     expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
