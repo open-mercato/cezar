@@ -263,6 +263,9 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     serve()
     renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
 
+    // The model list comes with provider status, which Continue no longer waits for (#719).
+    const button = await screen.findByRole('button', { name: /continue/i })
+    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
     fireEvent.pointerDown(await screen.findByRole('button', { name: 'Model' }))
     const options = await screen.findAllByRole('menuitemradio')
     fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
