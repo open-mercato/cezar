@@ -68,6 +68,8 @@ export interface EditorDraft {
   account: string | null
   /** `null` = never touched; `''` = auto, explicitly. */
   model: string | null
+  /** `null` = the selected Codex model's native default; omitted on the wire. */
+  reasoningEffort: string | null
   autonomous: boolean
   dispatch: boolean
   maxSubtasks: number
@@ -151,6 +153,7 @@ export function newDraft(): EditorDraft {
     runner: null,
     account: null,
     model: null,
+    reasoningEffort: null,
     autonomous: true,
     dispatch: false,
     maxSubtasks: 4,
@@ -201,6 +204,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     runner: task.runner ?? null,
     account: task.agentProfile ?? null,
     model: task.model ?? null,
+    reasoningEffort: task.reasoningEffort ?? null,
     autonomous: task.autonomous ?? false,
     dispatch: task.dispatch !== undefined,
     maxSubtasks: task.dispatch?.maxSubtasks ?? base.maxSubtasks,
@@ -218,6 +222,7 @@ export type TemplatePick = Pick<AutomationTemplateDraft, 'name' | 'kind' | 'sche
   steps?: TaskSteps
   runner?: string
   model?: string
+  reasoningEffort?: string
   autonomous?: boolean
   checkout?: 'base' | 'pr-head'
   allowForkHeads?: boolean
@@ -237,6 +242,7 @@ export function templatePick(template: AutomationTemplate): TemplatePick {
     ...(template.task.steps ? { steps: template.task.steps } : {}),
     ...(template.task.runner ? { runner: template.task.runner } : {}),
     ...(template.task.model !== undefined ? { model: template.task.model } : {}),
+    ...(template.task.reasoningEffort ? { reasoningEffort: template.task.reasoningEffort } : {}),
     ...(template.task.autonomous !== undefined ? { autonomous: template.task.autonomous } : {}),
     ...(template.task.dispatch ? { dispatch: template.task.dispatch } : {}),
     ...(template.task.checkout ? { checkout: template.task.checkout } : {}),
@@ -270,6 +276,7 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     // An account belongs to one runner; a template that names a runner must not inherit it.
     account: template.runner !== undefined && isRunner(template.runner) ? null : draft.account,
     model: template.model ?? draft.model,
+    reasoningEffort: template.reasoningEffort ?? (template.runner !== undefined || template.model !== undefined ? null : draft.reasoningEffort),
     autonomous: template.autonomous ?? draft.autonomous,
     dispatch: template.dispatch !== undefined,
     maxSubtasks: template.dispatch?.maxSubtasks ?? draft.maxSubtasks,
@@ -302,6 +309,7 @@ export function toBody(draft: EditorDraft): AutomationBody {
     ...(draft.runner ? { runner: draft.runner } : {}),
     ...(draft.account ? { agentProfile: draft.account } : {}),
     ...(draft.model ? { model: draft.model } : {}),
+    ...(draft.reasoningEffort ? { reasoningEffort: draft.reasoningEffort } : {}),
     autonomous: draft.autonomous,
     ...(draft.dispatch ? { dispatch: { maxSubtasks: draft.maxSubtasks, reviewChild: draft.reviewChild } } : {}),
   }

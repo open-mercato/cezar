@@ -24,7 +24,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimActive, disclaimedCommand, readHead, resolveProgram, type DisclaimOptions } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
@@ -169,6 +169,7 @@ export class CursorAgentRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('cursor', spec.reasoningEffort);
     const args = buildCursorArgs({
       userPrompt: spec.userPrompt,
       systemPrompt: spec.systemPrompt,
