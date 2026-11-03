@@ -83,6 +83,19 @@ describe('OpenCode V2 native events', () => {
     expect(events).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'error' }));
   });
 
+  it('reports a failed step and its terminal execution failure as one error', () => {
+    const { send, events } = record();
+    const error = { type: 'provider.free-limit', message: 'Free usage limit reached.', status: 429 };
+    send('session.step.started', { assistantMessageID: 'msg_1' });
+    send('session.step.failed', { assistantMessageID: 'msg_1', error });
+    send('session.execution.failed', { error });
+    send('session.idle', {});
+    expect(events.filter((e) => e.type === 'session.error')).toEqual([
+      expect.objectContaining({ message: 'Free usage limit reached.' }),
+    ]);
+    expect(events).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'error' }));
+  });
+
   it('ignores malformed, unknown and foreign-session events', () => {
     const { adapter } = record();
     for (const value of [null, {}, { type: 'session.text.delta', data: null },

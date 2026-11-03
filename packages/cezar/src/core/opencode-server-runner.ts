@@ -136,12 +136,11 @@ class OpencodeStatusError extends Error {
   }
 }
 
-/** The installed `opencode serve` has no 1.x session route — in practice OpenCode 2.x. */
+/** The server answered neither the 2.x `/api/info` probe nor the 1.x session route (#1513). */
 export function unsupportedServerMessage(status: number): string {
   return (
-    `this OpenCode server has no POST /session route (HTTP ${status}). ` +
-    'OpenCode 2.x replaced the server API cezar drives and is not supported yet — ' +
-    'install OpenCode 1.x (npm install -g opencode-ai@1) to run OpenCode tasks.'
+    `this OpenCode server has no POST /session route (HTTP ${status}) and did not identify itself ` +
+    'as OpenCode 2.x on GET /api/info — update OpenCode to a 1.x or 2.x release cezar can drive.'
   );
 }
 

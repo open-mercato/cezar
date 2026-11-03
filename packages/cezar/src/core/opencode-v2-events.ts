@@ -29,12 +29,12 @@ export class OpencodeV2Events {
     if (typeof mid !== 'string') return [];
     const info = event('message.updated', { info: { id: mid, sessionID: this.sessionId, role: 'assistant' } });
     if (type === 'session.step.started') return [info];
+    // A failed step is followed by `session.execution.failed` carrying the same error
+    // (real 2.2.5), so only that terminal event reports it; the step keeps its usage.
     if (type === 'session.step.ended' || type === 'session.step.failed') {
-      const events = [event('message.updated', {
+      return [event('message.updated', {
         info: { id: mid, sessionID: this.sessionId, role: 'assistant', tokens: data.tokens, cost: data.cost },
       })];
-      if (type === 'session.step.failed') events.push(event('session.error', { sessionID: this.sessionId, error: data.error }));
-      return events;
     }
 
     const textEvent = /^session\.(text|reasoning)\.(started|delta|ended)$/.exec(type);

@@ -82,7 +82,10 @@ const server = createServer((req, res) => {
         return; // wait hangs unless the runner handles the lost event bus
       }
       if (data.text.includes('#error')) {
-        emit('session.execution.failed', { error: { type: 'ProviderError', message: 'invalid API key', status: 401 } });
+        // Real 2.x reports a provider failure on the step AND on the execution.
+        const error = { type: 'ProviderError', message: 'invalid API key', status: 401 };
+        emit('session.step.failed', { ...common, error });
+        emit('session.execution.failed', { error });
         idle();
         return;
       }

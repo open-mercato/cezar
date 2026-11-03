@@ -84,7 +84,7 @@ describe('OpenCode V1 + V2 runner compatibility', () => {
   it('surfaces native V2 execution failures in both protocols', async () => {
     const { session, events, ui } = start('#error');
     await session.result;
-    expect(events).toContainEqual({ type: 'error', message: 'opencode: invalid API key' });
+    expect(events.filter((e) => e.type === 'error')).toEqual([{ type: 'error', message: 'opencode: invalid API key' }]);
     expect(ui).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'error' }));
   });
 
