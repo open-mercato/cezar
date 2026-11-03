@@ -20,4 +20,4 @@
 
 ### Phase 1: Copy button
 
-- [ ] 1.1 Add copy-path button to the diff file header
+- [x] 1.1 Add copy-path button to the diff file header — b05c1a41f
