@@ -7,6 +7,8 @@ import {
   estimateFileHeight,
   estimateFileRows,
   fileKey,
+  isLargeDiff,
+  LARGE_DIFF_LINES,
   widestLineChars,
 } from './diff-scroll'
 import type { DiffFileChange } from './types'
@@ -96,5 +98,32 @@ describe('widestLineChars', () => {
 
   it('is zero for an empty patch', () => {
     expect(widestLineChars('')).toBe(0)
+  })
+})
+
+describe('isLargeDiff — which files open collapsed', () => {
+  it('holds back a file past the changed-line budget, and only past it', () => {
+    expect(isLargeDiff(file('src/a.ts', 10, { adds: LARGE_DIFF_LINES, dels: 0 }))).toBe(false)
+    expect(isLargeDiff(file('src/a.ts', 10, { adds: LARGE_DIFF_LINES, dels: 1 }))).toBe(true)
+    expect(isLargeDiff(file('src/gone.ts', 10, { status: 'deleted', adds: 0, dels: 9_000 }))).toBe(true)
+  })
+
+  it('holds back lockfiles and build output however small', () => {
+    for (const path of ['package-lock.json', 'web/yarn.lock', 'pnpm-lock.yaml', 'go.sum', 'dist/app.min.js', 'dist/app.js.map']) {
+      expect(isLargeDiff(file(path, 3, { adds: 2 })), path).toBe(true)
+    }
+    expect(isLargeDiff(file('src/lock.ts', 3, { adds: 2 }))).toBe(false)
+  })
+
+  it('never holds back a binary or image file — it renders no rows', () => {
+    expect(isLargeDiff(file('logo.png', 1, { binary: true, adds: 0, dels: 0 }))).toBe(false)
+    expect(isLargeDiff(file('icon.svg', 10, { image: true, adds: 900, dels: 0 }))).toBe(false)
+  })
+})
+
+describe('closed cards in the cost rules', () => {
+  it('sizes a closed card\'s placeholder as a header', () => {
+    const big = file('big.ts', 2000)
+    expect(estimateFileHeight(big, false)).toBeLessThan(estimateFileHeight(big))
   })
 })

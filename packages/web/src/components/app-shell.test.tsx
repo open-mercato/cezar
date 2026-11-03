@@ -1,4 +1,4 @@
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -82,6 +82,14 @@ describe('AppShell', () => {
     expect(name!.className).toContain('tracking-normal')
   })
 
+  it('renders a workspace name and uploaded logo when supplied', () => {
+    renderShell('/', { brandName: 'Acme Studio', brandLogoUrl: '/api/v1/workspace/branding-logo?v=abc' })
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement
+    expect(lockup.querySelector('[data-slot="brand-name"]')?.textContent).toBe('Acme Studio')
+    expect(lockup.querySelector('[data-slot="brand-logo"]')?.getAttribute('src')).toBe('/api/v1/workspace/branding-logo?v=abc')
+    expect(lockup.querySelector('[data-slot="brand-mark"]')).toBeNull()
+  })
+
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
     renderShell('/')
     const main = screen.getByRole('main')
@@ -134,6 +142,7 @@ describe('AppShell', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -145,6 +154,7 @@ describe('AppShell', () => {
       '/inbox',
       '/git',
       '/github',
+      '/assets',
       '/automations',
       '/skills',
       '/workflows',
@@ -181,6 +191,7 @@ describe('AppShell', () => {
       ['/', 'Tasks'],
       ['/git', 'Git'],
       ['/skills', 'Skills'],
+      ['/assets', 'Assets'],
       // Tasks stays lit while a task thread is open (spec's "Task list & table").
       ['/tasks/abc123', 'Tasks'],
     ]
@@ -337,6 +348,7 @@ describe('AppShell', () => {
       expect(document.querySelector('[data-slot="repo-chip"]')).toBeNull()
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
       expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
+      expect(document.querySelector('[data-slot="star-chip"]')).toBeNull()
     })
 
     it('renders the repo chip and version chip from props', () => {
@@ -344,6 +356,63 @@ describe('AppShell', () => {
       expect(screen.getByText('cezar / main')).toBeTruthy()
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
+    })
+
+    describe('the ⭐ ask', () => {
+      const chip = () => document.querySelector('[data-slot="star-chip"]') as HTMLAnchorElement | null
+
+      it('renders the count beside the version chip, in the one controls row', () => {
+        renderShell('/', { version: '1.2.3', starCount: 1234 })
+        const row = document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
+        expect(row.querySelector('[data-slot="star-chip"]')).not.toBeNull()
+        expect(within(footer()).getByText('1.2k')).toBeTruthy()
+      })
+
+      it('is absent — not empty — when the count is unavailable', () => {
+        // Offline, a rate-limited IP, or `CEZ_NO_BANNER=1`. A button advertising a number it
+        // cannot produce is worse than no button, and the row has no room to spare either.
+        renderShell('/', { version: '1.2.3', starCount: null })
+        expect(chip()).toBeNull()
+      })
+
+      it('still renders at zero — a real count, not a missing one', () => {
+        renderShell('/', { version: '1.2.3', starCount: 0 })
+        expect(chip()).not.toBeNull()
+        expect(within(footer()).getByText('0')).toBeTruthy()
+      })
+
+      it('links to cezar, in a new tab, leaking neither opener nor referrer', () => {
+        renderShell('/', { starCount: 42 })
+        expect(chip()?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+        expect(chip()?.getAttribute('target')).toBe('_blank')
+        expect(chip()?.getAttribute('rel')).toContain('noopener')
+        expect(chip()?.getAttribute('rel')).toContain('noreferrer')
+      })
+
+      it('names itself for a screen reader with the exact count, not the abbreviation', () => {
+        renderShell('/', { starCount: 12_345 })
+        // The visible chip abbreviates for the 264px column; the accessible name must not —
+        // "12.3k stars" is a worse answer to "how many" than the number itself.
+        const label = chip()?.getAttribute('aria-label') ?? ''
+        expect(label).toMatch(/star cezar on github/i)
+        // Formatted for the reader's own locale, so assert it the same way rather than pinning
+        // `12,345` — that spelling is a property of the test machine, not of this component.
+        expect(label).toContain(new Intl.NumberFormat().format(12_345))
+        expect(label).not.toContain('12.3k')
+      })
+
+      it('is shrink-0, leaving the version chip as the row\'s one elastic item (#876)', () => {
+        // Two elastic controls would give the row two ways to lose its width budget. The star
+        // chip is six characters at worst, so it can afford to be rigid.
+        renderShell('/', { version: '1.2.3', starCount: 12_345 })
+        expect(chip()?.className).toContain('shrink-0')
+      })
+
+      it('offers no reward and blocks nothing — the chip is a link and only a link', () => {
+        renderShell('/', { starCount: 1000 })
+        expect(chip()?.tagName).toBe('A')
+        expect(chip()?.textContent ?? '').not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium)\b/i)
+      })
     })
 
     describe('version chip update affordance (#368)', () => {
@@ -398,6 +467,22 @@ describe('AppShell', () => {
       }
       // Radix hides the desktop app from the accessibility tree while the mobile drawer is modal.
       expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
+    })
+
+    it('dots a nav item whose feature shipped since the user started (spec 2026-10-26, "Coming back")', () => {
+      renderShell('/', { newNavItems: new Set(['/workflows', '/settings']) })
+      const markers = [...document.querySelectorAll('[data-slot="nav-new-marker"]')]
+      expect(markers).toHaveLength(2)
+      expect(markers.map((marker) => marker.closest('a')?.getAttribute('href'))).toEqual(['/workflows', '/settings'])
+      expect(screen.getByRole('link', { name: /Workflows\s*New/ })).toBeDefined()
+    })
+
+    it('puts the "What\u2019s new" row in the sidebar footer, above the host widget', () => {
+      renderShell('/', { whatsNew: <button type="button" data-slot="whats-new">What’s new</button>, hostWidget: <div data-slot="host-widget" /> })
+      const footer = document.querySelector('[data-slot="sidebar-footer"]')
+      const row = footer?.querySelector('[data-slot="whats-new"]')
+      expect(row).not.toBeNull()
+      expect(row?.compareDocumentPosition(footer!.querySelector('[data-slot="host-widget"]')!) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
     })
 
     it('renders no Skills marker without an actionable update', () => {
@@ -531,6 +616,38 @@ describe('AppShell', () => {
 
   /** jsdom cannot evaluate `md:` — so assert the structure and the responsive classes that
    *  encode it, and leave "does it actually reflow at 390px" to the e2e iPhone screenshot. */
+  /** Settings is full-screen (spec 2026-10-13-unified-settings): the shell renders none of its
+   *  chrome on a settings URL — the settings frame brings its own header, nav and way back. */
+  describe('chromeless settings', () => {
+    for (const entry of ['/p/boot/settings/agents', '/p/boot/settings', '/settings/global/appearance', '/settings/global']) {
+      it(`${entry} renders no sidebar, no drawer trigger and no mobile top bar`, () => {
+        renderShell(entry)
+        const shell = document.querySelector('[data-slot="app-shell"]') as HTMLElement
+        expect(shell.hasAttribute('data-chromeless')).toBe(true)
+        expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+        expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Open menu' })).toBeNull()
+        // The routed view still renders in the one scrolling region.
+        expect(within(document.querySelector('[data-slot="main"]') as HTMLElement).getByText('route content')).toBeTruthy()
+      })
+    }
+
+    it('keeps the banner row — provider failures link INTO settings, so the fix stays visible', () => {
+      renderShell('/p/boot/settings/agents', { banner: <div data-testid="banner">auth failed</div> })
+      expect(screen.getByTestId('banner')).toBeTruthy()
+      expect(document.querySelector('[data-slot="banner-slot"]')?.className).toContain('row-start-2')
+    })
+
+    it('is NOT chromeless on a look-alike path, or on the Skills page that /settings/skills redirects to', () => {
+      renderShell('/p/boot/settingsfoo')
+      expect(document.querySelector('[data-slot="app-shell"]')?.hasAttribute('data-chromeless')).toBe(false)
+      expect(sidebar()).not.toBeNull()
+      cleanup()
+      renderShell('/p/boot/skills')
+      expect(sidebar()).not.toBeNull()
+    })
+  })
+
   describe('responsive skeleton', () => {
     it('hides the sidebar below md and shows it from md up', () => {
       renderShell()
@@ -554,6 +671,64 @@ describe('AppShell', () => {
       expect(within(bar).getByText('Skills')).toBeTruthy()
     })
 
+  })
+
+  describe('foldable sidebar', () => {
+    it('folds into a rail, remembers it, and unfolds with focus on the fold button', () => {
+      renderShell()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      const unfold = screen.getByRole('button', { name: 'Show sidebar' })
+      expect(document.activeElement).toBe(unfold)
+      expect(localStorage.getItem('cez-sidebar-folded')).toBe('1')
+
+      fireEvent.click(unfold)
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    })
+
+    it('toggles with Mod+B', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+    })
+
+    it('Mod+B from a focused textarea keeps focus there', () => {
+      renderShell('/', {}, <textarea aria-label="composer" />)
+      const composer = screen.getByRole('textbox', { name: 'composer' })
+      composer.focus()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).toBe(composer)
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(composer)
+    })
+
+    it('ignores a held Mod+B and one pressed behind a dialog', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', repeat: true, ...mod })
+      expect(sidebar()).toBeTruthy()
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      document.body.append(dialog)
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      dialog.remove()
+    })
+
+    it('loads folded without stealing focus', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell()
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Show sidebar' }))
+    })
   })
 
   /** The resizable desktop column (#788, option C). jsdom has no layout engine, so these assert
@@ -963,5 +1138,33 @@ describe('Dashboard active navigation', () => {
     const link = screen.getByRole('link', { name: 'Dashboard' })
     expect(link.getAttribute('aria-current')).toBeNull()
     expect(link.classList.contains('bg-muted')).toBe(false)
+  })
+})
+
+describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2)', () => {
+  it('folds the sidebar to an icon rail while a view holds it, and the rail asks the holder to let go', async () => {
+    const { holdSidebarRail } = await import('@/lib/sidebar-rail')
+    renderShell('/tasks/r1/assets')
+    expect(sidebar()).toBeTruthy()
+
+    const onExit = vi.fn()
+    let release = () => {}
+    act(() => {
+      release = holdSidebarRail(onExit)
+    })
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+    const rail = document.querySelector('[data-slot="focus-sidebar-rail"]') as HTMLElement
+    expect(rail).toBeTruthy()
+    // The rail still navigates: every nav item as an icon link, Tasks lit for a task URL.
+    expect(within(rail).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+    // The project Assets page (Phase 3) is in the rail as well as the expanded nav.
+    expect(within(rail).getByRole('link', { name: 'Assets' }).getAttribute('href')).toBe('/assets')
+
+    fireEvent.click(within(rail).getByRole('button', { name: 'Show sidebar' }))
+    expect(onExit).toHaveBeenCalledTimes(1)
+
+    act(() => release())
+    expect(sidebar()).toBeTruthy()
+    expect(document.querySelector('[data-slot="focus-sidebar-rail"]')).toBeNull()
   })
 })

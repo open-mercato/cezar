@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { workspaceUiStatePath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -20,8 +21,10 @@ describe('the ui-state API — skillUsage (#408)', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
+  const legacyWorkspaceStatePath = workspaceUiStatePath();
 
   beforeEach(() => {
+    rmSync(legacyWorkspaceStatePath, { force: true });
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-uistateapi-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -32,6 +35,7 @@ describe('the ui-state API — skillUsage (#408)', () => {
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(legacyWorkspaceStatePath, { force: true });
   });
 
   const uiStatePath = () => join(repoRoot, '.ai/cezar', 'ui-state.json');
@@ -51,11 +55,37 @@ describe('the ui-state API — skillUsage (#408)', () => {
     expect(await res.json()).toEqual({});
   });
 
+  it('keeps a legacy workspace skill selection until this project saves its own', async () => {
+    mkdirSync(dirname(legacyWorkspaceStatePath), { recursive: true });
+    writeFileSync(legacyWorkspaceStatePath, JSON.stringify({ importedSkills: ['om-fix'] }));
+
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ importedSkills: ['om-fix'] });
+    expect(() => readFileSync(uiStatePath(), 'utf8')).toThrow();
+  });
+
+  it('uses this project selection, including an empty one, over the legacy workspace value', async () => {
+    mkdirSync(dirname(legacyWorkspaceStatePath), { recursive: true });
+    writeFileSync(legacyWorkspaceStatePath, JSON.stringify({ importedSkills: ['om-fix'] }));
+    await put({ importedSkills: [] });
+
+    expect(await (await get()).json()).toMatchObject({ importedSkills: [] });
+    expect(rawFile().importedSkills).toEqual([]);
+  });
+
   it('PUT skillUsage persists and round-trips through GET', async () => {
     const res = await put({ skillUsage: { 'om-fix': 1, 'om-review': 3 } });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ skillUsage: { 'om-fix': 1, 'om-review': 3 } });
     expect(rawFile().skillUsage).toEqual({ 'om-fix': 1, 'om-review': 3 });
+  });
+
+  it('persists team-skill selection in this project ui-state', async () => {
+    const res = await put({ importedSkills: ['om-fix'] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ importedSkills: ['om-fix'] });
+    expect(rawFile().importedSkills).toEqual(['om-fix']);
   });
 
   it('a later PUT replaces the whole map (shallow merge) — clients must send the FULL map', async () => {
@@ -107,6 +137,40 @@ describe('the ui-state API — skillUsage (#408)', () => {
     it('still refuses a malformed source', async () => {
       expect((await put({ lastTask: { source: 'nonsense', ref: 'x' } })).status).toBe(400);
       expect((await put({ lastTask: { source: 'skill' } })).status).toBe(400);
+    });
+  });
+
+  // ---- githubSort: the GitHub tab's list order -----------------------------------------------
+  // Additive presentation pref, the twin of `githubView`. The whole point is that an OLD file
+  // (and an old cockpit) has no opinion here and must keep behaving as "newest first" — the key
+  // may never become something a user has to author or migrate.
+  describe('githubSort remembers the GitHub tab list order', () => {
+    it('round-trips both directions through GET and the file', async () => {
+      expect((await put({ githubSort: 'oldest' })).status).toBe(200);
+      expect(rawFile().githubSort).toBe('oldest');
+      expect(await (await get()).json()).toMatchObject({ githubSort: 'oldest' });
+      await put({ githubSort: 'newest' });
+      expect(rawFile().githubSort).toBe('newest');
+    });
+
+    it('is absent from a file written before it existed — and GET stays silent about it', async () => {
+      await put({ githubView: 'prs' });
+      expect(rawFile()).not.toHaveProperty('githubSort');
+      expect(await (await get()).json()).not.toHaveProperty('githubSort');
+    });
+
+    it('does not disturb githubView, and githubView does not disturb it', async () => {
+      await put({ githubView: 'prs' });
+      await put({ githubSort: 'oldest' });
+      expect(rawFile()).toMatchObject({ githubView: 'prs', githubSort: 'oldest' });
+      await put({ githubView: 'issues' });
+      expect(rawFile()).toMatchObject({ githubView: 'issues', githubSort: 'oldest' });
+    });
+
+    it('refuses an unknown order instead of writing it', async () => {
+      const res = await put({ githubSort: 'alphabetical' });
+      expect(res.status).toBe(400);
+      expect(() => readFileSync(uiStatePath(), 'utf8')).toThrow();
     });
   });
 

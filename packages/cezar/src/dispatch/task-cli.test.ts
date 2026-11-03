@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { runTaskCommand, type TaskCliIo } from './task-cli.ts';
+
+function containsRunnerToken(text: string, runner: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${runner}(?=$|[^A-Za-z0-9_-])`).test(text);
+}
 
 /** The `cez task` CLI is a thin client: what is pinned is the request it builds from flags and
  *  env, and how it answers a refusal — never the engine, which has its own tests. */
@@ -73,9 +78,15 @@ describe('cez task', () => {
     await runTaskCommand(['report', '--status', 'done', '--result', 'r'], { CEZ_API_URL: 'http://127.0.0.1:1', CEZ_TASK_ID: 'r1' }, h.io);
     expect(h.calls[0]?.url).toBe('http://127.0.0.1:1/api/v1/runs/r1/report');
     const none = harness({ status: 200, body: {} });
-    expect(await runTaskCommand(['create', 'x'], {}, none.io)).toBe(2);
+    expect(await runTaskCommand(['create', 'x'], { CEZ_TASK_ID: 'r1' }, none.io)).toBe(2);
     expect(none.err[0]).toContain('CEZ_API_URL is not set');
+    expect(none.err[0]).toContain('stop and report that dispatch is unavailable');
     expect(none.calls).toHaveLength(0);
+    const shell = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['tree', 'r1'], {}, shell.io)).toBe(2);
+    expect(shell.err[0]).toContain('CEZ_API_URL=http://127.0.0.1:4321 cez task tree <run id>');
+    expect(shell.err[0]).not.toContain('only works inside a task');
+    expect(shell.calls).toHaveLength(0);
   });
 
   it('answers --help on a subcommand instead of refusing it as an unknown option', async () => {
@@ -83,6 +94,12 @@ describe('cez task', () => {
     expect(await runTaskCommand(['create', '--help'], env, h.io)).toBe(0);
     expect(h.out[0]).toContain('cez task create');
     expect(h.calls).toHaveLength(0);
+  });
+
+  it('advertises every supported runner in help as a standalone token', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['help'], {}, h.io)).toBe(0);
+    for (const runner of RUNNER_IDS) expect(containsRunnerToken(h.out[0] ?? '', runner)).toBe(true);
   });
 
   it('list prints the tree this task belongs to, indented, with status, cost and verdicts', async () => {

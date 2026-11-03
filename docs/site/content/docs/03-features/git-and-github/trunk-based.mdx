@@ -1,0 +1,26 @@
+---
+title: "Trunk-based development"
+description: "Work directly in the checkout and save verified changes to the base branch."
+version: opt-in
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/trunk-based-fields.tsx
+    line: 43
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+In Trunk-based mode, tasks work directly in the checkout, the project's working directory. Verified changes go to the base branch. Where tasks work and How changes land define how this happens and which checks are required.
+
+## Where to find it
+
+Project settings → Tasks → Development model
+
+## How to use it
+
+1. Choose Trunk-based.
+2. Check Where tasks work and How changes land.
+3. Set the checks required before changes are saved.
+
+> **Good to know**: Tasks that write changes run one at a time in the shared checkout. You can still explicitly choose a separate worktree for a task.

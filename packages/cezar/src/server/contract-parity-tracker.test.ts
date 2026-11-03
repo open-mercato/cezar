@@ -2,7 +2,7 @@ import type { InferResponseType, InferRequestType } from 'hono/client';
 import { hc } from 'hono/client';
 import { it, expect } from 'vitest';
 import type {
-  TrackerWatchInput, TrackerWatchHandle, TrackerWatchSnapshot,
+  TrackerContext, TrackerOperationInput, TrackerOperationResult, TrackerWatchInput, TrackerWatchHandle, TrackerWatchSnapshot,
   TrackerAssociationResponse, TrackerAssociationSavedResponse, TrackerClearedResponse,
   TrackerCandidatesResponse, TrackerItemsResponse, TrackerItemResponse,
   TrackerErrorResponse, TrackerAssociationInput, TrackerCandidatesQueryInput,
@@ -16,6 +16,9 @@ const scoped = client.api.v1.p[':projectId'].tracker;
 type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type Assert<T extends true> = T;
 type Checks = [
+  Assert<Mutual<TrackerContext, InferResponseType<typeof scoped.task.$get, 200>>>,
+  Assert<Mutual<TrackerOperationInput, InferRequestType<typeof scoped.task.$post>['json']>>,
+  Assert<Mutual<TrackerOperationResult, InferResponseType<typeof scoped.task.$post, 200>>>,
   Assert<Mutual<TrackerItemQuery, InferRequestType<typeof tracker[':id']['$get']>['query']>>,
   Assert<Mutual<TrackerItemQuery, InferRequestType<typeof scoped[':id']['$get']>['query']>>,
   Assert<Mutual<TrackerWatchInput, InferRequestType<typeof scoped.watch.$post>['json']>>,

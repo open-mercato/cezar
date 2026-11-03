@@ -103,6 +103,19 @@ describe('attachment routes (#950)', () => {
       ]);
     });
 
+    // Telemetry 18c930de: a pasted screenshot alone is a task; nothing at all is still a 400.
+    it('starts an attachment-only task, and still refuses one with neither text nor attachments', async () => {
+      const ok = await post('/api/v1/runs', { ...base, task: '', images: [{ mediaType: 'image/png', data: PNG_B64 }] });
+      expect(ok.status).toBe(201);
+      expect(captured?.task).toBe('');
+
+      captured = undefined;
+      const empty = await post('/api/v1/runs', { ...base, task: '  ' });
+      expect(empty.status).toBe(400);
+      expect(((await empty.json()) as { error: string }).error).toContain('describe the task or attach a file');
+      expect(captured).toBeUndefined();
+    });
+
     it('still hands an image through as a viewable block', async () => {
       const res = await post('/api/v1/runs', {
         ...base,

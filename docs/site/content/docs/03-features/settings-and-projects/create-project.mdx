@@ -1,0 +1,26 @@
+---
+title: "Create a local project or use a GitHub template"
+description: "Create a repository without leaving Cezar."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/create-project-dialog.tsx
+    line: 101
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+New project creates a local Git repository and registers it in the workspace. With gh signed in, you can also create a private repository in your account or an organization, either empty or based on a GitHub template.
+
+## Where to find it
+
+Add project → New project
+
+## How to use it
+
+1. Enter a project name and check the destination folder.
+2. Choose a local project, or Create a private GitHub repository and select its owner.
+3. Choose Empty or From a template. For a template, provide owner/repo or a URL.
+4. Create the project and start its first task.
+
+> **Good to know**: Templates require GitHub. GitHub repositories are always private when created. If a later step fails, a remote repository that has already been created remains.

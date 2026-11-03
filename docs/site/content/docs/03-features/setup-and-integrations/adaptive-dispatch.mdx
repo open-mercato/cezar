@@ -1,0 +1,25 @@
+---
+title: "Reduce concurrency under load"
+description: "The plan reduces parallel subtasks when CPU or memory is under pressure."
+version: planned
+related:
+  links:
+    - architecture/operations
+sources:
+  - label: "Specification"
+    path: .ai/specs/2026-09-20-adaptive-admission-governor.md
+    line: 14
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The planned controller would use host CPU and memory measurements. Under pressure, it would lower Dispatch concurrency, then restore the previous limit when the load drops.
+
+## Status
+
+Specification: not yet available
+
+## What you can do today
+
+1. Measure CPU and memory pressure on the host.
+2. Temporarily reduce Dispatch concurrency and restore it after the load drops.
+
+> **Good to know**: This feature depends on a separate Dispatch limit and resource-capacity measurements. The current semaphore uses fixed limits without an adaptive controller. There is no confirmed delivery date.

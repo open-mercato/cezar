@@ -15,6 +15,7 @@ import { toast } from '@/components/ui/toaster'
 import { MAX_CHAIN_STEPS } from '@/lib/github-task'
 import { Link } from '@/lib/project-router'
 import { TRACKER_TASK_LIMIT, trackerLosses, trackerRunBody, trackerTaskPrompt } from '@/lib/tracker-task'
+import { trackMessageSent } from '@/lib/telemetry'
 
 export type TrackerDraftCache = Map<string, { instruction: string; supplemental: string; acknowledgedSnapshot: string | null }>
 
@@ -70,6 +71,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
       { instruction, supplemental, acknowledgeLoss },
     )),
     onSuccess: (created) => {
+      trackMessageSent('tracker')
       const run = 'runs' in created ? created.runs[0] : created
       setQueued(run?.id ?? null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
@@ -88,7 +90,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
 
   return (
     <section className="mt-7 rounded-lg border border-border bg-card p-4" data-slot="tracker-handoff">
-      <h2 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[.04em] text-soft-foreground uppercase">
+      <h2 className="flex items-center gap-1.5 eyebrow text-soft-foreground">
         <ZapIcon className="size-3.5 text-violet" /> Hand this to the agent
       </h2>
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -97,7 +99,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
         <EnginePills pick={engine} onChange={setEngine} accounts disabled={start.isPending || !resolved.canRun} />
         <AgentProviderGate resolved={resolved} dataSlot="tracker-provider-gate" />
       </div>
-      {validSkills.length ? <div className="mt-2.5 flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[11px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
+      {validSkills.length ? <div className="mt-2.5 flex flex-wrap gap-1.5">{validSkills.map(name => <button type="button" key={name} aria-label={`Remove skill ${name}`} onClick={() => toggleSkill(name)} className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-meta font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger">{name}<XIcon aria-hidden="true" className="size-3" /></button>)}</div> : null}
       {workflow === null && validSkills.length >= MAX_CHAIN_STEPS ? (
         <p className={`mt-2 text-xs ${skillChainOverLimit ? 'text-danger' : 'text-muted-foreground'}`}>
           Skill chains support at most {MAX_CHAIN_STEPS} skills. Remove one before selecting another.
@@ -117,8 +119,8 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
         </div>
       ) : null}
       <label className="mt-3 block text-xs font-medium" htmlFor="tracker-instruction">Custom instruction</label>
-      <Textarea id="tracker-instruction" aria-keyshortcuts="Control+Enter Meta+Enter" onKeyDown={event => { if (isSubmitShortcut(event.nativeEvent)) { event.preventDefault(); if (canSubmit) start.mutate() } }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional instructions; these are placed last in the task." className="mt-1 min-h-20 text-[13px]" />
-      <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
+      <Textarea id="tracker-instruction" aria-keyshortcuts="Control+Enter Meta+Enter" onKeyDown={event => { if (isSubmitShortcut(event.nativeEvent)) { event.preventDefault(); if (canSubmit) start.mutate() } }} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional instructions; these are placed last in the task." className="mt-1 min-h-20 text-ui" />
+      <div className="mt-1 flex justify-between text-meta text-muted-foreground">
         <span>{composition.error ?? 'Full tracker detail and source link are included. Comments, attachments, and custom fields are outside the snapshot.'}</span>
         <span>{composition.task.length.toLocaleString()} / {TRACKER_TASK_LIMIT.toLocaleString()}</span>
       </div>
@@ -128,7 +130,7 @@ export function TrackerHandoff({ item, workflows, skills, selection, onSelection
         <Button variant="contrast" onClick={() => start.mutate()} disabled={!canSubmit}>
           <PlayIcon className="size-3.5" /> Run agent on this issue
         </Button>
-        <kbd aria-hidden="true" className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground">{submitShortcutHint()}</kbd>
+        <kbd aria-hidden="true" className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-micro font-medium text-muted-foreground">{submitShortcutHint()}</kbd>
         {queued ? <span className="flex items-center gap-1 text-xs text-success"><CheckIcon className="size-3" /> queued · <Link className="text-violet hover:underline" to={`/tasks/${queued}`}>View task →</Link></span> : null}
       </div>
     </section>

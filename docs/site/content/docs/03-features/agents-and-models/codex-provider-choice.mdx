@@ -1,0 +1,25 @@
+---
+title: "Choose a Codex provider per task"
+description: "The plan adds a provider choice from model_providers in native Codex configuration."
+version: planned
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Specification"
+    path: .ai/specs/2026-09-19-runner-seam-native-backends.md
+    line: 77
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The specification describes reading providers from model_providers in native Codex configuration. The task form would allow separate provider and model choices for each task.
+
+## Status
+
+Specification: not yet available
+
+## What you can do today
+
+1. Read providers from model_providers in Codex configuration.
+2. Choose a provider and model separately for each task.
+
+> **Good to know**: Cezar currently reads the configured provider and rejects a model with a different provider prefix. Setting Azure as the default provider does not enable per-task provider selection. There is no confirmed delivery date.

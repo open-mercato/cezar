@@ -1,0 +1,25 @@
+---
+title: "Choose a base branch"
+description: "Set the branch that new worktrees start from and draft pull requests target."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/tasks-section.tsx
+    line: 53
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+This setting defines the starting point for future tasks in the repository.
+
+## Where to find it
+
+Settings → project → Tasks → Base branch
+
+## How to use it
+
+1. Choose the base branch.
+2. Start a new task.
+3. Check the diff and the pull request's target branch.
+
+> **Good to know**: The branch must exist in the repository. Changing this setting does not rebase existing work.

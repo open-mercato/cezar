@@ -13,7 +13,7 @@
  * Zero-config: the safe env is the default and needs no configuration. Two
  * opt-in escape hatches (both read from the host env, both off by default):
  *   - `CEZ_ENV_PASSTHROUGH=A,B,C` forwards those extra named vars;
- *   - `CEZ_AGENT_ENV_FULL=1` restores the legacy full-`process.env` behavior.
+ *   - `CEZ_AGENT_ENV_FULL=1` restores full host inheritance except inherited tracker task capabilities.
  */
 
 import type { AgentBackend } from './agent-runner.ts';
@@ -217,7 +217,8 @@ const MULTI_PROVIDER_PREFIXES: readonly string[] = [
 ];
 
 /** Per-backend auth/config the runner genuinely needs, by prefix. */
-const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
+/** @internal Focused tests mutate a copy of one entry to model future policy changes. */
+export const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   claude: ['ANTHROPIC_', 'CLAUDE_'],
   'claude-cli': ['ANTHROPIC_', 'CLAUDE_'],
   codex: ['OPENAI_', 'CODEX_', 'AZURE_OPENAI_'],
@@ -230,6 +231,44 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // granting it here handed pi the whole `AWS_*` / `GOOGLE_CLOUD_*` family on any host that had
   // set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, plus Claude's own config dir.
   pi: ['PI_', ...MULTI_PROVIDER_PREFIXES],
+  // junie's default auth (JetBrains account) lives entirely under `~/.junie/`
+  // (already reachable via the base `HOME` allowlist — no env var needed). Its BYOK
+  // path is CLI flags (`--anthropic-api-key=<text>` etc, `junie --help`), which
+  // cezar never passes, and nothing documents junie reading the provider env vars —
+  // so no provider prefix is granted on the strength of a flag.
+  junie: ['JUNIE_'],
+  // Copilot routes every model through GitHub, so it needs only its own family. The `gh` names
+  // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
+  // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
+  copilot: ['COPILOT_'],
+  // Antigravity signs in through its own browser OAuth flow. It stores the token in the OS keyring
+  // (Secret Service over D-Bus on Linux) and, per its own changelog, BYPASSES the keyring when no
+  // `DBUS_SESSION_BUS_ADDRESS` is present — so without that one name a signed-in user looks signed
+  // out inside a run. The address is a socket path, not a secret. `XDG_RUNTIME_DIR` is already in
+  // the base list. No credential env var is documented, so `GEMINI_`/`GOOGLE_` keys stay out.
+  antigravity: ['ANTIGRAVITY_', 'DBUS_SESSION_BUS_ADDRESS'],
+  // Gemini CLI (#581): its own `GEMINI_*` family (API key, model, home, trust). The Google names it
+  // also reads are exact names below — a `GOOGLE_` prefix would hand it every Google credential on
+  // the host.
+  gemini: ['GEMINI_'],
+  kimi: ['KIMI_'],
+};
+
+/**
+ * Per-backend auth/config the runner needs by EXACT name — where a prefix would over-grant
+ * (spec 2026-09-19-runner-seam-native-backends § Phase 1 "Credentials by name").
+ */
+const BACKEND_ALLOW_NAMES: Partial<Record<AgentBackend, ReadonlySet<string>>> = {
+  gemini: upperSet([
+    'GOOGLE_API_KEY',
+    'GOOGLE_CLOUD_PROJECT',
+    'GOOGLE_CLOUD_LOCATION',
+    // Gemini's own auth selectors (`getAuthTypeFromEnv` in the 0.60 bundle): Vertex AI, Google
+    // login for Workspace/Code Assist licenses, and a custom API gateway.
+    'GOOGLE_GENAI_USE_VERTEXAI',
+    'GOOGLE_GENAI_USE_GCA',
+    'GOOGLE_GEMINI_BASE_URL',
+  ]),
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the
@@ -265,6 +304,14 @@ const VERTEX_ALLOW_NAMES: ReadonlySet<string> = upperSet([
   // ANTHROPIC_VERTEX_PROJECT_ID already rides in on the `ANTHROPIC_` prefix.
 ]);
 const VERTEX_ALLOW_PREFIXES: readonly string[] = ['GOOGLE_CLOUD_'];
+/**
+ * Gemini CLI's own Vertex selector: `GOOGLE_GENAI_USE_VERTEXAI=true` switches it to Vertex AI, which
+ * authenticates through Application Default Credentials. Same toggle shape as Claude's above, keyed
+ * on the backend's OWN variable (the #850 direction): the service-account file is forwarded to
+ * Gemini only while Gemini is told to use Vertex.
+ */
+const GEMINI_VERTEX_TOGGLE = 'GOOGLE_GENAI_USE_VERTEXAI';
+const GEMINI_VERTEX_ALLOW_NAMES: ReadonlySet<string> = upperSet(['GOOGLE_APPLICATION_CREDENTIALS']);
 
 export function looksSecret(name: string): boolean {
   return SECRET_NAME_RE.test(name);
@@ -291,6 +338,11 @@ function isTruthy(value: string | undefined): boolean {
   if (value === undefined) return false;
   const v = value.trim().toLowerCase();
   return v !== '' && v !== '0' && v !== 'false';
+}
+
+/** Only Claude Code backends may unlock Claude's Bedrock/Vertex credentials. */
+export function isClaudeBackend(backend: AgentBackend): boolean {
+  return backend === 'claude' || backend === 'claude-cli';
 }
 
 export interface BuildChildEnvOptions {
@@ -325,12 +377,14 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   if (isTruthy(readVar(source, 'CEZ_AGENT_ENV_FULL'))) {
     const full: NodeJS.ProcessEnv = {};
     for (const [name, value] of Object.entries(source)) {
+      // Task authority is per-launch even when full host inheritance is requested.
+      if (name.toUpperCase() === 'CEZ_TRACKER_CAPABILITY') continue;
       if (!overridden.has(name.toUpperCase())) full[name] = value;
     }
     return { ...full, ...extra };
   }
 
-  const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
+  const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude ?? [];
   const passthrough = upperSet(
     (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
       .split(',')
@@ -338,9 +392,11 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
       .filter(Boolean),
   );
 
-  // Cloud auth is unlocked only by the toggle that needs it, and only for a
-  // backend that is actually given the toggle (`CLAUDE_` prefix) to read.
-  const claudeCloud = backendPrefixes.includes('CLAUDE_');
+  // Cloud auth is unlocked only for Claude Code backends. Keep this gate tied
+  // to backend identity, not to whether an allowlist happens to contain the
+  // `CLAUDE_` prefix: a non-Claude backend may need a Claude-prefixed setting
+  // for an unrelated reason, but must never gain Claude's cloud credentials.
+  const claudeCloud = isClaudeBackend(opts.backend);
   const cloudPrefixes: string[] = [];
   const cloudNames = new Set<string>();
   if (claudeCloud && isTruthy(readVar(source, BEDROCK_TOGGLE))) {
@@ -350,6 +406,11 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     cloudPrefixes.push(...VERTEX_ALLOW_PREFIXES);
     for (const n of VERTEX_ALLOW_NAMES) cloudNames.add(n);
   }
+  // Exactly `'true'`, as Gemini CLI itself (and `gemini-credentials.ts`) reads the selector.
+  if (opts.backend === 'gemini' && readVar(source, GEMINI_VERTEX_TOGGLE) === 'true') {
+    for (const n of GEMINI_VERTEX_ALLOW_NAMES) cloudNames.add(n);
+  }
+  const backendNames = BACKEND_ALLOW_NAMES[opts.backend] ?? new Set<string>();
 
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
@@ -364,6 +425,9 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
   /** `name` is matched normalized; the caller keeps the original spelling. */
   function allow(name: string): boolean {
     const key = name.toUpperCase();
+    // A nested cockpit must not pass its parent's task authority into unrelated
+    // agents. Only an explicit per-launch extraEnv grant may cross this boundary.
+    if (key === 'CEZ_TRACKER_CAPABILITY') return false;
     // cezar's own namespace (CEZ_DRY_RUN plumbing, mock hooks, run wiring).
     if (key.startsWith('CEZ_')) return true;
     // Backend auth + gh handoff + the cloud creds an active Bedrock/Vertex
@@ -372,6 +436,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     // reaches the on-disk NDJSON (see secret-redaction.ts).
     if (GH_ALLOW_NAMES.has(key)) return true;
     if (matchesPrefix(key, backendPrefixes)) return true;
+    if (backendNames.has(key)) return true;
     if (cloudNames.has(key) || matchesPrefix(key, cloudPrefixes)) return true;
     // Explicit opt-in passthrough.
     if (passthrough.has(key)) return true;

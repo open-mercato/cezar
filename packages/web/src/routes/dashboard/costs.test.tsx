@@ -282,11 +282,11 @@ it('applies a detail response policy immediately to previously accepted rows', a
   fireEvent.click(await screen.findByRole('button', { name: 'View tasks' }))
   const sheet = await screen.findByRole('dialog')
   await within(sheet).findByRole('link', { name: 'Measured task' })
-  expect(within(sheet).getAllByText('Reported USD: $0.00').length).toBe(20)
+  expect(within(sheet).getAllByLabelText('Reported USD: $0.00').length).toBe(20)
   hideDetailCost()
   await act(() => client.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard }))
   await waitFor(() =>
-    expect(within(sheet).queryAllByText('Reported USD: $0.00')).toHaveLength(0),
+    expect(within(sheet).queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0),
   )
 })
 it('keeps an expired paged cohort visible until the fresh replacement is accepted', async () => {
@@ -583,11 +583,11 @@ it('does not restore revoked detail metric values from history while refetching'
   await screen.findByRole('link', { name: 'Measured task' })
   hideDetailCost()
   await act(() => client.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard }))
-  await waitFor(() => expect(screen.queryAllByText('Reported USD: $0.00')).toHaveLength(0))
+  await waitFor(() => expect(screen.queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0))
   vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
   remount(true)
   await screen.findByRole('dialog')
-  expect(screen.queryAllByText('Reported USD: $0.00')).toHaveLength(0)
+  expect(screen.queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0)
 })
 
 it.each(['View tasks', 'shop'])('returns focus to the %s trigger after closing a restored usage Sheet', async name => {
@@ -633,12 +633,12 @@ it('keeps revoked detail policy when returning to cached sorts and restoring the
   await waitFor(() => expect(client.isFetching()).toBe(0))
   hideDetailCost()
   fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'output' } })
-  await waitFor(() => expect(within(sheet).queryAllByText('Reported USD: $0.00')).toHaveLength(0))
+  await waitFor(() => expect(within(sheet).queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0))
   vi.mocked(fetch).mockImplementation(() => new Promise(() => {}))
   fireEvent.change(within(sheet).getByRole('combobox', { name: 'Sort by' }), { target: { value: 'input' } })
   remount()
   const restored = await screen.findByRole('dialog')
-  expect(within(restored).queryAllByText('Reported USD: $0.00')).toHaveLength(0)
+  expect(within(restored).queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0)
 })
 
 it('ignores an older in-flight detail policy and permits a later successful recovery', async () => {
@@ -654,9 +654,9 @@ it('ignores an older in-flight detail policy and permits a later successful reco
   await waitFor(() => expect(screen.queryAllByText('$0.000012')).toHaveLength(0))
   await act(async () => { finishDetail(Response.json(fixture('older-permissive'))) })
   await within(sheet).findByRole('link', { name: 'Measured task' })
-  expect(within(sheet).queryAllByText('Reported USD: $0.00')).toHaveLength(0)
+  expect(within(sheet).queryAllByLabelText('Reported USD: $0.00')).toHaveLength(0)
   expect(screen.queryAllByText('$0.000012')).toHaveLength(0)
   setData(fixture('later-permissive'))
   await act(() => client.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard }))
-  await waitFor(() => expect(within(sheet).getAllByText('Reported USD: $0.00')).toHaveLength(20))
+  await waitFor(() => expect(within(sheet).getAllByLabelText('Reported USD: $0.00')).toHaveLength(20))
 })

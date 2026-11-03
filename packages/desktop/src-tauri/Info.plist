@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the bundle's Info.plist by tauri-build. Without these WebKit refuses the
+     cockpit's dictation before macOS ever asks (telemetry c55c7b0b). -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Cezar uses the microphone when you dictate a message to an agent.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Cezar turns your dictation into text for the message box.</string>
+</dict>
+</plist>

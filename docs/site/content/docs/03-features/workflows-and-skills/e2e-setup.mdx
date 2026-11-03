@@ -1,0 +1,26 @@
+---
+title: "Set up TesterArmy e2e"
+description: "Add a browser test and the implement-and-e2e workflow to your project."
+related:
+  links:
+    - guides/common-questions
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/tester-army-e2e-card.tsx
+    line: 122
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Set up e2e starts an installation task in a separate worktree. The agent configures TesterArmy for the project development server, adds a basic smoke test, and creates the implement-and-e2e workflow. Review the changes before bringing them into the repository.
+
+## Where to find it
+
+Settings → project → External integrations → Test frameworks → TesterArmy e2e
+
+## How to use it
+
+1. Check the configuration status and workflow availability.
+2. Optionally enter a key for one of the listed model providers.
+3. Choose Set up e2e, review the installation task, then inspect its branch or draft PR.
+
+> **Good to know**: Setup requires a Git repository and an available agent. Smoke tests can run without a model key. If provided, the key is stored as a secret for check steps only.

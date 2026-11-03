@@ -1,4 +1,4 @@
-import { MetricContent, metricSurface } from './presentation'
+import { MetricContent, metricAccents, metricSurface } from './presentation'
 import type { DashboardCostProject, DashboardCosts } from '@open-mercato/cezar-api-client'
 import { ArrowDownLeft, ArrowUpRight, DollarSign, ChevronRight } from 'lucide-react'
 import {
@@ -13,19 +13,19 @@ export const accents = {
   cost: {
     text: 'text-primary',
     fill: 'bg-primary',
-    tint: 'from-primary/10',
+    tint: metricAccents.primary,
     icon: DollarSign,
   },
   input: {
     text: 'text-violet',
     fill: 'bg-violet',
-    tint: 'from-violet/10',
+    tint: metricAccents.violet,
     icon: ArrowDownLeft,
   },
   output: {
     text: 'text-info',
     fill: 'bg-info',
-    tint: 'from-info/10',
+    tint: metricAccents.info,
     icon: ArrowUpRight,
   },
 }

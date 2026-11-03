@@ -27,9 +27,27 @@ describe('WorkspaceSemaphore', () => {
   it('defaults to the workspace schema defaults before any refresh', () => {
     const sem = new WorkspaceSemaphore();
     expect(sem.maxParallel()).toBe(2);
+    expect(sem.idleTimeoutMinutes()).toBe(15);
     expect(sem.memoryLimitMb()).toBeNull();
     expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
     expect(sem.busy()).toBe(0);
+  });
+
+  describe('idleTimeoutMinutes (#992)', () => {
+    it('preserves explicit null and zero as disabled', () => {
+      expect(new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: null } }).idleTimeoutMinutes()).toBeNull();
+      expect(new WorkspaceSemaphore({ initial: { idleTimeoutMinutes: 0 } }).idleTimeoutMinutes()).toBe(0);
+    });
+
+    it('refreshes the cached timeout', async () => {
+      let timeout: number | null = 15;
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 2, memoryLimitMb: null, idleTimeoutMinutes: timeout }),
+      });
+      timeout = 30;
+      await sem.refresh();
+      expect(sem.idleTimeoutMinutes()).toBe(30);
+    });
   });
 
   /** #810 — the getter used to be `?? null`. Flipping the default to 5 made that a trap:
@@ -111,6 +129,32 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.busy()).toBe(1);
   });
 
+  it('idle() only when no participant holds a slot or has a queue', () => {
+    const sem = new WorkspaceSemaphore();
+    expect(sem.idle()).toBe(true);
+    const offQueued = sem.register(participant(0, 1000));
+    expect(sem.idle()).toBe(false);
+    offQueued();
+    const offBusy = sem.register(participant(1));
+    expect(sem.idle()).toBe(false);
+    offBusy();
+    sem.register(participant(0));
+    expect(sem.idle()).toBe(true);
+  });
+
+  // The self-update warning read the BOOT project's store only — empty when cezar boots
+  // outside a project, so "Update when idle" never appeared while other projects ran tasks.
+  it('activeRuns() sums every project, and counts nothing for participants that do not report', () => {
+    const sem = new WorkspaceSemaphore();
+    sem.register({ ...participant(0), activeRuns: () => 0 });
+    const offB = sem.register({ ...participant(1), activeRuns: () => 2 });
+    sem.register({ ...participant(0), activeRuns: () => 1 });
+    sem.register(participant(0));
+    expect(sem.activeRuns()).toBe(3);
+    offB();
+    expect(sem.activeRuns()).toBe(1);
+  });
+
   it('refresh() swaps the cached limits and pumps every participant', async () => {
     let limits = { maxParallel: 1, memoryLimitMb: null as number | null };
     const sem = new WorkspaceSemaphore({ load: () => Promise.resolve({ ...limits }) });
@@ -149,6 +193,25 @@ describe('WorkspaceSemaphore', () => {
     sem.register(named('older', 1000));
     await sem.release();
     expect(order).toEqual(['older', 'newer', 'idle']);
+  });
+
+  it('release() pumps a queue holding a "Run First" promotion first, newest promotion first', async () => {
+    const order: string[] = [];
+    const named = (name: string, queuedAt: number | null, promotedAt?: number | null): SemaphoreParticipant => ({
+      busySlots: () => 0,
+      oldestQueuedAt: () => queuedAt,
+      ...(promotedAt === undefined ? {} : { newestPromotionAt: () => promotedAt }),
+      pump: () => {
+        order.push(name);
+      },
+    });
+    const sem = new WorkspaceSemaphore();
+    sem.register(named('oldest-fifo', 1000));
+    sem.register(named('promoted-early', 3000, 5000));
+    sem.register(named('no-promotion', 2000, null));
+    sem.register(named('promoted-late', 4000, 6000));
+    await sem.release();
+    expect(order).toEqual(['promoted-late', 'promoted-early', 'oldest-fifo', 'no-promotion']);
   });
 
   it('a release landing mid-sweep re-runs the sweep instead of being dropped', async () => {

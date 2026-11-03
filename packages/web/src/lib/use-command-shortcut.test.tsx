@@ -95,6 +95,46 @@ describe('shouldTriggerCommandShortcut — editable-target suppression', () => {
   })
 })
 
+describe('shouldTriggerCommandShortcut — inEditable (⌘P from the composer)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const inEditable = { inEditable: true }
+  const textarea = () => document.createElement('textarea')
+
+  it.each([
+    { platform: 'MacIntel', init: { metaKey: true }, fires: true },
+    // Ctrl+P is "line up" in a macOS text field — typing keeps it.
+    { platform: 'MacIntel', init: { ctrlKey: true }, fires: false },
+    { platform: 'Win32', init: { ctrlKey: true }, fires: true },
+    { platform: 'Win32', init: { metaKey: true }, fires: false },
+  ])('$platform $init in a text field → $fires', ({ platform, init, fires }) => {
+    vi.stubGlobal('navigator', { platform })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', target: textarea(), ...init }), 'p', inEditable)).toBe(fires)
+  })
+
+  const terminalInput = () => {
+    const term = document.createElement('div')
+    term.className = 'xterm'
+    return term.appendChild(textarea())
+  }
+
+  it('never fires a Ctrl chord inside the terminal, where Ctrl+P is shell history', () => {
+    vi.stubGlobal('navigator', { platform: 'Linux x86_64' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', ctrlKey: true, target: terminalInput() }), 'p', inEditable)).toBe(false)
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', ctrlKey: true, target: terminalInput() }), 'p', inEditable)).toBe(false)
+  })
+
+  it('⌘ on a Mac still fires inside the terminal', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', metaKey: true, target: terminalInput() }), 'p', inEditable)).toBe(true)
+  })
+
+  it('outside a text field either modifier still counts', () => {
+    vi.stubGlobal('navigator', { platform: 'MacIntel' })
+    expect(shouldTriggerCommandShortcut(keyEvent({ key: 'p', ctrlKey: true }), 'p', inEditable)).toBe(true)
+  })
+})
+
 describe('shouldTriggerKeyShortcut — bare key, no modifiers', () => {
   it('fires on the lone key', () => {
     expect(shouldTriggerKeyShortcut(keyEvent({ key: 'c' }), 'c')).toBe(true)

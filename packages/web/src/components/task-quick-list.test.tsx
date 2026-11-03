@@ -7,12 +7,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
-import { TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { RepoBaseContext, TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { markScheduledTasks, resetScheduledTasksGate } from '@/lib/scheduled-tasks-gate'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   repoRoot: '/home/u/cezar',
   repo: null,
   checks: [],
@@ -20,9 +22,11 @@ const HEALTH: HealthResponse = {
   forge: null,
   capabilities: {
     localHandoff: true,
+    terminal: false,
+    designMode: false,
     followups: true,
     singleProject: false,
-    automations: false,
+    automations: false, webhooks: false,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,
@@ -70,9 +74,17 @@ const row = (id: string) => document.querySelector(`[data-run-id="${id}"]`)
 const dotOf = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="status-dot"]`)
 
 /** The rendered text of each row under one bucket header, in order. */
+/** What an element PAINTS — screen-reader-only text (the unread marker) is not painted. */
+const paintedText = (el: Element | null | undefined): string | undefined => {
+  if (!el) return undefined
+  const painted = el.cloneNode(true) as Element
+  painted.querySelectorAll('.sr-only').forEach((hidden) => hidden.remove())
+  return painted.textContent ?? ''
+}
+
 const rowsIn = (label: string): string[] =>
   [...bucket(label).querySelectorAll('[data-slot="task-row"], [data-slot="group-tile"]')].map((el) =>
-    (el.textContent ?? '').trim()
+    (paintedText(el) ?? '').trim()
   )
 
 afterEach(cleanup)
@@ -333,8 +345,8 @@ describe('TaskQuickList', () => {
     })
 
     it('gives the title a floor and makes the diff pair the element that drops', () => {
-      // The worst case from the issue: a title competing with a 5-digit diff pair, a PR chip and
-      // the unread dot all at once. The title must still be the growing element with a floor,
+      // The worst case from the issue: a title competing with a 5-digit diff pair and a PR chip
+      // at once (the unread dot it once also competed with is retired). The title must still be the growing element with a floor,
       // and the diff pair must be the one carrying the container query that drops it.
       renderList({
         runs: [
@@ -363,8 +375,8 @@ describe('TaskQuickList', () => {
       // Dropped from view, never from reach — the exact numbers stay in its tooltip.
       expect(diff.getAttribute('title')).toBe('+59514 −12160 across 208 files')
 
-      // Everything the row paints, in reading order: reference, name, diff, unread marker. No
-      // age — the reference took that slot.
+      // Everything the row paints, in reading order: reference, name, diff. No age — the
+      // reference took that slot. Unread is the title's weight, so it paints no text either.
       expect(rowsIn('Recent')).toEqual(['#775implementing comment threads across the whole thread view+59514 −12160'])
     })
 
@@ -394,8 +406,8 @@ describe('TaskQuickList', () => {
           run({ id: 'new', title: 'New', status: 'running', createdAt: ago(4 * 60_000) }),
         ],
       })
-      expect(row('old')?.textContent).toBe('Old2h')
-      expect(row('new')?.textContent).toBe('New4m')
+      expect(paintedText(row('old'))).toBe('Old2h')
+      expect(paintedText(row('new'))).toBe('New4m')
     })
 
     it('shows the queue position instead of an age for queued runs', () => {
@@ -439,7 +451,7 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('aged')?.textContent).toBe('#9Finished with a PR')
+      expect(paintedText(row('aged'))).toBe('#9Finished with a PR')
     })
   })
 
@@ -562,13 +574,31 @@ describe('TaskQuickList', () => {
       // honest axis is the pointer, not the viewport — the drawer keeps the sidebar's fixed
       // 264px, so a `md:` rule would have been wrong in both directions.
       renderList({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
-      const pin = document.querySelector('[data-slot="pin-toggle"]') as HTMLElement
-      expect(pin.className).toContain('no-hover:opacity-100')
+      const actions = document.querySelector('[data-slot="task-row-actions"]') as HTMLElement
+      expect(actions.className).toContain('no-hover:opacity-100')
       // …and big enough for a thumb there, where 20px is not a target.
-      expect(pin.className).toContain('no-hover:size-7')
+      expect(document.querySelector('[data-slot="pin-toggle"]')?.className).toContain('no-hover:size-7')
       // The quiet default survives for pointer devices: still zero-width until hovered.
-      expect(pin.className).toContain('w-0')
-      expect(pin.className).toContain('group-hover/task-row:w-5')
+      expect(actions.className.split(' ')).toContain('w-0')
+      expect(actions.className).toContain('group-hover/task-row:w-auto')
+    })
+
+    it('keeps the age and queue position on a device that cannot hover, where the actions never leave', () => {
+      renderList({
+        runs: [run({ id: 'q', status: 'queued' }), run({ id: 'fin', status: 'done' })],
+        onTogglePin: vi.fn(),
+        onToggleArchive: vi.fn(),
+      })
+      for (const id of ['q', 'fin']) {
+        const age = row(id)?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+        expect(age.closest('[data-slot="task-row-meta-droppable"]')).toBeNull()
+        let el: HTMLElement | null = age
+        while (el && el !== row(id)) {
+          expect(el.className).not.toContain('no-hover:hidden')
+          el = el.parentElement
+        }
+      }
+      expect(row('q')?.querySelector('[data-slot="task-row-age"]')?.textContent).toBe('#1')
     })
 
     it('paints no pin control at all when no container wired one', () => {
@@ -588,6 +618,48 @@ describe('TaskQuickList', () => {
     it('keeps the status dot on a pinned row — Pinned says where it is, not how it is', () => {
       renderList({ runs: [run({ id: 'kept', status: 'waiting', pinned: true })], onTogglePin: vi.fn() })
       expect(dotOf('kept')?.getAttribute('data-tone')).toBe('pending')
+    })
+  })
+
+  describe('the archive action', () => {
+    it('archives a finished row and restores an archived one, reporting the state asked for', () => {
+      const onToggleArchive = vi.fn()
+      renderList({ runs: [run({ id: 'fin', status: 'done' })], onToggleArchive })
+      fireEvent.click(within(row('fin') as HTMLElement).getByRole('button', { name: 'Archive task' }))
+      expect(onToggleArchive.mock.calls[0]?.[0]).toMatchObject({ id: 'fin' })
+      expect(onToggleArchive.mock.calls[0]?.[1]).toBe(true)
+    })
+
+    it('offers restore in the archived view, where the pin is withheld', () => {
+      const onToggleArchive = vi.fn()
+      renderList({
+        view: 'archived',
+        runs: [run({ id: 'gone', status: 'done', archived: true })],
+        onTogglePin: vi.fn(),
+        onToggleArchive,
+      })
+      expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+      fireEvent.click(within(row('gone') as HTMLElement).getByRole('button', { name: 'Unarchive task' }))
+      expect(onToggleArchive.mock.calls[0]?.[1]).toBe(false)
+    })
+
+    it('is not offered on a run the engine still owns', () => {
+      renderList({ runs: [run({ id: 'live', status: 'running' })], onTogglePin: vi.fn(), onToggleArchive: vi.fn() })
+      expect(row('live')?.querySelector('[data-slot="archive-toggle"]')).toBeNull()
+      expect(row('live')?.querySelector('[data-slot="pin-toggle"]')).not.toBeNull()
+    })
+
+    it('sits beside the pin, and the title gives up its floor while they show', () => {
+      renderList({ runs: [run({ id: 'fin', status: 'done' })], onTogglePin: vi.fn(), onToggleArchive: vi.fn() })
+      const actions = row('fin')?.querySelector('[data-slot="task-row-actions"]') as HTMLElement
+      expect([...actions.children].map((el) => el.getAttribute('data-slot'))).toEqual(['pin-toggle', 'archive-toggle'])
+      expect(row('fin')?.querySelector('[data-slot="task-row-title"]')?.className).toContain('group-hover/task-row:min-w-0')
+    })
+
+    it('keeps the metadata unconditionally on a row with no actions', () => {
+      renderList({ runs: [run({ id: 'live', status: 'running' })] })
+      expect(row('live')?.querySelector('[data-slot="task-row-actions"]')).toBeNull()
+      expect(row('live')?.querySelector('[data-slot="task-row-meta"]')?.className).toBe('contents')
     })
   })
 
@@ -734,7 +806,7 @@ describe('TaskQuickListContainer', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Pin task' }))
     await waitFor(() =>
-      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true } }]),
+      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true, surface: 'sidebar' } }]),
     )
   })
 
@@ -800,7 +872,7 @@ describe('dispatched subtasks in the quick-list', () => {
   })
 
   // The kind chip tells a dispatched row from a typed one at a glance, and it is the one piece
-  // of metadata the sidebar keeps at every width. Never on the root.
+  // of metadata the sidebar keeps at every width (it only yields to the hover pin). Never on the root.
   it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
     renderList({
       runs: [
@@ -813,5 +885,187 @@ describe('dispatched subtasks in the quick-list', () => {
     expect(kindOf('rev')).toBe('review')
     expect(kindOf('imp')).toBe('implement')
     expect(kindOf('p')).toBeNull()
+  })
+
+  // A nested row at the 264px minimum had no room for indent + title floor + kind + age, and the
+  // hover actions pushed the row past the column. The metadata (kind included) yields its slot to
+  // the actions while they show, and a child's age is droppable metadata below 19rem.
+  it('swaps the metadata for the actions on hover and drops a child age in a narrow column', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    const meta = row('rev')?.querySelector('[data-slot="task-row-meta"]') as HTMLElement
+    expect(meta.querySelector('[data-slot="dispatch-kind"]')).not.toBeNull()
+    expect(meta.className).toContain('group-hover/task-row:hidden')
+    expect(meta.className).toContain('group-focus-within/task-row:hidden')
+    // Without hover the actions never leave, so only the droppable part yields there.
+    const droppable = meta.querySelector('[data-slot="task-row-meta-droppable"]') as HTMLElement
+    expect(droppable.querySelector('[data-slot="dispatch-kind"]')).not.toBeNull()
+    expect(droppable.className).toContain('no-hover:hidden')
+
+    const childAge = row('rev')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+    expect(childAge.className).toContain('hidden')
+    expect(childAge.className).toContain('@min-[19rem]/sidebar:inline')
+    // A root row keeps its age at every width.
+    const rootAge = row('p')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+    expect(rootAge.className).not.toContain('hidden')
+  })
+
+  // Violet is the status dot's colour for running / needs review, so a trailing violet dot that
+  // meant "unread" read as the same signal. Unread is the title's weight, plus a word for AT.
+  it('marks an unread row by weight and a screen-reader word, with no trailing dot', () => {
+    renderList({ runs: [run({ id: 'u', status: 'done', finishedAt: '2026-07-14T09:00:00Z' })] })
+    const rowEl = row('u') as HTMLElement
+    const marker = rowEl.querySelector('[data-slot="unread-marker"]') as HTMLElement
+    expect(marker.className).toContain('sr-only')
+    expect(marker.closest('a')).not.toBeNull()
+    expect(rowEl.querySelector('[data-slot="task-row-title"]')?.className).toContain('font-semibold')
+    // Only the leading status dot remains.
+    expect(rowEl.querySelectorAll('[data-slot="status-dot"]')).toHaveLength(1)
+  })
+
+  // A child filed in another bucket than its parent is a TOP-LEVEL row: no indent to pay for and
+  // no parent above it to date it, so it keeps its age at every width.
+  it('keeps the age on a dispatched row that is not nested', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'running' }),
+        run({ id: 'c', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    expect(row('c')?.getAttribute('data-depth')).toBe('0')
+    const age = row('c')?.querySelector('[data-slot="task-row-age"]') as HTMLElement
+    expect(age.className).not.toContain('hidden')
+    // Still a dispatched row, so the kind chip is there to tell it apart.
+    expect(row('c')?.querySelector('[data-slot="dispatch-kind"]')?.textContent).toBe('review')
+  })
+
+  // A pinned row's pin is hover-revealed like every other row's: a permanent one overlapped the
+  // title on rows whose chips fill the column. The kind chip swaps with it the same way.
+  it('reveals a pinned row’s pin on hover only, like any other row', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({
+          id: 'rev',
+          status: 'done',
+          pinned: true,
+          dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' },
+        }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    const meta = row('rev')?.querySelector('[data-slot="task-row-meta"]') as HTMLElement
+    expect(meta.className.split(' ')).not.toContain('hidden')
+    expect(meta.className).toContain('group-hover/task-row:hidden')
+    expect(row('rev')?.querySelector('[data-slot="pin-toggle"]')?.getAttribute('data-pinned')).toBe('true')
+    const actions = row('rev')?.querySelector('[data-slot="task-row-actions"]') as HTMLElement
+    expect(actions.className.split(' ')).toContain('opacity-0')
+    expect(actions.className).not.toContain('pinned')
+  })
+
+  it('keeps the kind chip unconditionally when the row has no pin to swap in', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+      ],
+    })
+    const kind = row('rev')?.querySelector('[data-slot="dispatch-kind"]') as HTMLElement
+    expect(kind.className).not.toContain('hidden')
+  })
+})
+
+describe('a PR known only by number', () => {
+  it('links to the repo the list provides, and stays a plain chip without one', () => {
+    const marked = run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)
+    const { unmount } = render(
+      <MemoryRouter>
+        <RepoBaseContext.Provider value="https://github.com/o/shop">
+          <TaskQuickList runs={[marked]} view="active" now={NOW} onViewChange={vi.fn()} />
+        </RepoBaseContext.Provider>
+      </MemoryRouter>,
+    )
+    expect(document.querySelector('[data-slot="pr-chip"]')?.closest('a')?.getAttribute('href')).toBe('https://github.com/o/shop/pull/1497')
+    unmount()
+    renderList({ runs: [run({ markerRefs: { pr: 1497 } } as Partial<RunRecord>)] })
+    expect(document.querySelector('[data-slot="pr-chip"]')?.closest('a')).toBeNull()
+  })
+})
+
+/** #1340: the Scheduled group must not cost every user a `GET /automations`. */
+describe('TaskQuickListContainer — scheduled tasks gate', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  const scheduled = {
+    id: 'later', name: 'Later', kind: 'schedule', enabled: true,
+    deferredStart: { notBefore: '2099-01-01T09:00:00Z', timeZone: 'UTC', status: 'pending', runIds: [] },
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  function renderContainer(automations: unknown[]) {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      const body = path === '/api/v1/health'
+        ? { ...HEALTH, capabilities: { ...HEALTH.capabilities, automations: true } }
+        : path.endsWith('/automations') ? { automations } : [run({ id: 'live', title: 'A real run', status: 'running' })]
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    return render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/']}>
+          <ListViewProvider><TaskQuickListContainer /></ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+  }
+  const asked = () => fetchMock.mock.calls.some((call) => String(call[0]).endsWith('/automations'))
+
+  const asks = () => fetchMock.mock.calls.filter((call) => String(call[0]).endsWith('/automations')).length
+
+  it('asks once per session and stops once the list holds no scheduled task', async () => {
+    resetScheduledTasksGate()
+    const first = renderContainer([])
+    await waitFor(() => expect(asks()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    first.unmount()
+    renderContainer([])
+    await screen.findByText('A real run').catch(() => undefined)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(asks()).toBe(1)
+    expect(screen.queryByRole('region', { name: 'Scheduled tasks' })).toBeNull()
+  })
+
+  it('shows the Scheduled group, including one made in another browser', async () => {
+    resetScheduledTasksGate()
+    renderContainer([scheduled])
+    expect(await screen.findByRole('region', { name: 'Scheduled tasks' })).not.toBeNull()
+    expect(asked()).toBe(true)
+  })
+
+  it('asks again after this cockpit schedules a task', async () => {
+    resetScheduledTasksGate()
+    const first = renderContainer([])
+    await waitFor(() => expect(asks()).toBe(1))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    first.unmount()
+    markScheduledTasks('default')
+    renderContainer([scheduled])
+    await waitFor(() => expect(asks()).toBe(2))
   })
 })

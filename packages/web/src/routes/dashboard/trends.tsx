@@ -1,4 +1,4 @@
-import { Freshness } from './presentation'
+import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
 import { Table2, ChevronDown } from 'lucide-react'
 import { formatAmount, formatHours } from './format'
@@ -232,18 +232,17 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
   })
   return (
     <Card className="gap-0 py-0">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
-        <h2 className="text-sm font-semibold">Trends</h2>
-        <label className="flex min-h-11 items-center gap-2 text-xs">
+      <div className={widgetHeader}>
+        <h2 className={widgetHeading}>Trends</h2>
+        <label className={filterLabel}>
           Period
-          <select
-            className="min-h-11 rounded-md border bg-background px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          <FilterSelect
             value={period}
             onChange={(e) => setPeriod(e.target.value as TrendPeriod)}
           >
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
-          </select>
+          </FilterSelect>
         </label>
       </div>
       <div className="space-y-4 p-4 text-sm">
@@ -296,7 +295,8 @@ export function Trends({ visibility }: { visibility: UsageMetricVisibility }) {
         )}
 
         <details className="text-xs text-muted-foreground">
-          <summary data-export-heading="Metric definitions" className="cursor-pointer py-2">
+          <summary data-export-heading="Metric definitions" className={`${disclosureSummary} py-2`}>
+            <DisclosureChevron />
             How these metrics work
           </summary>
           <p>

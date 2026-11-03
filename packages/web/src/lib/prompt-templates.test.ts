@@ -59,10 +59,10 @@ describe('normalizePromptTemplates', () => {
   })
 
   it('trims and caps label/text length', () => {
-    const raw = [{ id: 'a', label: `  ${'x'.repeat(90)}  `, text: `  ${'y'.repeat(2010)}  ` }]
+    const raw = [{ id: 'a', label: `  ${'x'.repeat(90)}  `, text: `  ${'y'.repeat(20010)}  ` }]
     const [template] = normalizePromptTemplates(raw)
     expect(template?.label).toHaveLength(80)
-    expect(template?.text).toHaveLength(2000)
+    expect(template?.text).toHaveLength(20000)
   })
 
   it('caps the list at 50 entries', () => {

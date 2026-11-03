@@ -234,6 +234,27 @@ describe('childSettleReport', () => {
     expect(asking.text).toContain('status blocked (cezar: done)');
   });
 
+  // The record keeps at most 4 question texts, however many the card carried. Without the count
+  // the parent would read a truncated list as the whole ask and re-plan around a question it
+  // never saw.
+  it('says how many parked questions the record could not carry', () => {
+    const asking = childSettleReport(
+      record({
+        status: 'done',
+        dispatch: {
+          rootRunId: 'm',
+          parentRunId: 'p',
+          pendingAsk: {
+            questions: ['A?', 'B?', 'C?', 'D?'],
+            omittedQuestions: 2,
+            askedAt: '2026-09-09T10:00:00.000Z',
+          },
+        },
+      }),
+    );
+    expect(asking.report.result).toContain('A? | B? | C? | D? (+2 more)');
+  });
+
   it('lets the child’s own report win over a stale pending question', () => {
     const own = childSettleReport(
       record({
