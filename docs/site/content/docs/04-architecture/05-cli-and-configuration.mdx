@@ -52,7 +52,7 @@ npx cezar-run serve --repo /path/to/project --port 4321 --no-open
 
 | Command | What it does |
 | --- | --- |
-| `cezar run` "&lt;task>" --workflow quick-task | Runs a workflow without a server or browser. It executes agent work, which can change files and consume provider quota. |
+| `cezar run` "&lt;task>" --workflow quick-task | Runs a workflow without a server or browser. It executes agent work, which can change files and consume provider quota. `--model` overrides the model, and `--effort` the reasoning effort of a Codex run; any other runner refuses `--effort`. |
 | cezar projects / projects add &lt;directory> | Reads or changes the local project registry. No server is required. |
 | cezar runs list --json | Reads tasks from the running server specified by `CEZ_API_URL`. |
 | `cezar task` / `cezar automation` | Controls dispatch and automations on the running server. |
