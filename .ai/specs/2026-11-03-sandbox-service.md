@@ -554,6 +554,30 @@ Every new route goes into the BACKWARD_COMPATIBILITY.md §2 inventory, and the c
     - The type editor gains an **Agents may launch this type** checkbox. It defaults per Q12.
     - ![Agent-launched sandboxes](assets/sandbox-service/mockup-10-agent-launched.png)
 
+11. **Sandboxes management view** (`/sandboxes`, sidebar).
+    - Reserved RAM and vCPU for this computer and each SSH host, disk, and the Daytona month estimate.
+    - Filters: state, project, account, no owner, orphans.
+    - Per row: owner task, resources, disk and "has" (services, agent versions), with **Shell**, **Pause**/**Resume**, **Attach to new task…** and **Delete**.
+    - Bulk delete, and delete paused sandboxes older than N days.
+    - ![Sandboxes view](assets/sandbox-service/mockup-11-sandboxes-view.png)
+12. **Agent accounts → Sandbox credential.**
+    - The software line shows the pinned version and snapshot state.
+    - Pick a mode: API key, Token (with **Run "claude setup-token" in a terminal tab**), or the opt-in login inside the sandbox.
+    - It explains how the credential is passed in.
+    - The composer's preflight line (item 6) reads from this.
+    - ![Sandbox credential](assets/sandbox-service/mockup-12-agent-sandbox-auth.png)
+13. **Resource queue and cost.**
+    - A ×3-variant task is queued with the exact RAM reason, and the variants start together (rules 2 and 10).
+    - A Daytona task shows the model cost plus the estimated sandbox cost against its dispatch budget (rule 7).
+    - ![Queue and cost](assets/sandbox-service/mockup-13-queue-and-cost.png)
+
+Items 4, 6 and 7 also show the twelve rules in place:
+- **Item 4, the type editor:** services, caches, browser, *agents may launch*, share with the team, and "when the task ends".
+- **Item 6, the composer picker:** the project's `.devcontainer` type, a **Reuse existing** tab, and a preflight line.
+- **Item 7, the run header:** sign-in mode, services, reserved RAM, Pause / Keep 24 h / Save as type…, and the dropped-MCP feed line.
+
+Item 9 (Preview) is the #1877 agent-tab list with sandbox badges.
+
 **Other ways to choose a sandbox.** Automations and `cez task create` take the same `sandbox` field (`--sandbox <typeId|none>`). A dispatched child inherits its parent's sandbox type unless the dispatch overrides it.
 
 **Accessibility.** The picker reuses `PickerPill`'s radio-menu semantics. Status pills always pair color with text. Terminal tab badges have text labels for screen readers ("sandbox", "host").

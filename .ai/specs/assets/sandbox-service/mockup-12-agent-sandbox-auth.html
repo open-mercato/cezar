@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Agent account sandbox credential</title><link rel="stylesheet" href="mockup.css">
+<style>.kv{display:grid;grid-template-columns:160px 1fr;gap:10px 14px;font-size:13px;align-items:center}.kv>div:nth-child(odd){color:#9a9aa3}
+.mode{border:1px solid #2f2f35;border-radius:10px;padding:10px 12px;margin-top:8px;display:flex;gap:10px}
+.mode.on{border-color:#7c6cf0;background:#1a1730}
+.r{width:14px;height:14px;border-radius:50%;border:1px solid #52525b;margin-top:3px;flex:none}.mode.on .r{border:4px solid #8f86e8}</style></head>
+<body>
+<aside class="side">
+  <div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div>
+  <div class="nav"><span class="ic">⚿</span>Secrets</div><div class="nav on"><span class="ic">▣</span>Agent accounts</div><div class="nav"><span class="ic">⬡</span>Sandboxes</div>
+</aside>
+<main class="main">
+  <div class="top"><h1>Agent accounts</h1><p>Second logins, and the agent and models a project uses when it has chosen none.</p></div>
+  <div class="content">
+    <div class="tabs"><span class="tab on">Claude Code</span><span class="tab">Codex</span><span class="tab">Cursor</span><span class="tab">pi</span><span class="tab">…</span></div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b>Klaudiusz</b><span class="mono sm muted">~/.claude-klaudiusz</span></div>
+      <div class="kv" style="margin-top:12px">
+        <div>On this computer</div><div><span class="pill ok"><span class="dot"></span>Signed in · Max plan</span></div>
+        <div>Software</div><div class="mono">claude 2.1.235 <span class="muted">· sandboxes use this version · snapshots: Open Mercato dev ✓, Ubuntu 16 GB ✓, build-box VM rebuilding…</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <b>Sandbox credential</b>
+      <p class="muted sm" style="margin:4px 0 6px">Sandboxes never get <span class="mono">~/.claude-klaudiusz</span>. Choose what a task running in a sandbox under this account signs in with.</p>
+      <div class="mode"><span class="r"></span><div class="grow"><b>API key</b><div class="muted sm">A scoped Console key. Billed per token, separately from the subscription.</div></div></div>
+      <div class="mode on"><span class="r"></span><div class="grow"><b>Token</b> <span class="pill ok" style="font-size:11px"><span class="dot"></span>set · ••••Qm2a · 3 days ago</span>
+        <div class="muted sm">A long-lived token from <span class="mono">claude setup-token</span>, so it uses this account's Max plan.</div>
+        <div style="margin-top:8px;display:flex;gap:8px"><span class="btn">Run “claude setup-token” in a terminal tab</span><span class="btn">Replace…</span><span class="btn ghost">Remove</span></div></div></div>
+      <div class="mode"><span class="r"></span><div class="grow"><b>Log in inside the sandbox</b> <span class="pill warn" style="font-size:11px">off · opt-in</span>
+        <div class="muted sm">Runs Claude's own login in a sandbox terminal and keeps the login on an auth volume with the provider (on build-box's disk for SSH). Not available for SSH shell types.</div></div></div>
+      <div class="hint" style="margin-top:12px">How it is passed in: microsandbox swaps it in only on requests to <span class="mono">api.anthropic.com</span> (it never enters the VM). SSH passes it on stdin to the agent process only. It never reaches check steps, terminals or helper sandboxes, and the audit log records only that it was set.</div>
+    </div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

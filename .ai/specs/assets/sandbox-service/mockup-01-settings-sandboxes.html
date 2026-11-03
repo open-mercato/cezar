@@ -90,6 +90,16 @@
       </div>
       <div class="row" style="justify-content:flex-start"><span class="btn primary">＋ New sandbox type</span></div>
     </div>
+    <h2>From this project</h2>
+    <p class="lead">Types found in the repository. A <span class="mono">.devcontainer</span> is turned into a type automatically, and <span class="mono">.ai/cezar/sandboxes.json</span> types are shared with the team.</p>
+    <div class="card" style="padding:4px 16px">
+      <div class="row"><div class="grow"><b>Open Mercato dev</b> <span class="pill violet">from .devcontainer</span> <span class="pill off">read-only</span>
+        <div class="muted sm mono">node:24 · features: docker-in-docker · compose: postgres, redis · forwardPorts 3000 · postCreate: yarn install</div></div><span class="btn">Duplicate</span></div>
+      <div class="row"><div class="grow"><b>QA browser box</b> <span class="pill">shared · .ai/cezar/sandboxes.json</span>
+        <div class="muted sm mono">microsandbox · ubuntu:24.04 · 2 vCPU · 4 GiB · browser</div></div><span class="btn">Edit</span></div>
+    </div>
+    <h2>Caches</h2>
+    <div class="card" style="padding:4px 16px"><div class="row"><div class="grow sm"><span class="mono">yarn</span> 2.1 GiB · <span class="mono">npm</span> 640 MiB · <span class="mono">pip</span> 0 <span class="muted">· shared by every sandbox on this account</span></div><span class="btn">Clear…</span></div></div>
     <div class="callout">Tasks still run on this computer unless you pick a sandbox type in the composer. "None" is always the default.</div>
   </div>
 </main>

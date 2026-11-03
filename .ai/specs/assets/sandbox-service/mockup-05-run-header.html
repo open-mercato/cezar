@@ -33,17 +33,22 @@
     <div class="kv">
       <div>Provider</div><div>microsandbox (local) · v0.7.13</div>
       <div>Sandbox</div><div class="mono">cez-2afe116d</div>
-      <div>Image</div><div class="mono">ubuntu:24.04 + claude 2.1.235</div>
+      <div>Image</div><div class="mono">ubuntu:24.04 + claude 2.1.235 (pinned to host)</div>
+      <div>Signed in</div><div>sandbox token · “Klaudiusz” (host-scoped, never in VM)</div>
+      <div>Services</div><div class="mono">postgres :5432 ✓ · redis :6379 ✓</div>
       <div>Resources</div><div class="mono">4 vCPU · 16 GiB · 40 GiB · net public</div>
       <div>Workspace</div><div class="mono">/workspace ⇄ .ai/cezar/worktrees/2afe116d</div>
       <div>Usage now</div><div class="mono">CPU 61% · RAM 9.8 / 16 GiB</div>
+      <div>Reserved</div><div>16 GiB of host RAM (40 of 124 GiB reserved in total)</div>
       <div>Stops</div><div>after 30 min idle · removed when the task lands or is archived</div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:14px"><span class="btn">Open shell</span><span class="btn">Stop sandbox</span><span class="btn ghost">Logs</span></div>
+    <div style="display:flex;gap:8px;margin-top:14px"><span class="btn">Open shell</span><span class="btn">Pause</span><span class="btn">Keep 24 h</span><span class="btn">Save as type…</span><span class="btn ghost">Audit log</span></div>
   </div>
   <div class="feed">
     <div class="ev"><span class="t">14:02:11</span><span>⬡ Sandbox <code>cez-2afe116d</code> booted in 1.8 s (cached snapshot)</span></div>
     <div class="ev"><span class="t">14:02:13</span><span>⬡ Setup script finished (exit 0)</span></div>
+    <div class="ev"><span class="t">14:02:19</span><span>⬡ Services ready: postgres (6.1 s), redis (0.8 s)</span></div>
+    <div class="ev"><span class="t">14:02:19</span><span class="muted">⬡ MCP server <code>figma</code> is host-only and is not available in this sandbox</span></div>
     <div class="ev"><span class="t">14:02:14</span><span>▶ claude started inside the sandbox · cwd /workspace</span></div>
     <div class="ev"><span class="t">14:09:40</span><span class="muted">$ yarn install && yarn setup   <span style="color:#86efac">✓ fresh environment: no host services reachable</span></span></div>
   </div>
