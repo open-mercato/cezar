@@ -1,0 +1,25 @@
+---
+title: "Automation templates and duplication"
+description: "Start from a template or duplicate an existing rule."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/template-palette.tsx
+    line: 55
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The editor includes a template palette. Existing automations have a Duplicate menu action. After copying a rule, you can change its task text and conditions.
+
+## Where to find it
+
+Automations → New automation → Start from a template / More → Duplicate
+
+## How to use it
+
+1. Open the template palette and choose Use this.
+2. Check the trigger, prompt, and agent.
+3. Save your rule and enable it after checking the settings.
+
+> **Good to know**: After copying a rule, check its connections and whether the selected skills are available in the destination project.

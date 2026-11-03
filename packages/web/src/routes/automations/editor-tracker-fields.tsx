@@ -37,7 +37,7 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
   const first = metadata.data?.pages[0]
   const ready = first?.available ? first : undefined
   const sameSource = !!ready && !!trigger && JSON.stringify(ready.association) === JSON.stringify(trigger.association)
-  const valid = sameSource && !!trigger?.events.length && trigger.events.every(event => ready?.events.includes(event))
+  const valid = !!trigger?.access && sameSource && !!trigger?.events.length && trigger.events.every(event => ready?.events.includes(event))
     && (trigger.requiredLabels?.length ?? 0) <= 100 && (trigger.requiredLabels ?? []).every(label => label.length > 0 && label.length <= 200)
     && (!trigger.events.includes('issue.status_changed') || !!trigger.targetStatusIds?.length)
     && (!(trigger.events.includes('issue.labeled') || trigger.events.includes('issue.unlabeled')) || !!trigger.changedLabelIds?.length)
@@ -66,7 +66,9 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         {ready.events.map(event => <Chip key={event} active={sameSource && trigger?.events.includes(event)} aria-pressed={sameSource && trigger?.events.includes(event)} onClick={() => {
           const current = sameSource ? trigger!.events : []
           const events = current.includes(event) ? current.filter(item => item !== event) : [...current, event]
-          const nextTrigger = { ...(sameSource ? trigger : {}), association: ready.association, events }
+          // A rotated connection keeps the user's reviewed grants; only a brand-new trigger starts read-only.
+          const access = trigger?.access ?? (!trigger ? { version: 1 as const, writes: [] } : undefined)
+          const nextTrigger: TrackerTrigger = { ...(sameSource ? trigger : {}), ...(access ? { access } : {}), association: ready.association, events }
           if (event === 'issue.status_changed' && !events.includes(event)) delete nextTrigger.targetStatusIds
           onChange({ trackerTrigger: nextTrigger, ...(!sameSource ? { enabled: false } : {}) })
         }}>{event}</Chip>)}
@@ -109,6 +111,15 @@ export function EditorTrackerFields({ trigger, intervalSeconds, onChange, onVali
         <SelectContent>{POLL_MINUTES.map(minutes => <SelectItem key={minutes} value={String(minutes)}>{minutes} min</SelectItem>)}</SelectContent>
       </Select>
     </div>
-    <p className="text-xs text-muted-foreground">Only events after enabling are eligible. Existing backlog is not launched. The workflow agent receives this project’s tracker credentials to carry out your instructions; status updates are not guaranteed by the scheduler.</p>
+    {trigger && sameSource ? <fieldset className="flex flex-col gap-2">
+      <legend>Tracker access</legend>
+      {!trigger.access ? <div role="alert">This automation previously gave its agent a tracker token. Review the prompt: only reading this issue, comments and status transitions are now supported. Other operations need a revised workflow.
+        <Button type="button" variant="outline" onClick={() => onChange({ trackerTrigger: { ...trigger, access: { version: 1, writes: [] } } })}>Confirm migration to read-only access</Button>
+      </div> : <>
+        <p>Fresh issue details and accessible comments are read by cezar. Attachments and custom fields are not included. Tokens stay with cezar.</p>
+        {(['comment', 'transition'] as const).map(operation => <label key={operation} className="flex gap-2"><input type="checkbox" checked={trigger.access!.writes.includes(operation)} onChange={e => onChange({ trackerTrigger: { ...trigger, access: { version: 1, writes: e.target.checked ? [...trigger.access!.writes, operation] : trigger.access!.writes.filter(value => value !== operation) } } })} />Allow agent to {operation === 'comment' ? 'post comments' : 'change status'} on this issue without further approval</label>)}
+      </>}
+    </fieldset> : null}
+    <p className="text-xs text-muted-foreground">Only events after enabling are eligible. Existing backlog is not launched. Use a token with minimal read permissions; grant provider write permissions only for selected write actions.</p>
   </div>
 }

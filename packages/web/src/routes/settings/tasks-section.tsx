@@ -20,7 +20,7 @@ export function TasksSection() {
 
   if (config.isPending) {
     return (
-      <p data-slot="tasks-loading" className="p-4 text-[13px] text-soft-foreground md:p-6">
+      <p data-slot="tasks-loading" className="p-4 text-ui text-soft-foreground md:p-6">
         Loading task settings…
       </p>
     )
@@ -71,7 +71,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
             ))}
           </select>
         ) : (
-          <p data-slot="tasks-base-branch-unavailable" className="text-[13px] text-soft-foreground">
+          <p data-slot="tasks-base-branch-unavailable" className="text-ui text-soft-foreground">
             {repo.isPending ? 'Loading branches…' : 'Not a git repository — tasks run in place, no branching.'}
           </p>
         )}
@@ -94,7 +94,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-ui text-muted-foreground">
             {(config.reviewGate ?? false) ? 'On' : 'Off'}
             {config.reviewGate === null && ' (default)'}
           </span>
@@ -118,7 +118,7 @@ function TasksForm({ config }: { config: ConfigResponse }) {
               )
             }
           />
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-ui text-muted-foreground">
             {(config.liveTitleUpdates ?? true) ? 'On' : 'Off'}
             {config.liveTitleUpdates === null && ' (default)'}
           </span>

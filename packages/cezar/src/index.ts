@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { WebhookCoordinator } from './webhooks/coordinator.ts';
+import { webhooksEnabled } from './webhooks/service.ts';
+import { allocateProjectSlug, listProjects, shouldRegisterProject } from './workspace/projects.ts';
+import { listServerInstances as webhookServerInstances } from './server-install/state.ts';
 import { parseArgs } from 'node:util';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
@@ -18,7 +22,6 @@ import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
-import { resolveTrackerAgentEnv } from './server/tracker/agent-credentials.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { resolveCapabilities } from './server/capabilities.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
@@ -38,7 +41,7 @@ import { devVersion } from './self-update/semver.ts';
 import { isSupervised, restartProcess } from './self-update/restart.ts';
 import { runSelfUpdateCommand } from './self-update/cli.ts';
 import { writeLaunchers } from './self-update/launcher.ts';
-import { initWorkspace } from './workspace/boot.ts';
+import { initServeWorkspace, initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
@@ -48,13 +51,31 @@ import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 import { killLiveChecks } from './workflows/check-step.ts';
 import { installRunSignalHandlers } from './run-signals.ts';
-import { apiOrigin, pickPort } from './api-origin.ts';
+import { runHandoffCommand } from './handoff-cli.ts';
+import { apiOrigin } from './api-origin.ts';
+import { pickStartupPort } from './startup-port.ts';
 import { runTelemetryCommand } from './telemetry-cli.ts';
 import { reportInconclusiveProbe } from './server/provider-telemetry.ts';
 import { runRunsCommand } from './runs/runs-cli.ts';
+import { runImpactCommand } from './impact/impact-cli.ts';
 
 import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
+import { runTrackerCommand } from './server/tracker/task-cli.ts';
 import { runSecretsCommand } from './workspace/secrets-cli.ts';
+import { launchPageUrl } from './cockpit-address.ts';
+import {
+  claimCockpitSlot,
+  inspectCockpitRuntime,
+  instanceCockpitSlot,
+  newRuntimeId,
+  publishCockpitRuntime,
+  releaseCockpitRuntime,
+  resolveCockpitSlot,
+  waitForCockpitRuntime,
+  type CockpitLease,
+  type CockpitRuntimeRecord,
+} from './runtime/cockpit-runtime.ts';
+import { handoffProject } from './runtime/cockpit-handoff.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -63,7 +84,10 @@ Usage:
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
+  cezar handoff <log|resume>  update a running task's handoff file (CEZ_HANDOFF_FILE)
   cezar runs list           list a running cockpit's tasks from a shell (CEZ_API_URL=http://127.0.0.1:4321)
+  cezar impact <evidence|render>  collect evidence for, and render, an impact report
+                            (local, no cockpit; paths default to $CEZ_ARTIFACTS_DIR)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -90,6 +114,7 @@ Options:
       --repo <dir>            repo to operate on (default: cwd)
       --workflow <name>       workflow for \`run\` (default: quick-task)
       --model <model>         model override for \`run\`
+      --effort <value>        Codex reasoning-effort override for \`run\`
       --no-open               don't open the browser
       --platform <id>         server-install target (ubuntu-vps | macosx-ngrok)
       --domain <host>         server-install (ubuntu-vps): host a SECOND, independent
@@ -114,6 +139,10 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'tracker') {
+    process.exitCode = await runTrackerCommand(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === 'tracker-connections') {
     process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
     return;
@@ -134,6 +163,11 @@ async function main(): Promise<void> {
     process.exitCode = await runAutomationCommand(process.argv.slice(3));
     return;
   }
+  // `cez handoff …`: an agent's own handoff file (CEZ_HANDOFF_FILE), no server involved.
+  if (process.argv[2] === 'handoff') {
+    process.exitCode = await runHandoffCommand(process.argv.slice(3));
+    return;
+  }
   // Opt-in telemetry's terminal switch (docs/telemetry.md): no server, no repo needed.
   if (process.argv[2] === 'telemetry') {
     process.exitCode = await runTelemetryCommand(process.argv.slice(3));
@@ -144,12 +178,23 @@ async function main(): Promise<void> {
     process.exitCode = await runRunsCommand(process.argv.slice(3));
     return;
   }
+  // `cez impact …` (spec 2026-10-22-html-artifacts-and-impact): local, no server, own flags.
+  if (process.argv[2] === 'impact') {
+    process.exitCode = await runImpactCommand(process.argv.slice(3), {
+      cwd: process.cwd(),
+      env: process.env,
+      log: (line) => console.log(line),
+      error: (line) => console.error(line),
+    });
+    return;
+  }
   const { values, positionals } = parseArgs({
     options: {
       port: { type: 'string', short: 'p', default: '4321' },
       repo: { type: 'string' },
       workflow: { type: 'string' },
       model: { type: 'string' },
+      effort: { type: 'string' },
       'no-open': { type: 'boolean', default: false },
       platform: { type: 'string' },
       domain: { type: 'string' },
@@ -190,7 +235,7 @@ async function main(): Promise<void> {
       await serveCommand(repoRoot, Number(values.port), !values['no-open'], values['bind-host']);
       return;
     case 'run':
-      await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model);
+      await runCommand(repoRoot, positionals.slice(1).join(' ').trim(), values.workflow, values.model, values.effort);
       return;
     case 'init':
       initCommand(repoRoot);
@@ -262,7 +307,80 @@ async function serveCommand(
   openBrowser: boolean,
   bindHost?: string,
 ): Promise<void> {
-  const bootProjectId = await initWorkspace(repoRoot);
+  const runtimeId = newRuntimeId();
+  let cockpitLease: CockpitLease | undefined;
+  let runtimeReleased = false;
+  const releaseRuntime = async (): Promise<void> => {
+    if (!cockpitLease || runtimeReleased) return;
+    runtimeReleased = true;
+    await releaseCockpitRuntime(cockpitLease).catch((error: unknown) => {
+      console.warn(`[cez] could not clean cockpit runtime state (${error instanceof Error ? error.message : String(error)})`);
+    });
+  };
+  const joinRunningCockpit = async (runtime: CockpitRuntimeRecord): Promise<void> => {
+    if (await shouldRegisterProject(repoRoot).catch(() => false)) {
+      await handoffProject(runtime, repoRoot, { openBrowser, open: openUrl });
+      return;
+    }
+    const url = launchPageUrl(runtime.origin);
+    console.log(`  cockpit already running (pid ${runtime.owner.pid}) — launch root is not registrable`);
+    console.log(`  cockpit → ${url}`);
+    if (openBrowser) openUrl(url);
+  };
+
+  // A shell launch prefers the host's default installed service, when that exact service has
+  // published a verifiable runtime lease. Named installs are deliberately never auto-selected.
+  if (!process.env.CEZ_INSTANCE_ID && process.env.CEZ_REMOTE !== '1') {
+    const installed = webhookServerInstances().find((entry) =>
+      entry.instance === 'default' && entry.state.installed && entry.state.instanceId,
+    );
+    if (installed?.state.instanceId) {
+      const discovered = await inspectCockpitRuntime(instanceCockpitSlot(installed.state.instanceId));
+      if (discovered.kind === 'verified') {
+        await joinRunningCockpit(discovered.runtime);
+        return;
+      }
+      // A published record means this exact installed-service slot has an owner. If that owner is
+      // live but its endpoint cannot be authenticated, silently falling through would start a
+      // second cockpit with the same schedulers and registry. Only a missing record (older/stopped
+      // service) or a provably dead exact process identity is safe to ignore here.
+      if (discovered.kind === 'unavailable') {
+        throw new Error(
+          `the default installed cockpit is running, but it cannot be safely reached (${discovered.reason}). ` +
+          'Stop or restart that service; cezar will not launch a duplicate.',
+        );
+      }
+    }
+  }
+
+  const slot = resolveCockpitSlot({ bindHost, port: preferredPort });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const claim = await claimCockpitSlot(slot);
+    if (claim.kind === 'primary') {
+      cockpitLease = claim.lease;
+      break;
+    }
+    if (claim.kind === 'degraded') {
+      console.warn(`[cez] singleton reuse unavailable (${claim.reason}) — starting without a runtime lease`);
+      break;
+    }
+    if (claim.kind === 'blocked') {
+      throw new Error(`cannot verify the existing cockpit owner for ${slot}: ${claim.reason}`);
+    }
+    const incumbent = await waitForCockpitRuntime(slot);
+    if (incumbent.kind === 'verified') {
+      await joinRunningCockpit(incumbent.runtime);
+      return;
+    }
+    if (incumbent.kind === 'dead' && attempt === 0) continue;
+    const reason = incumbent.kind === 'unavailable' ? incumbent.reason : 'the live owner has not become ready';
+    throw new Error(
+      `a cockpit already owns ${slot}, but it cannot be safely reached (${reason}). ` +
+      'Stop that process or wait for it to finish starting; cezar will not launch a duplicate.',
+    );
+  }
+
+  const bootProjectId = await initServeWorkspace(repoRoot);
   // ONE workspace semaphore for the whole process (spec 2026-07-20, step 2.5):
   // the boot manager and every lazily-built project context count their runs
   // against the same `resources.maxParallel`. The boot refresh() below is the
@@ -272,7 +390,7 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
+  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
   let httpServer: ReturnType<typeof startServer> | null = null;
   let stopping = false;
   // Owned lifecycle scripts drain first; then the store and telemetry flush as before.
@@ -291,7 +409,7 @@ async function serveCommand(
         track('app_stop', { label: reason });
         return flushTelemetry(reason === 'signal' ? undefined : 1_000);
       })
-      .finally(() => process.exit(process.exitCode ?? 0));
+      .finally(() => void releaseRuntime().finally(() => process.exit(process.exitCode ?? 0)));
   };
   process.on('SIGINT', () => shutdown('signal'));
   process.on('SIGTERM', () => shutdown('signal'));
@@ -332,6 +450,18 @@ async function serveCommand(
     }
   }
 
+  let webhookPort = preferredPort;
+  const webhooks = webhooksEnabled() ? new WebhookCoordinator({
+    mode: () => resolveCapabilities(process.env, bindHost).localHandoff ? 'local' : 'hosted',
+    ports: () => [webhookPort, ...webhookServerInstances().map(instance => instance.state.primaryPort)],
+    projects: async () => listProjects(), dryRun: process.env.CEZ_DRY_RUN === '1',
+    singleProject: resolveCapabilities(process.env, bindHost).singleProject,
+  }) : undefined;
+  if (webhooks) {
+    const registry = (await loadWorkspaceConfig()).projects;
+    const publicId = bootProjectId ?? allocateProjectSlug(repoRoot, registry.map(project => project.id));
+    await webhooks.attach({ root: repoRoot, store, manager }, publicId, false, true);
+  }
   const recovered = store
     .listRuns()
     .filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length;
@@ -341,6 +471,8 @@ async function serveCommand(
     providerRuntimeAuth,
   );
   if (recovered > 0) console.log(`  recovered ${recovered} run(s) from the previous session`);
+
+  webhooks?.ready(repoRoot);
 
   // Update discovery (#368) through the self-update service (PoC): the channel's newest
   // version lands on /api/v1/health as `latestVersion` for the chip, and the dialog behind the
@@ -359,10 +491,9 @@ async function serveCommand(
         store.flush({ pretty: true });
         // The old process stops here, so it reports its own stop before handing over (bounded).
         track('app_stop', { label: 'restart' });
-        void flushTelemetry(1_000).finally(() =>
+        void flushTelemetry(1_000).finally(() => void releaseRuntime().finally(() =>
           restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
-        );
-        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+        ));
       }).catch((error: unknown) => {
         console.error('cezar: lifecycle shutdown failed before restart', error);
         process.exit(1);
@@ -387,7 +518,8 @@ async function serveCommand(
       'runs.total': runs.length,
     };
   });
-  const port = await pickPort(preferredPort, bindHost);
+  const port = await pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost);
+  webhookPort = port;
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only
   // for a deliberate hosted setup where a reverse proxy in front provides TLS +
@@ -408,6 +540,8 @@ async function serveCommand(
     store,
     manager,
     version,
+    runtimeId,
+    runtimeHandoffToken: cockpitLease?.ownership.identity.token,
     update,
     bootProjectId,
     semaphore,
@@ -415,10 +549,23 @@ async function serveCommand(
     providerAuth,
     providerRuntimeAuth,
     workspaceEvents,
+    webhooks,
     selfUpdate,
   }, port);
-  httpServer.once('listening', () => manager.lifecycle.start());
+  httpServer.once('listening', () => {
+    const publication = cockpitLease
+      ? publishCockpitRuntime(cockpitLease, { runtimeId, port, bindHost, version })
+      : Promise.resolve();
+    void publication
+      .catch((error: unknown) => {
+        console.warn(`[cez] cockpit runtime state could not be published (${error instanceof Error ? error.message : String(error)})`);
+      })
+      .finally(() => manager.lifecycle.start());
+  });
   const url = `http://localhost:${port}`;
+  const launchUrl = bootProjectId
+    ? `${url}/p/${encodeURIComponent(bootProjectId)}/`
+    : launchPageUrl(url);
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
   console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);
@@ -428,7 +575,7 @@ async function serveCommand(
     console.log(`  ${mark} ${check.name.padEnd(6)} ${detail}`);
   }
   if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
-  console.log(`\n  cockpit → ${url}\n`);
+  console.log(`\n  cockpit → ${launchUrl}\n`);
   // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
   await printSkillsBanner(repoRoot);
   // The star ask's terminal line — same block, same two off switches.
@@ -486,7 +633,7 @@ async function serveCommand(
   // paint is the cockpit and never a connection error.
   if (openBrowser) {
     const healthy = await waitForHealth(`${url}/api/v1/health`, 5_000);
-    if (healthy) openUrl(url);
+    if (healthy) openUrl(launchUrl);
   }
 }
 
@@ -511,12 +658,15 @@ async function runCommand(
   task: string,
   workflowName: string | undefined,
   model: string | undefined,
+  reasoningEffort: string | undefined,
 ): Promise<void> {
   if (!task) {
-    console.error('usage: cezar run "<task>" [--workflow name] [--model model]');
+    console.error('usage: cezar run "<task>" [--workflow name] [--model model] [--effort value]');
     process.exitCode = 1;
     return;
   }
+  // This entrypoint, so the agent can run `node "$CEZ_BIN" handoff …` here too (no cockpit needed).
+  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
   await initWorkspace(repoRoot);
   const { workflows, issues } = await loadWorkflows(repoRoot);
   for (const issue of issues) console.error(`! skipped ${issue.path}: ${issue.message}`);
@@ -595,7 +745,7 @@ async function runCommand(
   });
 
   await initTelemetry({ version: readOwnVersion() });
-  const run = manager.startRun(workflow, { task, model, origin: 'cli' });
+  const run = manager.startRun(workflow, { task, model, reasoningEffort, origin: 'cli' });
   // No cockpit device here: the CLI's message counts under the installation's own id.
   track('message_sent', { label: 'cli' });
   // `review` is terminal here too (spec 009) — headless runs must not hang on

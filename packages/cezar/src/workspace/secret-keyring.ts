@@ -1,7 +1,7 @@
 /**
- * The OS keychain as a home for ONE item: the 32-byte data key that encrypts this machine's
+ * The OS keychain stores one item per initialized home: the 32-byte data key for its
  * secret files (spec 2026-10-10-project-secrets-vault-options, backend D). The secrets
- * themselves never go to the keychain — one item means one macOS "allow access" prompt per
+ * themselves never go to the keychain — one item avoids per-secret access prompts per
  * binary, no per-platform value-size limit, and the metadata (scope, audiences) stays in the
  * file where it can be read without a prompt.
  *
@@ -21,7 +21,7 @@ export interface DataKeyring {
   set(key: Buffer): Promise<void>;
 }
 
-/** The keychain item's coordinates. One per machine, shared by every `CEZ_HOME`. */
+/** The keychain item's coordinates. Legacy item, shared by every `CEZ_HOME`; new homes use a persisted account suffix. */
 export const KEYCHAIN_SERVICE = 'cezar';
 export const KEYCHAIN_ACCOUNT = 'secrets-data-key';
 
@@ -30,8 +30,8 @@ export const KEYCHAIN_ACCOUNT = 'secrets-data-key';
  * run (a vitest worker must never write a developer's real keychain — tests inject a fake), a
  * missing native package, or no usable store on this machine.
  */
-export async function osKeychain(env: NodeJS.ProcessEnv = process.env): Promise<DataKeyring | null> {
-  if (env.CEZ_SECRETS_KEYCHAIN === '0' || env.VITEST) return null;
+export async function osKeychain(env: NodeJS.ProcessEnv = process.env, account = KEYCHAIN_ACCOUNT): Promise<DataKeyring | null> {
+  if (env.CEZ_SECRETS_KEYCHAIN === '0' || env.VITEST || process.env.VITEST) return null;
   let keyring: typeof import('@napi-rs/keyring');
   try {
     keyring = await import('@napi-rs/keyring');
@@ -42,7 +42,7 @@ export async function osKeychain(env: NodeJS.ProcessEnv = process.env): Promise<
   try {
     // Requiring a store makes the constructor throw when it is unavailable — the `null` below —
     // instead of silently picking the non-persistent kernel keyring.
-    entry = new keyring.AsyncEntry(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, { linux: { store: 'secret-service' } });
+    entry = new keyring.AsyncEntry(KEYCHAIN_SERVICE, account, { linux: { store: 'secret-service' } });
   } catch {
     return null;
   }

@@ -1,0 +1,27 @@
+---
+title: "Check session tokens and cost"
+description: "See the input and output token counts and the cost reported by the agent."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/run-header.tsx
+    line: 944
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-30-session-usage-metrics.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+These values appear in the task list or session when the provider supplies them.
+
+## Where to find it
+
+Tasks or session view
+
+## How to use it
+
+1. Open the task list or a session.
+2. Check the available usage values.
+
+> **Good to know**: Providers report different usage data. A missing cost does not mean the run was free.

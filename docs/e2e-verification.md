@@ -22,7 +22,8 @@ test still runs, and only `agent.*` steps need a model.
 
 cezar then starts a task, in its own worktree like any other, that:
 
-1. runs `npx e2e init --yes` and installs what it added with the repository's package manager;
+1. runs `npx e2e init` non-interactively (web engine, the gateway for your key, skill and `.mcp.json`),
+   which also installs what it added with the repository's package manager;
 2. points `e2e.config.ts` at **this** project's dev server on a per-task port
    (`http://127.0.0.1:0` with a `{port}` app command, so parallel tasks never collide)
    and wires the model provider for the key you stored;
@@ -301,16 +302,16 @@ for follow-ups.
 - **The replay cache can be shared across tasks.** Every task starts in a
   fresh worktree, and `.e2e/cache/` is gitignored, so by default each task
   re-records every `agent.act`. cezar hands each check `CEZ_SHARED_CACHE_DIR`
-  (`~/.cezar/cache/<project>`, one per project) — point the cache there:
+  (`~/.cezar/cache/<project>`, one per project) — point the cache there with
+  `E2E_CACHE_DIR` (e2e ≥ 0.21; the workflow the setup writes already does):
 
-  ```ts
-  // e2e.config.ts
-  import { join } from 'node:path'
-  cache: {
-    mode: 'read-write',
-    dir: process.env.CEZ_SHARED_CACHE_DIR ? join(process.env.CEZ_SHARED_CACHE_DIR, 'e2e') : '.e2e/cache',
-  },
+  ```sh
+  E2E_CACHE_DIR="${CEZ_SHARED_CACHE_DIR:+$CEZ_SHARED_CACHE_DIR/e2e}" npx e2e run
   ```
+
+  e2e keys entries by `projectId` (or the `package.json` `name`), which every
+  worktree of the project shares. While the variable is set, a cache you
+  committed under `cache.dir` is not read — leave it out if you commit yours.
 
   cezar hands every parallel task the same directory and takes no lock on it —
   it does not own the writes, your e2e tool does. A recording one task
@@ -333,6 +334,10 @@ for follow-ups.
   attempt. Keep e2e's own startup, test and exploration timeouts below the
   bound so a hung app fails as a verdict, with its report, rather than as a
   kill.
+- **The app sees only what you list.** `app.command` gets `PATH`, `HOME`,
+  the temp variables and `command.env`. Name host variables it needs — a
+  per-task database URL, a check secret — in `command.inheritEnv`
+  (`['DATABASE_URL', 'STRIPE_*']`); model keys stay out.
 - **No service orchestration.** e2e starts `app.command` and nothing else. A
   database or a mock stack has to be up before the run, or started by the
   command the config names.
@@ -416,7 +421,8 @@ cezar on, with no CI to configure.
 
 Every agent step in a test and every exploration step is model calls, charged
 to whatever provider the config names — separately from the cezar task's own
-agent. Three things keep it bounded: the replay cache (verified actions replay
+agent. Four things keep it bounded: the replay cache (verified actions replay
 for free until the app changes), `--max-failures <n>` (stop before spending a
-model call on every remaining test of a broken build), and a low `onFail.max`
+model call on every remaining test of a broken build), `--max-duration <ms>`
+(a wall-clock cap on the whole run), and a low `onFail.max`
 — each retry re-runs the whole check.

@@ -1,0 +1,88 @@
+---
+title: "Workflow YAML"
+description: "How to write a workflow, check its results with a command, and send work back for a fix. YAML examples and guidance on moving from a step list to a graph."
+sources:
+  - label: "File loading and name collisions"
+    path: packages/cezar/src/workflows/load.ts
+    line: 15
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Step schema"
+    path: packages/cezar/src/workflows/types.ts
+    line: 28
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "retryOn rules"
+    path: packages/cezar/src/workflows/types.ts
+    line: 168
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Check execution through bash -lc"
+    path: packages/cezar/src/workflows/run.ts
+    line: 8025
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Graph syntax and ports"
+    path: docs/reference.md
+    line: 362
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## Where to save a workflow and which fields to use
+
+Save a `.yaml` or `.yml` file directly in `.ai/cezar/workflows/`. The loader reads files from this directory. It reports each file error separately and continues loading the others. The name field identifies the workflow. If it matches a built-in template, Cezar uses your file.
+
+In the list format, choose either steps or skills. You cannot declare both. Each step needs a unique id. An agent step contains prompt or skill; a check step contains command. Combining command with prompt fails validation. If you use `onFail.retry`, point it to an earlier step.
+
+## Implementation, tests, and up to two repair attempts
+
+The example assumes the repository has an npm test command. Replace it with the command your project uses. Cezar inserts the task text at `{{task}}`. If a check fails, its redacted output is added to the prompt for the next implementation attempt. `max: 2` permits two repair attempts after the initial execution. It does not limit total time or token usage.
+
+Exit code 0 means success. With `retryOn: [1]`, code 1 sends the task back for a fix, while a code such as 2 ends execution with an error without running the agent again. Omitting `retryOn` or using an empty list retries every nonzero exit code. This setting makes sense when the checking tool does not distinguish a failed test from a configuration error.
+
+```yaml
+name: fix-and-verify
+description: Implement a change and verify it with project tests.
+steps:
+  - id: implement
+    name: Implementation
+    runner: claude
+    prompt: "Complete the task and add the required tests: {{task}}"
+    allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
+  - id: verify
+    name: Tests
+    command: npm test
+    onFail:
+      retry: implement
+      max: 2
+      retryOn: [1]
+```
+
+<Mermaid chart={"flowchart LR\n  implement[\"Implement<br/><small>agent edits the code</small>\"] --> test[\"Test<br/><small>check step: npm test</small>\"]\n  test -- \"exit 0\" --> done[\"Finish<br/><small>tests passed</small>\"]\n  test -- \"exit 1, up to 2 retries\" --> implement\n  test -- \"other exit code or no retries left\" --> fail[\"Stop with an error\"]"} />
+
+## How runners interpret `allowedTools`
+
+The default `allowedTools` are Read, Edit, Write, Grep, Glob, and Bash. Bash alone gives broad shell access. Claude supports `allowedTools` and `bashAllowlist`, while Codex, OpenCode, Junie, and Cursor have their own permission models. The list does not create the same sandbox across runners. After changing a runner, check its actual permissions even if the YAML still validates.
+
+Each agent step can have its own runner and model, such as different choices for implementation and review. A skill supplies instructions to the step. When verification is mandatory, add a check with command: its exit code lets the engine decide whether to continue. A prompt asking the agent to test its work does not provide the same control.
+
+## Variables and secrets in a check step
+
+A check runs `bash -lc` in the task worktree. It receives the server environment, `CEZ_RUN_ID`, `CEZ_WORKTREE`, `CEZ_STEP_ID`, and the `CEZ_ATTEMPT` number. Available values depend on the task. When context is missing, Cezar does not replace it with an empty string.
+
+You can assign Cezar secrets with the checks audience to a command. If you omit secrets, the check receives every available secret in that audience. Project values take precedence over workspace values. Setting secrets on an agent step causes a workflow loading error. This rule does not remove API keys previously exported in the host environment.
+
+```yaml
+name: staging-check
+steps:
+  - id: verify
+    command: npm run test:staging
+    secrets:
+      - STAGING_TOKEN
+      - { name: STAGING_LOGIN, as: APP_PASSWORD }
+```
+
+> **Good to know**: This example requires a test:staging script and saved secrets with the checks audience. Saving the workflow file does not run the command.
+
+## When to use version: 2
+
+Use a graph when you need branches, a question for a person, a wait for CI, or separate subtasks. A graph contains nodes and edges. An edge starts at a specific port, such as tests.pass or tests.fail. An unconnected port ends the path; a failure port ends it unsuccessfully. Every cycle must pass through a loop node with a repetition limit.
+
+A basic graph executes one node at a time. Parallel work uses fork and join. Fork branches launch separate tasks through dispatch rather than editing the same checkout in parallel. Node results are available through \{\{nodes.&lt;id>.&lt;field>\}\}, such as a check output field.
+
+Before using a graph, check what happens when a loop is exhausted, no verdict is returned, a timeout occurs, or the task is cancelled. The success path does not describe these cases. Simulate in the editor walks the graph without running tools. To execute a check, run a task.

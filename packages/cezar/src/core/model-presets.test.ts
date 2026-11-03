@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner, modelNativeToRunner } from './model-presets.ts';
+import { KNOWN_PRESETS_BY_RUNNER, modelConflictsWithRunner, modelNativeToRunner, pinSurvivesRunnerSwitch } from './model-presets.ts';
+
+describe('pinSurvivesRunnerSwitch', () => {
+  it('drops any pin crossing into or out of Antigravity', () => {
+    expect(pinSurvivesRunnerSwitch('Gemini 3.8 Flash (High)', 'antigravity', 'claude')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('my-org/custom-tune', 'claude', 'antigravity')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('Gemini 3.8 Flash (High)', 'antigravity', 'antigravity')).toBe(true);
+  });
+
+  it('otherwise keeps only a pin native to the target on a switch', () => {
+    expect(pinSurvivesRunnerSwitch('my-custom-alias', 'codex', 'claude')).toBe(true);
+    expect(pinSurvivesRunnerSwitch('openai/gpt-5.1', 'opencode', 'claude')).toBe(false);
+    expect(pinSurvivesRunnerSwitch('sonnet', 'claude', 'codex')).toBe(false);
+  });
+
+  it('keeps a same-runner pin unless it conflicts', () => {
+    expect(pinSurvivesRunnerSwitch('my-org/custom-tune', 'claude', 'claude')).toBe(true);
+    expect(pinSurvivesRunnerSwitch('gpt-5.1-codex', 'claude', 'claude')).toBe(false);
+  });
+});
 
 describe('modelConflictsWithRunner', () => {
   it('never rejects auto or a runner\'s own preset', () => {

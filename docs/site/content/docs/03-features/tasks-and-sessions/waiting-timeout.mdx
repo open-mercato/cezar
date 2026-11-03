@@ -1,0 +1,25 @@
+---
+title: "Idle timeout for waiting sessions"
+description: "Choose how long an ordinary waiting session stays open."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/resources-section.tsx
+    line: 167
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Waiting-session idle timeout sets how many inactive minutes Cezar waits before closing a waiting backend session. You can return to the task later and resume it with Continue.
+
+## Where to find it
+
+Settings → Global → Resources → Waiting-session idle timeout
+
+## How to use it
+
+1. Set the number of minutes.
+2. Choose 0 to keep the session open without a time limit.
+3. Resume a closed session with Continue on the task.
+
+> **Good to know**: Sessions marked as monitoring are exempt from this timeout.

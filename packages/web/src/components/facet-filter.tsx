@@ -121,7 +121,7 @@ export function FacetFilter({
                     </span>
                     <span className="min-w-0 flex-1 truncate">{option.label}</span>
                     {option.count === undefined ? null : (
-                      <span className="shrink-0 font-mono text-[11px] text-soft-foreground tabular-nums">
+                      <span className="shrink-0 font-mono text-meta text-soft-foreground tabular-nums">
                         {option.count}
                       </span>
                     )}
@@ -189,7 +189,7 @@ export function ToggleChip({
     >
       {label}
       {count === undefined ? null : (
-        <span className={cn('font-mono text-[11px] tabular-nums', !selected && 'text-soft-foreground')}>
+        <span className={cn('font-mono text-meta tabular-nums', !selected && 'text-soft-foreground')}>
           {count}
         </span>
       )}

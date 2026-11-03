@@ -3,12 +3,13 @@ import { CheckIcon, GitBranchIcon, GitPullRequestIcon, PlusIcon } from 'lucide-r
 import { useState, type FormEvent } from 'react'
 
 import { createRepoBranch, putConfig } from '@/api/client'
-import { queryKeys, useGithub, useHealth, useRepoSync } from '@/api/queries'
+import { queryKeys, useGithub, useRepoSync } from '@/api/queries'
 import { BranchTrackingBadge } from './repo-sync-bar'
 import type { GithubItem, HealthResponse, RepoInfo, RepoResponse } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
+import { useActiveForge } from '@/lib/active-forge'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 /**
@@ -18,13 +19,13 @@ import { cn, isHttpUrl } from '@/lib/utils'
  * danger toast. The agents' base-branch picker rides the same payload's `baseBranch` +
  * `PUT /api/config`, exactly like the legacy Repo tab did.
  *
- * Forge-specific rows (open PRs with checks badges) render ONLY when `/api/health` reports
- * the forge driver available — no driver, no PR surface, per the forge-seam doctrine. The
+ * Forge-specific rows (open PRs with checks badges) render ONLY when this project's forge
+ * (`useActiveForge`, #1410) is available — no driver, no PR surface, per the forge-seam doctrine. The
  * component gate doubles as the fetch gate: `<ForgePullRequests>` mounts (and so queries
  * `/api/github`) only behind it.
  */
 export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: RepoInfo }) {
-  const health = useHealth()
+  const forge = useActiveForge()
   const sync = useRepoSync()
   const queryClient = useQueryClient()
   const onError = (error: Error) => toast(error.message, { tone: 'danger' })
@@ -81,7 +82,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
   return (
     <section data-slot="repo-branches" className="flex flex-col gap-6 px-4 py-4 md:px-6">
       <div>
-        <h2 className="text-xs font-semibold tracking-wide text-soft-foreground uppercase">Branches</h2>
+        <h2 className="eyebrow text-soft-foreground">Branches</h2>
         <Input
           aria-label="Filter branches"
           placeholder="Filter branches…"
@@ -102,7 +103,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
                 {current ? (
                   <span
                     data-slot="branch-current"
-                    className="flex shrink-0 items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+                    className="flex shrink-0 items-center gap-1 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground"
                   >
                     <CheckIcon aria-hidden="true" className="size-3" />
                     current
@@ -111,7 +112,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
                   <span
                     data-slot="branch-elsewhere"
                     title={`Checked out in ${heldAt}`}
-                    className="ml-auto shrink-0 text-[11px] text-soft-foreground"
+                    className="ml-auto shrink-0 text-meta text-soft-foreground"
                   >
                     in another worktree
                   </span>
@@ -160,7 +161,7 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
       <div className="max-w-md">
         <label
           htmlFor="base-branch-picker"
-          className="text-xs font-semibold tracking-wide text-soft-foreground uppercase"
+          className="eyebrow text-soft-foreground"
         >
           Agents’ base branch
         </label>
@@ -181,10 +182,10 @@ export function RepoBranchesSection({ repo, info }: { repo: RepoResponse; info: 
             </option>
           ))}
         </select>
-        <p className="mt-1 text-[11px] text-soft-foreground">New task worktrees branch from this.</p>
+        <p className="mt-1 text-meta text-soft-foreground">New task worktrees branch from this.</p>
       </div>
 
-      {health.data?.forge?.available ? <ForgePullRequests /> : null}
+      {forge?.available ? <ForgePullRequests /> : null}
     </section>
   )
 }
@@ -196,7 +197,7 @@ function ForgePullRequests() {
   const github = useGithub({ limit: 20 })
   return (
     <div data-slot="repo-prs" className="max-w-xl">
-      <h2 className="text-xs font-semibold tracking-wide text-soft-foreground uppercase">Open pull requests</h2>
+      <h2 className="eyebrow text-soft-foreground">Open pull requests</h2>
       {github.isPending ? (
         <p className="mt-2 text-xs text-soft-foreground">Loading pull requests…</p>
       ) : github.isError ? (
@@ -222,8 +223,8 @@ function PullRequestRow({ pr }: { pr: GithubItem }) {
   const inner = (
     <>
       <GitPullRequestIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
-      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">#{pr.number}</span>
-      <span className="min-w-0 flex-1 truncate text-[13px]">{pr.title}</span>
+      <span className="shrink-0 font-mono text-meta text-muted-foreground">#{pr.number}</span>
+      <span className="min-w-0 flex-1 truncate text-ui">{pr.title}</span>
       {pr.checks ? <ChecksBadge checks={pr.checks} /> : null}
     </>
   )
@@ -249,7 +250,7 @@ function ChecksBadge({ checks }: { checks: 'passing' | 'failing' | 'pending' }) 
       data-slot="pr-checks"
       data-checks={checks}
       className={cn(
-        'shrink-0 text-[10px] font-medium',
+        'shrink-0 text-micro font-medium',
         checks === 'passing' && 'text-success',
         checks === 'failing' && 'text-danger',
         checks === 'pending' && 'text-muted-foreground',

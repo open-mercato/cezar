@@ -1,0 +1,40 @@
+---
+title: "Architecture"
+description: "How Cezar accepts a task, starts an agent, and saves the result, and which settings control that process."
+---
+These pages are for developers who integrate with Cezar, operate it on a server, or change its code. Each page links to the source it describes.
+
+<Cards>
+  <Card title="System overview" href="/docs/architecture/overview">
+    How a task reaches the agent, where Cezar saves its results, and how the browser receives progress updates.
+  </Card>
+  <Card title="Task lifecycle, concurrency, and recovery" href="/docs/architecture/run-lifecycle">
+    What task statuses mean, why tasks wait in the queue, and what remains after work stops or a worktree is removed.
+  </Card>
+  <Card title="Workflow YAML" href="/docs/architecture/workflows">
+    How to write a workflow, check its results with a command, and send work back for a fix. YAML examples and guidance on moving from a step list to a graph.
+  </Card>
+  <Card title="Runners and subtasks" href="/docs/architecture/agent-runners">
+    How Cezar connects to seven agent tools, how their permissions differ, and how to delegate work through dispatch.
+  </Card>
+  <Card title="CLI, configuration, and files" href="/docs/architecture/cli-and-configuration">
+    Commands for starting Cezar and selecting a project, plus the files that store settings, limits, and task history.
+  </Card>
+  <Card title="HTTP API and project scope" href="/docs/architecture/http-api">
+    How to select a project, create a task, and read its result over HTTP. Curl examples, error codes, and access rules for an API with no built-in sign-in.
+  </Card>
+  <Card title="Server operation, security, and recovery" href="/docs/architecture/operations">
+    Where agents execute commands, how to expose the cockpit through a proxy, and how to back up data. Installation and troubleshooting procedures.
+  </Card>
+</Cards>
+
+## Common questions
+
+| Question | Read |
+| --- | --- |
+| How do I start a task through the API? | [HTTP API and project scope](/docs/architecture/http-api) |
+| How do I write my own workflow? | [Workflow YAML](/docs/architecture/workflows) |
+| Where does Cezar store tasks and configuration? | [CLI, configuration, and files](/docs/architecture/cli-and-configuration) |
+| What happens when I click Start? | [Task lifecycle, concurrency, and recovery](/docs/architecture/run-lifecycle) |
+| How do I run Cezar on a server? | [Server operation, security, and recovery](/docs/architecture/operations) |
+| How does Cezar communicate with an agent? | [Runners and subtasks](/docs/architecture/agent-runners) |

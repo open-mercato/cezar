@@ -208,7 +208,7 @@ export function IntegerStepper({
         </div>
       </div>
       {invalid ? (
-        <p id={errorId} data-slot="stepper-invalid" className="text-[11px] text-danger">
+        <p id={errorId} data-slot="stepper-invalid" className="text-meta text-danger">
           Enter a whole number from {min} to {max}
           {allowEmpty ? ', or leave it empty' : ''}.
         </p>

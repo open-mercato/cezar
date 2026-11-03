@@ -93,15 +93,61 @@ jobs:
           (cd alias-cezar && npm pack --dry-run --ignore-scripts)
           (cd alias-cezar-run && npm pack --dry-run --ignore-scripts)
 
+  # Exercise filesystem ownership/recovery on every supported OS. macOS and Windows also
+  # build and test the installed release package; Linux does that in `verify` above.
+  # Preview publication waits for every leg. Required merge checks are configured separately
+  # in branch protection; local test commands still run only on the developer's own OS.
+  webhooks-cross-platform:
+    # Separate OS checks make platform failures visible in branch protection.
+    name: Webhook ownership on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run the webhook suite
+        if: runner.os != 'Windows'
+        run: npm test -- packages/cezar/src/webhooks
+
+      # A cold Windows PowerShell probe is intentionally fail-closed and expensive. Serial files
+      # avoid a worker-start stampede while the first successful probe populates its process cache.
+      - name: Run the webhook suite on Windows
+        if: runner.os == 'Windows'
+        run: npm test -- packages/cezar/src/webhooks --no-file-parallelism --testTimeout=180000 --hookTimeout=30000
+
+      - name: Build application on macOS and Windows
+        if: runner.os != 'Linux'
+        run: npm run build
+
+      - name: Run packaged CLI E2E tests on macOS and Windows
+        if: runner.os != 'Linux'
+        run: npm run test:package
+
   # npm preview publishing (spec .ai/specs/2026-07-18-npm-preview-publish.md, #482).
-  # Publishes a snapshot of both packages after a fully green verify run:
+  # Publishes a snapshot of both packages after fully green verify, vitest and
+  # webhooks-cross-platform runs:
   # same-repo PRs → dist-tag pr-<N>, develop pushes → @develop. `main` pushes do
   # NOT publish — stable `latest` releases are owner-driven and manual via
   # release.yml, so CI never moves `latest`. Without the NPM_TOKEN secret the
   # script degrades to a loud dry run, so this job stays green on unconfigured forks.
   publish-snapshot:
     name: Publish npm snapshot
-    needs: [verify, vitest]
+    needs: [verify, vitest, webhooks-cross-platform]
     if: >-
       (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
       (github.event_name == 'pull_request' &&
