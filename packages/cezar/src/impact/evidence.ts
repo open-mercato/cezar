@@ -12,6 +12,7 @@ import { execFile } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
+import { ghEnv } from '../core/gh-env.ts';
 
 export interface CommandResult {
   ok: boolean;
@@ -32,7 +33,7 @@ export const runCommand: CommandRunner = (cmd, args, cwd) =>
         encoding: 'buffer',
         timeout: 60_000,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1', GH_PROMPT_DISABLED: '1' },
+        env: ghEnv({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_NO_LAZY_FETCH: '1', GH_PROMPT_DISABLED: '1' }),
       },
       (error, stdout) => {
         const code = error ? (typeof error.code === 'number' ? error.code : null) : 0;
