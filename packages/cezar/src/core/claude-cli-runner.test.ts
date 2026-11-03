@@ -83,6 +83,12 @@ describe('buildClaudeArgs output mode', () => {
   it('asks for partial messages so text streams as deltas', () => {
     expect(buildClaudeArgs(spec)).toContain('--include-partial-messages');
   });
+
+  it('rejects the Codex-only reasoning effort instead of ignoring it', () => {
+    expect(() => buildClaudeArgs({ ...spec, reasoningEffort: 'high' })).toThrow(
+      'reasoning effort is only supported by the Codex runner',
+    );
+  });
 });
 
 describe('buildClaudeArgs approval gate', () => {

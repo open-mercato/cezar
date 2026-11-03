@@ -131,7 +131,7 @@ export function MessageTime({ ts }: { ts: string }) {
       data-slot="message-time"
       dateTime={ts}
       title={exactLabel(ts)}
-      className="text-[11px] leading-none text-soft-foreground"
+      className="text-meta leading-none text-soft-foreground"
     >
       {label}
     </time>
@@ -150,7 +150,7 @@ export function TurnTime({ startedAt, completedAt }: { startedAt?: string; compl
   return (
     <div
       data-slot="turn-time"
-      className="flex items-center gap-1.5 px-0.5 text-[11px] leading-none text-soft-foreground"
+      className="flex items-center gap-1.5 px-0.5 text-meta leading-none text-soft-foreground"
     >
       <time dateTime={completedAt} title={exactLabel(completedAt)}>
         {label}
@@ -179,7 +179,7 @@ export function DaySeparator({ ts }: { ts: string }) {
       data-slot="day-separator"
       role="separator"
       aria-label={relative ? `${label}, ${exact}` : exact}
-      className="flex items-center gap-3 py-1 text-[11px] font-medium text-soft-foreground"
+      className="flex items-center gap-3 py-1 text-meta font-medium text-soft-foreground"
     >
       <span aria-hidden className="h-px flex-1 bg-border" />
       <time dateTime={localDayKey(ts)} title={exact}>

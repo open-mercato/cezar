@@ -5,6 +5,10 @@ import { cn, isHttpUrl } from './utils'
 describe('cn', () => {
   it.each([
     { name: 'keeps non-conflicting utilities', input: ['text-sm', 'font-semibold'], expected: 'text-sm font-semibold' },
+    // The type scale is a font size, not a colour: both survive, and a later size wins over an earlier one.
+    { name: 'keeps a scale size beside a text colour', input: ['text-ui', 'text-muted-foreground'], expected: 'text-ui text-muted-foreground' },
+    { name: 'keeps a text colour beside a later scale size', input: ['text-primary-foreground', 'text-label'], expected: 'text-primary-foreground text-label' },
+    { name: 'lets a later scale size override an earlier one', input: ['text-xs', 'text-meta'], expected: 'text-meta' },
     { name: 'drops falsy values', input: ['px-2', false, null, undefined, ''], expected: 'px-2' },
     { name: 'flattens arrays', input: [['flex', 'items-center']], expected: 'flex items-center' },
     { name: 'applies object syntax', input: [{ 'bg-muted': true, 'bg-card': false }], expected: 'bg-muted' },

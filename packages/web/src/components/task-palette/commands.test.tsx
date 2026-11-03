@@ -183,6 +183,13 @@ describe('views', () => {
     expect(on.navigate).toHaveBeenCalledWith('/tasks/r1/preview')
   })
 
+  it('finds a view by the names a returning user remembers (Design Mode, Browser, Code)', () => {
+    const { byId } = build(run('done'), { terminalAvailable: true })
+    expect(byId.get('view:browser')?.keywords).toEqual(expect.arrayContaining(['browser', 'design mode']))
+    expect(byId.get('view:files')?.keywords).toContain('code')
+    expect(byId.get('view:terminal')?.keywords).toContain('shell')
+  })
+
   it('for a task not on screen they navigate to its routes, with no layout commands', () => {
     const { byId, on, commands } = build(run('done'), { terminalAvailable: true })
     byId.get('view:changes')?.perform()

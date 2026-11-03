@@ -8,7 +8,8 @@ import type { RunRecord, RunStore } from '../runs/store.ts';
  */
 export interface RunFrames {
   record(): string;
-  workspace(project: string): string;
+  /** `slim` drops the heavy keys; a client that did not ask for it gets the whole record. */
+  workspace(project: string, slim?: boolean): string;
 }
 
 export type RunFrameListener = (run: RunRecord, frames: RunFrames) => void;
@@ -39,11 +40,12 @@ export function onRunFrames(store: RunStore, listener: RunFrameListener): () => 
       const workspace = new Map<string, string>();
       const frames: RunFrames = {
         record: () => (record ??= JSON.stringify(run)),
-        workspace: (project) => {
-          let text = workspace.get(project);
+        workspace: (project, slim = true) => {
+          const key = `${slim ? 's' : 'f'}:${project}`;
+          let text = workspace.get(key);
           if (text === undefined) {
-            text = JSON.stringify(toWorkspaceRunEvent(run, project));
-            workspace.set(project, text);
+            text = JSON.stringify(slim ? toWorkspaceRunEvent(run, project) : { ...run, project });
+            workspace.set(key, text);
           }
           return text;
         },

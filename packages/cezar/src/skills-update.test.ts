@@ -41,6 +41,14 @@ describe('SkillsUpdateService', () => {
     expect(state.scopes.map((s) => s.skills)).toEqual([['alpha'], ['alpha']]);
   });
 
+  it('does not flag every skill because a name in the CLI header contains "update" (#1740)', async () => {
+    const lock = { version: 3, skills: { 'om-fix': { source: 'open-mercato/skills' }, 'om-auto-update-changelog': { source: 'open-mercato/skills' } } };
+    const { home, repo } = await fixture(lock);
+    const out = 'Updating om-auto-update-changelog, om-fix\n\u2713 All project skills are up to date\n';
+    const service = new SkillsUpdateService({ homeDir: home, resolveNpx: async () => 'npx', run: async () => ({ stdout: out, stderr: '' }) });
+    const state = await service.check(repo);
+    expect(state.scopes[0]).toMatchObject({ status: 'current', available: false, skills: [] });
+  });
   it('normalizes offline failures and never leaks command output', async () => {
     const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
     const run = vi.fn(async () => { throw new Error('fetch failed token=super-secret'); });

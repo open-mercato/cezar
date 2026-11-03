@@ -22,10 +22,10 @@ import { useDashboardFilter } from './url-filter'
 
 type Period = DashboardInsights['period']
 const periodText = (period: Period) => `Last ${period === '7d' ? 7 : 30} calendar days`
-const bandLabel = 'font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground'
+const bandLabel = 'eyebrow text-muted-foreground'
 const panel = 'min-w-0 rounded-lg border bg-card-2 p-4'
 const th =
-  'whitespace-nowrap px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.1em] text-soft-foreground'
+  'whitespace-nowrap px-3 py-2 eyebrow text-soft-foreground'
 
 function useProjectName() {
   const projects = useProjects().data?.projects
@@ -173,7 +173,7 @@ function FailureReasons({ data }: { data: DashboardInsights }) {
       <div className="flex items-baseline justify-between gap-2">
         <h3 className={bandLabel}>Why tasks failed</h3>
         {total > 0 && (
-          <span className="font-mono text-[11px] text-soft-foreground">{total} failed</span>
+          <span className="font-mono text-meta text-soft-foreground">{total} failed</span>
         )}
       </div>
       {total === 0 ? (
@@ -287,7 +287,7 @@ export function BackendComparison() {
             ) : (
               <p className="py-4 text-sm text-muted-foreground">No finished tasks in this period.</p>
             )}
-            <span className="block font-mono text-[11px] text-soft-foreground">
+            <span className="block font-mono text-meta text-soft-foreground">
               <Freshness at={data.asOf} />
             </span>
             <ExportRows
@@ -317,7 +317,7 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
     <tr className="border-t transition-colors hover:bg-muted/30">
       <td className="px-3 py-2.5">
         <span className="block font-medium">{backendName(b.backend)}</span>
-        <span className="block font-mono text-[11px] text-soft-foreground">
+        <span className="block font-mono text-meta text-soft-foreground">
           {b.backend === 'mixed' ? 'steps ran on different backends' : (b.model ?? 'default model')}
         </span>
       </td>
@@ -470,7 +470,7 @@ export function AutomationOutcomes() {
                     No automations yet. Create one in a project's Automations page.
                   </p>
                 )}
-                <span className="block font-mono text-[11px] text-soft-foreground">
+                <span className="block font-mono text-meta text-soft-foreground">
                   <Freshness at={data.asOf} />
                 </span>
                 <ExportRows

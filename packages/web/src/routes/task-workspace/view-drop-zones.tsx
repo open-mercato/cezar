@@ -1,9 +1,8 @@
-import { useState } from 'react'
-
 import { cn } from '@/lib/utils'
 
 import { VIEW_DRAG_TYPE } from './layout-cards'
 import { isViewId, MAX_COLUMNS, viewLabel, type ViewId, type WorkspaceColumn } from './layout-state'
+import { useDragHover } from './use-drag-hover'
 
 type Zone = { key: string; at: number; mode: 'insert' | 'replace'; label: string; hint?: string }
 
@@ -21,7 +20,6 @@ export function ViewDropZones({
   columns: readonly WorkspaceColumn[]
   onDrop: (view: ViewId, at: number, mode: 'insert' | 'replace') => void
 }) {
-  const [hot, setHot] = useState<string | null>(null)
   const full = columns.length >= MAX_COLUMNS
   const cells =
     columns.length === 0
@@ -56,33 +54,39 @@ export function ViewDropZones({
           className={cn('grid min-w-0 grow gap-1.5 p-2.5', cell.zones.length === 3 ? 'grid-cols-[26%_1fr_26%]' : 'grid-cols-1')}
         >
           {cell.zones.map((zone) => (
-            <div
-              key={zone.key}
-              data-drop-zone={zone.mode}
-              onDragOver={(event) => {
-                if (!event.dataTransfer.types.includes(VIEW_DRAG_TYPE)) return
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'move'
-                setHot(zone.key)
-              }}
-              onDragLeave={() => setHot((current) => (current === zone.key ? null : current))}
-              onDrop={(event) => {
-                const dropped = event.dataTransfer.getData(VIEW_DRAG_TYPE)
-                if (!isViewId(dropped)) return
-                event.preventDefault()
-                onDrop(dropped, zone.at, zone.mode)
-              }}
-              className={cn(
-                'flex flex-col items-center justify-center rounded-lg border-[1.5px] border-dashed border-border bg-background/80 p-2 text-center text-xs font-medium text-muted-foreground transition-colors',
-                hot === zone.key && 'border-foreground/60 bg-muted text-foreground',
-              )}
-            >
-              {zone.label}
-              {zone.hint ? <span className="text-[11px] font-normal opacity-80">{zone.hint}</span> : null}
-            </div>
+            <DropZoneTarget key={zone.key} zone={zone} onDrop={onDrop} />
           ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+function DropZoneTarget({ zone, onDrop }: { zone: Zone; onDrop: (view: ViewId, at: number, mode: 'insert' | 'replace') => void }) {
+  const { over, reset, handlers } = useDragHover((event) => event.dataTransfer.types.includes(VIEW_DRAG_TYPE))
+  return (
+    <div
+      data-drop-zone={zone.mode}
+      {...handlers}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes(VIEW_DRAG_TYPE)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+      }}
+      onDrop={(event) => {
+        reset()
+        const dropped = event.dataTransfer.getData(VIEW_DRAG_TYPE)
+        if (!isViewId(dropped)) return
+        event.preventDefault()
+        onDrop(dropped, zone.at, zone.mode)
+      }}
+      className={cn(
+        'flex flex-col items-center justify-center rounded-lg border-[1.5px] border-dashed border-border bg-background/80 p-2 text-center text-xs font-medium text-muted-foreground transition-colors',
+        over && 'border-foreground/60 bg-muted text-foreground',
+      )}
+    >
+      {zone.label}
+      {zone.hint ? <span className="text-meta font-normal opacity-80">{zone.hint}</span> : null}
     </div>
   )
 }
