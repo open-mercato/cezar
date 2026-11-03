@@ -7,7 +7,7 @@ import { runArtifactsEventSchema, runArtifactsResponseSchema } from '@open-merca
 import { MAX_ARTIFACT_BYTES } from '../runs/artifacts.ts';
 import { artifactsDir, RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import { artifactCsp, artifactsFrame } from './artifacts.ts';
+import { artifactCsp, artifactsBaseUrl, artifactsFrame } from './artifacts.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
@@ -38,6 +38,31 @@ describe('artifactCsp — the exact header (spec Q3/Q4)', () => {
 
   it('never grants the same origin, in either mode', () => {
     for (const cdn of [true, false]) expect(artifactCsp(cdn)).not.toContain('allow-same-origin');
+  });
+
+  it("admits images and media from the run's own artifacts URL only — never 'self' or a host", () => {
+    const csp = artifactCsp(false, 'http://127.0.0.1:4321/api/v1/runs/r1/artifacts/');
+    expect(csp).toContain('img-src data: blob: http://127.0.0.1:4321/api/v1/runs/r1/artifacts/;');
+    expect(csp).toContain('media-src data: blob: http://127.0.0.1:4321/api/v1/runs/r1/artifacts/;');
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).not.toContain("'self'");
+  });
+});
+
+describe('artifactsBaseUrl', () => {
+  it('cuts the request URL after /artifacts/, on either alias, without the query', () => {
+    expect(artifactsBaseUrl('http://127.0.0.1:4321/api/v1/runs/r1/artifacts/report.html?v=2')).toBe(
+      'http://127.0.0.1:4321/api/v1/runs/r1/artifacts/',
+    );
+    expect(artifactsBaseUrl('http://127.0.0.1:4321/api/v1/p/my-app/runs/r1/artifacts/shots/a.png')).toBe(
+      'http://127.0.0.1:4321/api/v1/p/my-app/runs/r1/artifacts/',
+    );
+  });
+
+  it('gives no source for a URL a CSP source list could misread', () => {
+    expect(artifactsBaseUrl('not a url')).toBeUndefined();
+    expect(artifactsBaseUrl('http://127.0.0.1:4321/api/v1/runs/r1/files')).toBeUndefined();
+    expect(artifactsBaseUrl("http://127.0.0.1:4321/api/v1/runs/r;1'/artifacts/x.html")).toBeUndefined();
   });
 });
 
@@ -76,6 +101,38 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
   });
 
   const get = (path: string) => apiRequest(app, `/api/v1/runs/${runId}/artifacts${path}`);
+  // `app.request` resolves a bare path against http://localhost.
+  const ownBase = () => `http://localhost/api/v1/runs/${runId}/artifacts/`;
+
+  it('lists and serves a file one folder down, by encoded name and by the relative URL a page uses', async () => {
+    mkdirSync(join(dir, 'shots'));
+    writeFileSync(join(dir, 'shots', 'a.png'), 'png');
+    writeFileSync(join(dir, 'report.html'), '<img src="shots/a.png">');
+    const list = runArtifactsResponseSchema.parse(await (await get('')).json());
+    expect(list.artifacts.map((a) => a.name).sort()).toEqual(['report.html', 'shots/a.png']);
+    for (const path of ['/shots%2Fa.png', '/shots/a.png']) {
+      const res = await get(path);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get('content-type'), path).toBe('image/png');
+      expect(await res.text(), path).toBe('png');
+    }
+  });
+
+  it('refuses a symlinked folder, a dot folder and anything two folders down', async () => {
+    mkdirSync(join(outside, 'secrets'));
+    writeFileSync(join(outside, 'secrets', 'a.png'), 'secret');
+    symlinkSync(join(outside, 'secrets'), join(dir, 'linked'));
+    mkdirSync(join(dir, '.versions', '1'), { recursive: true });
+    writeFileSync(join(dir, '.versions', '1', 'a.png'), 'old');
+    mkdirSync(join(dir, 'deep', 'er'), { recursive: true });
+    writeFileSync(join(dir, 'deep', 'er', 'a.png'), 'deep');
+    const list = runArtifactsResponseSchema.parse(await (await get('')).json());
+    expect(list.artifacts).toEqual([]);
+    expect((await get('/linked/a.png')).status).toBe(404);
+    expect((await get('/linked%2Fa.png')).status).toBe(404);
+    expect((await get('/.versions/a.png')).status).toBe(400);
+    expect((await get('/deep%2Fer%2Fa.png')).status).toBe(400);
+  });
 
   it('serves HTML with the sandbox CSP and the isolation headers', async () => {
     writeFileSync(join(dir, 'report.html'), '<title>Report</title><p>hi</p>');
@@ -83,7 +140,7 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('<title>Report</title><p>hi</p>');
     expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8');
-    expect(res.headers.get('content-security-policy')).toBe(artifactCsp(true));
+    expect(res.headers.get('content-security-policy')).toBe(artifactCsp(true, ownBase()));
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(res.headers.get('referrer-policy')).toBe('no-referrer');
     expect(res.headers.get('cross-origin-resource-policy')).toBe('same-origin');
@@ -94,7 +151,7 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
     process.env.CEZ_ARTIFACTS_CDN = '0';
     writeFileSync(join(dir, 'report.html'), '<p>hi</p>');
     const res = await get('/report.html');
-    expect(res.headers.get('content-security-policy')).toBe(artifactCsp(false));
+    expect(res.headers.get('content-security-policy')).toBe(artifactCsp(false, ownBase()));
   });
 
   it('404s a dotfile, a dot-dot name and an absent file — only scan members are served', async () => {

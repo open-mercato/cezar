@@ -63,7 +63,7 @@ export async function listArtifactVersions(dir: string): Promise<RunArtifactVers
   for (const version of numbers.slice(-MAX_VERSIONS)) {
     const vdir = await existingVersionDir(dir, version);
     if (!vdir) continue;
-    const { artifacts } = await scanArtifacts(vdir);
+    const { artifacts } = await scanArtifacts(vdir, { nested: false }); // a revision is the flat set a render archived
     if (artifacts.length === 0) continue;
     const newest = artifacts.reduce((a, b) => (a.updatedAt >= b.updatedAt ? a : b));
     versions.push({ version, updatedAt: newest.updatedAt, files: artifacts.map((a) => a.name).sort() });
@@ -81,7 +81,7 @@ export function artifactsPromptPart(dir: string, cdnEnabled = artifactsCdnEnable
   const network = cdnEnabled
     ? 'Scripts may load only from cdnjs, jsDelivr or unpkg with an exact pinned version; no fetch/XHR to any host.'
     : 'Inline every script and style — no external URL loads; no fetch/XHR to any host.';
-  return `To show the user a page or report, write it as a single HTML (or .md/.png) file into \`${dir}\` (also $CEZ_ARTIFACTS_DIR); it appears live in the cockpit's Assets view. ${network}`;
+  return `To show the user a page or report, write it as a single HTML (or .md/.png) file into \`${dir}\` (also $CEZ_ARTIFACTS_DIR); it appears live in the cockpit's Assets view. A page may show images saved beside it or one folder down by relative path (<img src="shots/a.png">). ${network}`;
 }
 
 function kindOf(name: string, size: number): RunArtifactKind {
@@ -128,29 +128,38 @@ async function readHead(path: string): Promise<string> {
   }
 }
 
-/**
- * The run's artifacts, newest first. Never throws — a missing or unreadable directory is an
- * empty listing. Non-recursive; skips dotfiles, directories, symlinks and names the serving
- * route could not address, so a listed name is always a regular file inside `dir`.
- */
-export async function scanArtifacts(dir: string): Promise<ArtifactListing> {
+/** Regular, non-dot files directly in `dir`, as `{name: prefix + file}`. Never throws. */
+async function listFiles(dir: string, prefix: string, out: Array<{ name: string; size: number; mtimeMs: number }>, subdirs?: string[]): Promise<void> {
   let names: string[];
   try {
     names = await readdir(dir);
   } catch {
-    return { artifacts: [], truncated: false };
+    return;
   }
-  const files: Array<{ name: string; size: number; mtimeMs: number }> = [];
   for (const name of names) {
     if (name.startsWith('.') || !ARTIFACT_NAME_RE.test(name)) continue;
     try {
-      const info = await lstat(join(dir, name));
-      if (!info.isFile()) continue; // lstat: a symlink is never a file here
-      files.push({ name, size: info.size, mtimeMs: info.mtimeMs });
+      const info = await lstat(join(dir, name)); // lstat: a symlink is neither a file nor a folder here
+      if (info.isFile()) out.push({ name: prefix + name, size: info.size, mtimeMs: info.mtimeMs });
+      else if (info.isDirectory()) subdirs?.push(name);
     } catch {
       // vanished between readdir and lstat
     }
   }
+}
+
+/**
+ * The run's artifacts, newest first. Never throws — a missing or unreadable directory is an
+ * empty listing. Files at the top and, with `nested` (the default), one folder level down as
+ * `<folder>/<file>`, so a page's screenshots folder shows up and can be served to it. Skips
+ * dotfiles, symlinks and names the serving route could not address, so a listed name is always
+ * a regular file inside `dir`.
+ */
+export async function scanArtifacts(dir: string, { nested = true }: { nested?: boolean } = {}): Promise<ArtifactListing> {
+  const files: Array<{ name: string; size: number; mtimeMs: number }> = [];
+  const subdirs: string[] = [];
+  await listFiles(dir, '', files, nested ? subdirs : undefined);
+  for (const sub of subdirs) await listFiles(join(dir, sub), `${sub}/`, files);
   files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
   const kept = files.slice(0, MAX_ARTIFACTS);
   const artifacts: RunArtifact[] = [];
@@ -173,21 +182,27 @@ export async function scanArtifacts(dir: string): Promise<ArtifactListing> {
 }
 
 /**
- * Debounced `fs.watch` on one directory. Speed only — `fs.watch` is not reliable everywhere, so
+ * Debounced `fs.watch` on the artifacts directory. Speed only — `fs.watch` is not reliable everywhere, so
  * the turn-end rescan is the guarantee (spec Q2). Never throws; an unwatchable dir is a no-op.
  */
 export function watchArtifacts(dir: string, onChange: () => void): { close: () => void } {
   let timer: NodeJS.Timeout | undefined;
   let watcher: FSWatcher | undefined;
-  try {
-    watcher = watch(dir, { persistent: false }, () => {
-      clearTimeout(timer);
-      timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
-      timer.unref?.();
-    });
-    watcher.on('error', () => watcher?.close());
-  } catch {
-    watcher = undefined;
+  const changed = () => {
+    clearTimeout(timer);
+    timer = setTimeout(onChange, WATCH_DEBOUNCE_MS);
+    timer.unref?.();
+  };
+  // Recursive, so a file landing in a listed folder is seen too; where that is unsupported the
+  // top level still is, and the turn-end rescan covers the rest.
+  for (const recursive of [true, false]) {
+    try {
+      watcher = watch(dir, { persistent: false, recursive }, changed);
+      watcher.on('error', () => watcher?.close());
+      break;
+    } catch {
+      watcher = undefined;
+    }
   }
   return {
     close: () => {

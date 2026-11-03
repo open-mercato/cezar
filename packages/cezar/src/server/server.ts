@@ -178,7 +178,7 @@ import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type 
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
 import { artifactsDir } from '../runs/store.ts';
 import { artifactsCdnEnabled, existingVersionDir, scanArtifacts } from '../runs/artifacts.ts';
-import { artifactHeaders, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
+import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
 import { listProjectAssets } from '../runs/project-assets.ts';
 import type { RunArtifact } from '@open-mercato/cezar-contract';
@@ -213,6 +213,7 @@ import {
   runHistoryQuerySchema,
   runIdParamSchema,
   artifactNameParamSchema,
+  artifactNestedParamSchema,
   artifactFileQuerySchema,
   artifactsBySubjectQuerySchema,
   startImpactSchema,
@@ -4999,6 +5000,19 @@ export function createApp(deps: ServerDeps) {
     }
   };
 
+  /** Both artifact-file routes: `name` is a listed name, flat or `<folder>/<file>`. */
+  const serveArtifact = async (c: Context<ProjectApiEnv>, id: string, name: string, v: string | undefined) => {
+    const { dataDir, store } = c.get('project');
+    if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+    const runDir = artifactsDir(dataDir, id);
+    const dir = v === undefined ? runDir : await existingVersionDir(runDir, Number(v));
+    if (!dir) return c.json({ error: 'artifact not found' }, 404);
+    const artifact = (await scanArtifacts(dir)).artifacts.find((each) => each.name === name);
+    const stream = artifact ? await openArtifact(dir, name) : null;
+    if (!artifact || !stream) return c.json({ error: 'artifact not found' }, 404);
+    return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
+  };
+
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
   const runsRoutes = new Hono<ProjectApiEnv>()
     // `workflowDef` is ~1.3 MB per run; the list leaves it out (`?full=1` opts back in, GET /runs/:id is always complete).
@@ -5771,17 +5785,14 @@ export function createApp(deps: ServerDeps) {
     // only regular, non-dot files), the same idea as `repoIndexContains`.
     // `?v=<n>` serves kept revision n (spec R4) from `.versions/<n>/`, same guard, same headers.
     .get('/runs/:id/artifacts/:name', paramZodValidator(artifactNameParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
-      const { dataDir, store } = c.get('project');
       const { id, name } = c.req.valid('param');
-      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
-      const { v } = c.req.valid('query');
-      const runDir = artifactsDir(dataDir, id);
-      const dir = v === undefined ? runDir : await existingVersionDir(runDir, Number(v));
-      if (!dir) return c.json({ error: 'artifact not found' }, 404);
-      const artifact = (await scanArtifacts(dir)).artifacts.find((each) => each.name === name);
-      const stream = artifact ? await openArtifact(dir, name) : null;
-      if (!artifact || !stream) return c.json({ error: 'artifact not found' }, 404);
-      return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled()));
+      return serveArtifact(c, id, name, c.req.valid('query').v);
+    })
+
+    // A file one folder down, at the URL a page's relative `<img src="shots/a.png">` resolves to.
+    .get('/runs/:id/artifacts/:dir/:name', paramZodValidator(artifactNestedParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
+      const { id, dir, name } = c.req.valid('param');
+      return serveArtifact(c, id, `${dir}/${name}`, c.req.valid('query').v);
     })
 
     // Assess Impact (spec 2026-10-22-html-artifacts-and-impact § Serving): the server resolves and

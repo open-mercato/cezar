@@ -1395,16 +1395,22 @@ export async function getRunArtifacts(id: string, opts?: ReadOptions): Promise<R
   )
 }
 
+/** A listed name (`file` or `folder/file`) as URL path segments, so a nested page's relative
+ *  `<img src>` resolves inside its own folder. */
+function artifactPath(name: string): string {
+  return name.split('/').map(encodeURIComponent).join('/')
+}
+
 /** A text artifact's body (markdown, JSON) — the same raw route, read as text. */
 export function getRunArtifactText(id: string, name: string, opts?: ReadOptions): Promise<string> {
-  return requestText(runPath(id, `/artifacts/${encodeURIComponent(name)}`), { method: 'GET', signal: opts?.signal })
+  return requestText(runPath(id, `/artifacts/${artifactPath(name)}`), { method: 'GET', signal: opts?.signal })
 }
 
 /** One artifact's raw bytes, for an iframe/`<img>`/new tab — never fetched here. HTML is served
  *  with a CSP `sandbox` header, so even opened directly it gets an opaque origin (spec Q3). */
 export function runArtifactRawUrl(id: string, name: string, version?: number): string {
   const kept = version === undefined ? '' : `?v=${version}`
-  return apiPath(runPath(id, `/artifacts/${encodeURIComponent(name)}${kept}`))
+  return apiPath(runPath(id, `/artifacts/${artifactPath(name)}${kept}`))
 }
 
 /** `pr:<n>` / `spec:<path>` — the `GET /artifacts?subject=` spelling of a subject. */

@@ -33,6 +33,23 @@ describe('scanArtifacts (spec 2026-10-22-html-artifacts Q5)', () => {
     expect(artifacts.map((a) => a.name)).toEqual(['ok.html']);
   });
 
+  it('lists files one folder down as <folder>/<file>, and nothing deeper', async () => {
+    mkdirSync(join(dir, 'shots', 'deeper'), { recursive: true });
+    writeFileSync(join(dir, 'report.html'), '<title>R</title>');
+    writeFileSync(join(dir, 'shots', 'a.png'), 'x');
+    writeFileSync(join(dir, 'shots', '.hidden.png'), 'x');
+    writeFileSync(join(dir, 'shots', 'deeper', 'b.png'), 'x');
+    mkdirSync(join(dir, '.versions', '1'), { recursive: true });
+    writeFileSync(join(dir, '.versions', '1', 'old.html'), 'x');
+    symlinkSync(join(dir, 'shots'), join(dir, 'linked'));
+    const { artifacts } = await scanArtifacts(dir);
+    expect(artifacts.map((a) => [a.name, a.kind]).sort()).toEqual([
+      ['report.html', 'html'],
+      ['shots/a.png', 'image'],
+    ]);
+    expect((await scanArtifacts(dir, { nested: false })).artifacts.map((a) => a.name)).toEqual(['report.html']);
+  });
+
   it('classifies by extension and lists newest first', async () => {
     const files = ['a.html', 'b.md', 'c.png', 'd.json', 'e.txt'];
     files.forEach((name, i) => {
@@ -91,6 +108,7 @@ describe('the artifacts prompt line (O3)', () => {
     expect(line).toContain('`/data/artifacts/r1`');
     expect(line).toContain('cdnjs, jsDelivr or unpkg with an exact pinned version');
     expect(line).toContain('no fetch/XHR to any host');
+    expect(line).toContain('<img src="shots/a.png">');
   });
   it('asks for everything inline with CEZ_ARTIFACTS_CDN=0', () => {
     expect(artifactsCdnEnabled({ CEZ_ARTIFACTS_CDN: '0' })).toBe(false);

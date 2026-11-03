@@ -134,6 +134,15 @@ describe('AssetsView', () => {
     await waitFor(() => expect(frame()).not.toBeNull())
   })
 
+  it('opens a page one folder down from its encoded URL, and frames it at its folder path', async () => {
+    const nested = art('report/index.html', 'html', '2026-10-22T12:00:00.000Z', 'Nested report')
+    listing = { artifacts: [nested, DEMO], truncated: false }
+    mount('/tasks/r1/assets/report%2Findex.html')
+    await waitFor(() => expect(frame()?.getAttribute('title')).toBe('Nested report'))
+    // Path segments, not `report%2Findex.html`: the page's relative <img src> must resolve in report/.
+    expect(frame()!.getAttribute('src')).toMatch(/^\/api\/v1\/runs\/r1\/artifacts\/report\/index\.html#theme=(dark|light)$/)
+  })
+
   it('keeps the selection local when the view shares its layout', async () => {
     mount('/tasks/r1/assets', false)
     await waitFor(() => expect(frame()).not.toBeNull())

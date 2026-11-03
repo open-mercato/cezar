@@ -9,7 +9,7 @@ export const runArtifactKindSchema = z.enum(['html', 'markdown', 'image', 'json'
 export type RunArtifactKind = z.infer<typeof runArtifactKindSchema>;
 
 export const runArtifactSchema = z.object({
-  /** File name — also the URL segment of `GET /runs/:id/artifacts/:name`. */
+  /** File name, `<folder>/<file>` one level down — also the URL path under `GET /runs/:id/artifacts/`. */
   name: z.string(),
   kind: runArtifactKindSchema,
   /** HTML `<title>` (first 8 KB) or the first `# ` heading. */
@@ -44,13 +44,26 @@ export const runArtifactsResponseSchema = z.object({
 });
 export type RunArtifactsResponse = z.infer<typeof runArtifactsResponseSchema>;
 
-/** The `:name` segment: one flat file name, never a path. */
+/** One path segment of an artifact: a file name, or the folder it sits in. */
 export const ARTIFACT_NAME_RE = /^[A-Za-z0-9._-]{1,128}$/;
+/** A folder segment never starts with a dot: `..` and `.versions` are not addressable folders. */
+const ARTIFACT_DIR_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
+/** A listed artifact's name: a file at the top, or `<folder>/<file>` one level down. */
+export const ARTIFACT_PATH_RE = /^(?:[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}\/)?[A-Za-z0-9._-]{1,128}$/;
+const artifactRunId = z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/);
+/** `:name` may carry an encoded `/` (`dir%2Ffile`), which is how the cockpit addresses a nested file. */
 export const artifactNameParamSchema = z.object({
-  id: z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/),
-  name: z.string().regex(ARTIFACT_NAME_RE),
+  id: artifactRunId,
+  name: z.string().regex(ARTIFACT_PATH_RE),
 });
 export type ArtifactNameParam = z.infer<typeof artifactNameParamSchema>;
+/** `GET /runs/:id/artifacts/:dir/:name`: where a page's relative `<img src="dir/x.png">` lands. */
+export const artifactNestedParamSchema = z.object({
+  id: artifactRunId,
+  dir: z.string().regex(ARTIFACT_DIR_RE),
+  name: z.string().regex(ARTIFACT_NAME_RE),
+});
+export type ArtifactNestedParam = z.infer<typeof artifactNestedParamSchema>;
 
 /** `GET /runs/:id/artifacts/:name?v=<n>` — serve kept revision `n` (spec R4), same headers. */
 export const artifactFileQuerySchema = z.object({
