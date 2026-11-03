@@ -306,7 +306,7 @@ export function LayoutCards({
               <span
                 data-slot="tab-badge"
                 aria-label={`${badges[view]} ${label.toLowerCase()}`}
-                className="rounded-full bg-muted px-1.5 py-px text-[10.5px] font-semibold tabular-nums text-muted-foreground"
+                className="rounded-full bg-muted px-1.5 py-px text-micro font-semibold tabular-nums text-muted-foreground"
               >
                 {badges[view]}
               </span>

@@ -76,7 +76,7 @@ export function AssetsAskComposer({
       {reference ? (
         <span
           data-slot="assets-ask-ref"
-          className="mb-1.5 inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted py-0.5 pr-0.5 pl-2 text-[11.5px]"
+          className="mb-1.5 inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted py-0.5 pr-0.5 pl-2 text-meta"
         >
           <AtSignIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground" />
           <span className="truncate" title={`${reference.ref} — ${reference.label}`}>
@@ -104,7 +104,7 @@ export function AssetsAskComposer({
           onKeyDown={onKeyDown}
           disabled={Boolean(blockedReason)}
           placeholder={reference ? 'Ask or correct — ⌘↵ to send' : 'Ask the agent about this report — click an element to reference it'}
-          className="max-h-32 min-h-9 flex-1 resize-y rounded-md border border-border bg-card px-2.5 py-2 text-[13px] focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
+          className="max-h-32 min-h-9 flex-1 resize-y rounded-md border border-border bg-card px-2.5 py-2 text-ui focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-60"
         />
         <Button type="submit" size="sm" data-action="assets-ask-send" disabled={!canSend} aria-busy={sending || undefined}>
           {sending ? (

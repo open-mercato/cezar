@@ -134,7 +134,7 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
           <span
             data-slot="assets-sandboxed"
             title="Runs in a sandbox: no access to cezar, your cookies or the network beyond pinned CDN scripts"
-            className="hidden items-center gap-1 rounded-sm border border-border px-1.5 py-px text-[11px] text-muted-foreground sm:inline-flex"
+            className="hidden items-center gap-1 rounded-sm border border-border px-1.5 py-px text-meta text-muted-foreground sm:inline-flex"
           >
             <ShieldCheckIcon aria-hidden="true" className="size-3" />
             sandboxed
@@ -148,7 +148,7 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
           />
         ) : null}
         {viewing !== undefined ? (
-          <span data-slot="assets-viewing-version" className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <span data-slot="assets-viewing-version" className="inline-flex items-center gap-1.5 text-meta text-muted-foreground">
             Viewing v{viewing}
             <span aria-hidden="true">—</span>
             <button
@@ -162,7 +162,7 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
           </span>
         ) : null}
         {listing.data.truncated ? (
-          <span className="hidden text-[11px] text-muted-foreground md:inline">Showing the first 64 files</span>
+          <span className="hidden text-meta text-muted-foreground md:inline">Showing the first 64 files</span>
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <Button
@@ -269,7 +269,7 @@ function VersionMenu({
           size="sm"
           data-action="assets-versions"
           aria-label={`Version v${shown} — pick another version`}
-          className="h-7 gap-1 px-2 text-[12px] text-muted-foreground"
+          className="h-7 gap-1 px-2 text-label text-muted-foreground"
         >
           <HistoryIcon aria-hidden="true" className="size-3.5" />
           v{shown}
@@ -283,7 +283,7 @@ function VersionMenu({
           {[...versions].reverse().map((version) => (
             <DropdownMenuRadioItem key={version.version} value={String(version.version)} data-version={version.version}>
               v{version.version} · {shortAge(version.updatedAt)} ago
-              {version.version === newest?.version ? <span className="ml-auto text-[11px] text-muted-foreground">current</span> : null}
+              {version.version === newest?.version ? <span className="ml-auto text-meta text-muted-foreground">current</span> : null}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
@@ -326,10 +326,10 @@ function AssetSwitcher({
           size="sm"
           data-action="assets-switcher"
           aria-label={`Asset: ${artifactLabel(current)} — switch asset`}
-          className="h-7 min-w-0 max-w-[min(28rem,60vw)] gap-1.5 px-2 text-[13px] font-medium"
+          className="h-7 min-w-0 max-w-[min(28rem,60vw)] gap-1.5 px-2 text-ui font-medium"
         >
           <span className="truncate">{artifactLabel(current)}</span>
-          <span className="shrink-0 text-[11px] font-normal text-muted-foreground">{KIND_LABELS[current.kind]}</span>
+          <span className="shrink-0 text-meta font-normal text-muted-foreground">{KIND_LABELS[current.kind]}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-60" />
         </Button>
       </DropdownMenuTrigger>
@@ -342,7 +342,7 @@ function AssetSwitcher({
             <DropdownMenuRadioItem key={artifact.name} value={artifact.name} data-asset={artifact.name}>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">{artifactLabel(artifact)}</span>
-                <span className="truncate font-mono text-[11px] text-muted-foreground">
+                <span className="truncate font-mono text-meta text-muted-foreground">
                   {artifact.name} · {KIND_LABELS[artifact.kind]} · {shortAge(artifact.updatedAt)}
                 </span>
               </span>

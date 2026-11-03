@@ -21,7 +21,7 @@ export function ImpactChip({ run, className }: { run: Pick<ApiRun, 'id' | 'subje
       data-slot="impact-chip"
       title="Open the impact report"
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+        'inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
         className,
       )}
     >

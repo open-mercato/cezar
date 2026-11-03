@@ -128,7 +128,7 @@ export function ImpactControl({
             Open impact
           </Button>
           {assessButton('Re-assess', state.stale ? 'primary' : 'outline')}
-          <span data-slot="impact-meta" className="font-mono text-[11px] text-soft-foreground">
+          <span data-slot="impact-meta" className="font-mono text-meta text-soft-foreground">
             {state.meta}
           </span>
         </>

@@ -48,8 +48,8 @@ export function ThreadArtifactCards({ runId }: { runId: string }) {
               <Icon className="size-4" />
             </span>
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[13px] font-medium text-foreground">{artifactLabel(artifact)}</span>
-              <span className="truncate font-mono text-[11px] text-muted-foreground">
+              <span className="truncate text-ui font-medium text-foreground">{artifactLabel(artifact)}</span>
+              <span className="truncate font-mono text-meta text-muted-foreground">
                 {KIND_LABELS[artifact.kind]} · {artifact.name}
               </span>
             </span>

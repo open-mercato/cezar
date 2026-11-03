@@ -29,7 +29,7 @@ export function AssetsRoute() {
       {/* Desktop header — below `md` the shell's top bar already says "Assets". */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Assets</h1>
-        <p className="text-[13px] text-soft-foreground">Every page and report your agents wrote, newest first.</p>
+        <p className="text-ui text-soft-foreground">Every page and report your agents wrote, newest first.</p>
       </header>
 
       <div className="flex flex-1 flex-col gap-3 p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
@@ -56,7 +56,7 @@ export function AssetsRoute() {
                   aria-pressed={filter === id}
                   onClick={() => setFilter(id)}
                   className={cn(
-                    'h-7 rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+                    'h-7 rounded-[7px] px-3 text-label font-medium text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
                     filter === id && 'bg-card font-semibold text-foreground shadow-xs',
                   )}
                 >
@@ -72,9 +72,9 @@ export function AssetsRoute() {
             ) : (
               <>
                 <div className="hidden overflow-x-auto rounded-lg border border-border md:block">
-                  <table data-slot="assets-table" className="w-full border-collapse text-[13px]">
+                  <table data-slot="assets-table" className="w-full border-collapse text-ui">
                     <thead>
-                      <tr className="border-b border-border text-left text-[11.5px] font-medium text-muted-foreground">
+                      <tr className="border-b border-border text-left text-meta font-medium text-muted-foreground">
                         <th scope="col" className="px-3 py-2 font-medium">Asset</th>
                         <th scope="col" className="px-3 py-2 font-medium">Subject</th>
                         <th scope="col" className="px-3 py-2 font-medium">State</th>
@@ -99,7 +99,7 @@ export function AssetsRoute() {
                 {/* Below `md` the table stacks into cards. */}
                 <ul data-slot="assets-cards" className="flex flex-col gap-2 md:hidden">
                   {rows.map((row) => (
-                    <li key={`${row.runId}/${row.name}`} data-slot="asset-card" className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-3 text-[13px]">
+                    <li key={`${row.runId}/${row.name}`} data-slot="asset-card" className="flex flex-col gap-1.5 rounded-lg border border-border bg-card p-3 text-ui">
                       <AssetCell row={row} />
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <SubjectCell row={row} />
@@ -165,7 +165,7 @@ function StateChip({ state }: { state: AssetState }) {
       data-slot="asset-state"
       data-state={state}
       title={state === 'none' ? 'No subject, or its state cannot be told' : undefined}
-      className={cn('inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', className)}
+      className={cn('inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-meta font-medium whitespace-nowrap', className)}
     >
       {dot ? <span aria-hidden="true" className={cn('size-1.5 rounded-full', dot)} /> : null}
       {label}
