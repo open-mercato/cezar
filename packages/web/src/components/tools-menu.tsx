@@ -164,7 +164,7 @@ export function ToolsMenu({ health, forge }: { health: HealthResponse | undefine
         {history ? (
           <>
             <DropdownMenuSeparator />
-            <p data-slot="history-note" className="px-2 py-1.5 text-[11px] leading-snug text-muted-foreground">
+            <p data-slot="history-note" className="px-2 py-1.5 text-meta leading-snug text-muted-foreground">
               {history}
             </p>
           </>
