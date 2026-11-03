@@ -102,6 +102,7 @@ function project(overrides: Partial<ProjectListEntry> & { id: string }): Project
 function health(forgeAvailable: boolean | 'cold', automations = false): HealthResponse {
   return {
     version: '0.0.0-test',
+    runtimeId: '00000000-0000-4000-8000-000000000001',
     projects: [],
     bootProject: 'default',
     repoRoot: '/repo',
@@ -109,7 +110,7 @@ function health(forgeAvailable: boolean | 'cold', automations = false): HealthRe
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable === 'cold' ? { kind: 'github' } : forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, webhooks: false, dispatch: false },
   }
 }
 
@@ -142,6 +143,8 @@ function renderPalette({
   automations = false,
   uiState = {} as Record<string, unknown>,
   entry = '/',
+  bootProject,
+  healthOverrides = {},
 }: {
   runs?: RunRecord[]
   skills?: Skill[]
@@ -159,14 +162,17 @@ function renderPalette({
   uiState?: Record<string, unknown>
   /** The URL to mount at. `/p/<id>/…` is what gives the palette an ACTIVE project. */
   entry?: string
+  /** The registry's boot project; defaults to the first listed project. */
+  bootProject?: string
+  healthOverrides?: Partial<HealthResponse>
 } = {}) {
   if (theme) localStorage.setItem(THEME_STORAGE_KEY, theme)
   serve({
     '/api/v1/runs': runs,
     '/api/v1/skills': skills,
-    '/api/v1/health': health(forge, automations),
+    '/api/v1/health': { ...health(forge, automations), ...healthOverrides },
     '/api/v1/ui-state': uiState,
-    '/api/v1/projects': { projects, bootProject: projects[0]?.id ?? 'default', projectsDir: '/repos' },
+    '/api/v1/projects': { projects, bootProject: bootProject ?? projects[0]?.id ?? 'default', projectsDir: '/repos' },
     '/api/v1/workspace/runs-index': { runs: indexed, perProjectLimit: 200, truncated, referenceStatuses },
   })
   render(
@@ -252,19 +258,19 @@ describe('Views group', () => {
     expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear')
   })
 
-  it('leads with New task and its C hint, then the 8 nav destinations and Global settings', async () => {
+  it('leads with New task and its C hint, then the 9 nav destinations and Global settings', async () => {
     renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/assets', '/automations', '/skills', '/workflows', '/settings',
       '/settings/global',
     ])
     expect(views[0]?.textContent).toContain('New task')
@@ -280,11 +286,11 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings', '/settings/global',
+      '/new', '/', '/inbox', '/git', '/github', '/assets', '/skills', '/workflows', '/settings', '/settings/global',
     ])
   })
 
@@ -293,7 +299,7 @@ describe('Views group', () => {
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(11),
     )
 
     const newTaskRows = [...document.querySelectorAll('[data-nav-to="/new"]')]
@@ -348,6 +354,29 @@ describe('Views group', () => {
 
     expect(location()).toBe('/settings/global')
     await waitFor(() => expect(dialog()).toBeNull())
+  })
+
+  // #1410: health's forge is the BOOT folder's. A cloned GitHub project served from a non-repo
+  // boot still offers its GitHub view — and a remote-less project never inherits the boot's.
+  it.each([
+    { name: 'offers GitHub for a GitHub project when the boot folder has no forge', bootForge: false, projectForge: true },
+    { name: 'drops GitHub for a remote-less project when the boot folder has one', bootForge: true, projectForge: false },
+  ])('$name', async ({ bootForge, projectForge }) => {
+    renderPalette({
+      forge: bootForge,
+      bootProject: 'home',
+      projects: [project({ id: 'shop', name: 'shop', root: '/repos/shop', ...(projectForge ? { forge: 'github' as const } : {}) })],
+      entry: '/p/shop/',
+      healthOverrides: { bootProject: 'home', checks: [{ name: 'gh', available: true }] },
+    })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="palette-view"]').length).toBeGreaterThan(0))
+    await waitFor(() => {
+      const targets = [...document.querySelectorAll('[data-slot="palette-view"]')].map((view) => view.getAttribute('data-nav-to'))
+      expect(targets.includes('/github')).toBe(projectForge)
+    })
   })
 
   it('navigates to the selected view and closes', async () => {

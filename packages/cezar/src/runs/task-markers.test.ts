@@ -69,6 +69,15 @@ describe('parseTaskMarkers — report-tier reference lines', () => {
     expect(parseTaskMarkers('ISSUE_NUMBER=12')).toEqual({ issue: 12 });
   });
 
+  it('gives PR_NUMBER precedence over PR_URL in either legacy order', () => {
+    expect(parseTaskMarkers('PR_URL=https://github.com/o/r/pull/101\nPR_NUMBER=202')).toEqual({ pr: 202 });
+    expect(parseTaskMarkers('PR_NUMBER=202\nPR_URL=https://github.com/o/r/pull/101')).toEqual({ pr: 202 });
+  });
+
+  it('parses fenced marker lines because marker matching is line-anchored, not fence-aware', () => {
+    expect(parseTaskMarkers('```text\nCEZ:PR=442\nCEZ:ISSUE=433\n```')).toEqual({ pr: 442, issue: 433 });
+  });
+
   it('a report line outranks a legacy marker; the last report line wins', () => {
     expect(parseTaskMarkers('PR_NUMBER=1\nPR: #2 (link: https://github.com/o/r/pull/2)')).toEqual({ pr: 2 });
     expect(
@@ -76,6 +85,22 @@ describe('parseTaskMarkers — report-tier reference lines', () => {
         'PR: #1 (link: https://github.com/o/r/pull/1)\nPR: #2 (link: https://github.com/o/r/pull/2)',
       ),
     ).toEqual({ pr: 2 });
+    expect(
+      parseTaskMarkers('ISSUE_NUMBER=1\nIssue: #2 (link: https://github.com/o/r/issues/2)'),
+    ).toEqual({ issue: 2 });
+  });
+
+  it('keeps CEZ declarations above report and legacy values even when values disagree', () => {
+    expect(
+      parseTaskMarkers(
+        'PR_URL=https://github.com/o/r/pull/1\nPR_NUMBER=2\nPR: #3 (link: https://github.com/o/r/pull/3)\nCEZ:PR=4',
+      ),
+    ).toEqual({ pr: 4 });
+    expect(
+      parseTaskMarkers(
+        'ISSUE_NUMBER=1\nIssue: #2 (link: https://github.com/o/r/issues/2)\nCEZ:ISSUE=4',
+      ),
+    ).toEqual({ issue: 4 });
   });
 
   it('is line-anchored and exact-shape — prose, placeholders and decorated lines never parse', () => {

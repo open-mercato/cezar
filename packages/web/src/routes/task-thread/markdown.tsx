@@ -4,6 +4,7 @@ import {
   defaultRemarkPlugins,
   defaultRehypePlugins,
   type CodeHighlighterPlugin,
+  type DiagramPlugin,
   type LinkSafetyConfig,
   type UrlTransform,
 } from 'streamdown'
@@ -40,6 +41,20 @@ const shikiPlugin: CodeHighlighterPlugin = {
     void highlight(code, String(language)).then((result) => callback?.(result))
     return null
   },
+}
+
+// Keep Streamdown's controls and error fallback; load Pele only for visible diagrams.
+const mermaidPlugin: DiagramPlugin = {
+  name: 'mermaid',
+  type: 'diagram',
+  language: 'mermaid',
+  getMermaid: () => ({
+    initialize: () => {},
+    render: async (id, source) => {
+      const { renderAsync } = await import('pele/lazy')
+      return renderAsync(source, { idPrefix: id, links: false, images: false })
+    },
+  }),
 }
 
 interface MdastNode {
@@ -259,7 +274,7 @@ export const Markdown = memo(function Markdown({
             ? 'thread-markdown markdown-document'
             : 'thread-markdown'
       }
-      plugins={{ code: shikiPlugin }}
+      plugins={{ code: shikiPlugin, ...(inline ? {} : { mermaid: mermaidPlugin }) }}
       shikiTheme={[SYN_THEME, SYN_THEME]}
       remarkPlugins={breaks ? HARD_BREAKS : undefined}
       rehypePlugins={urlTransform ? undefined : TRANSCRIPT_REHYPE_PLUGINS}
@@ -276,7 +291,8 @@ export const Markdown = memo(function Markdown({
       controls={{
         code: { copy: true, download: false },
         table: false,
-        mermaid: false,
+        // Thread rows contain paint, which would clip Streamdown's inline fullscreen overlay.
+        mermaid: { copy: true, download: false, fullscreen: false, panZoom: true },
       }}
       lineNumbers={false}
     >

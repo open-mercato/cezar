@@ -1,0 +1,28 @@
+---
+title: "Continue a session in Cezar or a terminal"
+description: "Return to an earlier agent session and send another instruction."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/use-run-actions.ts
+    line: 139
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/003-handoff-cli.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar saves the information needed to resume supported sessions. You can also open a session directly in the CLI.
+
+## Where to find it
+
+Task → Continue
+
+## How to use it
+
+1. Open an existing task.
+2. Choose Continue to add a message.
+3. Use terminal handoff if you want to work directly in the CLI.
+
+> **Good to know**: Opening a local terminal depends on the machine's capabilities and the agent's session support.

@@ -61,7 +61,11 @@ describe('workflow node editor against the live dry-run server', () => {
 
   it('saves a version: 2 file the server can load back', () => {
     browser.fill('input[aria-label="Workflow name"]', FLOW)
-    browser.evaluate(`[...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === 'Save').click()`)
+    // Save stays disabled until the debounced server validation of the edited graph settles
+    // (workflow-graph.tsx `canSave`); clicking earlier is a silent no-op.
+    const saveButton = `[...document.querySelectorAll('header button')].find((b) => b.textContent.trim() === 'Save')`
+    browser.waitForFunction(`${saveButton}?.disabled === false`)
+    browser.evaluate(`${saveButton}.click()`)
     browser.waitForFunction(`location.pathname.endsWith('/workflows/${FLOW}')`)
     expect(existsSync(savedPath(FLOW))).toBe(true)
     const doc = parse(readFileSync(savedPath(FLOW), 'utf8')) as { version: number; edges: { from: string; to: string }[] }

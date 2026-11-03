@@ -1,0 +1,26 @@
+---
+title: "Save changes to the base branch"
+description: "Commit, synchronize, check, and push a completed task's changes to the base branch."
+version: opt-in
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/trunk-based-fields.tsx
+    line: 85
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Auto-land commits task changes, synchronizes them, runs checks, and pushes them to the base branch. After reviewing Changes, use Commit to &lt;base> or Finish. An Autonomous task can complete this process itself.
+
+## Where to find it
+
+Project settings → Tasks → How changes land
+
+## How to use it
+
+1. Enable auto-land for work in the checkout.
+2. Review Changes and send any corrections.
+3. Use Commit to &lt;base> or Finish. An Autonomous task may finish landing on its own.
+
+> **Good to know**: The commit includes all checkout changes outside `.ai/cezar/`, including manual edits. Git-tracked configuration cannot grant this permission.

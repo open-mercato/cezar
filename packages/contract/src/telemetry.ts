@@ -35,9 +35,11 @@ export type SetTelemetryConsentInput = z.infer<typeof setTelemetryConsentInputSc
 export const TELEMETRY_ROUTE_SEGMENTS: readonly string[] = [
   'p', 'new', 'tasks', 'changes', 'files', 'commits', 'compare', 'git', 'branches', 'log',
   'github', 'prs', 'issues', 'tracker', 'skills', 'inbox', 'workflows', 'automations',
+  'assets',
   'dashboard', 'settings', 'global', 'agents', 'agent-config', 'worktrees', 'bookmarklets',
   'prompt-templates', 'appearance', 'notifications', 'resources', 'accounts', 'projects',
   'keyboard', 'graph', 'integrations', 'secrets', 'workflows-new', 'workspace-secrets', 'privacy',
+  'instructions', 'global-instructions',
 ];
 
 export const telemetryRouteSchema = z
@@ -138,7 +140,7 @@ export const TASK_COMMAND_LABELS = [
   'git:commit', 'git:commit-push', 'git:push', 'git:create-pr', 'git:create-draft-pr',
   'git:update-branch', 'git:resolve-conflicts', 'git:fix-checks', 'open-pr',
   'view:session', 'view:graph', 'view:changes', 'view:commits', 'view:files', 'view:browser',
-  'view:terminal', 'view:notes', 'tab',
+  'view:assets', 'view:terminal', 'view:notes', 'tab',
   'layout', 'layout:new', 'full-view', 'split', 'terminal', 'terminal-column',
   'open', 'open:terminal-resume',
   'copy:link', 'copy:branch', 'copy:path', 'copy:resume', 'copy:pr', 'copy:id',
@@ -157,8 +159,9 @@ export function taskCommandLabel(id: string): TaskCommandLabel | undefined {
 /** Which palette opened — `palette_opened`'s label. `task_switch` is ⌘P off a task page. */
 export const PALETTE_KINDS = ['command', 'task', 'task_switch'] as const;
 /** How the user moved to another task — `task_switched`'s label. `cycle` is ⌘P ⌘P… then ↵;
- *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K. */
-export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab'] as const;
+ *  `tab` acts on a task without opening it; the `cmdk` pair are the same two from ⌘K; `arrow`
+ *  is ⌥↑/⌥↓ (and ⌥⇧ for the Needs-you ring), no palette at all. */
+export const TASK_SWITCH_WAYS = ['enter', 'cycle', 'tab', 'cmdk', 'cmdk_tab', 'arrow'] as const;
 /** What a palette session searched with — `palette_mode_used`'s label: a prefix (`@` tasks, `>`
  *  commands, `#` files), or a search shape (`pr_number`, `automation`). Never the text itself. */
 export const PALETTE_MODES = ['tasks', 'commands', 'files', 'pr_number', 'automation'] as const;

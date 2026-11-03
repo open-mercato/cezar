@@ -33,6 +33,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
     orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
