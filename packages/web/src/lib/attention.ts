@@ -63,8 +63,8 @@ function hasPendingPermission(_run: AttentionInput): boolean {
  * Still always false here, but now by DESIGN rather than for want of data. The "finished while
  * you weren't looking" question is answered by the read/unread channel (#unread-done-items):
  * `RunRecord.seenAt` + `isUnread()` in `lib/read-state.ts`. That signal is deliberately kept OFF
- * the status dot — the dot keeps saying done/failed, and unread rides its own trailing violet
- * marker (the approved "Option B") so status and "have I seen it" never collapse into one dot.
+ * the status dot — the dot keeps saying done/failed, and unread rides the title's weight, so
+ * status and "have I seen it" never collapse into one dot.
  * Routing unread through this `unseen` bucket would recolor the status dot violet, which is
  * exactly the conflation that design avoids, so the bucket stays reserved and unused.
  */
@@ -76,7 +76,10 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt' | 'dispatch' | 'costUsd'>
+export type AttentionInput = Pick<
+  RunRecord,
+  'status' | 'activity' | 'fallbackEpisode' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'worktreeLifecycle'
+>
 
 export type BudgetStop = {
   spent: number
@@ -93,6 +96,19 @@ export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'costUsd
 }
 
 /**
+ * A `failed` run whose session closed on an unanswered `CEZ:ASK`: no process is left, but the
+ * question is still the user's. Every surface that asks "does this need you?" reads it the same way.
+ */
+export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
+  return run.status === 'failed' && run.awaitingAnswerSince !== undefined
+}
+
+/** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
+  return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+}
+
+/**
  * `RunRecord` → attention.
  *
  * The chain below *is* the priority order — first match wins, so `error` can never be masked by a
@@ -106,6 +122,9 @@ export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'costUsd
  *  - `done`/`failed` → the green/red outcome, still.
  */
 export function deriveAttention(run: AttentionInput): Attention {
+  const lifecycle = run.worktreeLifecycle
+  if (lifecycle?.needsAttention) return {bucket: 'waiting', tone: 'pending', pulse: false, label: lifecycle.phase === 'setup' ? 'setup needs attention' : 'cleanup needs attention'}
+  if (lifecycle?.activeOperationId) return {bucket: 'running', tone: 'pending', pulse: true, label: lifecycle.phase === 'setup' ? 'preparing worktree' : 'cleaning up worktree'}
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
   }
@@ -117,6 +136,13 @@ export function deriveAttention(run: AttentionInput): Attention {
   // chain is first-match-wins.
   if (run.status === 'failed' && run.autoResumeAt) {
     return { bucket: 'none', tone: 'pending', pulse: false, label: 'scheduled' }
+  }
+  // A session that closed on an unanswered `CEZ:ASK` — the inactivity timer, a crash, a restart —
+  // is `failed` on the record because the process is gone, but the question is still the user's to
+  // answer. Reporting it as a failure (or, before that, as done) hid a task that was waiting on
+  // you; it wears the `waiting` rung instead, and the answer reopens the session.
+  if (isAwaitingAnswer(run)) {
+    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
   }
   if (run.status === 'failed') {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
@@ -143,6 +169,9 @@ export function deriveAttention(run: AttentionInput): Attention {
   }
   if (isUnseen(run)) {
     return { bucket: 'unseen', tone: 'violet', pulse: false, label: 'unseen' }
+  }
+  if (run.status === 'queued' && run.fallbackEpisode?.pending) {
+    return { bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' }
   }
   if (run.status === 'queued') {
     return { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }

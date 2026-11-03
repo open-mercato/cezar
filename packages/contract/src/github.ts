@@ -26,9 +26,22 @@ export const githubItemSchema = z.object({
   author: z.string(),
   createdAt: z.string(),
   labels: z.array(z.string()),
-  body: z.string(),
+  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
+  body: z.string().optional(),
   url: z.string(),
   comments: z.number(),
+  /** Issue ownership; omitted when unavailable or unsupported by a forge. */
+  assignees: z.array(z.string()).optional(),
+  assigneesTruncated: z.boolean().optional(),
+  /** Authoritative closing/development links, never casual PR mentions (#1620). */
+  linkedPrs: z.array(z.object({
+    number: z.number().int().positive(),
+    title: z.string(),
+    url: z.string(),
+    state: z.enum(['open', 'merged', 'closed']),
+    isDraft: z.boolean(),
+  })).optional(),
+  linkedPrsTruncated: z.boolean().optional(),
   /** PRs only. */
   isDraft: z.boolean().optional(),
   additions: z.number().optional(),
@@ -54,8 +67,24 @@ export const githubDataSchema = z.object({
   prs: z.array(githubItemSchema),
   /** Repo-wide label name → 6-hex color (no `#`); lets chips tint like GitHub. Additive. */
   labelColors: z.record(z.string(), z.string()).optional(),
+  issuesTotal: z.number().int().nonnegative().optional(),
+  prsTotal: z.number().int().nonnegative().optional(),
+  issuesNextCursor: z.string().nullable().optional(),
+  prsNextCursor: z.string().nullable().optional(),
 });
 export type GithubData = z.infer<typeof githubDataSchema>;
+
+/** Query for the cursor-paged open GitHub list. Cursor values are opaque to clients. */
+export const githubListQuerySchema = z.object({
+  limit: z.string().optional(),
+  refresh: z.string().optional(),
+  issuesCursor: z.string().max(2_000).optional(),
+  prsCursor: z.string().max(2_000).optional(),
+  /** `1` = that side is exhausted: skip it instead of restarting it from page one (#1750). */
+  issuesDone: z.string().optional(),
+  prsDone: z.string().optional(),
+});
+export type GithubListQuery = z.infer<typeof githubListQuerySchema>;
 
 /**
  * `GET /api/v1/github/checks?prs=…` (#664) — lazy PR checks glyphs, `number → glyph`. The list
@@ -285,6 +314,11 @@ export const githubCommentsDataSchema = z.object({
   /** Timeline events (#525) — additive; absent when the server degraded to the legacy
    *  comments-only fetch. Capped independently of `comments`. */
   events: z.array(githubTimelineEventSchema).optional(),
+  detail: z.object({
+    body: z.string(),
+    additions: z.number().int().nonnegative().optional(),
+    deletions: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
 export type GithubCommentsData = z.infer<typeof githubCommentsDataSchema>;
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ChangedFile } from '@open-mercato/cezar-api-client'
 
-import { buildFileTree } from './file-tree'
+import { buildFileTree, buildPathTree } from './file-tree'
 
 const file = (path: string, extra: Partial<ChangedFile> = {}): ChangedFile => ({
   path,
@@ -81,5 +81,46 @@ describe('buildFileTree', () => {
       file('img/logo.png', { status: 'added', binary: true, adds: 0, dels: 0 }),
     ])
     expect(root.dirs[0]!.files[0]).toMatchObject({ status: 'added', binary: true })
+  })
+})
+
+/** The generic half the repo Files sub-tab (#1279) builds its tree from: same nesting, same
+ *  compaction, same ordering, no counts. */
+describe('buildPathTree', () => {
+  const plain = (paths: string[]) =>
+    buildPathTree(paths, (path, name) => ({ kind: 'file' as const, name, path }))
+
+  it('an empty path list is an empty root', () => {
+    expect(plain([])).toEqual({ kind: 'dir', name: '', path: '', dirs: [], files: [] })
+  })
+
+  it('nests plain paths and keeps root files at the root', () => {
+    const root = plain(['README.md', 'src/a.ts', 'src/util/b.ts'])
+    expect(root.files.map((f) => f.name)).toEqual(['README.md'])
+    const src = root.dirs[0]!
+    expect(src.name).toBe('src')
+    expect(src.path).toBe('src')
+    expect(src.files.map((f) => f.path)).toEqual(['src/a.ts'])
+    expect(src.dirs[0]!.files[0]).toEqual({ kind: 'file', name: 'b.ts', path: 'src/util/b.ts' })
+  })
+
+  it('compacts single-child chains and stops at a folder with its own files', () => {
+    expect(plain(['packages/web/src/main.tsx']).dirs[0]!.name).toBe('packages/web/src')
+    const kept = plain(['a/keep.ts', 'a/b/deep.ts'])
+    expect(kept.dirs[0]!.name).toBe('a')
+    expect(kept.dirs[0]!.dirs[0]!.name).toBe('b')
+  })
+
+  it('sorts dirs and files alphabetically, in separate lists so dirs render first', () => {
+    const root = plain(['z.ts', 'a.ts', 'm/x.ts', 'b/y.ts'])
+    expect(root.dirs.map((d) => d.name)).toEqual(['b', 'm'])
+    expect(root.files.map((f) => f.name)).toEqual(['a.ts', 'z.ts'])
+  })
+
+  it('handles a dotfile at the root and a path with spaces and unicode', () => {
+    const root = plain(['.env', 'a dir/a file.txt', 'ünïcode.md'])
+    expect(root.files.map((f) => f.name)).toEqual(['.env', 'ünïcode.md'])
+    expect(root.dirs[0]!.name).toBe('a dir')
+    expect(root.dirs[0]!.files[0]!.path).toBe('a dir/a file.txt')
   })
 })

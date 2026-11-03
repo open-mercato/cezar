@@ -14,9 +14,9 @@ import { z } from 'zod';
  * server already owns.
  *
  * Failure is not exceptional here, it is the common case — offline, rate-limited (60/h per IP
- * unauthenticated), behind a proxy, `CEZ_NO_BANNER=1`. Every one of them answers
- * `{ available: false }` the way `server/github.ts` does, never an error and never a throw: a
- * promo that can break a cockpit is worse than a promo nobody sees.
+ * unauthenticated, 5000/h with `GITHUB_TOKEN`), behind a proxy, `CEZ_NO_BANNER=1`. Every one of
+ * them answers `{ available: false }` the way `server/github.ts` does, never an error and never
+ * a throw: a promo that can break a cockpit is worse than a promo nobody sees.
  *
  * Two caches, both cheap: in memory for the life of the process, and a single small JSON file
  * under `~/.cache/cez/` so a restart (the desktop shell restarts often) paints the count
@@ -29,20 +29,22 @@ const REPO = 'open-mercato/cezar';
 export const CEZAR_REPO_URL = `https://github.com/${REPO}`;
 const API_URL = `https://api.github.com/repos/${REPO}`;
 const TIMEOUT_MS = 5_000;
-/** Six hours. A star count moves slowly and nothing here depends on it being exact. */
-export const STAR_CACHE_TTL_MS = 6 * 60 * 60_000;
+/** Ten seconds — the cockpit polls at the same cadence so the chip shows the live number. The
+ *  rate-limit pacing below stretches it whenever GitHub's hourly budget cannot afford it. */
+export const STAR_CACHE_TTL_MS = 10_000;
+/** The longest a rate-limit header may silence the reader — a garbled reset stays bounded. */
+export const STAR_MAX_PACE_MS = 60 * 60_000;
 /**
- * Fifteen minutes, and the reason a FAILED read is remembered too.
+ * One minute, and the reason a FAILED read is remembered too.
  *
  * `fetchedAtMs` only advances on success, so without this the failure path has no cache at all:
  * an offline or proxied machine pays the full `TIMEOUT_MS` on every cockpit load forever, and a
  * rate-limited IP (60/h unauthenticated) keeps spending requests into the very `403` that is
  * telling it to stop. `inFlight` collapses a concurrent burst, never a sequential one.
  *
- * Shorter than the success TTL on purpose — offline is usually temporary and the cost of being
- * wrong here is one quiet chip, not a stale number.
+ * A floor, not the whole wait: a rate-limited `403` waits for the reset GitHub names instead.
  */
-export const STAR_FAILURE_BACKOFF_MS = 15 * 60_000;
+export const STAR_FAILURE_BACKOFF_MS = 60_000;
 
 export interface StarCount {
   /** `false` whenever there is no number to show — offline, rate-limited, or promos silenced.
@@ -100,19 +102,56 @@ export function starAskSilenced(env: NodeJS.ProcessEnv = process.env): boolean {
   return false;
 }
 
-/** One request, zod-validated, silent on every failure. `null` means "nothing known". */
-export async function fetchStarCount(fetchImpl: typeof fetch = fetch): Promise<number | null> {
-  try {
-    const res = await fetchImpl(API_URL, {
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: { accept: 'application/vnd.github+json' },
-    });
-    if (!res.ok) return null;
-    const parsed = repoSchema.safeParse(await res.json());
-    return parsed.success ? parsed.data.stargazers_count : null;
-  } catch {
-    return null;
+export interface StarCountFetch {
+  /** `null` means "nothing known". */
+  count: number | null;
+  /** How long GitHub's rate-limit headers say to wait before the next request, when they say. */
+  waitMs?: number;
+}
+
+/**
+ * The wait GitHub's headers ask for: `retry-after` (secondary limits) wins, otherwise the hourly
+ * budget left (`x-ratelimit-remaining`) spread evenly to `x-ratelimit-reset`, so an
+ * unauthenticated machine slows to ~1/min instead of spending its 60 and hitting the 403.
+ */
+export function rateLimitWaitMs(headers: Headers, nowMs: number): number | undefined {
+  const retryAfter = Number(headers.get('retry-after'));
+  if (headers.has('retry-after') && Number.isFinite(retryAfter) && retryAfter >= 0) {
+    return Math.min(retryAfter * 1000, STAR_MAX_PACE_MS);
   }
+  const remaining = Number(headers.get('x-ratelimit-remaining'));
+  const resetMs = Number(headers.get('x-ratelimit-reset')) * 1000;
+  if (!headers.has('x-ratelimit-remaining') || !headers.has('x-ratelimit-reset')) return undefined;
+  if (!Number.isFinite(remaining) || !Number.isFinite(resetMs) || remaining < 0) return undefined;
+  const untilReset = Math.max(0, resetMs - nowMs);
+  return Math.min(remaining === 0 ? untilReset : untilReset / remaining, STAR_MAX_PACE_MS);
+}
+
+/** One request, zod-validated, silent on every failure. Carries the rate-limit wait too. */
+export async function readStarCount(
+  fetchImpl: typeof fetch = fetch,
+  env: NodeJS.ProcessEnv = process.env,
+  nowMs: number = Date.now(),
+): Promise<StarCountFetch> {
+  try {
+    const headers: Record<string, string> = { accept: 'application/vnd.github+json' };
+    const token = env.GITHUB_TOKEN || env.GH_TOKEN;
+    if (token) headers.authorization = `Bearer ${token}`;
+    const res = await fetchImpl(API_URL, { signal: AbortSignal.timeout(TIMEOUT_MS), headers });
+    const waitMs = rateLimitWaitMs(res.headers, nowMs);
+    const withWait = (count: number | null): StarCountFetch =>
+      waitMs === undefined ? { count } : { count, waitMs };
+    if (!res.ok) return withWait(null);
+    const parsed = repoSchema.safeParse(await res.json());
+    return withWait(parsed.success ? parsed.data.stargazers_count : null);
+  } catch {
+    return { count: null };
+  }
+}
+
+/** The count alone — `null` means "nothing known". */
+export async function fetchStarCount(fetchImpl: typeof fetch = fetch): Promise<number | null> {
+  return (await readStarCount(fetchImpl, {})).count;
 }
 
 async function readDisk(path: string): Promise<DiskEntry | null> {
@@ -149,9 +188,9 @@ export interface StarCountReaderOptions {
 export class StarCountReader {
   private count: number | null = null;
   private fetchedAtMs = 0;
-  /** `null` — not `0` — means "never failed": a `now()` near the epoch (every test clock) would
-   *  otherwise read as a failure one tick ago and suppress the very first request. */
-  private failedAtMs: number | null = null;
+  /** No request before this instant: set by a failure's backoff or by rate-limit pacing. `null`
+   *  — not `0` — so a `now()` near the epoch (every test clock) never suppresses the first read. */
+  private retryAtMs: number | null = null;
   private inFlight: Promise<number | null> | null = null;
   private diskRead = false;
 
@@ -190,22 +229,23 @@ export class StarCountReader {
     this.fetchedAtMs = entry.fetchedAtMs;
   }
 
-  /** Whether the last attempt failed recently enough that another one is not worth its timeout. */
+  /** Whether a recent failure or GitHub's rate limit says the next request is not worth making. */
   private backingOff(): boolean {
-    return this.failedAtMs !== null && this.now() - this.failedAtMs < STAR_FAILURE_BACKOFF_MS;
+    return this.retryAtMs !== null && this.now() < this.retryAtMs;
   }
 
   /** Always goes to GitHub, and never twice at once — a burst of cockpit tabs is one request. */
   private async refresh(): Promise<number | null> {
     if (this.inFlight) return this.inFlight;
-    this.inFlight = fetchStarCount(this.fetchImpl).then(async (count) => {
+    this.inFlight = readStarCount(this.fetchImpl, this.env, this.now()).then(async ({ count, waitMs }) => {
+      const now = this.now();
       if (count === null) {
-        this.failedAtMs = this.now();
+        this.retryAtMs = now + Math.max(STAR_FAILURE_BACKOFF_MS, waitMs ?? 0);
       } else {
         this.count = count;
-        this.fetchedAtMs = this.now();
-        this.failedAtMs = null;
-        await writeDisk(this.cachePath, { count, fetchedAtMs: this.fetchedAtMs });
+        this.fetchedAtMs = now;
+        this.retryAtMs = waitMs !== undefined && waitMs > STAR_CACHE_TTL_MS ? now + waitMs : null;
+        await writeDisk(this.cachePath, { count, fetchedAtMs: now });
       }
       this.inFlight = null;
       return count;

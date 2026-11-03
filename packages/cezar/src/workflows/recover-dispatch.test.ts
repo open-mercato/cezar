@@ -207,6 +207,49 @@ describe('recover() and the dispatch field', () => {
     }
   });
 
+  it('does not report an idle-closed unanswered child until its question is retired', () => {
+    const flag = process.env.CEZ_DISPATCH;
+    process.env.CEZ_DISPATCH = '1';
+    const manager = new RunManager(store, repoRoot, { semaphore: frozen() });
+    try {
+      const parent = store.createRun({ title: 'commander', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(parent.id, { status: 'waiting', dispatch: { rootRunId: parent.id } });
+      const child = store.createRun({
+        title: 'guard duty',
+        workflow: 'quick-task',
+        task: 'ask before deleting',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      const askedAt = new Date().toISOString();
+      store.updateRun(child.id, {
+        status: 'failed',
+        finishedAt: askedAt,
+        awaitingAnswerSince: askedAt,
+        error: 'the session closed before the question was answered',
+        dispatch: {
+          rootRunId: parent.id,
+          parentRunId: parent.id,
+          pendingAsk: { questions: ['Delete the old migration?'], askedAt },
+        },
+      });
+
+      const internal = manager as unknown as { reportSettledChildToParent(id: string): void };
+      internal.reportSettledChildToParent(child.id);
+      expect(store.getRun(parent.id)?.dispatch?.pendingReports).toBeUndefined();
+
+      // A status transition is the existing retirement seam: it clears the unanswered hold and
+      // lets the normal settle hook deliver one honest blocked outcome.
+      store.updateRun(child.id, { status: 'cancelled', finishedAt: new Date().toISOString() });
+      internal.reportSettledChildToParent(child.id);
+      expect(store.getRun(parent.id)?.dispatch?.pendingReports).toHaveLength(1);
+      expect(store.getRun(parent.id)?.dispatch?.pendingReports?.[0]?.report.status).toBe('blocked');
+    } finally {
+      manager.dispose();
+      if (flag === undefined) delete process.env.CEZ_DISPATCH;
+      else process.env.CEZ_DISPATCH = flag;
+    }
+  });
+
   it('survives the record being written and read back off disk', () => {
     const { id, dispatch } = queuedDispatchedRun();
     store.flush();

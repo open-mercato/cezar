@@ -29,6 +29,7 @@ it('retains latest status after the operational snapshot reconciles a resumed fe
         title: 'Resumed task',
         status: 'done',
         createdAt: '2026-09-25T00:00:00Z',
+        lastActivityAt: '2026-09-25T00:00:00Z',
         archived: false,
         workflow: 'quick',
       },

@@ -9,7 +9,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 import { readNdjson } from './ndjson.ts';
 import type { UiEvent } from './ui-events.ts';
@@ -33,11 +33,13 @@ import {
   mapJunieSessionUpdate,
   type JunieUiMapperState,
 } from './junie-ui-mapper.ts';
+import { acpMcpCapabilities, skippedServersNote, toAcpMcpServers } from './private-mcp.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 
 export interface JunieRunnerOptions {
   /** Override the binary name/path; defaults to `junie` on PATH (`CEZ_JUNIE_BIN`). */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -94,6 +96,7 @@ export class JunieRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('junie', spec.reasoningEffort);
     const session = new JunieSession(this.bin, this.timeoutMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
@@ -163,22 +166,18 @@ class JunieSession implements AgentSession {
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-        this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+      this.child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!this.hasExited()) {
+          this.terminatedByCezar = true;
+          this.child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     this.ready = this.bootstrap();
 
@@ -188,6 +187,7 @@ class JunieSession implements AgentSession {
         const readLoop = async () => {
           for await (const line of readNdjson(this.child.stdout)) {
             if (this.timedOut) break;
+            deadline.touch();
             let msg: JunieAcpMessage;
             try {
               msg = JSON.parse(line) as JunieAcpMessage;
@@ -204,7 +204,7 @@ class JunieSession implements AgentSession {
           this.end();
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
@@ -233,8 +233,7 @@ class JunieSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `junie timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('junie', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }
@@ -346,10 +345,15 @@ class JunieSession implements AgentSession {
       await this.rpc.request('authenticate', { methodId }).catch(() => undefined);
     }
 
+    // Private MCP servers (spec 2026-10-07-private-project-mcp) ride ACP's per-session list.
+    const { mcpServers, skipped } = toAcpMcpServers(this.spec.mcpServers ?? [], acpMcpCapabilities(initResult));
+    if (skipped.length) {
+      this.emit({ type: 'note', message: skippedServersNote('junie', skipped, 'the CLI did not advertise that MCP transport') });
+    }
     const session =
       this.spec.resume && this.spec.sessionId
-        ? await this.rpc.request('session/load', { sessionId: this.spec.sessionId, cwd: this.spec.cwd, mcpServers: [] })
-        : await this.rpc.request('session/new', { cwd: this.spec.cwd, mcpServers: [] });
+        ? await this.rpc.request('session/load', { sessionId: this.spec.sessionId, cwd: this.spec.cwd, mcpServers })
+        : await this.rpc.request('session/new', { cwd: this.spec.cwd, mcpServers });
     this.sessionId = stringField(session, 'sessionId') ?? this.spec.sessionId;
     if (this.sessionId) {
       this.emit({ type: 'session', sessionId: this.sessionId });

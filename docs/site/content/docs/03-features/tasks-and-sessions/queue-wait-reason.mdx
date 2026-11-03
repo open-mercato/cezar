@@ -1,0 +1,25 @@
+---
+title: "Understand why a task is waiting"
+description: "Distinguish queue capacity, account limits, and another session's automatic resume."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/lib/queue-wait-label.ts
+    line: 3
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+The explanation beside a task status shows whether it is waiting for a queue slot, an account quota reset, or another session's automatic resume. Waiting for usage limit reset includes the reset time. With automatic resume, the task waits for the session using that account to resume.
+
+## Where to find it
+
+Tasks → waiting task
+
+## How to use it
+
+1. Find the task in the queue.
+2. Read the explanation beside its status.
+3. For Waiting for usage limit reset, check the displayed time. For automatic resume, wait for the session using that account to resume.
+
+> **Good to know**: The wait can be caused by a task in another project. Increasing concurrency does not clear an account block.

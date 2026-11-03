@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { AgentsDock } from './agents-dock'
@@ -191,6 +191,25 @@ describe('AgentsDock — row interaction', () => {
 })
 
 describe('AgentsDock — collapse memory', () => {
+  it('collapses an explicitly open dock when the fan-out settles, but allows reopening it', async () => {
+    const { rerender } = render(<AgentsDock runId="run-completion" agents={[agent()]} />)
+    fireEvent.click(head())
+    expect(head().getAttribute('aria-expanded')).toBe('true')
+
+    rerender(
+      <AgentsDock
+        runId="run-completion"
+        agents={[agent({ status: 'completed' })]}
+      />,
+    )
+    await waitFor(() => expect(head().getAttribute('aria-expanded')).toBe('false'))
+    expect(rows()).toHaveLength(0)
+
+    fireEvent.click(head())
+    expect(head().getAttribute('aria-expanded')).toBe('true')
+    expect(rows()).toHaveLength(1)
+  })
+
   it('remembers an explicit expand per run across remounts', () => {
     const { unmount } = render(<AgentsDock runId="run-memory" agents={[agent()]} />)
     fireEvent.click(head()) // expand (default is collapsed)

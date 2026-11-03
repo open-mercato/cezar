@@ -163,8 +163,9 @@ describe('childTaskEnvelope', () => {
 
 describe('childSettleReport', () => {
   it('reports an automatically capped child as partial, even if its terminal status is failed or it filed done', () => {
+    // A capped run the user Finished settles `done`; the durable cause still makes it partial.
     const silent = childSettleReport(
-      record({ status: 'failed', autoContinueCapReached: true } as Partial<RunRecord> & { autoContinueCapReached: boolean }),
+      record({ status: 'done', autoContinueCapReached: true } as Partial<RunRecord> & { autoContinueCapReached: boolean }),
     );
     expect(silent.report.status).toBe('partial');
     expect(silent.report.result).toContain('automatic continue cap reached');
@@ -260,6 +261,27 @@ describe('childSettleReport', () => {
     expect(asking.report.result).toContain('Delete the old migration?');
     expect(asking.report.result).toContain('before a reply arrived');
     expect(asking.text).toContain('status blocked (cezar: done)');
+  });
+
+  // The record keeps at most 4 question texts, however many the card carried. Without the count
+  // the parent would read a truncated list as the whole ask and re-plan around a question it
+  // never saw.
+  it('says how many parked questions the record could not carry', () => {
+    const asking = childSettleReport(
+      record({
+        status: 'done',
+        dispatch: {
+          rootRunId: 'm',
+          parentRunId: 'p',
+          pendingAsk: {
+            questions: ['A?', 'B?', 'C?', 'D?'],
+            omittedQuestions: 2,
+            askedAt: '2026-09-09T10:00:00.000Z',
+          },
+        },
+      }),
+    );
+    expect(asking.report.result).toContain('A? | B? | C? | D? (+2 more)');
   });
 
   it('lets the child’s own report win over a stale pending question', () => {

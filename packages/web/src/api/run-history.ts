@@ -1,10 +1,12 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
-import type { RunEvent, RunHistoryPage } from '@open-mercato/cezar-api-client'
+import type { ApiRun, RunEvent, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useThrottledValue } from '@/lib/use-throttled-value'
 import { getRunHistory, getRunHistoryContext } from './client'
+import { mergeRun } from './events'
+import { queryKeys } from './queries'
 import { liveItemKey, useRunEvents, type RunEventCompaction } from './run-events'
 
 const MAX_HISTORY_PAGES = 5
@@ -273,14 +275,23 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
       if (compactingOwnerRef.current === ownerKey) compactingOwnerRef.current = undefined
     }
   }, [historyKey, ownerKey, queryClient, runId, tailKey])
+  // The workspace stream's `run` frame is slim; this stream carries the whole record, which is
+  // what keeps the thread's steps, prompt and queued messages live. Only an existing detail
+  // cache is patched, as the workspace stream does.
+  const onRun = useCallback((run: RunRecord) => {
+    const key = queryKeys.runs.detail(run.id)
+    if (queryClient.getQueryData(key) === undefined) return
+    queryClient.setQueryData<ApiRun>(key, (previous) => (previous === undefined ? run : mergeRun(previous, run)))
+  }, [queryClient])
   const liveFrames = useRunEvents(newestPage && !fallback ? runId : undefined, newestPage ? {
     cursor: newestPage.liveCursor,
     afterSeq: newestPage.asOfSeq,
     compactWhenOver: LIVE_COMPACTION_SIZE_TRIGGER,
     compactAt: COMPACT_LIVE_AT_EVENTS,
     onCompact: compactLive,
-  } : {})
-  const fallbackFrames = useRunEvents(fallback ? runId : undefined)
+    onRun,
+  } : { onRun })
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun })
   const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
   const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const fallbackTailRef = useRef<{ runId: string | undefined; scope: string; events: RunEvent[] }>({
@@ -351,12 +362,35 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   const jumpToLatest = useCallback(async () => {
     historyGenerationRef.current += 1
     historyMutationRef.current = Promise.resolve()
-    newestPageRef.current = undefined
-    queryClient.removeQueries({ queryKey: tailKey, exact: true })
-    // resetQueries cancels the in-flight older-page request, clears its data immediately, and
-    // refetches the active cursorless page. Do not await the refetch: the scroller must jump now.
-    void queryClient.resetQueries({ queryKey: historyKey, exact: true })
-  }, [historyKey, queryClient, tailKey])
+    // Trim to the tail IN PLACE. Resetting the query blanked it, which flipped `isPending` and
+    // swapped the whole thread for its loading skeleton mid-jump — the pill read as a reload,
+    // and the scroll ran against the skeleton. The tail page is the one the live stream resumes
+    // from, so dropping older pages around it needs no refetch and no reconnect.
+    const latestTail = (pages: readonly RunHistoryPage[]) => newestPageRef.current
+      ?? newestCursorlessPage(pages)
+      ?? queryClient.getQueryData<RunHistoryPage>(tailKey)
+    const current = queryClient.getQueryData<InfiniteData<RunHistoryPage, string | undefined>>(historyKey)
+    if (!latestTail(current?.pages ?? [])) {
+      // No tail anywhere in the cache (should not happen once hydrated): reload it the old way.
+      newestPageRef.current = undefined
+      queryClient.removeQueries({ queryKey: tailKey, exact: true })
+      void queryClient.resetQueries({ queryKey: historyKey, exact: true })
+      return
+    }
+    if (current?.pages.length === 1 && current.pages[0] === latestTail(current.pages) && !history.isFetchingPreviousPage) return
+    // Abandon an in-flight older page so it cannot land after the trim.
+    await queryClient.cancelQueries({ queryKey: historyKey, exact: true })
+    // Re-read after the await: a compaction may have installed a newer tail meanwhile.
+    const settled = queryClient.getQueryData<InfiniteData<RunHistoryPage, string | undefined>>(historyKey)
+    const tail = latestTail(settled?.pages ?? [])
+    if (!tail) return
+    queryClient.setQueryData<InfiniteData<RunHistoryPage, string | undefined>>(historyKey, {
+      pages: [tail],
+      pageParams: [undefined],
+    })
+    queryClient.setQueryData(tailKey, tail)
+    newestPageRef.current = tail
+  }, [history.isFetchingPreviousPage, historyKey, queryClient, tailKey])
 
   return {
     visibleEvents,

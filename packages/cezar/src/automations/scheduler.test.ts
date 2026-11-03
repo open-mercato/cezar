@@ -475,6 +475,82 @@ describe('WorkspaceAutomationScheduler', () => {
       vi.useRealTimers();
     }
   });
+
+  it('lets an in-flight check of an edited automation finish without re-arming its old revision (#1736)', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse('2026-10-28T12:00:00Z'));
+      const { store, definition } = await setup();
+      store.setState(definition.id, (state) => ({ ...state, nextCheckAt: new Date().toISOString() }));
+      const polls: Array<{ revision: number; labels: string[] | undefined }> = [];
+      let release!: () => void;
+      const blocked = new Promise<void>((resolve) => { release = resolve; });
+      let first = true;
+      const poll = vi.fn(async (_owner: string, _repo: string, polled: GithubAutomationDefinition) => {
+        polls.push({ revision: polled.revision, labels: polled.filters.anyLabels });
+        if (first) { first = false; await blocked; }
+        return { candidates: [], truncated: false, pages: 1 };
+      });
+      const scheduler = new WorkspaceAutomationScheduler({
+        coordinator: { refresh: async () => undefined, enabledProjectIds: () => ['p'], store: () => store } as never,
+        handle: () => ({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) }),
+      });
+      const edit = async (labels: string[]) => {
+        const latest = store.get(definition.id) as GithubAutomationDefinition;
+        store.update(latest.id, latest.revision, { ...latest, filters: { ...latest.filters, anyLabels: labels } });
+        await scheduler.reschedule();
+      };
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(polls).toHaveLength(1);
+      await edit(['v2']);
+      release();
+      await vi.advanceTimersByTimeAsync(1);
+      // Before the fix the settled rev-1 check re-armed a second chain that reschedule() could not reach.
+      expect(vi.getTimerCount()).toBe(1);
+      await edit(['v3']);
+      polls.length = 0;
+      await vi.advanceTimersByTimeAsync(3 * 300_000);
+      expect(polls.length).toBeGreaterThan(0);
+      expect(polls.every((item) => item.labels?.[0] === 'v3')).toBe(true);
+      expect(vi.getTimerCount()).toBe(1);
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('WorkspaceAutomationScheduler — a shortened interval is not held back by the old retry floor (#1736)', () => {
+  it('retries an edited poll after its new interval, not the one it failed under', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse('2026-10-28T12:00:00Z'));
+      const { store, definition } = await setup();
+      store.update(definition.id, definition.revision, { ...definition, intervalSeconds: 3600 });
+      store.setState(definition.id, (state) => ({ ...state, nextCheckAt: new Date().toISOString() }));
+      const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
+      const scheduler = new WorkspaceAutomationScheduler({
+        coordinator: { refresh: async () => undefined, enabledProjectIds: () => ['p'], store: () => store } as never,
+        handle: () => ({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) }),
+      });
+      // Another process holds the polling lease: the check is skipped and floored one old interval out.
+      const lease = store.acquireLease()!;
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1);
+      lease.release();
+      expect(poll).not.toHaveBeenCalled();
+      const latest = store.get(definition.id) as GithubAutomationDefinition;
+      store.update(latest.id, latest.revision, { ...latest, intervalSeconds: 60 });
+      store.setState(latest.id, (state) => ({ ...state, nextCheckAt: new Date(Date.now() + 60_000).toISOString() }));
+      await scheduler.reschedule();
+      await vi.advanceTimersByTimeAsync(61_000);
+      expect(poll).toHaveBeenCalledTimes(1);
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('WorkspaceAutomationScheduler — both kinds (spec 2026-09-14)', () => {
@@ -605,6 +681,167 @@ describe('WorkspaceAutomationScheduler — a rejected check never re-arms at zer
       expect(healthy).toHaveBeenCalledTimes(1);
       scheduler.stop();
     } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it('backs off a contended composer start so another project can launch, without consuming it', async () => {
+  vi.useFakeTimers();
+  const now = Date.parse('2026-10-13T09:00:00Z');
+  vi.setSystemTime(now);
+  const first = await setup(), second = await setup();
+  first.store.delete(first.definition.id); second.store.delete(second.definition.id);
+  const make = (store: AutomationStore, offset: number) => store.create({ name: 'Deferred', kind: 'schedule', enabled: true,
+    schedule: { type: 'once', date: '2026-10-13', hour: 8, minute: 0 }, task: { prompt: 'test' },
+    deferredStart: { origin: 'composer', reason: 'at', notBefore: new Date(now - 2000 + offset).toISOString(), timeZone: 'UTC',
+      binding: { runner: 'claude', revision: 'r', accounts: [] }, creationKey: 'key', requestDigest: 'digest', status: 'pending', runIds: [] } });
+  const a = make(first.store, 0), b = make(second.store, 1);
+  const lease = first.store.acquireLease()!;
+  const attempts = vi.spyOn(first.store, 'acquireLease');
+  const launch = vi.fn(async () => ({ runId: 'run' }));
+  const scheduler = new WorkspaceAutomationScheduler({ coordinator: { refresh: async () => {}, enabledProjectIds: () => ['a', 'b'], store: (id: string) => id === 'a' ? first.store : second.store } as unknown as import('./coordinator.ts').AutomationCoordinator,
+    handle: (projectId, store) => ({ projectId, store, timeZone: 'UTC', validateDeferred: async () => {}, launchSchedule: launch }) });
+  try {
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(second.store.get(b.id)).toBeUndefined();
+    expect(attempts).toHaveBeenCalledTimes(1);
+    expect(first.store.get(a.id)?.deferredStart?.notBefore).toBe(a.deferredStart?.notBefore);
+    lease.release();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(launch).toHaveBeenCalledTimes(2);
+  } finally { scheduler.stop(); lease.release(); vi.useRealTimers(); }
+});
+
+it('retains a recurring occurrence on contention and retries without starving another project', async () => {
+  vi.useFakeTimers();
+  const now = Date.parse('2026-10-13T09:00:00Z');
+  vi.setSystemTime(now);
+  const first = await setup(), second = await setup();
+  first.store.delete(first.definition.id); second.store.delete(second.definition.id);
+  const make = (store: AutomationStore, offset: number) => {
+    const definition = store.create({ name: 'Daily', kind: 'schedule', enabled: true,
+      schedule: { type: 'daily', hour: 9, minute: 0 }, task: { prompt: 'test' } });
+    store.setState(definition.id, s => ({ ...s, nextRunAt: new Date(now - 2000 + offset).toISOString() }));
+    return definition;
+  };
+  const a = make(first.store, 0); make(second.store, 1);
+  const lease = first.store.acquireLease()!;
+  const attempts = vi.spyOn(first.store, 'acquireLease');
+  const launch = vi.fn(async () => ({ runId: 'run' }));
+  const scheduler = new WorkspaceAutomationScheduler({
+    coordinator: { refresh: async () => {}, enabledProjectIds: () => ['a', 'b'], store: (id: string) => id === 'a' ? first.store : second.store } as unknown as import('./coordinator.ts').AutomationCoordinator,
+    handle: (projectId, store) => ({ projectId, store, timeZone: 'UTC', launchSchedule: launch }),
+  });
+  try {
+    await scheduler.start();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect(attempts).toHaveBeenCalledTimes(1);
+    expect(first.store.state(a.id)?.nextRunAt).toBe(new Date(now - 2000).toISOString());
+    lease.release();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect(Date.parse(first.store.state(a.id)!.nextRunAt!)).toBeGreaterThan(now);
+  } finally { scheduler.stop(); lease.release(); vi.useRealTimers(); }
+});
+
+describe('WorkspaceAutomationScheduler — long waits (#1340)', () => {
+  const MAX_WAIT = 2_147_483_647;
+  const T0 = Date.parse('2026-10-14T12:00:00Z');
+
+  async function futureSchedule(days: number, deferred = true) {
+    const { store, definition } = await setup();
+    store.delete(definition.id);
+    const due = T0 + days * 86_400_000;
+    const at = new Date(due).toISOString();
+    const scheduled = store.create({
+      name: 'Future task', kind: 'schedule', enabled: true,
+      schedule: { type: 'once', date: at.slice(0, 10), hour: 12, minute: 0 },
+      task: { prompt: 'test' },
+      ...(deferred ? { deferredStart: {
+        origin: 'composer' as const, reason: 'at' as const, notBefore: at, timeZone: 'UTC',
+        binding: { runner: 'claude' as const, revision: 'r', accounts: [] },
+        creationKey: 'key', requestDigest: 'digest', status: 'pending' as const, runIds: [],
+      } } : {}),
+    });
+    const launch = vi.fn(async () => ({ runId: 'future-run' }));
+    const scheduler = new WorkspaceAutomationScheduler({
+      coordinator: { refresh: async () => {}, enabledProjectIds: () => ['p'], store: () => store } as never,
+      handle: () => ({ projectId: 'p', store, timeZone: 'UTC', validateDeferred: async () => {}, launchSchedule: launch }),
+    });
+    return { store, scheduled, due, launch, scheduler };
+  }
+
+  it.each([
+    { days: 30, deferred: true },
+    { days: 60, deferred: true },
+    { days: 30, deferred: false },
+  ])('bounds a $days-day wait (deferred=$deferred) and launches exactly once at the due instant', async ({ days, deferred }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const { scheduler, launch, store, due } = await futureSchedule(days, deferred);
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    const lease = vi.spyOn(store, 'acquireLease');
+    try {
+      await scheduler.start();
+      // Fails immediately on the old implementation, before advancing an overflowing timer.
+      expect(timer).toHaveBeenLastCalledWith(expect.any(Function), MAX_WAIT);
+      for (let remaining = due - T0; remaining > MAX_WAIT; remaining -= MAX_WAIT) {
+        await vi.advanceTimersByTimeAsync(MAX_WAIT);
+        expect(launch).not.toHaveBeenCalled();
+        expect(lease).not.toHaveBeenCalled();
+        expect(store.receipts()).toEqual([]);
+        expect(vi.getTimerCount()).toBe(1);
+        expect(timer).toHaveBeenLastCalledWith(expect.any(Function), Math.min(MAX_WAIT, remaining - MAX_WAIT));
+      }
+      await vi.advanceTimersByTimeAsync(due - Date.now() - 1);
+      expect(launch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(store.receipts().filter(receipt => receipt.status === 'launched')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(86_400_000);
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(scheduler.hasTimer()).toBe(false);
+    } finally {
+      scheduler.stop();
+      timer.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels intermediate waits on stop and replaces them on reschedule', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    const { scheduler, store, scheduled, launch } = await futureSchedule(60);
+    try {
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(MAX_WAIT);
+      scheduler.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(MAX_WAIT);
+      expect(launch).not.toHaveBeenCalled();
+      await scheduler.start();
+      expect(vi.getTimerCount()).toBe(1);
+      // A newly due item must replace the long wait, with no stale timer left behind.
+      store.delete(scheduled.id);
+      store.create({
+        name: 'Soon', kind: 'schedule', enabled: true,
+        schedule: { type: 'once', date: '2026-12-01', hour: 12, minute: 0 },
+        task: { prompt: 'test' },
+      }, 'soon');
+      store.setState('soon', state => ({ ...state, nextRunAt: new Date(Date.now() + 60_000).toISOString() }));
+      await scheduler.reschedule();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(launch).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(launch).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      scheduler.stop();
       vi.useRealTimers();
     }
   });

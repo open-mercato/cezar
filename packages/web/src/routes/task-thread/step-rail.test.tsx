@@ -129,8 +129,11 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     const trigger = screen.getByRole('button')
     expect(summary.textContent).toContain('Verify')
     expect(summary.textContent).toContain('step 2 of 3')
-    expect(trigger.className).toContain('min-h-7')
+    // The phone target is 44px, while -my-2 cancels its extra 16px against run-header padding.
+    expect(trigger.className).toContain('min-h-11')
+    expect(trigger.className).toContain('-my-2')
     expect(trigger.className).toContain('md:min-h-[30px]')
+    expect(trigger.className).toContain('md:my-0')
     const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
     expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['done', 'active', 'pending'])
     // The full rows are not mounted until the user expands.

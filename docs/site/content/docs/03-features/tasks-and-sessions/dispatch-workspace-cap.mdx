@@ -1,0 +1,25 @@
+---
+title: "A workspace-wide Dispatch subtask limit"
+description: "The plan adds a shared Dispatch subtask limit for the workspace."
+version: planned
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Specification"
+    path: .ai/specs/2026-09-20-dispatch-admission-scheduler.md
+    line: 17
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+A separate limit would cover active Dispatch subtasks across all parent tasks. Further subtasks would wait in the queue once this limit is reached.
+
+## Status
+
+Specification: not yet available
+
+## What you can do today
+
+1. Apply a shared active-subtask limit in addition to individual parent limits.
+2. Queue further subtasks when the workspace reaches that limit.
+
+> **Good to know**: Cezar already has `maxParallel` and a per-parent subtask limit. The current configuration and semaphore lack `dispatchMaxConcurrent` and a separate admission counter. There is no confirmed delivery date.

@@ -1,0 +1,25 @@
+---
+title: "Permission modes and tool approval"
+description: "The plan adds permission choices and agent approval responses in the cockpit."
+version: planned
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Specification"
+    path: .ai/specs/2026-07-17-permission-modes.md
+    line: 11
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The specification describes choosing a permission mode per task. The cockpit would also let you approve or reject agent requests to use tools.
+
+## Status
+
+Specification: not yet available
+
+## What you can do today
+
+1. Choose a permission mode for a task.
+2. Approve or reject tool requests without leaving the cockpit.
+
+> **Good to know**: The Claude runner currently states that the cockpit cannot respond to permission prompts. The task form has no shared mode selector. There is no confirmed delivery date.

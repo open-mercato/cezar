@@ -5,9 +5,10 @@
  * restart (re-exec, or exit for a supervisor to relaunch — see `restart.ts`).
  */
 
-import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
+import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateScheduled, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import type { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
 import { buildCheckout, discoverCheckouts } from './checkouts.ts';
 import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled, packageRootOf, type InstallKind } from './layout.ts';
@@ -16,16 +17,23 @@ import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
 import { classifyVersion, isNewer } from './semver.ts';
 
 const LOG_CAP = 200;
+/** How often a scheduled "update when idle" re-checks the workspace. */
+const IDLE_POLL_MS = 5_000;
 
 export interface SelfUpdateDeps {
   pkgName: string;
   version: string;
+  /** What the dialog shows as running (`0.15.2-dev` for a checkout); update checks keep `version`. */
+  displayVersion?: string;
   /** The running entry file (`process.argv[1]`). */
   entry: string;
   /** Exit-or-reexec policy; the service only decides WHEN. */
   restart: () => void;
-  /** Runs in flight across the workspace, for the dialog's warning. */
-  activeRuns?: () => number;
+  /** The workspace's run counters — in production the `WorkspaceSemaphore` itself, so the dialog
+   *  can never again read one project's store (#1524). Absent: nothing runs. */
+  runs?: Pick<WorkspaceSemaphore, 'activeRuns' | 'idle'>;
+  /** Test seam for the idle poll's interval. */
+  idlePollMs?: number;
   /** Hosted mode trims the absolute entry path off the wire (#431). */
   trimPaths?: () => boolean;
   supervised?: boolean;
@@ -51,6 +59,8 @@ export class SelfUpdateService {
   private readonly registry: RegistryCache;
   private readonly env: NodeJS.ProcessEnv;
   private job: SelfUpdateJob | null = null;
+  private scheduled: SelfUpdateScheduled | null = null;
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
   private readonly pulls: OpenPullsCache;
 
   constructor(private readonly deps: SelfUpdateDeps) {
@@ -58,6 +68,11 @@ export class SelfUpdateService {
     this.installKind = detectInstallKind(deps.entry, this.env);
     this.registry = deps.registry ?? new RegistryCache(deps.pkgName);
     this.pulls = new OpenPullsCache(deps.pulls ?? (() => fetchOpenPulls(CEZAR_REPO, { env: this.env })));
+  }
+
+  /** The raw running version — what update checks compare, never the shown `-dev` one. */
+  get runningVersion(): string {
+    return this.deps.version;
   }
 
   /** The configured channel: workspace config wins, then `CEZ_UPDATE_CHANNEL`, then stable. */
@@ -103,7 +118,7 @@ export class SelfUpdateService {
     const { canSelfUpdate, reason } = this.capability();
     const trim = this.deps.trimPaths?.() ?? false;
     return {
-      version: this.deps.version,
+      version: this.deps.displayVersion ?? this.deps.version,
       installKind: this.installKind,
       entry: trim ? this.deps.entry.split(/[\\/]/).pop() ?? '' : this.deps.entry,
       canSelfUpdate,
@@ -134,7 +149,8 @@ export class SelfUpdateService {
           installed: installedIds.has(entry.version),
         })),
       job: this.job,
-      activeRuns: this.deps.activeRuns?.() ?? 0,
+      scheduled: this.scheduled,
+      activeRuns: this.deps.runs?.activeRuns() ?? 0,
     };
   }
 
@@ -249,6 +265,8 @@ export class SelfUpdateService {
     if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
     const { canSelfUpdate, reason } = this.capability();
     if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
+    // An explicit apply supersedes whatever was waiting for idle.
+    this.cancelScheduled();
     const job: SelfUpdateJob = { status: 'running', target, startedAt: new Date().toISOString(), finishedAt: null, log: [] };
     this.job = job;
     const log = (line: string) => {
@@ -277,6 +295,44 @@ export class SelfUpdateService {
       }
     })();
     return job;
+  }
+
+  /**
+   * "Update when idle": apply `target` once no task is running or queued, so the user can close
+   * the dialog and keep working. Applies at once when the workspace is already idle; replaces an
+   * earlier schedule. The same refusals as `apply()` are raised up front.
+   */
+  scheduleWhenIdle(target: string): void {
+    if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
+    const { canSelfUpdate, reason } = this.capability();
+    if (!canSelfUpdate) throw new Error(reason ?? 'self-update is not available for this install');
+    this.scheduled = { target, requestedAt: new Date().toISOString() };
+    if (!this.idleTimer) {
+      this.idleTimer = setInterval(() => this.applyIfIdle(), this.deps.idlePollMs ?? IDLE_POLL_MS);
+      this.idleTimer.unref?.();
+    }
+    this.applyIfIdle();
+  }
+
+  cancelScheduled(): void {
+    this.scheduled = null;
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    this.idleTimer = null;
+  }
+
+  private applyIfIdle(): void {
+    const scheduled = this.scheduled;
+    if (!scheduled) return;
+    if (this.deps.runs && !this.deps.runs.idle()) return;
+    try {
+      this.apply(scheduled.target);
+    } catch (error) {
+      // Nobody is watching a deferred apply — leave the refusal where the dialog shows a failure.
+      this.cancelScheduled();
+      const now = new Date().toISOString();
+      const message = error instanceof Error ? error.message : String(error);
+      this.job = { status: 'failed', target: scheduled.target, startedAt: now, finishedAt: now, log: [`failed: ${message}`], error: message };
+    }
   }
 
   /** A checkout `status()` offers under `target`: build it when it is unbuilt or older than its

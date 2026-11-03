@@ -31,6 +31,9 @@ export const dashboardCostTaskSchema = z.object({
   id: z.string(),
   title: z.string(),
   status: runStatusSchema,
+  /** Carried so a `failed` run still awaiting an answer reads as "needs you" here too — and so
+   *  reconciling the dashboard's live overlay from cost rows never erases it. */
+  awaitingAnswerSince: z.string().optional(),
   archived: z.boolean(),
   subtask: z.boolean(),
   createdAt: z.string(),

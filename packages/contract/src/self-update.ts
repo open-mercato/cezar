@@ -59,6 +59,12 @@ export const selfUpdateJobSchema = z.object({
 });
 export type SelfUpdateJob = z.infer<typeof selfUpdateJobSchema>;
 
+export const selfUpdateScheduledSchema = z.object({
+  target: z.string(),
+  requestedAt: z.string(),
+});
+export type SelfUpdateScheduled = z.infer<typeof selfUpdateScheduledSchema>;
+
 /** `GET /api/v1/workspace/self-update` (and every mutation on the family). */
 export const selfUpdateStatusSchema = z.object({
   version: z.string(),
@@ -83,6 +89,9 @@ export const selfUpdateStatusSchema = z.object({
   installed: z.array(installedVersionSchema),
   available: z.array(availableVersionSchema),
   job: selfUpdateJobSchema.nullable(),
+  /** "Update when idle": the version this process installs and restarts into as soon as no task
+   *  is running or queued. In memory only — a restart for any other reason forgets it. */
+  scheduled: selfUpdateScheduledSchema.nullable(),
   /** Runs in flight across the workspace — a restart interrupts them (boot recovery re-queues). */
   activeRuns: z.number().int().min(0),
 });
@@ -96,6 +105,8 @@ export const selfUpdateApplyRequestSchema = z
       .min(1)
       .max(64)
       .regex(/^[0-9A-Za-z.+-]+$/, 'version must be a plain version string'),
+    /** Wait until no task is running or queued, then apply (`scheduled` on the status). */
+    whenIdle: z.boolean().optional(),
   })
   .strict();
 export type SelfUpdateApplyRequest = z.infer<typeof selfUpdateApplyRequestSchema>;

@@ -44,6 +44,18 @@ describe('EditorScheduleFields', () => {
     expect(cron()).toBe('0 4 * * 1-5')
   })
 
+  it('once adds a date picker defaulting to a future day, and shows no cron (#771)', () => {
+    render(<Harness initial={{ type: 'daily', hour: 23, minute: 0 }} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Once' }))
+    const date = screen.getByLabelText('Date') as HTMLInputElement
+    expect(date.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(Date.parse(date.value)).toBeGreaterThan(Date.now() - 86_400_000)
+    expect(cron()).toBeUndefined()
+    expect(screen.getByText(/Runs a single time, then pauses itself/)).not.toBeNull()
+    fireEvent.change(date, { target: { value: '2020-01-01' } })
+    expect(screen.getByText(/This time has passed/)).not.toBeNull()
+  })
+
   it('clamps a typed hour and minute', () => {
     render(<Harness initial={{ type: 'daily', hour: 4, minute: 0 }} />)
     fireEvent.change(screen.getByLabelText('Hour'), { target: { value: '99' } })

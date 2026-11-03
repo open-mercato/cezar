@@ -6,7 +6,7 @@ import { Link } from 'react-router'
 import type { DashboardTaskRow, DashboardCoverage } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { ReferenceChip } from '@/components/reference-chip'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isNeedsYouStatus } from '@/lib/attention'
 import { taskReferences } from '@/lib/tasks-table'
 import { shortAge } from '@/lib/format'
 import { Button } from '@/components/ui/button'
@@ -31,9 +31,9 @@ export function TaskRow({
   const reconciled = useContext(DashboardReconciledContext) && !checking && !checkFailed
   const truth = useDashboardTruth(row)
   removed = removed || truth === null || (queue && truth?.archived === true)
-  if (truth) row = { ...row, status: truth.status }
+  if (truth) row = { ...row, status: truth.status, awaitingAnswerSince: truth.awaitingAnswerSince }
   const attention = deriveAttention(row)
-  const obsolete = queue && !['waiting', 'review'].includes(row.status)
+  const obsolete = queue && !isNeedsYouStatus(row)
   const inactive = removed || obsolete || !reconciled
   return (
     <div
@@ -58,7 +58,7 @@ export function TaskRow({
         ]}
       />
       {kicker && (
-        <p className="mb-1 pl-[15px] font-mono text-[10.5px] uppercase tracking-[0.1em] text-soft-foreground">
+        <p className="mb-1 pl-[15px] eyebrow text-soft-foreground">
           {kicker}
         </p>
       )}
@@ -77,7 +77,7 @@ export function TaskRow({
             {row.titleSummary || row.title}
           </Link>
           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-            <span className="font-mono text-[11px] text-soft-foreground">{row.projectId}</span>
+            <span className="font-mono text-meta text-soft-foreground">{row.projectId}</span>
             <span>
               {checkFailed
                 ? 'Could not check current state'

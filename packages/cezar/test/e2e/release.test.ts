@@ -11,10 +11,10 @@ const execFile = promisify(execFileCallback);
 // This file lives at packages/cezar/test/e2e; the orchestrator it drives is at the REPO root,
 // because a release spans every workspace and belongs to none of them.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const script = join(repoRoot, 'scripts', 'release.mjs');
+const script = join(repoRoot, 'scripts', 'release.mts');
 
-// The orchestrator imports packages/cezar/dist/release/stable.js, so this suite (like the
-// snapshot e2e) runs after `npm run build`.
+// The .mts orchestrator imports packages/cezar/src/release/*.ts directly (Node type stripping),
+// so unlike the snapshot e2e this suite needs no build.
 
 /** A miniature of the real workspace: the three publishable manifests, in their real
  *  directories, with the same intra-release dependency edges the pipeline has to re-pin. */
@@ -220,6 +220,20 @@ test('an unknown bump exits non-zero without touching the manifests', { timeout:
     await assert.rejects(runScript(root, ['snapshot', '--dry-run']));
     assert.equal((await readPkg(root, 'packages', 'cezar')).version, '0.1.5');
     assert.equal((await readPkg(root, 'packages', 'api-client')).version, '0.1.5');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('--dist-tag publishes an older line without moving latest', { timeout: 120_000 }, async () => {
+  const root = await makeFixture('0.1.5');
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    const { stdout } = await runScript(root, ['existing', '--dist-tag', 'latest-0.1', '--dry-run']);
+    assert.match(stdout, /dist-tag latest-0\.1/);
+    assert.ok(!/--tag latest(\s|$)/m.test(stdout), 'must not publish under latest');
+    assert.match(await readFile(join(root, 'github-output.txt'), 'utf8'), /^distTag=latest-0\.1$/m);
+    await assert.rejects(runScript(root, ['existing', '--dist-tag', '1.2.3', '--dry-run']));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

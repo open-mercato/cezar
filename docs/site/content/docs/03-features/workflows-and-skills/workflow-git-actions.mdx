@@ -1,0 +1,25 @@
+---
+title: "Commit, push, and draft PR nodes"
+description: "Run Git operations as explicit workflow steps."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/graph.ts
+    line: 221
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Git operations can be separate graph nodes. Enter a commit message in Commit, then add Push or Draft PR as needed. Connect the success and failure outputs.
+
+## Where to find it
+
+Workflows → Add node → Git section
+
+## How to use it
+
+1. Add Commit with a message.
+2. Add Push or Draft PR.
+3. Handle the success and failure outputs.
+
+> **Good to know**: Draft PR uses gh. The repository must have access to the relevant GitHub instance.

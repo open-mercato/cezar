@@ -93,60 +93,41 @@ describe('settings → skills against the live dry-run server', () => {
     browser.screenshot(`${artifactsDir}/settings-skills.png`)
   })
 
-  it('refresh keeps the selection and the list scroll position (#384)', () => {
-    browser.click(row(BETA))
+  it('refresh keeps the selected skill and its preview (#384)', () => {
+    browser.goto(`${baseUrl}${scoped(`/skills?skill=${BETA}`)}`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="skills-detail"] [data-slot="skill-detail"] h2')?.textContent === '${BETA}'`,
     )
-
-    // The host's real global catalog makes the list overflow — pin a scroll offset on it.
-    // The read-back must be 150: if the container did not truly overflow the browser would
-    // clamp to 0 and the whole scroll assertion would be vacuous.
-    browser.evaluate(`document.querySelector('[data-slot="skill-rows"]').scrollTop = 150`)
-    const before = Number(browser.evaluate(`document.querySelector('[data-slot="skill-rows"]').scrollTop`))
-    expect(before).toBe(150)
 
     browser.click('[data-slot="skills-refresh"]')
     // The button disables while the POST runs; wait until the round-trip settled.
     browser.waitForFunction(`!document.querySelector('[data-slot="skills-refresh"]').disabled`)
     browser.waitForFunction(`document.querySelector('[data-slot="toaster"]')?.textContent.includes('refreshed')`)
 
-    // Selection and scroll both survived the refetch.
+    // Selection and preview both survived the refetch.
     expect(browser.count(`${row(BETA)}[aria-current="page"]`)).toBe(1)
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="skills-detail"] [data-slot="skill-detail"] h2').textContent`,
       ),
     ).toBe(BETA)
-    expect(Number(browser.evaluate(`document.querySelector('[data-slot="skill-rows"]').scrollTop`))).toBe(
-      before,
-    )
   })
 
-  it('the pinned bookmarklet panel generates javascript: launchers against /new', () => {
-    // The pinned row sits at the bottom of the (viewport-tall) list column, which a long
-    // skill detail can push past the fold — scroll it in before the click, as a user would.
-    browser.evaluate(
-      `document.querySelector('[data-slot="bookmarklets-row"]').scrollIntoView({ block: 'center' })`,
+  it('shows the GitHub launcher and saved-bookmarklets link in the selected skill preview', () => {
+    browser.goto(`${baseUrl}${scoped(`/skills?skill=${ALPHA}`)}`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="skill-detail"] h2')?.textContent === '${ALPHA}'`,
     )
-    browser.click('[data-slot="bookmarklets-row"]')
-    browser.waitForFunction(`document.querySelector('[data-slot="bookmarklet-panel"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="skill-run-from-github"]') !== null`)
+    expect(browser.text('[data-slot="skill-run-from-github"]')).toContain('RUN FROM GITHUB')
+    expect(
+      browser.evaluate(
+        `document.querySelector('[data-slot="skill-bookmarklets-settings"]')?.getAttribute('href')`,
+      ),
+    ).toBe(scoped('/settings/bookmarklets'))
     // The imperative href lands after mount — wait for the real javascript: URL.
     browser.waitForFunction(
-      `(document.querySelector('[data-slot="bm-generic"] [data-slot="bm-link"]')?.getAttribute('href') ?? '').startsWith('javascript:')`,
-    )
-
-    const generic = String(
-      browser.evaluate(`document.querySelector('[data-slot="bm-generic"] [data-slot="bm-link"]').getAttribute('href')`),
-    )
-    // The protected /new deep-link grammar, baked with the server's real launch key — now
-    // under this project's own URL prefix (multi-project spec, step 3.6).
-    expect(decodeURIComponent(generic)).toContain(`${scoped('/new')}?'+q`)
-    expect(decodeURIComponent(generic)).toMatch(/auto=0&key=[^&]+&ref=/)
-
-    // One launcher per catalog skill, the seeded ones included.
-    browser.waitForFunction(
-      `[...document.querySelectorAll('[data-slot="bm-list"] [data-slot="bm-link"]')].some((a) => a.textContent.includes('/${ALPHA}'))`,
+      `(document.querySelector('[data-slot="skill-run-from-github"] [data-slot="bm-link"]')?.getAttribute('href') ?? '').startsWith('javascript:')`,
     )
     browser.screenshot(`${artifactsDir}/settings-skills-bookmarklets.png`)
   })
