@@ -8,6 +8,7 @@ import { parseRemote, splitRemoteRef } from '../../git-remotes.ts';
 import { GITHUB_COM, isGithubHost } from '../../github-hosts.ts';
 import { baseDivergence } from '../git-changes.ts';
 import { getRepoInfo } from '../git.ts';
+import { fetchIssueMetadata } from './github-issue-metadata.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -455,6 +456,14 @@ export function parseOwnerName(nameWithOwner: string): { owner: string; name: st
 const listCache = new Map<string, { at: number; limit: number; data: GithubData }>();
 const LIST_CACHE_MAX = 50;
 const CACHE_MS = 60_000;
+
+/** A sign-in changes what every cached `unavailable` answer means: a GitHub tab that cached "gh is
+ *  not authenticated" would keep saying so for a minute after the user just signed in. Called by
+ *  the login route the moment `gh` exits 0; the signed-in state is the only thing that moves. */
+export function forgetGithubListCache(): void {
+  listCache.clear();
+  enterpriseHostByRoot.clear();
+}
 export const GH_MAX_LIMIT = 1000;
 /** GitHub GraphQL rejects `first` above 100 (EXCESSIVE_PAGINATION); larger limits page. */
 const GH_GRAPHQL_PAGE_MAX = 100;
@@ -598,6 +607,7 @@ export async function fetchGithub(
         };
       },
     );
+    await hydrateIssueItems(repoRoot, issues, ownerName);
     const data: GithubData = {
       available: true,
       repo: `${ownerName.owner}/${ownerName.name}`,
@@ -673,6 +683,27 @@ export const GH_SEARCH_MAX = 50;
  *  degrade. `gh {issue,pr} view` is the opposite — it tolerates the field for both kinds — so only
  *  the search path needs to discriminate. */
 const SEARCH_FIELDS = 'number,title,author,createdAt,labels,body,url';
+
+async function hydrateIssueItems(
+  repoRoot: string,
+  items: ForgeItem[],
+  handle?: { owner: string; name: string },
+): Promise<void> {
+  const issues = items.filter(item => item.kind === 'issue');
+  if (!issues.length) return;
+  const deadline = Date.now() + 5_000;
+  const repo = handle ?? await resolveRepoHandle(repoRoot, 5_000);
+  if (!repo) return;
+  const metadata = await fetchIssueMetadata((query, variables) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return Promise.reject(new Error('Issue metadata budget exhausted'));
+    return gh(repoRoot, [
+      'api', 'graphql', '-f', `query=${query}`,
+      '-f', `owner=${variables.owner}`, '-f', `name=${variables.name}`,
+    ], remaining);
+  }, repo.owner, repo.name, issues.map(item => item.number));
+  for (const issue of issues) Object.assign(issue, metadata.get(issue.number));
+}
 
 /** `gh search {prs,issues} --json` field list for `kind`. See `SEARCH_FIELDS` on why `isDraft`
  *  cannot be sent to the issues search. */
@@ -808,7 +839,9 @@ export async function searchGithubItems(
         if (actualKind !== kind) {
           throw new Error(`GitHub returned a ${actualKind ?? 'unknown'} for an ${kind} lookup`);
         }
-        return { available: true, items: [toSearchItem(kind, hit, labelColors)], labelColors };
+        const items = [toSearchItem(kind, hit, labelColors)];
+        await hydrateIssueItems(repoRoot, items);
+        return { available: true, items, labelColors };
       } catch {
         // Not a number in this repo (or not this kind) — fall through to the text search below.
       }
@@ -842,9 +875,11 @@ export async function searchGithubItems(
       trimmed,
     ]);
     const hits = z.array(ghSearchHitSchema).parse(JSON.parse(out));
+    const items = hits.map((hit) => toSearchItem(kind, hit, labelColors));
+    await hydrateIssueItems(repoRoot, items, handle);
     return {
       available: true,
-      items: hits.map((hit) => toSearchItem(kind, hit, labelColors)),
+      items,
       truncated: hits.length >= capped,
       labelColors,
     };
@@ -868,6 +903,14 @@ function mockGithub(): GithubData {
     labels: [],
     url: `https://github.com/mock/repo/${over.kind === 'pr' ? 'pull' : 'issues'}/${over.number}`,
     comments: 0,
+    ...(over.kind === 'issue' ? {
+      assignees: over.number === 142 ? ['ada', 'grace'] : [],
+      linkedPrs: over.number === 142
+        ? [{ number: 128, title: 'Fix the session refresh', url: 'https://github.com/mock/repo/pull/128', state: 'open' as const, isDraft: false }]
+        : over.number === 139
+          ? [{ number: 126, title: 'Add JSON output', url: 'https://github.com/mock/repo/pull/126', state: 'merged' as const, isDraft: false }]
+          : [],
+    } : {}),
     ...over,
   });
   return {
@@ -1229,13 +1272,14 @@ export function __clearRepoHandleCacheForTests(): void {
  *  slug or `gh` failed — the caller then skips checks entirely and commits render unglyphed. */
 export async function resolveRepoHandle(
   repoRoot: string,
+  timeout = 15_000,
 ): Promise<{ owner: string; name: string } | null> {
   const memo = repoHandleCache.get(repoRoot);
   if (memo !== undefined) return memo;
   let handle: { owner: string; name: string } | null;
   try {
     handle = parseOwnerName(
-      await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']),
+      await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner'], timeout),
     );
   } catch {
     // Transient — do NOT memoize, so the next thread retries.
@@ -1520,6 +1564,42 @@ export async function fetchGithubChecks(repoRoot: string, numbers: number[]): Pr
         ? 'gh CLI not found — install it and run `gh auth login`'
         : firstLine(message),
     };
+  }
+}
+
+export type HeadChecksVerdict =
+  | { kind: 'unavailable' }
+  | { kind: 'stale'; headOid: string }
+  | { kind: 'conflict' }
+  | { kind: 'checks'; glyph: ChecksGlyph };
+
+/**
+ * CI verdict for one exact commit of a PR (#1533), never the 60 s PR-number cache: `stale` while
+ * the PR's head is not `sha` yet (a push not landed), `conflict` for a CONFLICTING PR at that head,
+ * else the rollup for `sha` itself. Offline or gh logged out is `unavailable`, not a verdict.
+ */
+export async function fetchPrHeadChecks(repoRoot: string, number: number, sha: string): Promise<HeadChecksVerdict> {
+  try {
+    const pr = JSON.parse(await gh(repoRoot, ['pr', 'view', String(number), '--json', 'headRefOid,mergeable'])) as {
+      headRefOid?: unknown;
+      mergeable?: unknown;
+    };
+    if (typeof pr.headRefOid !== 'string' || !pr.headRefOid) return { kind: 'unavailable' };
+    if (pr.headRefOid.toLowerCase() !== sha.toLowerCase()) return { kind: 'stale', headOid: pr.headRefOid };
+    if (pr.mergeable === 'CONFLICTING') return { kind: 'conflict' };
+    const ownerName = parseOwnerName(await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']));
+    if (!ownerName) return { kind: 'unavailable' };
+    const runGraphql: GraphqlRunner = (query, variables) => {
+      const args = ['api', 'graphql', '-f', `query=${query}`];
+      for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
+      return gh(repoRoot, args);
+    };
+    const checks = await fetchCommitChecks(runGraphql, ownerName.owner, ownerName.name, [sha]);
+    // The query failed or the SHA is unknown to GitHub yet: keep polling, do not guess.
+    if (!(sha in checks)) return { kind: 'unavailable' };
+    return { kind: 'checks', glyph: checks[sha] ?? null };
+  } catch {
+    return { kind: 'unavailable' };
   }
 }
 

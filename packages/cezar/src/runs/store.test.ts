@@ -127,10 +127,12 @@ describe('RunStore — directional usage persistence', () => {
       title: 'metered task',
       workflow: 'quick-task',
       task: 'metered task',
+      reasoningEffort: 'high',
       steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
     });
     store.updateStep(run.id, 'task', {
       iterations: 1,
+      reasoningEffort: 'medium',
       inputTokens: 120,
       outputTokens: 30,
       usageInvocationsStarted: 1,
@@ -139,11 +141,11 @@ describe('RunStore — directional usage persistence', () => {
       usageTurnsRecorded: 1,
       usageInvocationEpoch: 1,
     });
-    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(store.getRun(run.id)).toMatchObject({ inputTokens: 120, outputTokens: 30, reasoningEffort: 'high' });
     store.flush();
 
     const reopened = RunStore.open(dataDir).getRun(run.id);
-    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30 });
+    expect(reopened).toMatchObject({ inputTokens: 120, outputTokens: 30, reasoningEffort: 'high' });
     expect(reopened?.steps[0]).toMatchObject({
       inputTokens: 120,
       outputTokens: 30,
@@ -152,6 +154,7 @@ describe('RunStore — directional usage persistence', () => {
       usageTurnsStarted: 1,
       usageTurnsRecorded: 1,
       usageInvocationEpoch: 1,
+      reasoningEffort: 'medium',
     });
   });
 
@@ -306,6 +309,7 @@ describe('RunStore — titleSummary + diffStat (#389)', () => {
     expect(run?.titleSummary).toBeUndefined();
     expect(run?.diffStat).toBeUndefined();
     expect(run?.generateFollowups).toBeUndefined();
+    expect(run?.reasoningEffort).toBeUndefined();
     // Retention field (#483) is additive: a record without it parses and reads undefined.
     expect(run?.worktreeReclaimedAt).toBeUndefined();
   });
@@ -2202,6 +2206,74 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
       'utf8',
     );
     expect(RunStore.open(dataDir).getRun('legacy-1')).toBeUndefined();
+  });
+});
+
+describe('RunStore — promotedAt ("Run First")', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore): string =>
+    store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+  it('round-trips while the run stays queued', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+    store.updateRun(id, { title: 'renamed' });
+    store.flush();
+    // `keepLive` — the recovering open RunManager uses; a plain reader fails queued runs.
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
+  });
+
+  it.each(['running', 'cancelled', 'failed', 'waiting', 'review', 'done'] as const)(
+    'is retired when the run leaves the queue (%s), so a later re-queue lands at the tail',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = newRun(store);
+      store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.promotedAt).toBeUndefined();
+      store.updateRun(id, { status: 'queued' });
+      expect(store.getRun(id)?.promotedAt).toBeUndefined();
+      store.flush();
+      const persisted = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as Array<
+        Record<string, unknown>
+      >;
+      expect(persisted.find((entry) => entry.id === id)).not.toHaveProperty('promotedAt');
+    },
+  );
+});
+
+describe('RunStore — promotedAt across a non-recovering load', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('a reader that fails interrupted queued runs also retires their "Run First" mark', () => {
+    const store = RunStore.open(dataDir);
+    const id = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+    store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+    store.flush();
+
+    const reader = RunStore.open(dataDir);
+    expect(reader.getRun(id)?.status).toBe('failed');
+    expect(reader.getRun(id)?.promotedAt).toBeUndefined();
+    // …while the recovering open keeps it for RunManager.recover to honor.
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
   });
 });
 

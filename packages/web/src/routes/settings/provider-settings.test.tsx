@@ -128,7 +128,7 @@ describe('ProviderSettings', () => {
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
       ),
-    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI'])
+    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI', 'Antigravity'])
   })
 
   it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {

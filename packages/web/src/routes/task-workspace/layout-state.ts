@@ -97,6 +97,13 @@ export function isViewName(name: string, view: ViewId): boolean {
   return name === VIEW_LABELS[view] || (LEGACY_VIEW_NAMES[view]?.includes(name) ?? false)
 }
 
+/** Names a returning user may still search for: every label the view has had, plus what moved
+ *  into it (Design Mode lives in Preview). The task palette matches them as keywords. */
+export function viewAliases(view: ViewId): readonly string[] {
+  const moved: Partial<Record<ViewId, readonly string[]>> = { browser: ['Design Mode'], terminal: ['Shell'] }
+  return [...(LEGACY_VIEW_NAMES[view] ?? []), ...(moved[view] ?? [])]
+}
+
 export function viewLabel(view: ViewId): string {
   return VIEW_LABELS[view]
 }

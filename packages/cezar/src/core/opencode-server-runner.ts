@@ -12,7 +12,11 @@ import type {
   ContentBlock,
 } from './agent-runner.ts';
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
-import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import {
+  assertReasoningEffortSupported,
+  prependSystemPrompt,
+  trackChildExit,
+} from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
@@ -122,6 +126,7 @@ export class OpencodeServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('opencode', spec.reasoningEffort);
     const session = new OpencodeSession(this.bin, this.timeoutMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
@@ -975,7 +980,9 @@ class OpencodeSession implements AgentSession {
       }
     }
     const cost = info.cost;
-    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && (this.lastCost === undefined || cost > this.lastCost)) {
+    // A turn the provider turned away for a usage limit spent nothing, whatever list-price estimate
+    // OpenCode stamped on it (#1756); costs of earlier messages and of other failures stay (#1346).
+    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && !isUsageLimitRejection(info.error) && (this.lastCost === undefined || cost > this.lastCost)) {
       this.emit({ type: 'cost', usd: cost - (this.lastCost ?? 0) });
       this.lastCost = cost;
     }
@@ -1091,6 +1098,15 @@ export function opencodePermissionReply(
 
 /** Random high port, clear of opencode's own 4096 (#1179); the bound URL is read back from
  *  the server's output or a `/path` probe. */
+/** An assistant message's `error` that says the quota, not the model, ended the turn. */
+export function isUsageLimitRejection(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const data = isRecord(error.data) ? error.data : {};
+  const status = typeof data.statusCode === 'number' ? data.statusCode : undefined;
+  if (status === 429 || status === 402) return true;
+  return QUOTA_REASON_RE.test(`${stringField(error, 'name') ?? ''} ${stringField(data, 'message') ?? ''}`);
+}
+
 function randomServerPort(): number {
   return 40000 + Math.floor(Math.random() * 20000);
 }

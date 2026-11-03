@@ -61,7 +61,7 @@ import type {
 
 // Route-relative: `apiPath` adds the version (and would add the project scope, though this
 // stream is workspace-level and never scoped).
-const SSE_URL = apiPath('/workspace/events')
+const SSE_URL = `${apiPath('/workspace/events')}?slim=1`
 
 /** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */

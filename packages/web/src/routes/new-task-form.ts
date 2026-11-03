@@ -14,6 +14,7 @@ import type {
   Skill,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
+import type { ReasoningEffortOption } from '@/components/reasoning-effort-pill'
 
 /**
  * The new-task form's picker rules and its POST body, as pure functions — the exact semantics
@@ -56,6 +57,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
 ]
 
 export interface ModelPreset {
@@ -108,6 +110,11 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // stays free text for anything the account is entitled to.
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
+  ],
+  // Antigravity's slugs (`gemini-3.8-flash-high`, …) come from `agy models` for the signed-in
+  // account; nothing dated is listed here, and the field stays free text for any slug it prints.
+  antigravity: [
+    { id: '', label: 'auto', desc: 'Use your Antigravity default model' },
   ],
 }
 
@@ -208,6 +215,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   opencode: 'OpenCode',
   junie: 'Junie',
   cursor: 'Cursor',
+  antigravity: 'Antigravity',
 }
 
 export function modelCatalogStatus(
@@ -220,6 +228,27 @@ export function modelCatalogStatus(
   if (catalog?.stale) return `Using cached ${name} model list`
   if (failed || catalog?.source === 'unavailable') return `Latest ${name} models unavailable`
   return undefined
+}
+
+/** The App Server advertises effort levels per Codex model, never per runner. */
+export function reasoningEffortsForModel(
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): readonly ReasoningEffortOption[] {
+  if (runner !== 'codex' || model === '' || catalog?.runner !== 'codex') return []
+  return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
+}
+
+/** A stale draft effort is never sent after its runner/model capability disappears. */
+export function resolveReasoningEffort(
+  picked: string | null,
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): string {
+  const options = reasoningEffortsForModel(runner, model, catalog)
+  return picked !== null && options.some((option) => option.id === picked) ? picked : ''
 }
 
 /** Which runners the pill offers, from the health checks (legacy `renderChrome`). The `claude`
@@ -328,6 +357,8 @@ export function buildCreateRunBody(opts: {
   /** `null` — nothing picked — runs the built-in `quick-task`. */
   source: TaskSource | null
   model: string
+  /** Empty means the selected Codex model's native default; it is omitted on the wire. */
+  reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -369,6 +400,7 @@ export function buildCreateRunBody(opts: {
     task,
     source,
     model,
+    reasoningEffort,
     modelsLocked,
     runner,
     runnerExplicit,
@@ -394,6 +426,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
+    ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.

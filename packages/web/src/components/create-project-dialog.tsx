@@ -197,14 +197,14 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
                 }}
               />
               {nameError ? (
-                <p id="create-name-hint" data-slot="create-name-error" className="text-[12px] text-danger">
+                <p id="create-name-hint" data-slot="create-name-error" className="text-label text-danger">
                   {nameError}
                 </p>
               ) : (
                 <p
                   id="create-name-hint"
                   data-slot="create-target"
-                  className="min-w-0 truncate font-mono text-[11.5px] text-soft-foreground"
+                  className="min-w-0 truncate font-mono text-meta text-soft-foreground"
                   title={target}
                 >
                   {target}
@@ -228,9 +228,9 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
               </div>
 
               {owners.isPending ? (
-                <p className="text-[12px] text-muted-foreground">Checking GitHub…</p>
+                <p className="text-label text-muted-foreground">Checking GitHub…</p>
               ) : !githubAvailable ? (
-                <p data-slot="create-github-unavailable" className="text-[12px] text-muted-foreground">
+                <p data-slot="create-github-unavailable" className="text-label text-muted-foreground">
                   {ownersData && !ownersData.available
                     ? ownersData.reason
                     : 'Could not read your GitHub accounts — the project will be created locally only.'}
@@ -238,7 +238,7 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
               ) : null}
 
               {github ? (
-                <p className="text-[12px] text-muted-foreground">
+                <p className="text-label text-muted-foreground">
                   Created as <strong>private</strong> under <strong>{effectiveOwner}</strong> — you can change its
                   visibility on GitHub.
                 </p>
@@ -279,13 +279,13 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
             </div>
 
             {busy ? (
-              <p data-slot="create-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
+              <p data-slot="create-progress" className="truncate font-mono text-meta text-muted-foreground">
                 {progress ?? 'Starting…'}
               </p>
             ) : null}
 
             {create.isError ? (
-              <p data-slot="create-error" className="whitespace-pre-line text-[13px] text-danger">
+              <p data-slot="create-error" className="whitespace-pre-line text-ui text-danger">
                 {create.error instanceof Error ? create.error.message : 'could not create the project'}
               </p>
             ) : null}
@@ -338,7 +338,7 @@ function OwnerPicker({
     <div className="grid gap-3 md:flex md:min-h-0 md:flex-1 md:flex-col">
       <span
         id="create-owner-label"
-        className="text-[12px] font-semibold tracking-wider text-muted-foreground uppercase"
+        className="eyebrow text-muted-foreground"
       >
         Select organization
       </span>
@@ -386,9 +386,9 @@ function OwnerPicker({
                   {selected ? <CircleCheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" /> : null}
                 </span>
                 {o.personal ? (
-                  <span className="text-[12px] text-muted-foreground">Personal account</span>
+                  <span className="text-label text-muted-foreground">Personal account</span>
                 ) : o.description ? (
-                  <span className="line-clamp-2 text-[12px] text-muted-foreground">{o.description}</span>
+                  <span className="line-clamp-2 text-label text-muted-foreground">{o.description}</span>
                 ) : null}
               </span>
             </button>
@@ -430,7 +430,7 @@ function StartOption({
       )}
     >
       <span className="text-sm font-medium">{title}</span>
-      <span className="text-[12px] text-muted-foreground">{hint}</span>
+      <span className="text-label text-muted-foreground">{hint}</span>
     </button>
   )
 }
@@ -439,7 +439,7 @@ function StartOption({
 function OwnerPickerLoading() {
   return (
     <div className="grid gap-3" data-slot="create-owners-loading" aria-hidden="true">
-      <span className="text-[12px] font-semibold tracking-wider text-muted-foreground uppercase">
+      <span className="eyebrow text-muted-foreground">
         Select organization
       </span>
       {[0, 1].map((i) => (
