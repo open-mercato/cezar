@@ -38,6 +38,7 @@ import {
   getGithubPrChanges,
   getGithubRefStatus,
   getGroup,
+  getRunHarness,
   getHealth,
   getLaunchKey,
   getOpenTargets,
@@ -133,6 +134,7 @@ import type {
   StartImpactInput,
   CreateProjectInput,
   CreateAgentProfileInput,
+  RunEvent,
   ApiRun,
   HealthResponse,
   MessageInput,
@@ -242,12 +244,19 @@ export const queryKeys = {
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     tree: (id: string) => [queryScope(), 'runs', 'tree', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
+    harness: (id: string) => [queryScope(), 'runs', 'harness', id] as const,
   },
   groups: {
     detail: (groupId: string) => [queryScope(), 'groups', groupId] as const,
   },
   get todos() {
     return [queryScope(), 'todos'] as const
+  },
+  harness: {
+    get status() {
+      return [queryScope(), 'harness', 'status'] as const
+    },
+    probe: (profile: string) => [queryScope(), 'harness', 'probe', profile] as const,
   },
   get workflows() {
     return [queryScope(), 'workflows'] as const
@@ -1344,6 +1353,47 @@ export function useRun(id: string | undefined) {
   })
 }
 
+/** Durable harness snapshot. Live progress is folded from the existing per-run SSE stream by
+ *  the routed views, so this query never polls and does not open another connection. */
+export function useRunHarness(id: string | undefined, enabled = true, events: readonly RunEvent[] = []) {
+  const query = useQuery({
+    queryKey: queryKeys.runs.harness(id ?? ''),
+    queryFn: ({ signal }) => getRunHarness(id as string, { signal }),
+    enabled: Boolean(id) && enabled,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+  useHarnessFeedbackRefresh(id, enabled, events, query.data?.snapshotSeq)
+  return query
+}
+
+/** Refetch the ledger once a `harness.feedback.applied` event passes its snapshot. Its own hook so a
+ *  caller whose stream starts FROM the snapshot can wire it after both (the Review page). */
+export function useHarnessFeedbackRefresh(
+  id: string | undefined,
+  enabled: boolean,
+  events: readonly RunEvent[],
+  snapshotSeq: number | undefined,
+): void {
+  const queryClient = useQueryClient()
+  const scope = queryScope()
+  const feedbackSeq = events.reduce(
+    (latest, event) => event.type === 'harness.feedback.applied' ? Math.max(latest, event.seq) : latest,
+    0,
+  )
+  const refreshed = useRef('')
+  useEffect(() => {
+    const refreshKey = `${scope}:${id}:${feedbackSeq}`
+    if (!id || !enabled || !feedbackSeq || refreshed.current === refreshKey ||
+      feedbackSeq <= (snapshotSeq ?? 0)) return
+    refreshed.current = refreshKey
+    const queryKey = [scope, 'runs', 'harness', id] as const
+    // The run-status refresh can finish BEFORE the driver persists its reset. Cancel any
+    // older read, then fetch after the persisted event; invalidate cached conversations too.
+    void queryClient.cancelQueries({ queryKey }).then(() => queryClient.invalidateQueries({ queryKey }))
+  }, [scope, id, enabled, feedbackSeq, snapshotSeq, queryClient])
+}
+
 /**
  * One run of a NAMED project — what a surface outside `/p/:projectId` has to use.
  *
@@ -1745,11 +1795,14 @@ export function useRepoCommit(sha: string | undefined) {
 
 /** The Settings → Agents knobs (R6 1.5): base branch, default runner, system prompt, per-runner
  *  model presets. Task-start surfaces read this project-scoped query for both runner and model
- *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo. */
-export function useConfig() {
+ *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo.
+ *  `enabled: false` skips the fetch for callers outside a project scope (the global settings
+ *  shell), where the answer would be the boot repo's and the traffic is contractually absent. */
+export function useConfig(enabled = true) {
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: ({ signal }) => getConfig({ signal }),
+    enabled,
   })
 }
 
@@ -2228,7 +2281,14 @@ export function useSendMessage(id: string, projectId?: string) {
     // is the ordinary case and keeps the scoped-by-context spelling.
     mutationFn: (message: MessageInput) =>
       projectId === undefined ? sendMessage(id, message) : sendProjectRunMessage(projectId, id, message),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    // Returned so `mutateAsync` still settles after the runs refetch, as callers rely on.
+    onSuccess: (response) =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+        'queuedForPhase' in response
+          ? queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+          : undefined,
+      ]),
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })

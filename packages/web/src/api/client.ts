@@ -101,6 +101,7 @@ import type {
   GithubPrMergeStateResponse,
   GithubPrChangesData,
   GroupResponse,
+  HarnessLedgerResponse,
   HealthResponse,
   HostUsage,
   AttachmentEntry,
@@ -196,6 +197,7 @@ import {
   createCezarClient,
   getApiBaseUrl,
   getApiScope,
+  harnessLedgerResponseSchema,
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
@@ -380,7 +382,7 @@ function unscoped(url: string): string {
  * value — whose type the caller gets from the route, not from a hand-written declaration.
  */
 /** The per-request options `hc` takes, from this module's `ReadOptions`. */
-const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
+export const init = (opts?: ReadOptions) => ({ init: { signal: opts?.signal } })
 
 /**
  * Accepts a route that answers more than one FORMAT — `/repo/commit/:sha` serves a structured
@@ -510,7 +512,7 @@ async function requestText(path: string, init: RequestInit = {}): Promise<string
   return body
 }
 
-const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent(id)}${suffix}`
+export const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent(id)}${suffix}`
 
 // ---- reads --------------------------------------------------------------------------------
 
@@ -872,6 +874,22 @@ export async function getConfig(opts?: ReadOptions): Promise<ConfigResponse> {
     await cez.api.v1.p[':projectId'].config.$get({ param: { projectId: queryScope() } }, init(opts)),
     '/config',
   )
+}
+
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) ---------------------------------
+
+/** The run's harness ledger — 404s (throws) when the run has none. */
+export async function getRunHarness(
+  id: string,
+  opts?: ReadOptions,
+): Promise<HarnessLedgerResponse> {
+  return harnessLedgerResponseSchema.parse(await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].harness.$get(
+      { param: { projectId: queryScope(), id } },
+      init(opts),
+    ),
+    runPath(id, '/harness'),
+  ))
 }
 
 /** The selected project's agent-owned config catalog and current file state. */

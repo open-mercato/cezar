@@ -173,7 +173,7 @@ describe('RunManager agent-profile resolution', () => {
     const snapshot = await read.getMockImplementation()!('ignored', store.getRun(run.id)!.automationTracker!);
     read.mockImplementation(() => { entered(); return new Promise(resolve => { release = resolve; }); });
     const active = (manager as unknown as { active: Map<string, unknown> }).active;
-    active.set(run.id, { cancelled: false, interrupt() {} });
+    active.set(run.id, { cancelled: false, interrupt() {}, interruptHandlers: new Set(), liveSessions: new Set() });
     const pending = seam().agentEnvForStep(run.id, 'claude');
     await enteredPromise;
     if (action === 'delete') {

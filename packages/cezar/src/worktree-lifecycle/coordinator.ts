@@ -58,6 +58,9 @@ export class WorktreeLifecycleCoordinator {
     onWorktreeRemoved?: () => Promise<void>;
     /** Task-owned state outside the run store (layouts) goes with a delete-task teardown. */
     onTaskDeleted?: (runId: string) => void;
+    /** Runs before the store forgets the task, while its records still exist (the harness issue
+     *  claim's path lives only in the ledger the delete removes). */
+    beforeTaskDeleted?: (runId: string) => void;
     resume: (runId: string, launch: LifecyclePendingLaunch | undefined) => Promise<void>;
   }) {
     try { this.root = realpathSync(root); } catch { /* missing roots remain a local attention failure */ }
@@ -358,7 +361,11 @@ export class WorktreeLifecycleCoordinator {
             });
             if (remains) throw new Error('Worktree directory is gone but its managed branch could not be removed');
           }
-          if (operation.intent === 'delete-task') { this.runs.deleteRun(record.runId); this.options.onTaskDeleted?.(record.runId); }
+          if (operation.intent === 'delete-task') {
+            this.options.beforeTaskDeleted?.(record.runId);
+            this.runs.deleteRun(record.runId);
+            this.options.onTaskDeleted?.(record.runId);
+          }
           else if (this.runs.getRun(record.runId)) this.runs.updateRun(record.runId, operation.intent === 'reclaim'
             ? {worktreeReclaimedAt: now()} : {worktreePath: undefined, branch: undefined});
         }

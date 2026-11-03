@@ -25,16 +25,19 @@ vi.mock('../core/runner-factory.ts', () => ({
     startSession: (spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void) => {
       captured.specs.push(spec);
       const sessionId = `sess-${captured.specs.length}`;
+      // `hold` keeps the session (and so the run) live until it is ended.
+      let release: () => void = () => {};
       return {
         result: new Promise<AgentRunResult>((resolve) => {
+          release = () => resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 });
           setTimeout(() => {
             onEvent?.({ type: 'session', sessionId });
-            resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 });
+            if (!spec.userPrompt.includes('hold')) release();
           }, 0);
         }),
         sendMessage: () => false,
-        end: () => {},
-        interrupt: () => {},
+        end: () => release(),
+        interrupt: () => release(),
         open: false,
       };
     },
@@ -125,6 +128,45 @@ describe('private MCP servers at launch', { timeout: 20_000 }, () => {
     expect((await specAt(0)).mcpServers).toBeUndefined();
     await settled(record.id);
     expect(notes(record.id)).toContain('private MCP: cursor cannot attach tracker — cursor has no launch-time MCP channel');
+  });
+
+  // MCP tools pass neither the stage-only guard nor its sandbox, so a GitHub
+  // server could publish from a harness run that promises it never does.
+  it('a stage-only harness phase gets no servers, and a note says why', async () => {
+    writePrivateMcp({ github: { command: 'github-mcp', env: { TOKEN: 't' } } });
+    const record = manager!.startRun(TASK, { task: 'hold', worktree: false, runner: 'claude' });
+    expect((await specAt(0)).mcpServers?.map((s) => s.name)).toEqual(['github']);
+    const internals = manager as unknown as {
+      active: Map<string, unknown>;
+      runAgentStep: (...args: unknown[]) => Promise<string | null>;
+    };
+    const emitted: string[] = [];
+    await internals.runAgentStep.call(
+      manager,
+      record.id,
+      internals.active.get(record.id),
+      { id: 'implement', name: 'Implement', prompt: 'implement it' },
+      { task: 'x', worktree: false },
+      [],
+      null,
+      false,
+      (event: { type: string; message?: unknown }) => {
+        if (event.type === 'note') emitted.push(String(event.message));
+      },
+      undefined,
+      'claude',
+      undefined,
+      undefined,
+      [],
+      undefined,
+      { concurrent: true, env: { CEZ_HARNESS_STAGE_ONLY: '1' } },
+    );
+    expect((await specAt(1)).mcpServers).toBeUndefined();
+    expect(emitted).toContain('private MCP: claude cannot attach github — a stage-only harness phase gets no MCP servers');
+    // nor the handoff, dispatch or automations parts it cannot act on.
+    expect((await specAt(0)).systemPrompt).toContain('## Handoff (cezar)');
+    expect((await specAt(1)).systemPrompt ?? '').not.toContain('## Handoff (cezar)');
+    manager!.cancel(record.id);
   });
 
   it('a broken file is a note, never a failed run', async () => {

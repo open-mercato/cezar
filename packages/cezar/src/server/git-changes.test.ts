@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -23,6 +23,7 @@ import {
   splitPatch,
   type ChangesPayload,
 } from './git-changes.ts';
+import { pinWorktreeGitDir } from '../git-pin.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
@@ -275,6 +276,44 @@ describe('collectChanges — structured diff vs base', () => {
     expect(withAdd.ok).toBe(true);
     if (withAdd.ok) expect(withAdd.changes.files.some((f) => f.path === 'untracked.txt')).toBe(true);
   });
+
+  // a `read-tree HEAD` scratch index has no stat data, so every Changes read
+  // re-hashed every tracked file. Root reads any file regardless of mode, so the probe is moot there.
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'reads through the real index stat cache, and still lists staged, deleted and untracked files',
+    async () => {
+      pinWorktreeGitDir(dir, join(dir, '.git')); // a harness worktree reads through a scratch index
+      g(dir, 'config', 'core.trustctime', 'false');
+      const past = new Date(Date.now() - 60_000);
+      for (const name of ['locked.txt', 'staged.txt', 'gone.txt']) {
+        writeFileSync(join(dir, name), `${name}\n`);
+        utimesSync(join(dir, name), past, past);
+      }
+      g(dir, 'add', '-A');
+      g(dir, 'commit', '-m', 'base');
+      writeFileSync(join(dir, 'staged.txt'), 'staged.txt\nstaged\n');
+      g(dir, 'add', 'staged.txt');
+      g(dir, 'rm', '-q', 'gone.txt');
+      writeFileSync(join(dir, 'untracked.txt'), 'new\n');
+      // Unchanged and stat-clean in the real index, but unreadable: only a reader that re-hashes
+      // tracked files ever opens it.
+      chmodSync(join(dir, 'locked.txt'), 0o000);
+      const indexBefore = readFileSync(join(dir, '.git', 'index'));
+      try {
+        const result = await collectChanges(dir, 'main');
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.changes.files.map((f) => [f.path, f.status]).sort()).toEqual([
+          ['gone.txt', 'deleted'],
+          ['staged.txt', 'modified'],
+          ['untracked.txt', 'added'],
+        ]);
+        expect(readFileSync(join(dir, '.git', 'index'))).toEqual(indexBefore);
+      } finally {
+        chmodSync(join(dir, 'locked.txt'), 0o644);
+      }
+    },
+  );
 
   it('intentToAdd:false leaves the real index untouched on a repointed HEAD too', async () => {
     // Choosing between the two repointed anchors compares them with `git diff --shortstat`,

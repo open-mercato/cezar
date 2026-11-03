@@ -1,9 +1,11 @@
 import { execFile } from 'node:child_process';
-import { existsSync, realpathSync, type Dirent } from 'node:fs';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { constants, existsSync, realpathSync, type Dirent } from 'node:fs';
+import { copyFile, lstat, mkdtemp, readdir, readFile, rm, stat, utimes } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
+import { pinnedGitEnv } from './git-pin.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
 
@@ -41,10 +43,18 @@ function git(
   opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<GitResult> {
   return new Promise((resolve) => {
+    const pinned = pinnedGitEnv(cwd);
     execFile(
       'git',
       args,
-      { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', ...opts },
+      {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        encoding: 'utf8',
+        ...opts,
+        // A harness worktree's `.git` pointer is model-writable (git-pin.ts).
+        ...(pinned ? { env: { ...(opts.env ?? process.env), ...pinned } } : {}),
+      },
       (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
   });
@@ -80,8 +90,135 @@ async function fetchBase(repoRoot: string, remote: string, base: string): Promis
   });
 }
 
+/** A scratch index path in its own private directory: a predictable name in the shared temp dir
+ *  let a sandboxed phase plant a symlink there for the seeding copy to write through.
+ *  Dispose with `disposeScratchIndexPath`. */
+export async function scratchIndexPath(): Promise<string> {
+  return join(await mkdtemp(join(tmpdir(), 'cez-scratch-')), 'index');
+}
+
+export async function disposeScratchIndexPath(path: string): Promise<void> {
+  await rm(dirname(path), { recursive: true, force: true }).catch(() => {});
+}
+
+/**
+ * Seed a scratch index at `target` from a COPY of `dir`'s real index. The copy keeps the stat
+ * cache, so a diff need not re-hash every tracked file the way a `read-tree HEAD` seed made it
+ * (~14 ms became ~730 ms per call on a 2.5k-file repo, at every turn end and
+ * Changes read). `read-tree HEAD` remains the fallback when there is no index to copy.
+ */
+export async function seedScratchIndex(dir: string, target: string): Promise<boolean> {
+  // The seed creates `target`, never writes over one: a copy and git's own index lock both follow
+  // a link already at that path.
+  if (await lstat(target).then(() => true, () => false)) return false;
+  const where = await git(dir, ['rev-parse', '--git-path', 'index']);
+  if (where.ok && where.stdout.trim()) {
+    const source = resolve(dir, where.stdout.trim());
+    try {
+      const { atime, mtime } = await stat(source);
+      await copyFile(source, target, constants.COPYFILE_EXCL);
+      // Racy-git judges entries against the index file's own mtime; keep the real one.
+      await utimes(target, atime, mtime);
+      return true;
+    } catch {
+      // No index yet (a fresh repo): seed from HEAD below, unless the copy lost a race for `target`.
+      if (await lstat(target).then(() => true, () => false)) return false;
+    }
+  }
+  const seeded = await git(dir, ['read-tree', 'HEAD'], { env: { ...process.env, GIT_INDEX_FILE: target } });
+  return seeded.ok;
+}
+
+/**
+ * A throwaway index seeded from the real one with every untracked file intent-to-added,
+ * so diffs show the whole worktree WITHOUT touching the real index.
+ *
+ * The bare `git add -N .` these helpers used to run is a WRITE, and it raced
+ * everything that asserts worktree integrity: the harness subject hashes used
+ * to flip the moment a cockpit poll promoted a fresh untracked file (run
+ * 5f6fe8ae — a spec council rejected all three reviewers over it), and the
+ * stage residual check reads `git status` from the same index these helpers
+ * were mutating. Read paths must not write. Same technique as
+ * `collectChanges({intentToAdd: false})` in server/git-changes.ts.
+ *
+ * Returns a disposable handle whose file must survive through the caller's
+ * final git command, or null when seeding failed (callers then diff without
+ * untracked visibility rather than failing the read).
+ */
+interface ScratchIndex {
+  env: NodeJS.ProcessEnv;
+  path: string;
+}
+
+async function scratchIndex(worktreePath: string): Promise<ScratchIndex | null> {
+  const path = await scratchIndexPath().catch(() => null);
+  if (!path) return null;
+  const env = { ...process.env, GIT_INDEX_FILE: path };
+  let ready = false;
+  try {
+    if (!(await seedScratchIndex(worktreePath, path))) return null;
+    const ita = await git(worktreePath, ['add', '-N', '.'], { env });
+    if (!ita.ok) return null;
+    ready = true;
+    return { env, path };
+  } finally {
+    // Seeding can create the file before failing. A failed setup has no
+    // caller-owned handle, so dispose it here; successful handles are removed
+    // after the last diff that uses them.
+    if (!ready) await disposeScratchIndexPath(path);
+  }
+}
+
+/** The index a diff read uses. A harness worktree's index is part of its review subject, so it
+ *  is read through a private copy; any other worktree keeps main's intent-to-add on its own index. */
+async function readIndex(worktreePath: string): Promise<ScratchIndex | null> {
+  if (pinnedGitEnv(worktreePath)) return scratchIndex(worktreePath);
+  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
+  return null;
+}
+
+async function disposeScratchIndex(scratch: ScratchIndex | null): Promise<void> {
+  if (scratch) await disposeScratchIndexPath(scratch.path);
+}
+
 export function branchFor(runId: string): string {
   return `cez/${runId.slice(0, 8)}`;
+}
+
+/** A remote's default branch, as its `<remote>/HEAD` symref names it. */
+export interface RemoteDefault {
+  remote: string;
+  branch: string;
+}
+
+/** The branch the PR-target remote's HEAD points at (`upstream/HEAD` → `main`), or null when
+ *  there is no remote or no symref. The remote comes from `resolveTaskRemotes`, never a
+ *  hard-coded `origin`. Used only for the stale-base warning — resolution
+ *  still honors the configured base. */
+export async function remoteDefaultBranch(repoRoot: string): Promise<RemoteDefault | null> {
+  const { base } = await taskRemotes(repoRoot);
+  if (!base) return null;
+  const head = await git(repoRoot, ['symbolic-ref', '--quiet', `refs/remotes/${base}/HEAD`]);
+  if (!head.ok) return null;
+  const prefix = `refs/remotes/${base}/`;
+  const ref = head.stdout.trim();
+  return ref.startsWith(prefix) && ref.length > prefix.length
+    ? { remote: base, branch: ref.slice(prefix.length) }
+    : null;
+}
+
+/**
+ * The warning a run emits when its configured base branch is not the remote
+ * default, or null when there is nothing to warn about. A base pinned to a
+ * long-dead branch silently forks worktrees from old history — run 9788d87f
+ * checked out a base from 11 days earlier and "lost" tracked files that were
+ * simply newer than the branch. Pure so the wording stays pinned by tests.
+ */
+export function staleBaseNote(configured: string, remoteDefault: RemoteDefault | null): string | null {
+  if (!remoteDefault) return null;
+  const { remote, branch } = remoteDefault;
+  if (configured === branch || configured === `${remote}/${branch}`) return null;
+  return `configured base branch "${configured}" is not the remote default "${branch}" — a stale base silently hides newer files from the run (config: .ai/cezar/config.json)`;
 }
 
 /**
@@ -719,7 +856,7 @@ export async function gitHasIdentity(dir: string): Promise<boolean> {
 
 /**
  * "What did this task change": diff of the worktree (committed + uncommitted
- * + untracked, via `add -N`) against the merge-base with its base branch —
+ * + untracked, via a scratch-index intent-to-add) against the merge-base with its base branch —
  * so the diff stays *this task's* changes even after the base moves on.
  *
  * Deliberately does NOT take the repointed-HEAD guard that `collectChanges`
@@ -740,13 +877,17 @@ export async function worktreeDiff(
   cap = DIFF_CAP,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '(diff failed: refusing option-like base ref)';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', base]);
-  if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
-  if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
-  return res.stdout;
+  const scratch = await readIndex(worktreePath);
+  try {
+    const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const res = await git(worktreePath, ['diff', base], { env: scratch?.env });
+    if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
+    if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
+    return res.stdout;
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 /**
@@ -763,11 +904,15 @@ export async function worktreeDiffStat(
   baseBranch: string,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--stat', base]);
-  return res.ok ? res.stdout.trim() : '';
+  const scratch = await readIndex(worktreePath);
+  try {
+    const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const res = await git(worktreePath, ['diff', '--stat', base], { env: scratch?.env });
+    return res.ok ? res.stdout.trim() : '';
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 /** Aggregate diff numbers (#389) — the shape stored on `RunRecord.diffStat`. */
@@ -803,7 +948,8 @@ export function parseShortstat(s: string): DiffStat {
 /**
  * `git diff --shortstat` of the worktree vs its base (#389) — the numbers
  * behind `RunRecord.diffStat`, which is what the sidebar quick list and the
- * Tasks table show. Same intent-to-add as `worktreeDiff`, but the anchor comes
+ * Tasks table show. Same scratch-index technique as `worktreeDiff` (untracked
+ * files show up; real index untouched), but the anchor comes
  * from the shared `resolveTaskDiffBase` rule (`git-diff-base.ts`): pass the
  * run's own `taskBranch` and `runStartedAt`, and a worktree whose HEAD was
  * repointed onto another branch reports what this run did to that branch
@@ -865,11 +1011,19 @@ export async function worktreeChangedFiles(
   opts: { taskBranch?: string; runStartedAt?: string } = {},
 ): Promise<string[] | null> {
   if (!isSafeGitRef(baseBranch)) return null;
-  await git(worktreePath, ['add', '-N', '.']);
-  const { base } = await resolveTaskDiffBase((args) => git(worktreePath, args), baseBranch, opts);
-  const res = await git(worktreePath, ['diff', '--name-only', base]);
-  if (!res.ok) return null;
-  return res.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  const scratch = await readIndex(worktreePath);
+  try {
+    const { base } = await resolveTaskDiffBase(
+      (args) => git(worktreePath, args, { env: scratch?.env }),
+      baseBranch,
+      opts,
+    );
+    const res = await git(worktreePath, ['diff', '--name-only', base], { env: scratch?.env });
+    if (!res.ok) return null;
+    return res.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 export async function worktreeShortstat(
@@ -878,18 +1032,22 @@ export async function worktreeShortstat(
   opts: { taskBranch?: string; runStartedAt?: string } = {},
 ): Promise<DiffStat | null> {
   if (!isSafeGitRef(baseBranch)) return null;
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const { base, repointedHead } = await resolveTaskDiffBase(
-    (args) => git(worktreePath, args),
-    baseBranch,
-    opts,
-  );
-  const res = await git(worktreePath, ['diff', '--shortstat', base]);
-  if (!res.ok) return null;
-  // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
-  // `runs.json` and served on the runs API, so the un-narrowed shape must keep
-  // round-tripping byte-identically.
-  return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
+  const scratch = await readIndex(worktreePath);
+  try {
+    const { base, repointedHead } = await resolveTaskDiffBase(
+      (args) => git(worktreePath, args, { env: scratch?.env }),
+      baseBranch,
+      opts,
+    );
+    const res = await git(worktreePath, ['diff', '--shortstat', base], { env: scratch?.env });
+    if (!res.ok) return null;
+    // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
+    // `runs.json` and served on the runs API, so the un-narrowed shape must keep
+    // round-tripping byte-identically.
+    return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 /**

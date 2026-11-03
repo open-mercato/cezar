@@ -169,3 +169,48 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 })
+
+/**
+ * A harness run's step list opens as a popover (user feedback 2026-07-29), so 18 phases never grow
+ * the header. it must dismiss like one and never reopen on its own, and an
+ * ordinary run keeps the inline expansion.
+ */
+describe('WorkflowSteps — the harness popover', () => {
+  const steps = Array.from({ length: 18 }, (_, index) =>
+    step(`phase-${index + 1}`, index === 0 ? 'running' : 'pending', { name: `Phase ${index + 1}` }),
+  )
+  let seq = 0
+  const freshRun = () => `run-overlay-${(seq += 1)}`
+
+  it('opens a floating panel that Escape dismisses', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={steps} overlay />)
+    fireEvent.click(screen.getByRole('button', { name: /Workflow: Phase 1/ }))
+    const panel = document.querySelector('[data-slot="workflow-steps-panel"]')
+    expect(panel?.querySelectorAll('[data-slot="step-row"]')).toHaveLength(18)
+    expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe('open')
+
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+    expect(document.querySelector('[data-slot="workflow-steps-panel"]')).toBeNull()
+    expect(document.querySelector('[data-slot="workflow-steps"]')?.getAttribute('data-state')).toBe('closed')
+  })
+
+  it('opens closed again after a remount, where an inline expansion is remembered', () => {
+    const runId = freshRun()
+    const first = render(<WorkflowSteps runId={runId} steps={steps} overlay />)
+    fireEvent.click(screen.getByRole('button', { name: /Workflow: Phase 1/ }))
+    expect(document.querySelector('[data-slot="step-row"]')).not.toBeNull()
+    first.unmount()
+
+    render(<WorkflowSteps runId={runId} steps={steps} overlay />)
+    expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
+  })
+
+  it('expands an ordinary run inline, with no floating panel', () => {
+    render(<WorkflowSteps runId={freshRun()} steps={steps} />)
+    fireEvent.click(screen.getByRole('button', { name: /Workflow: Phase 1/ }))
+    expect(document.querySelector('[data-slot="workflow-steps-panel"]')).toBeNull()
+    expect(
+      document.querySelector('[data-slot="workflow-steps"]')?.querySelectorAll('[data-slot="step-row"]'),
+    ).toHaveLength(18)
+  })
+})

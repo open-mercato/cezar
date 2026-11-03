@@ -6,6 +6,8 @@ import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
+  HarnessRoles,
+  HarnessSkillProfile,
   AttachmentEntry,
   DispatchIntent,
   ModelDiscoveryRunner,
@@ -354,6 +356,60 @@ export function resolveSource(
   return candidate && sourceExists(candidate, skills, workflows) ? candidate : null
 }
 
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) -------------------------------------
+
+/** The built-in staged multi-model workflows. Mirrors `src/harness/workflows.ts` — the server
+ *  is authoritative; these names gate only which composer shows the harness panel. */
+export const HARNESS_WORKFLOWS = ['harness-fix-issue', 'harness-implement-feature'] as const
+
+/** The Configure-models prefill (the harness dialog's primary action): the interactive
+ *  `cez-setup-harness` task, staged **in the repo working tree** — setup writes
+ *  `.ai/agentic.config.json` + hooks for the human to review, and a throwaway worktree
+ *  would strand them on a `cez/` branch (a stale worktree base once hid the config
+ *  entirely: run 9788d87f). */
+export function harnessSetupPrefill(): {
+  composerMode: 'task'
+  source: TaskSource
+  text: string
+} {
+  return {
+    composerMode: 'task',
+    source: { source: 'skill', ref: HARNESS_SETUP_SKILL },
+    text: 'Configure the multi-model agent harness for this repository — detect and bind the reviewer and worker models I actually have access to.',
+  }
+}
+
+export const HARNESS_SETUP_SKILL = 'cez-setup-harness'
+
+/** The setup task runs in the checkout as a property of its SOURCE, never as a Worktree choice
+ *  written into the sticky draft: that choice outlived setup and put every later ordinary task in
+ *  place. */
+export function runsInPlace(skill: Pick<Skill, 'name' | 'source'> | undefined): boolean {
+  // The bundled skill only: a user's own skill under that name keeps the worktree.
+  return skill?.name === HARNESS_SETUP_SKILL && skill.source === 'bundled'
+}
+
+/** The harness workflow a source selects, or null — the switch that shows the harness panel,
+ *  sends the `harness` body field, and swaps the suggestion row. Resolved against the catalog
+ *  when there is one: the server keys the harness on `source: 'built-in'` and 400s a `harness`
+ *  body on a repo's own workflow file under the same name (review round 2). Without a catalog
+ *  (its fetch failed) the name alone decides, and the server judges. */
+export function harnessWorkflowName(
+  source: TaskSource | null | undefined,
+  workflows?: readonly WorkflowDef[],
+): string | null {
+  if (source?.source !== 'workflow' || !(HARNESS_WORKFLOWS as readonly string[]).includes(source.ref)) return null
+  if (workflows && !workflows.some((w) => w.name === source.ref && w.source === 'built-in')) return null
+  return source.ref
+}
+
+/** The Task tab's workflow catalog: harness workflows live in the Multi-model tab only, so
+ *  the ordinary picker never shows them (user feedback 2026-07-23: two entry points confuse). */
+export function withoutHarnessWorkflows(workflows: readonly WorkflowDef[]): WorkflowDef[] {
+  // Only the built-ins: a user's file under the same name is an ordinary workflow.
+  return workflows.filter((w) => !(w.source === 'built-in' && (HARNESS_WORKFLOWS as readonly string[]).includes(w.name)))
+}
+
 /**
  * The exact `POST /api/runs` body the legacy form sends:
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
@@ -402,6 +458,20 @@ export function buildCreateRunBody(opts: {
    *  Independent of `generateFollowups`: starting a task FROM a follow-up still marks that
    *  entry started, even when the new task itself won't generate follow-ups of its own. */
   todoId?: string
+  /** The role lineup the panel composed. Sent only when `source` IS a harness workflow —
+   *  the server 400s a `harness` field anywhere else, so the rule lives here, once.
+   *  (The named `profile` alternative was dropped from the composer 2026-07-27; the server
+   *  still accepts it from scripted callers.) */
+  harnessRoles?: HarnessRoles
+  harnessSkillProfile?: HarnessSkillProfile
+  harnessBaseAcknowledgement?: {
+    configuredBase: string
+    remoteDefault: string
+    reason: string
+  }
+  /** The loaded workflow catalog, so a harness NAME is sent as a harness only when it is the
+   *  built-in (see `harnessWorkflowName`). Absent when the catalog never loaded. */
+  workflows?: readonly WorkflowDef[]
   /** The Dispatch toggle (spec 2026-09-10-dispatch): `{}` is the bare toggle — split it, engine
    *  defaults — and the keys are the limits from its settings. `null`/absent = off, and the key
    *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
@@ -430,6 +500,10 @@ export function buildCreateRunBody(opts: {
     autonomous,
     generateFollowups,
     todoId,
+    harnessRoles,
+    harnessSkillProfile,
+    harnessBaseAcknowledgement,
+    workflows,
     dispatch,
     readOnly,
     inPlaceByDefault,
@@ -463,6 +537,16 @@ export function buildCreateRunBody(opts: {
     autonomous: autonomous === true ? true : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
+    harness:
+      harnessWorkflowName(source, workflows) !== null
+        ? {
+            skillProfile: harnessSkillProfile ?? 'generic',
+            ...(harnessRoles ? { roles: harnessRoles } : {}),
+            ...(harnessBaseAcknowledgement
+              ? { baseAcknowledgement: harnessBaseAcknowledgement }
+              : {}),
+          }
+        : undefined,
     dispatch: dispatch ?? undefined,
   }
 }

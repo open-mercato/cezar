@@ -89,6 +89,34 @@ describe('reclaimWorktrees (real git, #483)', () => {
     expect(store.runs.find((r) => r.id === newId)?.worktreeReclaimedAt).toBeUndefined();
   });
 
+  // a harness run is stage-only, so its work exists only in the worktree.
+  it('never reclaims a harness worktree, whose staged work is not on its branch', async () => {
+    const repo = await fixtureRepo();
+    const harnessId = '33333333-3333-4333-8333-333333333333';
+    const plainId = '44444444-4444-4444-8444-444444444444';
+    const harnessWt = await createWorktree(repo, harnessId, 'main');
+    const plainWt = await createWorktree(repo, plainId, 'main');
+    writeFileSync(join(harnessWt.path, 'feature.ts'), 'export const staged = true;\n');
+    await run('git', ['add', 'feature.ts'], { cwd: harnessWt.path });
+    const parked = {
+      ...finishedRun(harnessId, harnessWt.path, '2026-07-01T00:00:00.000Z'),
+      status: 'failed',
+      harness: { profile: 'standard', workflow: 'harness-implement-feature' },
+    } as unknown as RunRecord;
+    const newestId = '55555555-5555-4555-8555-555555555555';
+    const newestWt = await createWorktree(repo, newestId, 'main');
+    const store = fakeStore([
+      parked,
+      finishedRun(plainId, plainWt.path, '2026-07-02T00:00:00.000Z'),
+      finishedRun(newestId, newestWt.path, '2026-07-03T00:00:00.000Z'),
+    ]);
+
+    // keep=1: the newest ordinary run stays, the older ordinary run goes, the harness run is exempt.
+    expect(await reclaimWorktrees(repo, store, 1)).toEqual([plainId]);
+    expect(existsSync(join(harnessWt.path, 'feature.ts'))).toBe(true);
+    expect(store.runs.find((r) => r.id === harnessId)?.worktreeReclaimedAt).toBeUndefined();
+  });
+
   it('does not stamp a run whose directory still exists after a no-op remove (retries next pass)', async () => {
     const repo = await fixtureRepo();
     const oldId = '44444444-4444-4444-8444-444444444444';

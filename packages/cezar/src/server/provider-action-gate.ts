@@ -38,6 +38,37 @@ export function providersRequiredByWorkflow(
   return ORDER.filter((provider) => required.has(provider));
 }
 
+interface HarnessProviderInput {
+  roles?: {
+    orchestrator?: { runner?: string };
+    implementer?: { runner?: string };
+    reviewers?: Array<{ runner?: string }>;
+  };
+}
+
+/**
+ * Dynamic harness phases do not appear in workflow YAML, so the ordinary
+ * provider gate cannot see them. Collect the runner-backed roles before a
+ * run/worktree exists; advisors remain covered by the harness readiness probe
+ * because they are not cezar providers. No lineup is Claude solo.
+ */
+export function providersRequiredByHarness(harness: HarnessProviderInput | undefined): ProviderId[] {
+  const required = new Set<ProviderId>();
+  const add = (candidate: unknown) => {
+    if (candidate === 'claude' || candidate === 'codex' || candidate === 'opencode') {
+      required.add(candidate);
+    }
+  };
+  if (harness?.roles) {
+    add(harness.roles.orchestrator?.runner);
+    add(harness.roles.implementer?.runner);
+    for (const reviewer of harness.roles.reviewers ?? []) add(reviewer.runner);
+  } else {
+    add('claude');
+  }
+  return ORDER.filter((provider) => required.has(provider));
+}
+
 export function providerForExistingRun(
   run: RunRecord,
   override?: ProviderId,

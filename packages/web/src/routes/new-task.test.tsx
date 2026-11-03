@@ -18,6 +18,7 @@ import type {
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
 import { readDraft, resetDraft, writeDraft } from './new-task-draft'
+import { harnessSetupPrefill } from './new-task-form'
 import { NewTaskRoute } from './new-task'
 
 /**
@@ -153,6 +154,7 @@ const CONFIG: ConfigResponse = {
   branchNaming: null,
   defaultModels: {},
   modelsLocked: false,
+  multiModel: false,
   maxParallel: 2,
   memoryLimitMb: null,
   worktreeRetention: 10,
@@ -429,6 +431,75 @@ describe('the hero surface', () => {
     expect(location()).toBe('/new')
   })
 
+  it('the Multi-model tab exists only behind the multiModel flag (off by default)', async () => {
+    serve({ config: { multiModel: false } })
+    renderNewTask()
+    await pillReady()
+    // Task-only composer: no mode tablist at all, and a persisted multi draft
+    // falls back to the Task surface instead of stranding.
+    expect(document.querySelector('[data-slot="multi-model-tab"]')).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
+    expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
+  })
+
+  it('explains why a multi-model lineup cannot start when native model settings are locked', async () => {
+    writeDraft({ ...readDraft(), text: 'Keep my brief', composerMode: 'multi' })
+    serve({ config: { multiModel: true, modelsLocked: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    expect(await screen.findByText(/multi-model lineups need model selection unlocked/i)).toBeTruthy()
+    expect(textarea().disabled).toBe(false)
+    expect(textarea().value).toBe('Keep my brief')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start multi-model run' }).hasAttribute('disabled')).toBe(true))
+    expect(requests.some((request) => request.method === 'POST' && /harness\/probe|\/runs$/.test(request.url))).toBe(false)
+  })
+
+  it('switches composer mode with arrow keys and labels the active panel', async () => {
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+    const taskTab = screen.getByRole('tab', { name: 'Task' })
+    act(() => taskTab.focus())
+    fireEvent.keyDown(taskTab, { key: 'ArrowRight' })
+    const multiTab = screen.getByRole('tab', { name: 'Multi-model' })
+    await waitFor(() => expect(multiTab.getAttribute('aria-selected')).toBe('true'))
+    expect(document.activeElement).toBe(multiTab)
+    expect(screen.getByRole('tabpanel', { name: 'Multi-model' }).id).toBe(multiTab.getAttribute('aria-controls'))
+    fireEvent.keyDown(multiTab, { key: 'ArrowLeft' })
+    await waitFor(() => expect(taskTab.getAttribute('aria-selected')).toBe('true'))
+    expect(screen.getByRole('tabpanel', { name: 'Task' })).toBeTruthy()
+  })
+
+  // the setup prompt took the composer and the brief was gone for good.
+  it('keeps an unsent brief when Configure models takes the composer', async () => {
+    writeDraft({ ...readDraft(), text: 'My long brief', composerMode: 'multi' })
+    serve({ config: { multiModel: true } })
+    renderNewTask()
+    fireEvent.click(await screen.findByRole('button', { name: /configure models/i }))
+    await waitFor(() => expect(textarea().value).toMatch(/Configure the multi-model agent harness/))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore it now' }))
+    await waitFor(() => expect(textarea().value).toBe('My long brief'))
+    expect(document.querySelector('[data-slot="setup-stash-note"]')).toBeNull()
+  })
+
+  it('starts an ordinary task from a persisted multi-model draft when the feature is off', async () => {
+    writeDraft({
+      ...readDraft(),
+      text: 'Fix the stale draft',
+      composerMode: 'multi',
+      source: { source: 'workflow', ref: 'harness-fix-issue' },
+    })
+    serve({ config: { multiModel: false } })
+    renderNewTask()
+    await pillReady()
+    expect(document.querySelector('[data-slot="harness-panel"]')).toBeNull()
+    expect(document.querySelector('[data-slot="harness-setup-dialog"]')).toBeNull()
+    expect(requests.some((request) => request.url.includes('/harness/'))).toBe(false)
+    await startTask()
+    expect(postedBody()).toMatchObject({ task: 'Fix the stale draft', workflow: 'quick-task' })
+    expect(postedBody()).not.toHaveProperty('harness')
+  })
+
   it('starts an attachment-only task: empty task text, the attachment in images (telemetry 18c930de)', async () => {
     serve()
     renderNewTask()
@@ -447,6 +518,28 @@ describe('the hero surface', () => {
 // ---- picker data flows ------------------------------------------------------------------------
 
 describe('picker data flows', () => {
+  it('updates the harness role pickers when Claude model discovery changes', async () => {
+    serve({ config: { multiModel: true }, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    const { client } = renderNewTask()
+    await pillReady()
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Multi-model' }), { button: 0 })
+    fireEvent.click(await screen.findByRole('button', { name: 'Orchestrator model' }))
+    await waitFor(() => expect(client.getQueryState(workspaceQueryKeys.models('claude'))?.fetchStatus).toBe('idle'))
+
+    act(() => {
+      client.setQueryData(workspaceQueryKeys.models('claude'), {
+        runner: 'claude',
+        models: [{ id: 'claude-future', label: 'Future Claude', description: 'Discovered by the CLI' }],
+        source: 'live',
+        stale: false,
+      })
+    })
+
+    fireEvent.click(await screen.findByRole('option', { name: /claude · Future Claude/ }))
+    expect(screen.getByRole('button', { name: 'Orchestrator model' }).textContent).toContain('Future Claude')
+    expect(readDraft().harnessRoles?.orchestrator).toMatchObject({ runner: 'claude', model: 'claude-future' })
+  })
+
   it('hides the runner pill on a single-backend host (legacy rule)', async () => {
     serve()
     renderNewTask()
@@ -594,6 +687,10 @@ describe('picker data flows', () => {
     writeDraft({
       text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', reasoningEffort: null, variants: 1,
       worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -674,6 +771,28 @@ describe('picker data flows', () => {
     // `worktree` is sent only when explicitly OFF (new-task-form.ts): an absent key IS the
     // isolated-worktree default, so absence — not `worktree: false` — is what the fix restores.
     expect(postedBody()).not.toHaveProperty('worktree')
+  })
+
+  // the setup prefill wrote `worktree: false` into the sticky draft, so every
+  // ordinary task after "Configure models" ran in the user's checkout.
+  it('runs harness setup in the checkout without making in-place the next task\'s default', async () => {
+    const setup: Skill = {
+      name: 'cez-setup-harness',
+      description: 'Configure the harness',
+      body: '',
+      path: '/bundled/cez-setup-harness/SKILL.md',
+      source: 'bundled',
+    }
+    writeDraft({ ...readDraft(), ...harnessSetupPrefill() })
+    serve({ skills: [...SKILLS, setup] })
+    renderNewTask()
+    await pillReady('cez-setup-harness')
+    expect(document.querySelector('[data-slot="worktree-toggle"]')).toBeNull()
+
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ worktree: false })
+    expect(readDraft().worktree).not.toBe(false)
   })
 
   it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
@@ -1106,6 +1225,7 @@ describe('submit', () => {
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null, reasoningEffort: null,
       variants: 1, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
+      composerMode: null, harnessMode: null, harnessSkillProfile: null, harnessRoles: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()

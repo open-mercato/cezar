@@ -1,4 +1,6 @@
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { lstatSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { perRunner } from '@open-mercato/cezar-contract';
@@ -133,6 +135,15 @@ const configSchema = z.object({
    */
   modelsLocked: z.boolean().optional().catch(undefined),
   /**
+   * Multi-model harness feature flag: the staged multi-model workflows, their
+   * composer tab, the Settings → Harness section and the harness probe are
+   * offered only when this is true. Off by default while the feature hardens.
+   * Flipping it off never strands an in-flight harness run — revival reads the
+   * run's own persisted `workflowDef`, and the run-scoped harness routes stay
+   * readable for history. `.catch(false)` keeps a bad value additive-safe.
+   */
+  multiModel: z.boolean().default(false).catch(false),
+  /**
    * Trunk-based projects (spec 2026-10-20-trunk-based-projects). Every key is optional and
    * absent = today's branch-per-task behavior. `profile` only labels the preset the cockpit applied;
    * the behavior comes from the individual keys below.
@@ -151,6 +162,47 @@ const configSchema = z.object({
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
+
+export const MULTI_MODEL_TRACKED_ERROR =
+  'Multi-model runs cannot be enabled from a git-tracked .ai/cezar/config.json: a committed file would opt in every clone. Untrack the file, or enable it in local configuration.';
+
+/**
+ * Does `.ai/cezar/config.json` come from the repository rather than this machine? A committed file
+ * speaks for every clone, so — like worktree scripts and auto-land — it cannot opt the user in to
+ * multi-model runs, whose trusted config can call endpoints and run reviewer commands. A symlinked
+ * path component or a case variant lets committed content stand in for the local file under a
+ * path git never reports as tracked.
+ */
+export function configTrackedByGit(repoRoot: string): boolean {
+  for (const part of [['.ai'], ['.ai', 'cezar'], ['.ai', 'cezar', 'config.json']]) {
+    try {
+      if (lstatSync(join(repoRoot, ...part)).isSymbolicLink()) return true;
+    } catch {
+      // absent: nothing to stand in for
+    }
+  }
+  try {
+    // `icase`: on a case-insensitive filesystem a committed `.ai/Cezar/config.json` is this file.
+    execFileSync('git', ['ls-files', '--error-unmatch', '--', ':(icase).ai/cezar/config.json'], {
+      cwd: repoRoot,
+      stdio: 'ignore',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Synchronous admission guard for new runs; recovery uses the persisted workflow. */
+export function multiModelEnabled(repoRoot: string): boolean {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8'));
+    const parsed = configSchema.safeParse(raw);
+    return parsed.success && parsed.data.multiModel && !configTrackedByGit(repoRoot);
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Fold the machine-wide agent defaults under a repo's own config (spec 2026-07-29-agent-profiles).
@@ -197,7 +249,11 @@ export async function loadConfig(repoRoot: string): Promise<CezConfig> {
   }
   try {
     const parsed = configSchema.safeParse(withMachineDefaults(JSON.parse(raw), machine));
-    if (parsed.success) return parsed.data;
+    if (parsed.success) {
+      return parsed.data.multiModel && configTrackedByGit(repoRoot)
+        ? { ...parsed.data, multiModel: false }
+        : parsed.data;
+    }
   } catch {
     // fall through — malformed JSON degrades to the default
   }

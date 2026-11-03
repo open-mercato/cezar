@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RUNNER_IDS } from './core/agent-runner.ts';
-import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, resolveWorktreeRetention } from './config.ts';
+import { DEFAULT_SKILLS_REPOS, gatedSkillsRepos, loadConfig, multiModelEnabled, resolveWorktreeRetention } from './config.ts';
 
 /**
  * `config.json` schema roundtrips (R2 2.3: `systemPrompt?`). The invariants
@@ -128,6 +129,73 @@ describe('loadConfig systemPrompt', () => {
       const config = await loadConfig(repoRoot);
       expect(config.modelsLocked).toBeUndefined();
       expect(config.defaultRunner).toBe('codex');
+    });
+  });
+
+  /** The multi-model harness feature flag: OFF unless a repo opts in, and a bad
+   *  value degrades to off rather than silently enabling the feature. */
+  describe('multiModel', () => {
+    it('defaults to false, round-trips true, and degrades a bad value to false', async () => {
+      expect((await loadConfig(repoRoot)).multiModel).toBe(false);
+      expect(multiModelEnabled(repoRoot)).toBe(false);
+
+      write({ multiModel: true });
+      expect((await loadConfig(repoRoot)).multiModel).toBe(true);
+      expect(multiModelEnabled(repoRoot)).toBe(true);
+
+      write({ multiModel: 'on', defaultRunner: 'codex' });
+      const config = await loadConfig(repoRoot);
+      expect(config.multiModel).toBe(false);
+      expect(multiModelEnabled(repoRoot)).toBe(false);
+      expect(config.defaultRunner).toBe('codex');
+    });
+    // a committed file speaks for every clone, so it cannot opt one in.
+    it('ignores multiModel in a git-tracked config, and honours it once untracked', async () => {
+      const git = (...args: string[]) =>
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repoRoot, stdio: 'ignore' });
+      git('init', '-q');
+      write({ multiModel: true, defaultRunner: 'codex' });
+      git('add', '.ai/cezar/config.json');
+      git('commit', '-q', '-m', 'commit cezar config');
+      const tracked = await loadConfig(repoRoot);
+      expect(tracked.multiModel).toBe(false);
+      expect(tracked.defaultRunner).toBe('codex');
+      expect(multiModelEnabled(repoRoot)).toBe(false);
+
+      git('rm', '-q', '--cached', '.ai/cezar/config.json');
+      expect((await loadConfig(repoRoot)).multiModel).toBe(true);
+      expect(multiModelEnabled(repoRoot)).toBe(true);
+    });
+    // committed content reached the flag under a path git did not
+    // report as tracked — through a symlinked directory, or a case variant on macOS.
+    it('ignores multiModel reached through a symlink or a committed case variant', async () => {
+      const git = (...args: string[]) =>
+        execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repoRoot, stdio: 'ignore' });
+      git('init', '-q');
+      rmSync(join(repoRoot, '.ai/cezar'), { recursive: true, force: true });
+      mkdirSync(join(repoRoot, 'shared'), { recursive: true });
+      writeFileSync(join(repoRoot, 'shared', 'config.json'), JSON.stringify({ multiModel: true }));
+      symlinkSync(join(repoRoot, 'shared'), join(repoRoot, '.ai/cezar'));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'symlinked config');
+      expect(multiModelEnabled(repoRoot)).toBe(false);
+      expect((await loadConfig(repoRoot)).multiModel).toBe(false);
+
+      git('rm', '-q', '-r', '--cached', '.');
+      rmSync(join(repoRoot, '.ai/cezar'));
+      mkdirSync(join(repoRoot, '.ai/Cezar'), { recursive: true });
+      writeFileSync(join(repoRoot, '.ai/Cezar/config.json'), JSON.stringify({ multiModel: true }));
+      git('add', '-A');
+      git('commit', '-q', '-m', 'case variant');
+      expect(multiModelEnabled(repoRoot)).toBe(false);
+      expect((await loadConfig(repoRoot)).multiModel).toBe(false);
+    });
+    it('keeps synchronous admission and asynchronous config fail-closed on malformed files', async () => {
+      for (const raw of ['{', 'null', '[]', '{"multiModel":true,"maxParallel":"invalid"}']) {
+        writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), raw);
+        expect(multiModelEnabled(repoRoot)).toBe((await loadConfig(repoRoot)).multiModel);
+        expect(multiModelEnabled(repoRoot)).toBe(false);
+      }
     });
   });
 

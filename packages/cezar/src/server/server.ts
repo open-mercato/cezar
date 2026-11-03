@@ -20,7 +20,7 @@ import { trackerTaskContext, executeTrackerOperation } from './tracker/task-acce
 import { TrackerAgentBindingError } from './tracker/agent-credentials.ts';
 import { TrackerWatches } from './tracker/watch.ts';
 import { readTrackerAssociation, writeTrackerAssociation, clearTrackerAssociation } from '../tracker-association.ts';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import {
   detectedUrlsSchema, discoveredCommandsSchema,
   startAppSetSchema, startAppStateSchema, terminalCreateSchema, terminalInputSchema, terminalOutputQuerySchema, terminalOutputSchema,
@@ -223,13 +223,37 @@ import {
   setRunDraftInputSchema,
   repoFileQuerySchema,
   type DeleteDraftResponse,
+  harnessProbeInputSchema,
+  harnessProfileSchema,
+  harnessPresetInputSchema,
+  harnessAcceptContestedInputSchema,
+  harnessCouncilDecisionInputSchema,
 } from '@open-mercato/cezar-contract';
-import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+import { setFallbackProviderCheck, toPastedContent, type PastedContent, type RunManager, type StartRunInput } from '../workflows/run.ts';
+import {
+  councilDecisionDetail,
+  createLedger,
+  readLedger,
+  saveLedger,
+} from '../harness/ledger.ts';
+import { loadAgenticConfig, resolveHarnessRuntimeInfo } from '../harness/runtime.ts';
+import { probeKey, type ModelProber } from '../harness/probe.ts';
+import { createProjectProber } from '../harness/probe-transports.ts';
+import { harnessArtifactDir } from '../harness/driver.ts';
+import { providerFamilyOf } from '@open-mercato/cezar-contract';
+import { canonicalizeAdvisorRefs } from '../harness/advisor-identity.ts';
+import { opencodeSeatingError, runnerEquivalentOf } from '../harness/reviewer-binding.ts';
+import { releaseLedgerIssueClaim } from '../harness/issue-claim.ts';
+import { readHarnessFsEntry } from '../fs-read.ts';
+import { harnessProfileFor } from '../harness/types.ts';
+import { HARNESS_FIX_ISSUE, HARNESS_MODELS_LOCKED_ERROR, HARNESS_TEXT_ONLY_ERROR, isHarnessWorkflow, isHarnessWorkflowName } from '../harness/workflows.ts';
+import { extractTaskRefs } from '../runs/task-refs.ts';
 import {
   foldedLength,
   imageChars,
   MAX_FOLDED_TASK_CHARS,
   MAX_QUEUED_ATTACHMENTS,
+  MAX_QUEUED_MESSAGES,
   QUEUED_IMAGES_TOO_LARGE,
   queuedImageChars,
   queuedStackRefusal,
@@ -237,7 +261,16 @@ import {
 import { checkoutGitStatus } from '../workflows/landing.ts';
 import { deleteUpload, readUpload, writeUpload } from '../uploads.ts';
 import { diskHealth } from './disk-health.ts';
-import { branchesCheckedOutElsewhere, removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
+import {
+  branchesCheckedOutElsewhere,
+  remoteDefaultBranch,
+  removeWorktree,
+  resolveBaseRef,
+  staleBaseNote,
+  worktreeDiff,
+  worktreeDiffStat,
+  worktreeSizeBytes,
+} from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { worktreeLifecycleRoutes, lifecycleError } from './worktree-lifecycle.ts';
 import { readLifecycleConfigOrDefault, readLifecycleConfigRaw, lifecycleConfigFromRaw, withLifecycleConfigLock, applyLifecycleConfigUpdate, isLifecycleConfigTracked, LifecycleConfigError, TRACKED_CONFIG_ERROR } from '../worktree-lifecycle/config.ts';
@@ -261,7 +294,14 @@ import {
   readWorktreePath,
   repoIndexContains,
 } from './git-changes.ts';
-import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import {
+  configTrackedByGit,
+  gatedSkillsRepos,
+  loadConfig,
+  MULTI_MODEL_TRACKED_ERROR,
+  resolveWorktreeRetention,
+  type CezConfig,
+} from '../config.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
 import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
@@ -377,6 +417,7 @@ import type { MessageResponse } from '@open-mercato/cezar-contract';
 import {
   providerForActiveRun,
   providerForExistingRun,
+  providersRequiredByHarness,
   providersRequiredByWorkflow,
   recordedProfileFor,
   unavailableProviderMessage,
@@ -451,6 +492,8 @@ export interface ServerDeps {
   projectCommandRunner?: CommandRunner;
   /** Host-wide model discovery service. Tests inject a deterministic adapter. */
   modelCatalog?: RunnerModelCatalog;
+  /** Harness binding preflight. Tests inject deterministic readiness verdicts. */
+  harnessProber?: ModelProber;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
   providerAuth?: ProviderAuthService;
   /** Global provider enablement preferences. Tests may inject an in-memory store. */
@@ -980,6 +1023,9 @@ const uiStateSchema = z
     // Runs area presentation (#348): the sidebar-list + detail pane, or the
     // full-width table ("task manager") view.
     runsView: z.enum(['list', 'table']).optional(),
+    // Saved Multi-model role lineups. The composer normalizes older entries on
+    // read; new writes stay bounded and fully shaped at the API boundary.
+    harnessPresets: z.array(harnessPresetInputSchema).max(20).optional(),
     // The GitHub tab's last-selected sub-tab (#417): issues or PRs. ADDITIVE — an old
     // ui-state.json without the key behaves as the default (issues).
     githubView: z.enum(['issues', 'prs']).optional(),
@@ -1072,6 +1118,13 @@ const queuedMessagePatchSchema = z
   .refine((m) => m.text !== undefined || m.images !== undefined, {
     message: 'message edit needs text or attachments',
   });
+
+function foldedTask(task: string, stack: Array<{ text: string }>): string {
+  return [task, ...stack.map((m) => m.text)]
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join('\n\n');
+}
 
 /** A message's attachments as engine content, staged uploads read back from the store
  *  (telemetry 7054e5f2). A string is the refusal: `ATTACHMENT_UPLOAD_MISSING` when a referenced
@@ -4926,6 +4979,425 @@ export function createApp(deps: ServerDeps) {
     return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
   };
 
+  const harnessPublishBlockReason = (run: RunRecord, dataDir: string): string | null => {
+    if (!run.harness) return null;
+    if (!['review', 'done'].includes(run.status)) {
+      return 'stage-only: this harness run has not reached its review gate — publishing stays yours after review';
+    }
+    const read = readLedger(dataDir, run.id);
+    if (read.status === 'missing') {
+      return 'harness recovery state is missing — publishing is blocked until the ledger is restored';
+    }
+    if (read.status === 'corrupt') {
+      return `harness recovery state is corrupt — publishing is blocked: ${read.error}`;
+    }
+    if (read.status === 'unsupported') {
+      return `harness recovery state uses unsupported version ${String(read.version)} — update cezar before publishing`;
+    }
+    if (read.ledger.stage.status !== 'staged') {
+      return 'stage-only: the harness has not produced a verified staged handoff';
+    }
+    if (read.ledger.outcome.status === 'ready') return null;
+    if (read.ledger.outcome.status === 'contested') {
+      const accepted =
+        read.ledger.outcome.acceptedAt &&
+        read.ledger.outcome.acceptedBy === 'user' &&
+        read.ledger.outcome.acceptanceReason &&
+        read.ledger.decisions.some(
+          (decision) =>
+            decision.kind === 'accept-contested' &&
+            decision.by === 'user' &&
+            decision.at === read.ledger.outcome.acceptedAt &&
+            decision.detail === read.ledger.outcome.acceptanceReason,
+        );
+      if (accepted) return null;
+      return `harness review is contested — explicitly accept the unresolved findings with a reason before publishing: ${read.ledger.outcome.blockingReasons.join('; ')}`;
+    }
+    return `harness outcome is ${read.ledger.outcome.status} — publishing requires a verified ready outcome or an explicitly accepted contested outcome${
+      read.ledger.outcome.blockingReasons.length > 0
+        ? `: ${read.ledger.outcome.blockingReasons.join('; ')}`
+        : ''
+    }`;
+  };
+
+  const HARNESS_ARTIFACT_CHAR_CAP = 400_000;
+  const HARNESS_ARTIFACT_READ_MAX_BYTES = 8 * 1024 * 1024;
+
+  const MULTI_MODEL_DISABLED_ERROR =
+    'Multi-model runs are disabled for this repository. Set "multiModel": true in .ai/cezar/config.json to enable them.';
+
+  // ---- chained family: staged multi-model harness (project-scoped) ---------
+  const harnessRoutes = new Hono<ProjectApiEnv>()
+    .get('/harness/status', async (c) => {
+      const { root: repoRoot } = c.get('project');
+      const [agentic, cezarConfig, remoteDefault] = await Promise.all([
+        loadAgenticConfig(repoRoot),
+        loadConfig(repoRoot),
+        remoteDefaultBranch(repoRoot).catch(() => null),
+      ]);
+      const rawModels =
+        (agentic.agentHarness?.models as Record<string, unknown> | undefined) ?? {};
+      const models = [
+        {
+          id: 'claude',
+          family: 'anthropic',
+          model: 'host app',
+          adapter: 'host',
+          roles: ['host', 'reviewer'],
+        },
+        ...Object.entries(rawModels).map(([id, raw]) => {
+          const model = (raw ?? {}) as {
+            family?: unknown;
+            model?: unknown;
+            adapter?: unknown;
+            roles?: unknown;
+          };
+          const sameAs = runnerEquivalentOf(raw);
+          return {
+            id,
+            ...(typeof model.family === 'string' ? { family: model.family } : {}),
+            ...(typeof model.model === 'string' ? { model: model.model } : {}),
+            ...(typeof model.adapter === 'string' ? { adapter: model.adapter } : {}),
+            roles: Array.isArray(model.roles)
+              ? model.roles.filter((role): role is string => typeof role === 'string')
+              : [],
+            ...(sameAs ? { sameAs } : {}),
+          };
+        }),
+      ];
+      const note = cezarConfig.baseBranch
+        ? staleBaseNote(cezarConfig.baseBranch, remoteDefault)
+        : null;
+      return c.json({
+        // Feature flag (off by default). The status stays readable either way —
+        // it only reads config files — so Settings can explain the gate.
+        enabled: cezarConfig.multiModel,
+        configured: agentic.agentHarness !== undefined,
+        models,
+        base: {
+          configured: cezarConfig.baseBranch ?? null,
+          remoteDefault: remoteDefault?.branch ?? null,
+          stale: Boolean(note),
+          ...(note ? { note } : {}),
+        },
+        runtime: await resolveHarnessRuntimeInfo(repoRoot),
+      });
+    })
+
+    .post('/harness/probe', jsonZodValidator(harnessProbeInputSchema), async (c) => {
+      const body = c.req.valid('json');
+      const { root: repoRoot } = c.get('project');
+      // Probing spawns live provider transports — gated with run starts, unlike
+      // the read-only status above.
+      if (!(await loadConfig(repoRoot)).multiModel) {
+        return c.json({ error: MULTI_MODEL_DISABLED_ERROR }, 409);
+      }
+      const agentic = await loadAgenticConfig(repoRoot);
+      const profile = harnessProfileFor(body.roles);
+      const canonical = canonicalizeAdvisorRefs(
+        body.roles.reviewers,
+        (agentic.agentHarness?.models ?? {}) as Record<string, unknown>,
+      );
+      if (!canonical.ok) {
+        return c.json({ profile, ready: false, reason: canonical.error, models: [] });
+      }
+      const refs = [body.roles.orchestrator, body.roles.implementer, ...canonical.refs];
+      // A disabled provider is a settings fact: probing it was a live, billed call the user had
+      // turned off, answered `ready`.
+      const providersBlocked = await providerActionError(
+        providersRequiredByHarness({ roles: body.roles }),
+        { repoRoot },
+      );
+      if (providersBlocked) return c.json({ profile, ready: false, reason: providersBlocked, models: [] });
+      const prober =
+        deps.harnessProber ??
+        (await createProjectProber({ repoRoot, advisors: agentic.agentHarness?.models ?? {} }));
+      const verdicts = await prober.probeAll(refs);
+      const seen = new Set<string>();
+      const models = refs.flatMap((ref) => {
+        const key = probeKey(ref);
+        if (seen.has(key)) return [];
+        seen.add(key);
+        const id = ref.runner === 'claude' && !ref.model ? 'claude' : key;
+        const verdict = verdicts.get(key);
+        return [
+          {
+            id,
+            family: ref.runner === 'harness' ? ref.family : ref.runner,
+            binding:
+              ref.runner === 'harness'
+                ? `council · ${ref.model}`
+                : `${ref.runner} · ${ref.model || 'default model'}`,
+            roles: [] as string[],
+            readiness:
+              verdict?.status === 'ready'
+                ? ('ready' as const)
+                : verdict?.status === 'failed'
+                  ? ('failed' as const)
+                  : ('unknown' as const),
+            ...(verdict?.detail !== undefined ? { readinessDetail: verdict.detail } : {}),
+          },
+        ];
+      });
+      const ready = models.every((model) => model.readiness === 'ready');
+      return c.json({
+        profile,
+        ready,
+        ...(!ready ? { reason: 'one or more required model bindings could not be verified' } : {}),
+        models,
+      });
+    })
+
+    .get('/runs/:id/harness', (c) => {
+      const { dataDir, store } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const snapshotSeq = store.eventHighWaterMark(id);
+      const read = readLedger(dataDir, id);
+      if (read.status === 'missing') {
+        return c.json({ error: 'no harness ledger for this run' }, 404);
+      }
+      if (read.status === 'corrupt') {
+        return c.json({ error: `harness ledger is corrupt: ${read.error}` }, 409);
+      }
+      if (read.status === 'unsupported') {
+        return c.json(
+          { error: `harness ledger version ${String(read.version)} is not supported` },
+          409,
+        );
+      }
+      return c.json({ ...read.ledger, snapshotSeq });
+    })
+
+    .get('/runs/:id/harness/invocations/:invocationId', (c) => {
+      const { dataDir, store } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      const read = readLedger(dataDir, id);
+      if (read.status !== 'valid') {
+        return c.json({ error: 'no harness ledger for this run' }, 404);
+      }
+      const invocation = read.ledger.invocations.find(
+        (entry) => entry.id === c.req.param('invocationId'),
+      );
+      if (!invocation) return c.json({ error: 'no such invocation' }, 404);
+
+      const artifactRoot = resolve(harnessArtifactDir(dataDir, id));
+      const readArtifact = (path: string | undefined): string | null => {
+        if (!path) return null;
+        const full = resolve(path);
+        if (full !== artifactRoot && !full.startsWith(`${artifactRoot}${sep}`)) return null;
+        try {
+          // agent-output/ is model-writable: its directories must resolve inside the artifact root,
+          // then one no-follow, non-blocking, bounded read — a FIFO there hung the server and a
+          // symlink served any host file.
+          const realRoot = realpathSync(artifactRoot);
+          const parent = realpathSync(dirname(full));
+          if (parent !== realRoot && !parent.startsWith(`${realRoot}${sep}`)) return null;
+          const entry = readHarnessFsEntry(full, HARNESS_ARTIFACT_READ_MAX_BYTES);
+          if (entry.kind !== 'file') return null;
+          if (entry.content === null) return `… artifact too large to show (${entry.stat.size} bytes)`;
+          const text = entry.content.toString('utf8');
+          return text.length > HARNESS_ARTIFACT_CHAR_CAP
+            ? `${text.slice(0, HARNESS_ARTIFACT_CHAR_CAP)}\n\n… truncated (${text.length} characters total)`
+            : text;
+        } catch {
+          return null;
+        }
+      };
+
+      return c.json({
+        id: invocation.id,
+        ...(invocation.reviewerId !== undefined ? { reviewerId: invocation.reviewerId } : {}),
+        role: invocation.role,
+        phaseId: invocation.phaseId,
+        status: invocation.status,
+        attempt: invocation.attempt,
+        binding: invocation.binding,
+        ...(invocation.startedAt !== undefined ? { startedAt: invocation.startedAt } : {}),
+        ...(invocation.endedAt !== undefined ? { endedAt: invocation.endedAt } : {}),
+        ...(invocation.durationMs !== undefined ? { durationMs: invocation.durationMs } : {}),
+        ...(invocation.error !== undefined ? { error: invocation.error } : {}),
+        prompt: readArtifact(invocation.promptPath),
+        result: readArtifact(invocation.artifactPath),
+      });
+    })
+
+    .post(
+      '/runs/:id/harness/accept-contested',
+      jsonZodValidator(harnessAcceptContestedInputSchema),
+      async (c) => {
+        const { dataDir, store, manager } = c.get('project');
+        const id = c.req.param('id');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        if (!run.harness) return c.json({ error: 'run is not a harness run' }, 409);
+        const body = c.req.valid('json');
+        const read = readLedger(dataDir, id);
+        if (read.status !== 'valid') {
+          return c.json(
+            {
+              error:
+                read.status === 'missing'
+                  ? 'no harness ledger for this run'
+                  : read.status === 'corrupt'
+                    ? `harness ledger is corrupt: ${read.error}`
+                    : `harness ledger version ${String(read.version)} is not supported`,
+            },
+            409,
+          );
+        }
+        if (read.ledger.outcome.status !== 'contested') {
+          return c.json({ error: 'harness outcome is not contested' }, 409);
+        }
+        const pendingSpec = read.ledger.outcome.pendingDecision;
+        if (pendingSpec?.kind === 'spec') {
+          if (read.ledger.stage.status !== 'pending' || run.status !== 'failed') {
+            return c.json(
+              { error: 'specification risk can be accepted only while implementation is paused' },
+              409,
+            );
+          }
+          const at = new Date().toISOString();
+          const previousOutcome = read.ledger.outcome;
+          const decisionStart = read.ledger.decisions.length;
+          read.ledger.decisions.push({
+            at,
+            kind: 'spec.accept',
+            by: 'user',
+            detail:
+              pendingSpec.gate === 'council'
+                ? `council:${pendingSpec.round}`
+                : `pre-implement:${pendingSpec.round}`,
+          });
+          read.ledger.decisions.push({
+            at,
+            kind: 'spec.accept.reason',
+            by: 'user',
+            detail: body.reason,
+          });
+          read.ledger.outcome = { status: 'pending', blockingReasons: [] };
+          saveLedger(dataDir, id, read.ledger);
+          const resumed = manager.continueRun(id);
+          if (!resumed.ok) {
+            read.ledger.decisions.splice(decisionStart);
+            read.ledger.outcome = previousOutcome;
+            saveLedger(dataDir, id, read.ledger);
+            return c.json(
+              { error: `acceptance recorded but the run could not resume: ${resumed.error}` },
+              409,
+            );
+          }
+          store.appendEvent(id, {
+            type: 'harness.outcome.updated',
+            outcome: read.ledger.outcome,
+          });
+          return c.json({
+            outcome: read.ledger.outcome,
+            decisions: read.ledger.decisions,
+            resumed: true,
+          });
+        }
+        if (run.status !== 'review' || read.ledger.stage.status !== 'staged') {
+          return c.json(
+            { error: 'contested risk can be accepted only at the final staged review gate' },
+            409,
+          );
+        }
+        const at = new Date().toISOString();
+        read.ledger.outcome = {
+          ...read.ledger.outcome,
+          acceptedAt: at,
+          acceptedBy: 'user',
+          acceptanceReason: body.reason,
+        };
+        read.ledger.decisions.push({
+          at,
+          kind: 'accept-contested',
+          by: 'user',
+          detail: body.reason,
+        });
+        read.ledger.stage.prBody = [
+          read.ledger.stage.prBody ?? '',
+          '',
+          `Risk accepted by the user at ${at}: ${body.reason}`,
+        ]
+          .filter(Boolean)
+          .join('\n');
+        saveLedger(dataDir, id, read.ledger);
+        store.appendEvent(id, {
+          type: 'harness.outcome.updated',
+          outcome: read.ledger.outcome,
+        });
+        return c.json({ outcome: read.ledger.outcome, decisions: read.ledger.decisions });
+      },
+    )
+
+    .post(
+      '/runs/:id/harness/council-decision',
+      jsonZodValidator(harnessCouncilDecisionInputSchema),
+      async (c) => {
+        const { dataDir, store, manager } = c.get('project');
+        const id = c.req.param('id');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        if (!run.harness) return c.json({ error: 'run is not a harness run' }, 409);
+        const body = c.req.valid('json');
+        const read = readLedger(dataDir, id);
+        if (read.status !== 'valid') {
+          return c.json(
+            {
+              error:
+                read.status === 'missing'
+                  ? 'no harness ledger for this run'
+                  : read.status === 'corrupt'
+                    ? `harness ledger is corrupt: ${read.error}`
+                    : `harness ledger version ${String(read.version)} is not supported`,
+            },
+            409,
+          );
+        }
+        const pending = read.ledger.outcome.pendingDecision;
+        if (read.ledger.outcome.status !== 'blocked' || pending?.kind !== 'council') {
+          return c.json({ error: 'this run has no council decision to make' }, 409);
+        }
+        // The pause survives a resume until the council re-runs: a second click while the run is
+        // live bought every failed reviewer another paid attempt, or waived quorum.
+        if ((run.status !== 'failed' && run.status !== 'cancelled') || manager.isActive(id)) {
+          return c.json({ error: 'the run is already resuming — decide again only if it pauses' }, 409);
+        }
+        if (body.action === 'proceed' && !pending.canProceed) {
+          return c.json(
+            { error: 'every reviewer failed — there is nothing to proceed with; retry instead' },
+            409,
+          );
+        }
+        read.ledger.decisions.push({
+          at: new Date().toISOString(),
+          kind: `council.${body.action}`,
+          by: 'user',
+          detail: councilDecisionDetail(pending),
+        });
+        saveLedger(dataDir, id, read.ledger);
+        const resumed = manager.continueRun(id);
+        if (!resumed.ok) {
+          // An unapplied decision must not count later: a retry would buy an attempt the user
+          // was told failed, a proceed would waive quorum.
+          read.ledger.decisions.pop();
+          saveLedger(dataDir, id, read.ledger);
+          return c.json({ error: `the run could not resume, so the decision was not recorded: ${resumed.error}` }, 409);
+        }
+        store.appendEvent(id, {
+          type: 'note',
+          message:
+            body.action === 'retry'
+              ? `council decision: retry the failed reviewer(s) — ${pending.failed.map((failure) => failure.label).join(', ')}`
+              : `council decision: proceed with the ${pending.completedCount} completed reviewer(s), ignoring ${pending.failed.map((failure) => failure.label).join(', ')}`,
+        });
+        return c.json({ resumed: true, decisions: read.ledger.decisions });
+      },
+    );
+
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
   const runsRoutes = new Hono<ProjectApiEnv>()
     // `workflowDef` is ~1.3 MB per run; the list leaves it out (`?full=1` opts back in, GET /runs/:id is always complete).
@@ -4942,11 +5414,18 @@ export function createApp(deps: ServerDeps) {
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
     .post('/runs/archive-finished', (c) => {
-      const { store } = c.get('project');
+      const { dataDir, store } = c.get('project');
       const open = store.listRuns().filter((run) => !run.archived).map((run) => run.id);
       const archived = store.archiveFinished();
       // The sweep is an archive like any other: each task it took loses its terminals (spec §6).
-      if (archived > 0) for (const id of open) if (store.getRun(id)?.archived) stopTaskProcesses(id);
+      if (archived > 0) {
+        for (const id of open) {
+          const run = store.getRun(id);
+          if (!run?.archived) continue;
+          stopTaskProcesses(id);
+          if (run.harness) releaseLedgerIssueClaim(dataDir, id);
+        }
+      }
       // One event for the sweep, `value` = how many it archived (summed on the dashboard).
       if (archived > 0) track('task_archived', { label: 'bulk', value: archived }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ archived });
@@ -4957,7 +5436,7 @@ export function createApp(deps: ServerDeps) {
     .post('/runs/read-all', (c) => c.json({ read: c.get('project').store.markAllRead() }))
 
     .post('/runs/:id/archive', jsonZodValidator(archiveSchema, { absent: ({}) }), async (c) => {
-      const { store, manager } = c.get('project');
+      const { dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       // An empty/absent body archives (the common case); a malformed body degrades
       // to `{}` just as before, but a wrong-typed `archived` is now a 400 (#429).
@@ -4967,6 +5446,7 @@ export function createApp(deps: ServerDeps) {
       const parsed = { data: c.req.valid('json') };
       const retiresQuestion = parsed.data.archived !== false && store.getRun(id)?.awaitingAnswerSince !== undefined;
       const run = store.setArchived(id, parsed.data.archived !== false);
+      if (run?.archived && run.harness && !manager.isActive(id)) releaseLedgerIssueClaim(dataDir, id);
       if (run && parsed.data.archived !== false) stopTaskProcesses(id);
       if (run && retiresQuestion) manager.notifyQuestionRetired?.(id);
       // Labelled with the button that did it.
@@ -5032,13 +5512,181 @@ export function createApp(deps: ServerDeps) {
       } else {
         const { workflows } = await loadWorkflows(repoRoot);
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
+        // Feature flag (off by default): the catalog omits the harness workflows, but a direct
+        // start deserves the real reason rather than "unknown workflow".
+        if (!workflow && parsed.data.workflow !== undefined && isHarnessWorkflowName(parsed.data.workflow)) {
+          return c.json({ error: MULTI_MODEL_DISABLED_ERROR }, 409);
+        }
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
-      const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
-      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback), {
-        repoRoot,
-        profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
-      });
+      if (parsed.data.harness && !isHarnessWorkflow(workflow)) {
+        return c.json(
+          { error: `"harness" is only valid with the harness workflows, not "${workflow.name}"` },
+          400,
+        );
+      }
+      if (isHarnessWorkflow(workflow) && agentModelsLocked(repoRoot)) {
+        return c.json({ error: HARNESS_MODELS_LOCKED_ERROR }, 409);
+      }
+      if (isHarnessWorkflow(workflow) && (parsed.data.variants ?? 1) > 1) {
+        return c.json(
+          { error: 'parallel variants are not available for harness runs — one staged handoff per task' },
+          400,
+        );
+      }
+
+      const derivedProfile = harnessProfileFor(parsed.data.harness?.roles);
+      if (parsed.data.harness?.profile !== undefined && parsed.data.harness.profile !== derivedProfile) {
+        return c.json(
+          { error: `harness profile "${parsed.data.harness.profile}" needs a matching role lineup — named agentHarness profiles are no longer resolved` },
+          400,
+        );
+      }
+      let harnessInput = isHarnessWorkflow(workflow)
+        ? {
+            ...(parsed.data.harness ?? {}),
+            skillProfile: parsed.data.harness?.skillProfile ?? ('generic' as const),
+            profile: derivedProfile,
+          }
+        : undefined;
+      if (harnessInput && parsed.data.readOnly) {
+        return c.json({ error: 'harness workflows cannot run as read-only tasks' }, 400);
+      }
+      if (harnessInput && parsed.data.worktree === false) {
+        return c.json({ error: 'harness workflows require an isolated git worktree' }, 400);
+      }
+      if (harnessInput && parsed.data.images?.length) {
+        return c.json({ error: HARNESS_TEXT_ONLY_ERROR }, 400);
+      }
+      if (harnessInput && workflow.name === HARNESS_FIX_ISSUE && !harnessInput.issueId) {
+        const issueNumber = extractTaskRefs(parsed.data.task).issueNumber;
+        if (issueNumber === undefined) {
+          return c.json({ error: 'harness fix workflow requires a concrete issue id' }, 400);
+        }
+        harnessInput = { ...harnessInput, issueId: String(issueNumber) };
+      }
+
+      const cezarConfig = await loadConfig(repoRoot);
+      if (harnessInput && cezarConfig.baseBranch) {
+        const [remoteDefault, resolvedBase] = await Promise.all([
+          remoteDefaultBranch(repoRoot).catch(() => null),
+          resolveBaseRef(repoRoot, cezarConfig.baseBranch),
+        ]);
+        if (!resolvedBase) {
+          return c.json(
+            {
+              error:
+                `harness start blocked: configured base branch "${cezarConfig.baseBranch}" ` +
+                'does not resolve locally or on origin',
+            },
+            409,
+          );
+        }
+        const stale = staleBaseNote(cezarConfig.baseBranch, remoteDefault);
+        if (stale && remoteDefault) {
+          const acceptance = harnessInput.baseAcknowledgement;
+          if (
+            !acceptance ||
+            acceptance.configuredBase !== cezarConfig.baseBranch ||
+            acceptance.remoteDefault !== remoteDefault.branch
+          ) {
+            return c.json(
+              {
+                error:
+                  `harness start blocked before worktree creation: ${stale}. ` +
+                  'Update the base branch or explicitly acknowledge this exact base/default pair with a reason.',
+                configuredBase: cezarConfig.baseBranch,
+                remoteDefault: remoteDefault.branch,
+              },
+              409,
+            );
+          }
+        }
+      }
+
+      const fallback = parsed.data.runner ?? cezarConfig.defaultRunner;
+      const requiredProviders = new Set<ProviderId>(
+        providersRequiredByWorkflow(workflow, fallback),
+      );
+      if (harnessInput) {
+        const agentic = await loadAgenticConfig(repoRoot);
+        if (harnessInput.roles) {
+          const canonical = canonicalizeAdvisorRefs(
+            harnessInput.roles.reviewers,
+            (agentic.agentHarness?.models ?? {}) as Record<string, unknown>,
+          );
+          if (!canonical.ok) {
+            return c.json({ error: `harness start blocked: ${canonical.error}` }, 409);
+          }
+          const roles = { ...harnessInput.roles, reviewers: canonical.refs };
+          const seating = opencodeSeatingError(roles);
+          if (seating) {
+            return c.json({ error: `harness start blocked: ${seating}` }, 409);
+          }
+          if (new Set(roles.reviewers.map(providerFamilyOf)).size < 2) {
+            return c.json(
+              {
+                error:
+                  'reviewers must span at least two trusted model families (e.g. Anthropic + OpenAI)',
+              },
+              400,
+            );
+          }
+          harnessInput = { ...harnessInput, roles };
+        }
+        for (const provider of providersRequiredByHarness(harnessInput)) {
+          requiredProviders.add(provider);
+        }
+        const plan = harnessInput.roles ?? {
+          orchestrator: { runner: 'claude' as const, model: '' },
+          implementer: { runner: 'claude' as const, model: '' },
+          reviewers: [],
+        };
+        const refs = [plan.orchestrator, plan.implementer, ...plan.reviewers];
+        const planSeating = opencodeSeatingError(plan);
+        if (planSeating) {
+          return c.json({ error: `harness start blocked: ${planSeating}` }, 409);
+        }
+        // A disabled provider is refused before any billed probe of it.
+        const providersBlocked = await providerActionError([...requiredProviders], {
+          repoRoot,
+          profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+        });
+        if (providersBlocked) return c.json({ error: providersBlocked }, 409);
+        const prober =
+          deps.harnessProber ??
+          (await createProjectProber({ repoRoot, advisors: agentic.agentHarness?.models ?? {} }));
+        const verdicts = await prober.probeAll(refs);
+        const unavailable = refs
+          .filter(
+            (ref, index) =>
+              refs.findIndex((candidate) => probeKey(candidate) === probeKey(ref)) === index,
+          )
+          .map((ref) => ({ ref, verdict: verdicts.get(probeKey(ref)) }))
+          .filter(({ verdict }) => verdict?.status !== 'ready');
+        if (unavailable.length > 0) {
+          return c.json(
+            {
+              error:
+                'harness start blocked before worktree creation: ' +
+                unavailable
+                  .map(
+                    ({ ref, verdict }) =>
+                      `${probeKey(ref)} — ${verdict?.detail ?? 'binding was not verified'}`,
+                  )
+                  .join('; '),
+            },
+            409,
+          );
+        }
+      }
+      // A harness start ran this gate before its probes.
+      const blocked = harnessInput
+        ? null
+        : await providerActionError([...requiredProviders], {
+            repoRoot,
+            profileFor: (provider) => (provider === fallback ? parsed.data.agentProfile : undefined),
+          });
       if (blocked) return c.json({ error: blocked }, 409);
       // A composer override names an account the user just picked, so a stale id (deleted since
       // the page loaded) is answered honestly instead of quietly running on the default — the
@@ -5064,7 +5712,7 @@ export function createApp(deps: ServerDeps) {
       }
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
-      const input = {
+      const input: StartRunInput = {
         task: parsed.data.task,
         model: parsed.data.model,
         reasoningEffort: parsed.data.reasoningEffort,
@@ -5077,6 +5725,7 @@ export function createApp(deps: ServerDeps) {
         branch: parsed.data.branch,
         ...(parsed.data.readOnly ? { readOnly: true } : {}),
         autonomous: parsed.data.autonomous,
+        harness: harnessInput as StartRunInput['harness'],
         // Opt-in inbox (#471): the capability is the ceiling, so a client asking
         // for follow-ups on a server that has them off gets a plain `false`
         // rather than an error — the run is still perfectly valid without them.
@@ -5158,7 +5807,11 @@ export function createApp(deps: ServerDeps) {
             400,
           );
         }
-        if (!manager.editTask(id, parsed.data.task)) {
+        const edited = manager.editTask(id, parsed.data.task);
+        if (edited === 'missing-issue') {
+          return c.json({ error: 'harness fix workflow requires a concrete issue id' }, 400);
+        }
+        if (!edited) {
           return c.json({ error: 'run already started' }, 409);
         }
       }
@@ -5242,21 +5895,109 @@ export function createApp(deps: ServerDeps) {
         //   live session → delivered · still queued → folded into the prompt
         //   starting up or between sessions → buffered (1408d7cb) · anything else → 409
         if (manager.sendMessage(id, content)) return c.json((answered = { delivered: true as const }));
+        // Only a live model session can take an image; a stacked or boundary message reaches no phase.
+        if (run.harness && parsed.data.images.length > 0) {
+          return c.json({ error: HARNESS_TEXT_ONLY_ERROR }, 409);
+        }
 
+        // A harness run with a ledger resumes from it, never from its folded prompt: a message stacked
+        // onto a resumed run waiting in the queue was acknowledged and never applied.
+        const harnessResumes = Boolean(run.harness) && readLedger(dataDir, id).status !== 'missing';
         const currentRun = store.getRun(id);
         // Bounds apply only to a message that is actually about to be stacked. Without this
         // gate an over-long message posted to a *finished* run would answer `400 prompt too
         // long` when the truthful answer is `409 session closed`. The status read is safe
         // here because it only decides whether to reject EARLY — `enqueueMessage` still
         // re-checks against the engine's own queue before writing anything.
-        if (currentRun?.status === 'queued') {
+        if (currentRun?.status === 'queued' && !harnessResumes) {
           const refusal = queuedStackRefusal(dataDir, currentRun, content, parsed.data.text);
           if (refusal) return c.json({ error: refusal }, 400);
         }
 
-        const queued = manager.enqueueMessage(id, content);
+        const queued = harnessResumes ? null : manager.enqueueMessage(id, content);
         if (queued) return c.json((answered = { queued: true as const, message: queued }));
-        if (manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
+        if (!run.harness && manager.deferMessage(id, content)) return c.json((answered = { deferred: true as const }));
+        if (
+          run.harness &&
+          ['queued', 'running', 'waiting'].includes(store.getRun(id)?.status ?? '')
+        ) {
+          const harnessDataDir = c.get('project').dataDir;
+          let read = readLedger(harnessDataDir, id);
+          if (read.status === 'missing') {
+            const profile = harnessProfileSchema.safeParse(run.harness.profile);
+            if (!profile.success) {
+              return c.json(
+                { error: `harness recovery profile is invalid: ${run.harness.profile}` },
+                409,
+              );
+            }
+            const ledger = createLedger({
+              workflow: run.harness.workflow,
+              requestedProfile: profile.data,
+              skillProfile: run.harness.skillProfile,
+              subject: run.harness.issueId
+                ? {
+                    kind: 'issue',
+                    id: run.harness.issueId,
+                    text: foldedTask(run.task, run.queuedMessages ?? []),
+                  }
+                : {
+                    kind: 'brief',
+                    text: foldedTask(run.task, run.queuedMessages ?? []),
+                  },
+            });
+            saveLedger(harnessDataDir, id, ledger);
+            read = { status: 'valid', path: '', ledger };
+          }
+          if (read.status !== 'valid') {
+            return c.json(
+              {
+                error:
+                  read.status === 'corrupt'
+                    ? `harness ledger is corrupt: ${read.error}`
+                    : `harness ledger version ${String(read.version)} is not supported`,
+              },
+              409,
+            );
+          }
+          const pending = read.ledger.pendingMessages.filter((message) => !message.consumedAt);
+          if (pending.length >= MAX_QUEUED_MESSAGES) {
+            return c.json(
+              { error: `too many phase-boundary messages — ${MAX_QUEUED_MESSAGES} message limit` },
+              400,
+            );
+          }
+          const totalChars =
+            pending.reduce((sum, message) => sum + message.text.length, 0) +
+            parsed.data.text.length;
+          if (totalChars > MAX_FOLDED_TASK_CHARS) {
+            return c.json(
+              {
+                error: `phase-boundary messages exceed the ${MAX_FOLDED_TASK_CHARS} character limit`,
+              },
+              400,
+            );
+          }
+          const message = {
+            id: randomUUID(),
+            text: parsed.data.text,
+            createdAt: new Date().toISOString(),
+          };
+          read.ledger.pendingMessages.push(message);
+          saveLedger(harnessDataDir, id, read.ledger);
+          store.appendEvent(id, {
+            type: 'user-message',
+            queued: true,
+            text: message.text,
+            imageCount: 0,
+            images: [],
+          });
+          store.appendEvent(id, {
+            type: 'harness.message.queued',
+            message: { id: message.id, createdAt: message.createdAt },
+          });
+          return c.json((answered = { queuedForPhase: true as const }));
+        }
         return c.json({ error: 'session closed' }, 409);
       } finally {
         if (receipt && 'settle' in receipt) receipt.settle(answered);
@@ -5298,6 +6039,7 @@ export function createApp(deps: ServerDeps) {
       }
 
       if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
+      if (run.harness && parsed.data.images?.length) return c.json({ error: HARNESS_TEXT_ONLY_ERROR }, 409);
       const images = resolveAttachments(parsed.data.images);
       if (typeof images === 'string') return c.json({ error: images }, 400);
       if (images !== undefined) {
@@ -5329,12 +6071,19 @@ export function createApp(deps: ServerDeps) {
 
     // "Finish": gracefully close a waiting session — the run completes as done.
     .post('/runs/:id/finish', (c) => {
-      const { store, manager } = c.get('project');
+      const { dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       const before = store.getRun(id);
       if (!before) return c.json({ error: 'not found' }, 404);
+      // Accepting a harness review is publishing's twin: the same gate, or a contested outcome
+      // finished as done without its risk ever being accepted.
+      const acceptBlock = before.status === 'review' ? harnessPublishBlockReason(before, dataDir) : null;
+      if (acceptBlock) return c.json({ error: acceptBlock }, 409);
       const finished = manager.finish(id);
       if (!finished) return c.json({ error: 'no open session' }, 409);
+      // Finishing a harness phase session leaves the driver conducting the run, and the driver
+      // releases its own claim — as archive/remove-worktree/delete check too.
+      if (before.harness && !manager.isActive(id)) releaseLedgerIssueClaim(dataDir, id);
       if (before.status === 'review') track('review_decided', { label: 'accepted' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
       return c.json({ finished: true });
     })
@@ -5885,9 +6634,11 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/git/commit', jsonZodValidator(gitCommitSchema), async (c) => {
-      const { store } = c.get('project');
+      const { dataDir, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const publishBlock = harnessPublishBlockReason(run, dataDir);
+      if (publishBlock) return c.json({ error: publishBlock }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const parsed = { data: c.req.valid('json') };
@@ -5899,9 +6650,11 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/git/push', async (c) => {
-      const { root: repoRoot, store } = c.get('project');
+      const { root: repoRoot, dataDir, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
+      const publishBlock = harnessPublishBlockReason(run, dataDir);
+      if (publishBlock) return c.json({ error: publishBlock }, 409);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       let result;
@@ -5950,6 +6703,8 @@ export function createApp(deps: ServerDeps) {
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
+      const publishBlock = harnessPublishBlockReason(run, dataDir);
+      if (publishBlock) return c.json({ error: publishBlock }, 409);
       if (manager.isActive(id)) return c.json({ error: 'run is still active — wait for the review gate' }, 409);
       // A pull-request head run's branch holds the whole foreign PR under this run's changes: a
       // draft PR from it into the default base would re-propose that PR (spec
@@ -5980,8 +6735,16 @@ export function createApp(deps: ServerDeps) {
       if (!publish) {
         const branch = run.branch;
         publish = (async () => {
+          const harnessRead = run.harness ? readLedger(dataDir, id) : null;
+          const preparedHarnessBody =
+            harnessRead?.status === 'valid' ? harnessRead.ledger.stage.prBody : undefined;
           const outcome = await withWorktreeMutation(c.get('project'), id, () =>
-            createDraftPr({ repoRoot, run, handoffText: readHandoff(dataDir, id), draft }),
+            createDraftPr({
+              repoRoot,
+              run,
+              handoffText: preparedHarnessBody ?? readHandoff(dataDir, id),
+              draft,
+            }),
           );
           if (!outcome.ok) return outcome;
           // A number the cockpit asked about BEFORE the pull request existed is cached as "this
@@ -6000,6 +6763,7 @@ export function createApp(deps: ServerDeps) {
             type: 'note',
             message: `${draft ? 'draft PR' : 'PR'} created: ${outcome.url}${outcome.dryRun ? ' (dry run — no real PR)' : ''}`,
           });
+          if (run.harness) releaseLedgerIssueClaim(dataDir, id);
           return outcome;
         })()
           .then((outcome) => ({ outcome, branch }))
@@ -6040,7 +6804,7 @@ export function createApp(deps: ServerDeps) {
     // Archived tasks keep their worktree for inspection; this is the explicit
     // "🧹 Remove worktree" cleanup (spec 006).
     .post('/runs/:id/remove-worktree', async (c) => {
-      const { root: repoRoot, store, manager } = c.get('project');
+      const { root: repoRoot, dataDir, store, manager } = c.get('project');
       const id = c.req.param('id');
       const run = store.getRun(id);
       if (!run) return c.json({ error: 'not found' }, 404);
@@ -6051,6 +6815,7 @@ export function createApp(deps: ServerDeps) {
           stopTaskProcesses(id);
           if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
           store.updateRun(id, { worktreePath: undefined, branch: undefined });
+          if (run.harness) releaseLedgerIssueClaim(dataDir, id);
           if (run.prHead) await manager.sweepPrHeadRefs();
           return c.json({ removed: true });
         });
@@ -6070,6 +6835,7 @@ export function createApp(deps: ServerDeps) {
           // Layouts go with the task, and only with it — archiving keeps them (spec §5.3).
           deleteRunLayouts(dataDir, id);
           if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
+          if (run.harness) releaseLedgerIssueClaim(dataDir, id);
           const deleted = store.deleteRun(id);
           // The run's `refs/cezar/pr/<n>` goes with the last run that needed it (Phase 3).
           if (deleted && run.prHead) await manager.sweepPrHeadRefs();
@@ -7584,6 +8350,9 @@ export function createApp(deps: ServerDeps) {
       // Optional review gate (#489): tri-state — null means "no config key, the
       // CEZ_REVIEW_GATE env default (OFF) decides".
       reviewGate: config.reviewGate ?? null,
+      // Multi-model harness feature flag: off by default; gates the harness
+      // workflows, the composer's Multi-model tab and the Settings section.
+      multiModel: config.multiModel,
       profile: config.profile ?? null,
       taskWorkspace: config.taskWorkspace ?? null,
       landing: config.landing ?? null,
@@ -7615,6 +8384,9 @@ export function createApp(deps: ServerDeps) {
         (parsed.data.defaultModels !== undefined || parsed.data.defaultModelsAuto !== undefined)
       ) {
         return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      if (parsed.data.multiModel === true && configTrackedByGit(repoRoot)) {
+        return c.json({ error: MULTI_MODEL_TRACKED_ERROR }, 409);
       }
       try {
         const configPath = join(dataDir, 'config.json');
@@ -7677,6 +8449,10 @@ export function createApp(deps: ServerDeps) {
           if (parsed.data.reviewGate !== undefined) {
             if (parsed.data.reviewGate === null) delete raw.reviewGate;
             else raw.reviewGate = parsed.data.reviewGate;
+          }
+          if (parsed.data.multiModel !== undefined) {
+            if (parsed.data.multiModel === null) delete raw.multiModel;
+            else raw.multiModel = parsed.data.multiModel;
           }
           // Trunk-based keys (spec 2026-10-20-trunk-based-projects): null or '' clears.
           for (const key of ['profile', 'taskWorkspace', 'landing', 'defaultSkill', 'askSkill'] as const) {
@@ -8060,6 +8836,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
     .route('/', automationsRoutes)
+    .route('/', harnessRoutes)
     .route('/', webhookRoutes)
     .route('/', dispatchRoutes)
     .route('/', runsRoutes)

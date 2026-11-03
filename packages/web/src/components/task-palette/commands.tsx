@@ -107,6 +107,9 @@ export interface TaskCommandInput {
   prUrl?: string
   /** An absolute link to this task, for Copy link. */
   taskUrl: string
+  /** Why a harness review cannot be accepted yet — the same gate the Review panel and the server
+   *  apply. */
+  acceptBlocked?: string
 }
 
 const icon = (Icon: typeof PinIcon) => <Icon aria-hidden="true" />
@@ -124,7 +127,7 @@ export function buildTaskCommands(input: TaskCommandInput, on: TaskCommandHandle
   return [...commands, ...tabCommands(strip, commands)]
 }
 
-function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
+function actionCommands({ run, workspace, acceptBlocked }: TaskCommandInput, on: TaskCommandHandlers): TaskCommand[] {
   const flags = runActionFlags(run)
   const live = isRunActive(run.status) ? 'Stop the task first' : undefined
   const gated = run.worktreeLifecycle?.activeOperationId ? 'Resolve the worktree operation first' : undefined
@@ -196,6 +199,7 @@ function actionCommands({ run, workspace }: TaskCommandInput, on: TaskCommandHan
       label: 'Accept changes without a PR',
       icon: icon(CheckIcon),
       keywords: ['finish', 'review', 'done'],
+      ...(acceptBlocked ? { unavailable: acceptBlocked } : {}),
       perform: on.finish,
     })
   }

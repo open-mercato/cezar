@@ -122,7 +122,7 @@ describe('workspace semaphore across RunManagers (step 2.5)', () => {
     const parent = store.createRun({ title: 'parent', workflow: 'quick-task', task: 't', steps: [] });
     const child = store.createRun({ title: 'child', workflow: 'quick-task', task: 't', steps: [] });
     store.updateRun(child.id, { status: 'queued', dispatch: { rootRunId: parent.id, parentRunId: parent.id } });
-    internals.active.set(parent.id, {});
+    internals.active.set(parent.id, { interruptHandlers: new Set(), liveSessions: new Set() });
     internals.waiting.add(parent.id);
     // Second park, after the first reviewer reported: this turn dispatched nothing.
     internals.enterMonitoring(parent.id, false);

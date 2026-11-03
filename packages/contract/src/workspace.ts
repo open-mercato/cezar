@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { worktreeLifecycleConfigSchema } from './worktree-lifecycle.ts';
 import { type Runner, runnerSchema, perRunner } from './runners.ts';
+import { harnessPresetSchema } from './harness.ts';
 import { MAX_SAVED_WORKSPACE_LAYOUTS, savedWorkspaceLayoutSchema } from './workspace-layouts.ts';
 
 /**
@@ -191,6 +192,8 @@ export const uiStateSchema = z.looseObject({
   /** Skill selection frequency (#408): name → times chosen, across BOTH composers. */
   skillUsage: z.record(z.string(), z.number()).optional(),
   runsView: z.enum(['list', 'table']).optional(),
+  /** Saved multi-model role lineups, normalized by the cockpit on read. */
+  harnessPresets: z.array(harnessPresetSchema).optional(),
   /** The GitHub tab's last-selected sub-tab (#417). Absent → issues. */
   githubView: z.enum(['issues', 'prs']).optional(),
   /** The GitHub tab's list order. Absent → newest first, which is what `gh` already returns. */
@@ -440,6 +443,9 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Multi-model harness feature flag (off by default): gates the harness workflows, the
+   *  composer's Multi-model tab and the Settings → Harness section. */
+  multiModel: z.boolean(),
   /** Trunk-based projects (spec 2026-10-20-trunk-based-projects); null = the key is unset
    *  and the branch-per-task default applies. */
   profile: z.enum(['branches', 'trunk']).nullable(),
@@ -497,6 +503,8 @@ export const setConfigInputSchema = z.object({
   liveTitleUpdates: z.boolean().nullable().optional(),
   /** null clears the key back to the env-default behavior (OFF). */
   reviewGate: z.boolean().nullable().optional(),
+  /** Multi-model harness feature flag: null clears the key back to the default (OFF). */
+  multiModel: z.boolean().nullable().optional(),
   /** Trunk-based keys (spec 2026-10-20-trunk-based-projects): `null` clears each back to
    *  the branch-per-task default. */
   profile: z.enum(['branches', 'trunk']).nullable().optional(),

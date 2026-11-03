@@ -136,6 +136,21 @@ describe('useRunEvents — subscription', () => {
     ])
   })
 
+  // Review round 2: the harness Review page keeps only its own frames; a page that never shows the
+  // transcript held every token delta of the run otherwise.
+  it('retains only the frames `keep` accepts', async () => {
+    const { result } = renderHook(() =>
+      useRunEvents('run-1', { keep: (event) => event.type.startsWith('harness.') }))
+    const source = FakeEventSource.last
+
+    source.emit('ui-event', line(1, 'item.delta', { itemId: 'm1', field: 'text', delta: 'noise' }))
+    source.emit('ui-event', line(2, 'harness.phase.updated', { phase: { id: 'implement' } }))
+    source.emit('run-event', line(3, 'token-usage', { tokensUsed: 42 }))
+    await flushEvents()
+
+    expect(result.current.map((event) => [event.seq, event.type])).toEqual([[2, 'harness.phase.updated']])
+  })
+
   it('coalesces run-record frames into one onRun on the batch flush', async () => {
     const runs: RunRecord[] = []
     renderHook(() => useRunEvents('run-1', { onRun: (run) => runs.push(run) }))

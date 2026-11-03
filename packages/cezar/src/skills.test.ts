@@ -1,9 +1,11 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { ensureSkillOnDisk } from './skills-materialize.ts';
 import {
   BUILTIN_SKILLS_DIR,
+  discoverSkillCandidates,
   discoverSkills,
   filterImportedTeamSkills,
   parseFrontmatter,
@@ -140,6 +142,113 @@ describe('discoverSkills local entrypoints', () => {
 
     expect(skills.map((skill) => skill.name)).toEqual(['flat', 'legacy', 'om-example']);
     expect(skills.some((skill) => skill.name === 'agentic-setup')).toBe(false);
+  });
+
+  // generic bundled playbooks reached every user's catalog and planner prompt with
+  // multi-model off, on a protected surface (BACKWARD_COMPATIBILITY.md §2, §5).
+  it('hides every bundled skill while multi-model is off, and keeps them for recovery', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-bundled-'));
+    const recovered = await mkdtemp(join(tmpdir(), 'cez-recovered-skills-'));
+    tempDirs.push(repoRoot, bundled, recovered);
+    for (const [name, requires] of [
+      ['cez-setup-harness', 'requires: [cez-harness]'],
+      ['cez-harness', 'requires: [cez-code-review]'],
+      ['cez-code-review', ''],
+    ]) {
+      await mkdir(join(bundled, name!), { recursive: true });
+      await writeFile(join(bundled, name!, 'SKILL.md'), `---\nname: ${name}\n${requires}\n---\n${name} body`);
+    }
+    const publicNames = (await discoverSkills(repoRoot, { bundledDir: bundled }))
+      .filter((skill) => skill.source === 'bundled').map((skill) => skill.name);
+    expect(publicNames).toEqual([]);
+
+    const internal = await discoverSkills(repoRoot, { bundledDir: bundled, includeHarness: true });
+    const setup = internal.find((skill) => skill.name === 'cez-setup-harness')!;
+    expect(await ensureSkillOnDisk(recovered, setup, internal)).toBe(true);
+    for (const name of ['cez-setup-harness', 'cez-harness', 'cez-code-review']) {
+      expect((await stat(join(recovered, '.claude/skills', name, 'SKILL.md'))).isFile()).toBe(true);
+    }
+    expect((await discoverSkillCandidates(repoRoot, 'cez-harness', { bundledDir: bundled }))[0]?.source).toBe('bundled');
+
+    await mkdir(join(repoRoot, '.ai/cezar'), { recursive: true });
+    await writeFile(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ multiModel: true, skillsRepos: [] }));
+    expect((await discoverSkills(repoRoot, { bundledDir: bundled })).filter((skill) => skill.source === 'bundled').map((skill) => skill.name))
+      .toEqual(['cez-code-review', 'cez-harness', 'cez-setup-harness']);
+
+    await writeFile(join(repoRoot, '.ai/cezar/config.json'), JSON.stringify({ multiModel: false, skillsRepos: [] }));
+    await mkdir(join(repoRoot, '.ai/skills/cez-setup-harness'), { recursive: true });
+    await writeFile(join(repoRoot, '.ai/skills/cez-setup-harness/SKILL.md'), '---\nname: cez-setup-harness\n---\nExplicit local playbook');
+    expect((await discoverSkills(repoRoot, { bundledDir: bundled })).find((skill) => skill.name === 'cez-setup-harness')?.source).toBe('ai');
+  });
+
+  it('keeps the shipped cez-* collection out of a fresh repo\'s catalog', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    expect((await discoverSkills(repoRoot)).filter((skill) => skill.source === 'bundled')).toEqual([]);
+    const recovery = await discoverSkills(repoRoot, { includeHarness: true });
+    expect(recovery.filter((skill) => skill.source === 'bundled').map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(['cez-code-review', 'cez-fix', 'cez-harness', 'cez-spec-writing']),
+    );
+  });
+
+  it('discovers bundled skills last and loses name collisions to every other source', async () => {
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-bundled-'));
+    tempDirs.push(bundled);
+    await mkdir(join(bundled, 'cez-harness'), { recursive: true });
+    await writeFile(
+      join(bundled, 'cez-harness', 'SKILL.md'),
+      '---\nname: cez-harness\ndescription: bundled runtime\nrequires: [om-code-review]\n---\nbody',
+    );
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+
+    const skills = await discoverSkills(repoRoot, { bundledDir: bundled, includeHarness: true });
+    const found = skills.find((s) => s.name === 'cez-harness');
+    expect(found?.source).toBe('bundled');
+    expect(found?.requires).toEqual(['om-code-review']);
+
+    await mkdir(join(repoRoot, '.ai/skills/cez-harness'), { recursive: true });
+    await writeFile(join(repoRoot, '.ai/skills/cez-harness/SKILL.md'), '---\nname: cez-harness\n---\nlocal');
+    const again = await discoverSkills(repoRoot, { bundledDir: bundled });
+    expect(again.find((s) => s.name === 'cez-harness')?.source).toBe('ai');
+  });
+
+  it('can return every same-name definition for explicit extension composition', async () => {
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-bundled-'));
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(bundled, repoRoot);
+    await mkdir(join(bundled, 'om-code-review'), { recursive: true });
+    await writeFile(
+      join(bundled, 'om-code-review', 'SKILL.md'),
+      '---\nname: om-code-review\n---\nshared',
+    );
+    await mkdir(join(repoRoot, '.ai/skills/om-code-review'), { recursive: true });
+    await writeFile(
+      join(repoRoot, '.ai/skills/om-code-review/SKILL.md'),
+      '---\nname: om-code-review\n---\nextension',
+    );
+
+    const candidates = await discoverSkillCandidates(repoRoot, 'om-code-review', {
+      bundledDir: bundled,
+    });
+
+    expect([candidates[0]?.source, candidates[0]?.body.trim()]).toEqual([
+      'ai',
+      'extension',
+    ]);
+    expect(
+      candidates.some(
+        (skill) => skill.source === 'bundled' && skill.body.trim() === 'shared',
+      ),
+    ).toBe(true);
+  });
+
+  it('disables bundled scanning when bundledDir is null', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    const skills = await discoverSkills(repoRoot, { bundledDir: null });
+    expect(skills.some((s) => s.source === 'bundled')).toBe(false);
   });
 
   it('follows npx-skills directory mirrors and deduplicates them by skill name', async () => {

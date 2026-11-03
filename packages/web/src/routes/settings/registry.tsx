@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  NetworkIcon,
   WebhookIcon,
   BookmarkIcon,
   BotIcon,
@@ -18,7 +19,7 @@ import {
   TicketIcon,
   ShieldCheckIcon,
 } from 'lucide-react'
-import type { ComponentType, SVGProps } from 'react'
+import { Suspense, type ComponentType, type SVGProps } from 'react'
 
 import type { Capabilities } from '@open-mercato/cezar-api-client'
 import { AccountsSection } from './accounts-section'
@@ -40,6 +41,19 @@ import { TrackerSection } from './tracker-section'
 import { ProjectSecretsSection, WorkspaceSecretsSection } from './secrets-section'
 import { WebhooksSection } from './webhooks-section'
 import { IntegrationsSection } from './integrations-section'
+import { lazyRoute } from '@/lib/telemetry'
+
+// Multi-model is opt-in, so its section is a chunk of its own (UI performance gate).
+const HarnessSectionBody = lazyRoute('settings-harness', () =>
+  import('./harness-section').then((m) => ({ default: m.HarnessSection })),
+)
+function HarnessSection() {
+  return (
+    <Suspense fallback={null}>
+      <HarnessSectionBody />
+    </Suspense>
+  )
+}
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -59,6 +73,7 @@ import { IntegrationsSection } from './integrations-section'
 
 export type SettingsSectionId =
   | 'bookmarklets'
+  | 'harness'
   | 'appearance'
   | 'accounts'
   | 'agents'
@@ -135,6 +150,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Providers, default runner and models.',
     icon: BotIcon,
     component: AgentsSection,
+    scope: 'project',
+  },
+  {
+    id: 'harness',
+    title: 'Harness',
+    description: 'Multi-model runs: profiles, model access, staged-only pipeline.',
+    icon: NetworkIcon,
+    component: HarnessSection,
     scope: 'project',
   },
   {
@@ -265,22 +288,28 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  * entirely, and so does everything belonging to the OTHER scope. The two areas are rendered by
  * the same shell, so this filter is the only thing keeping them apart.
  */
+/** What decides whether a section is listed: the health capabilities, plus the project's
+ *  `multiModel` config flag. The Harness section stays hidden until the project explicitly
+ *  enables it, including while config is loading or another project is expanded. */
+export type SectionVisibility = Partial<Pick<Capabilities, 'singleProject'>> & { multiModel?: boolean }
+
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: SectionVisibility,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      !(capabilities?.multiModel !== true && section.id === 'harness'),
   )
 }
 
 /** Both areas at once — what the unified nav (spec 2026-10-13-unified-settings) renders: the
  *  global sections as flat rows, the project sections under every project in the tree. */
 export function settingsSectionsByScope(
-  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
+  capabilities?: SectionVisibility,
 ): Record<SettingsScope, SettingsSection[]> {
   return {
     global: visibleSettingsSections('global', capabilities),

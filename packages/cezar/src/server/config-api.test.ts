@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,6 +72,22 @@ describe('the config API', () => {
       body: JSON.stringify(body),
     });
 
+  // the toggle must say why a committed config cannot enable multi-model runs.
+  it('refuses to enable multiModel in a git-tracked config.json', async () => {
+    const git = (...args: string[]) =>
+      execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repoRoot, stdio: 'ignore' });
+    git('init', '-q');
+    writeFileSync(configPath(), JSON.stringify({ baseBranch: 'main' }));
+    git('add', '.ai/cezar/config.json');
+    git('commit', '-q', '-m', 'commit cezar config');
+
+    const res = await put({ multiModel: true });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toMatch(/git-tracked/);
+    expect(rawFile().multiModel).toBeUndefined();
+    expect((await put({ multiModel: false })).status).toBe(200);
+  });
+
   it('GET answers the zero-config defaults when no file exists', async () => {
     const res = await get();
     expect(res.status).toBe(200);
@@ -86,6 +103,7 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      multiModel: false,
       profile: null,
       taskWorkspace: null,
       landing: null,
@@ -272,6 +290,7 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      multiModel: false,
       profile: null,
       taskWorkspace: null,
       landing: null,

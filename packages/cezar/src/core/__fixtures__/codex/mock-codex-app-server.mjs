@@ -129,13 +129,27 @@ rl.on('line', (line) => {
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
   } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
-    const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
+    const expectedSandbox =
+      process.env.CEZ_CODEX_NETWORK === '0' ||
+      process.env.CEZ_HARNESS_STAGE_ONLY === '1'
+        ? 'workspace-write'
+        : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
       return;
     }
     if (process.argv.includes('sandbox_workspace_write.network_access=true')) {
       emit({ id: msg.id, error: { code: -32602, message: 'workspace-write override is obsolete in full-access mode' } });
+      return;
+    }
+    // Opt-in assertion for the stage-only writable-roots grant: exactly the
+    // phase-result dir must arrive as spawn-time sandbox config, or the thread must not start.
+    const requiredRoot = process.env.MOCK_CODEX_REQUIRE_WRITABLE_ROOTS;
+    if (
+      requiredRoot &&
+      !process.argv.includes(`sandbox_workspace_write.writable_roots=${JSON.stringify([requiredRoot])}`)
+    ) {
+      emit({ id: msg.id, error: { code: -32602, message: `expected writable_roots config carrying ${requiredRoot}` } });
       return;
     }
     if (msg.method === 'thread/start') {
@@ -180,6 +194,12 @@ rl.on('line', (line) => {
     // the whole event, which is exactly why it used to vanish into a quiet note (#955).
     if (scenario === 'reject' && turnSeq > 1) {
       emit({ id: msg.id, error: { code: -32603, message: 'thread is busy compacting context' } });
+      return;
+    }
+    // Opt-in assertion: reasoning effort rides on turn/start, the only request codex reads it from.
+    const requiredEffort = process.env.MOCK_CODEX_REQUIRE_EFFORT;
+    if (requiredEffort && msg.params?.effort !== requiredEffort) {
+      emit({ id: msg.id, error: { code: -32602, message: `expected turn/start effort ${requiredEffort}, got ${msg.params?.effort}` } });
       return;
     }
     const turnId = scenario ? `turn_mock_${turnSeq}` : 'turn_mock_1';

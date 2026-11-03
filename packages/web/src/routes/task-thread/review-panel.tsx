@@ -45,7 +45,15 @@ import { writeClipboard } from '@/lib/clipboard'
  * ride Send back — the review gate is the self-review moment, and notes sent without them would
  * leave them pending for some later message.
  */
-export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+export function ReviewPanel({
+  run,
+  diffComments,
+  publishBlockedReason,
+}: {
+  run: ApiRun
+  diffComments?: DiffComments
+  publishBlockedReason?: string
+}) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
       <div
@@ -62,14 +70,22 @@ export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?:
       </div>
 
       <RunDiff runId={run.id} />
-      <ReviewActions run={run} diffComments={diffComments} />
+      <ReviewActions run={run} diffComments={diffComments} publishBlockedReason={publishBlockedReason} />
     </section>
   )
 }
 
 // ---- notes + exits --------------------------------------------------------------------------
 
-function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: DiffComments }) {
+function ReviewActions({
+  run,
+  diffComments,
+  publishBlockedReason,
+}: {
+  run: ApiRun
+  diffComments?: DiffComments
+  publishBlockedReason?: string
+}) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
   // Review notes are the second-longest thing anyone types into a task, and they are typed while
@@ -238,8 +254,12 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
             data-slot="review-draft-pr"
             variant="outline"
             size="sm"
-            title={git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR'}
-            disabled={draftPrBusy}
+            title={
+              publishBlockedReason ??
+              (git.byAgent ? 'Ask the agent to push the branch and open a draft PR' : 'Push the branch and open a draft PR')
+            }
+            aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+            disabled={draftPrBusy || publishBlockedReason !== undefined}
             aria-busy={draftPrBusy || undefined}
             onClick={openDraftPr}
           >
@@ -256,14 +276,23 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
           variant="contrast"
           size="sm"
           className="ml-auto"
-          title={finishTitle('review')}
-          disabled={finish.isPending}
+          title={publishBlockedReason ?? finishTitle('review')}
+          aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+          disabled={finish.isPending || publishBlockedReason !== undefined}
           onClick={() => finish.mutate()}
         >
           <CheckIcon aria-hidden="true" />
           Accept
         </Button>
       </div>
+      {publishBlockedReason ? (
+        <p
+          id="harness-publish-guidance"
+          className="text-xs text-warning"
+        >
+          {publishBlockedReason}
+        </p>
+      ) : null}
       {manual !== null ? <ManualMergeLine command={manual} /> : null}
     </div>
   )

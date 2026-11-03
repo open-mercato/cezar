@@ -205,24 +205,29 @@ export function buildTranscriptRows(
         content: { kind: 'user-message', message: section.userMessage },
       })
     }
-    for (const block of groupThreadItems([...section.entries])) {
+    const blocks = groupThreadItems([...section.entries])
+    const timeBefore = blocks.findIndex((block) =>
+      block.kind === 'entry' && block.entry.kind === 'note' && block.entry.marker === 'step-start' && block.entry.afterTurnEnd === true,
+    )
+    const timeRow: TranscriptRowModel | undefined = section.completedAt !== undefined ? {
+      key: `${section.id}:turn-time`,
+      scope: section.id,
+      content: {
+        kind: 'turn-time',
+        completedAt: section.completedAt,
+        ...(section.startedAt !== undefined ? { startedAt: section.startedAt } : {}),
+      },
+    } : undefined
+    for (const [index, block] of blocks.entries()) {
+      // Keep a phase's finish above the next phase's divider.
+      if (timeRow && index === timeBefore) rows.push(timeRow)
       rows.push({
         key: `${section.id}:${block.id}`,
         scope: section.id,
         content: { kind: 'block', block },
       })
     }
-    if (section.completedAt !== undefined) {
-      rows.push({
-        key: `${section.id}:turn-time`,
-        scope: section.id,
-        content: {
-          kind: 'turn-time',
-          completedAt: section.completedAt,
-          ...(section.startedAt !== undefined ? { startedAt: section.startedAt } : {}),
-        },
-      })
-    }
+    if (timeRow && timeBefore === -1) rows.push(timeRow)
   }
   return rows
 }
@@ -523,9 +528,9 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
   if (previous === undefined || previous.kind !== next.kind || previous.id !== next.id) return false
   switch (next.kind) {
     case 'message':
-      return previous.kind === 'message' && sameFields(previous, next, MESSAGE_COMPARE_FIELDS)
+      return previous.kind === 'message' && sameFields<UiMessageItem>(previous, next, MESSAGE_COMPARE_FIELDS)
     case 'reasoning':
-      return previous.kind === 'reasoning' && sameFields(previous, next, REASONING_COMPARE_FIELDS)
+      return previous.kind === 'reasoning' && sameFields<UiReasoningItem>(previous, next, REASONING_COMPARE_FIELDS)
     case 'tool':
       return previous.kind === 'tool' && sameToolItem(previous, next)
     case 'note':
@@ -566,6 +571,8 @@ const NOTE_COMPARE_FIELDS = {
   id: true,
   text: true,
   tone: true,
+  marker: true,
+  afterTurnEnd: true,
 } satisfies Record<keyof ThreadNote, true>
 
 const IMAGE_COMPARE_FIELDS = {

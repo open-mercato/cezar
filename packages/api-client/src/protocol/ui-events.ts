@@ -279,6 +279,40 @@ export interface UiImageEvent {
   data: string
 }
 
+/**
+ * Harness driver events (spec 2026-07-23-harness-orchestration) — run-level
+ * snapshots emitted by the harness phase driver, not by backend mappers. The
+ * ledger schema on the server is authoritative; the UI treats these as
+ * replaceable snapshots keyed by phase/round identity.
+ */
+export interface UiHarnessPhaseUpdatedEvent {
+  type: 'harness.phase.updated'
+  phase: Record<string, unknown>
+}
+
+export interface UiHarnessReadinessUpdatedEvent {
+  type: 'harness.readiness.updated'
+  profile: string
+  models: Array<Record<string, unknown>>
+}
+
+export interface UiHarnessCouncilUpdatedEvent {
+  type: 'harness.council.updated'
+  council: Record<string, unknown>
+}
+
+export interface UiHarnessStageUpdatedEvent {
+  type: 'harness.stage.updated'
+  stage: Record<string, unknown>
+}
+
+/** A persisted feedback restart invalidates the previous implementation review cycle. */
+export interface UiHarnessFeedbackAppliedEvent {
+  type: 'harness.feedback.applied'
+  phaseId: string
+  messageIds: string[]
+}
+
 export type UiEvent =
   | UiSessionStartedEvent
   | UiSessionEndedEvent
@@ -295,6 +329,11 @@ export type UiEvent =
   | UiAskRequestedEvent
   | UiUsageUpdatedEvent
   | UiImageEvent
+  | UiHarnessPhaseUpdatedEvent
+  | UiHarnessReadinessUpdatedEvent
+  | UiHarnessCouncilUpdatedEvent
+  | UiHarnessStageUpdatedEvent
+  | UiHarnessFeedbackAppliedEvent
 
 /** Every v2 event discriminator. */
 export type UiEventType = UiEvent['type']

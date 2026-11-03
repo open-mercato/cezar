@@ -26,7 +26,7 @@ function serve(config: Partial<ConfigResponse> = {}) {
     systemPrompt: null,
     branchNaming: null,
     defaultModels: {},
-    modelsLocked: false,
+    modelsLocked: false, multiModel: false,
     maxParallel: 2,
     memoryLimitMb: null,
     worktreeRetention: 10,
