@@ -1,15 +1,44 @@
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
 import { KILL_GRACE_MS } from './claude-cli-runner.js';
-import { CodexAppServerRunner, userInputAnswers } from './codex-app-server-runner.js';
+import { CodexAppServerRunner, codexThreadOverrides, userInputAnswers } from './codex-app-server-runner.js';
 import { RunStore } from '../runs/store.ts';
+
+const MOCK_BIN = fileURLToPath(
+  new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+);
+
+type RpcRequest = { method?: string; params?: Record<string, unknown> };
+
+function requestsFrom(file: string): RpcRequest[] {
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8')
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as RpcRequest);
+}
+
+async function waitForRequest(file: string, method: string): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (requestsFrom(file).some((request) => request.method === method)) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for mock Codex request: ${method}`);
+}
+
+function paramsFor(requests: RpcRequest[], method: string): Record<string, unknown> {
+  const request = requests.find((candidate) => candidate.method === method);
+  if (!request) throw new Error(`missing mock Codex request: ${method}`);
+  return request.params ?? {};
+}
 
 /** Only the escalation tests below swap the child out; every other test in this
  *  file keeps spawning the real mock app-server through the untouched `spawn`. */
@@ -31,12 +60,8 @@ vi.mock('node:child_process', async (importOriginal) => {
  * than an agent failure, so the Codex branch needs its own regression.
  */
 describe('a teardown cezar initiated (codex app-server)', () => {
-  const mockBin = fileURLToPath(
-    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
-  );
-
   it('settles the session instead of failing it when the app-server exits 143', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     let sawText: () => void = () => {};
     const firstText = new Promise<void>((resolve) => {
@@ -66,7 +91,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
   }, 15_000);
 
   it('surfaces a failed turn as an AgentEvent error', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     const session = runner.startSession(
       { userPrompt: 'mock:turn-failed', cwd: process.cwd() },
@@ -81,7 +106,7 @@ describe('a teardown cezar initiated (codex app-server)', () => {
   }, 15_000);
 
   it('surfaces a turn/completed whose status is failed as an AgentEvent error', async () => {
-    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
     const events: AgentEvent[] = [];
     const session = runner.startSession(
       { userPrompt: 'mock:turn-completed-failed', cwd: process.cwd() },
@@ -93,6 +118,31 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
     expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
     expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
+});
+
+describe('a model the ChatGPT-plan login cannot use (1350055f)', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  it('names the model cezar sent and where to change it', async () => {
+    const events: AgentEvent[] = [];
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: 'mock:chatgpt-model', cwd: process.cwd(), model: 'gpt-5.1-codex' },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+
+    const error = events.find((e) => e.type === 'error');
+    expect(error).toEqual({
+      type: 'error',
+      message:
+        "400 invalid_request_error: The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account."
+        + ' — "gpt-5.1-codex" needs an OpenAI API-key login: pick another model for the task (auto uses your Codex default),'
+        + ' check the workflow step and the Codex default in Settings → Agents, or sign Codex in with an API key',
+    });
   }, 15_000);
 });
 
@@ -363,6 +413,86 @@ describe('an asynchronous turn/start or turn/steer rejection (#955)', () => {
   }, 20_000);
 });
 
+describe('Codex reasoning effort App Server mapping', () => {
+  it('sends effort only on turn/start, including a resumed thread, and never on steer', async () => {
+    const captureDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
+    const requestsFile = join(captureDir, 'requests.ndjson');
+    const runner = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'mock:hold-turn',
+        cwd: process.cwd(),
+        reasoningEffort: 'high',
+        env: { CEZ_MOCK_CODEX_REQUESTS_FILE: requestsFile },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+
+    try {
+      await waitForRequest(requestsFile, 'turn/start');
+      expect(session.sendMessage([{ type: 'text', text: 'steer this turn' }])).toBe(true);
+      await session.result;
+
+      const requests = requestsFrom(requestsFile);
+      expect(paramsFor(requests, 'turn/start')).toMatchObject({ effort: 'high' });
+      expect(paramsFor(requests, 'thread/start')).not.toHaveProperty('effort');
+      expect(paramsFor(requests, 'turn/steer')).not.toHaveProperty('effort');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(captureDir, { recursive: true, force: true });
+    }
+
+    const resumedDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
+    const resumedRequestsFile = join(resumedDir, 'requests.ndjson');
+    const resumed = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      {
+        userPrompt: 'continue',
+        cwd: process.cwd(),
+        sessionId: 'th_saved',
+        resume: true,
+        reasoningEffort: 'low',
+        env: { CEZ_MOCK_CODEX_REQUESTS_FILE: resumedRequestsFile },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    try {
+      await resumed.result;
+      const requests = requestsFrom(resumedRequestsFile);
+      expect(paramsFor(requests, 'turn/start')).toMatchObject({ effort: 'low' });
+      expect(paramsFor(requests, 'thread/resume')).not.toHaveProperty('effort');
+    } finally {
+      resumed.interrupt();
+      await resumed.result.catch(() => undefined);
+      rmSync(resumedDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('omits effort entirely when preserving Codex native defaults', async () => {
+    const captureDir = mkdtempSync(join(tmpdir(), 'cezar-codex-effort-'));
+    const requestsFile = join(captureDir, 'requests.ndjson');
+    const session = new CodexAppServerRunner({ bin: MOCK_BIN, timeoutMs: 0 }).startSession(
+      {
+        userPrompt: 'use native defaults',
+        cwd: process.cwd(),
+        env: { CEZ_MOCK_CODEX_REQUESTS_FILE: requestsFile },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    try {
+      await session.result;
+      expect(paramsFor(requestsFrom(requestsFile), 'turn/start')).not.toHaveProperty('effort');
+    } finally {
+      session.interrupt();
+      await session.result.catch(() => undefined);
+      rmSync(captureDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
 /**
  * #844 — the runner's own SIGTERM sets `ChildProcess.killed`, so a watchdog
  * gated on `!child.killed` refused to escalate for exactly the app-server it
@@ -474,6 +604,30 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       expect(fake.signals).toEqual(['SIGTERM']);
       vi.advanceTimersByTime(KILL_GRACE_MS);
       expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    });
+  });
+});
+
+describe('the artifacts directory under the Codex sandbox (spec 2026-10-22-html-artifacts)', () => {
+  const spec = { cwd: '/wt', model: 'gpt-5', env: { CEZ_ARTIFACTS_DIR: '/data/artifacts/r1' } };
+
+  it('adds it as a workspace-write writable root when CEZ_CODEX_NETWORK=0', () => {
+    expect(codexThreadOverrides(spec, { 'mcp_servers.x.command': 'y' }, { CEZ_CODEX_NETWORK: '0' })).toEqual({
+      model: 'gpt-5',
+      cwd: '/wt',
+      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+      config: { 'mcp_servers.x.command': 'y', 'sandbox_workspace_write.writable_roots': ['/data/artifacts/r1'] },
+    });
+  });
+
+  it('leaves the default full-access overrides byte-identical', () => {
+    expect(codexThreadOverrides(spec, undefined, {})).toEqual({
+      model: 'gpt-5',
+      cwd: '/wt',
+      sandbox: 'danger-full-access',
+      approvalPolicy: 'never',
+      config: undefined,
     });
   });
 });

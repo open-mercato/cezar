@@ -1,0 +1,29 @@
+---
+title: "Limit parallel tasks in a project"
+description: "Set how many tasks from one repository can run at the same time."
+related:
+  links:
+    - guides/parallel-tasks
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/projects-section.tsx
+    line: 758
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-22-per-project-concurrency.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The project limit controls how many of its tasks can run together. The global limit on parallel tasks still applies.
+
+## Where to find it
+
+Settings → Global → Projects → Max parallel tasks for the project
+
+## How to use it
+
+1. Open project settings and set the parallel task limit.
+2. Check how many tasks are running and how many are waiting in the queue.
+
+> **Good to know**: Raising the project limit does not reserve extra resources or increase the global limit.

@@ -1,0 +1,25 @@
+---
+title: "Human approval"
+description: "Pause the workflow for an Approve or Reject decision."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 5668
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Human gate pauses the workflow and displays a request for a decision. You can connect separate Approve and Reject paths. If you set a timeout, also connect the output that handles it.
+
+## Where to find it
+
+Workflows → Add node → Human gate
+
+## How to use it
+
+1. Add Human gate and write the request.
+2. Connect separate approve and reject paths.
+3. Optionally set a timeout and handle its output.
+
+> **Good to know**: While waiting for the decision, the task releases its concurrent execution slot.

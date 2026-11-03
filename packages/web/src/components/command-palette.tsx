@@ -15,6 +15,7 @@ import {
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
+import { useActiveForge } from '@/lib/active-forge'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
@@ -233,7 +234,7 @@ export function TaskColumnsHeading({ label }: { label: string }) {
   return (
     <span className="flex items-center gap-2">
       <span className="min-w-0 flex-1">{label}</span>
-      <span aria-hidden="true" className="flex shrink-0 gap-1 text-[11px] font-normal">
+      <span aria-hidden="true" className="flex shrink-0 gap-1 text-meta font-normal">
         <span className={cn(DATE_COLUMN, "after:content-['Updated']")} />
         <span className={cn(DATE_COLUMN, "after:content-['Created']")} />
       </span>
@@ -654,7 +655,7 @@ export const TaskItem = React.memo(function TaskItem({
             projectId={task.projectId}
             reference={chip}
             compact
-            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
           />
         </span>
       ) : null}
@@ -715,6 +716,8 @@ function PaletteContent({ close }: { close: () => void }) {
   React.useEffect(() => () => trackPaletteModes(sessionModes.current), [])
   const { theme, setTheme } = useTheme()
   const { activeProjectId, registry, health, multiProject, projectNames, repoBases, tasks } = usePaletteTasks()
+  // The Views row's GitHub gate follows the active project's forge, not the boot folder's (#1410).
+  const activeForge = useActiveForge()
   const skills = useSkills()
   // Skills list most-used → project → global (#519) — the same order every picker renders.
   const uiState = useUiState()
@@ -837,7 +840,7 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandItem>
           ) : null}
           {visibleNavItems({
-            forge: health.data?.forge != null,
+            forge: activeForge != null,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
             tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,

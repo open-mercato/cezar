@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { PRIVATE_MCP_FILE, PRIVATE_MCP_RUNNERS, privateMcpPath } from '../core/private-mcp.ts';
 
@@ -40,6 +40,14 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `~/.gemini/antigravity-cli` — no relocation var documented (see `PROFILE_ENV_VAR.antigravity`) */
+  antigravity: string;
+  /** `$PI_CODING_AGENT_DIR` or `~/.pi/agent` */
+  pi: string;
+  /** `$GEMINI_CLI_HOME/.gemini` or `~/.gemini` */
+  gemini: string;
+  /** `$KIMI_CODE_HOME` or `~/.kimi-code` */
+  kimi: string;
 }
 
 export interface ConfigFileDef {
@@ -85,10 +93,17 @@ const OPENCODE_CONFIG_DOCS = 'https://opencode.ai/docs/config/';
 const OPENCODE_RULES_DOCS = 'https://opencode.ai/docs/rules/';
 const CURSOR_CLI_CONFIG_DOCS = 'https://cursor.com/docs/cli/reference/configuration';
 const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli';
+const KIMI_DOCS = 'https://moonshotai.github.io/kimi-code/';
 const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
 const PRIVATE_MCP_DOCS = 'https://github.com/open-mercato/cezar/blob/main/.ai/specs/2026-10-07-private-project-mcp.md';
+const ANTIGRAVITY_DOCS = 'https://antigravity.google/docs/cli';
 const COPILOT_INSTRUCTIONS_DOCS =
   'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
+const PI_CONFIG_DOCS = 'https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/README.md';
+// Gemini CLI ships its docs in the npm package (`docs/`); these are the same files upstream.
+// Verified against the bundled copies in @google/gemini-cli 0.60.0, 2026-09-19 (#581).
+const GEMINI_CONFIG_DOCS = 'https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/configuration.md';
+const GEMINI_MEMORY_DOCS = 'https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/gemini-md.md';
 
 /**
  * The table. Order is presentation order: per runner, then user → project →
@@ -381,6 +396,115 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: COPILOT_INSTRUCTIONS_DOCS,
   },
 
+  // ---- Google Antigravity CLI ----
+  // Paths verified against agy 1.4.0 on 2026-10-18 (its embedded docs and a live install): the
+  // CLI's own settings live in ~/.gemini/antigravity-cli/settings.json (`model` holds the /model
+  // choice as its display name, which --model also accepts), MCP servers in the shared
+  // ~/.gemini/config/mcp_config.json (key: mcpServers), and rules in GEMINI.md / AGENTS.md.
+  {
+    id: 'antigravity.user.settings',
+    runners: ['antigravity'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.antigravity, 'settings.json'),
+    label: '~/.gemini/antigravity-cli/settings.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    modelKey: 'model',
+    modelPriority: 1,
+    precedence:
+      'The CLI\'s own persisted settings, including the model chosen with /model. A --model flag overrides it for one session.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.user.mcp',
+    runners: ['antigravity'],
+    kind: 'mcp',
+    scope: 'user',
+    resolve: (_repo, home) => join(dirname(home.antigravity), 'config', 'mcp_config.json'),
+    label: '~/.gemini/config/mcp_config.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    precedence:
+      'Global Configuration: applies to all sessions. Plugin configuration (plugins/<plugin_name>/mcp_config.json) is active when the plugin is enabled. `agy mcp add|remove` edits this file.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.user.memory',
+    runners: ['antigravity'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(dirname(home.antigravity), 'GEMINI.md'),
+    label: '~/.gemini/GEMINI.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Global rules applied to every workspace.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+  {
+    id: 'antigravity.project.memory',
+    runners: ['antigravity'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, 'GEMINI.md'),
+    label: 'GEMINI.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'Directory-based rules, read alongside AGENTS.md and .agents/rules/*.md (contextual / hierarchical). Runs read the committed copy.',
+    docsUrl: ANTIGRAVITY_DOCS,
+  },
+
+  // ---- Pi coding agent ----
+  // Pi keeps editable preferences in the global agent directory and project .pi directory.
+  // Credentials (auth.json/oauth.json), custom model definitions, sessions and packages are
+  // intentionally not catalogued: they are sensitive or runtime state, not settings.
+  {
+    id: 'pi.user.settings',
+    runners: ['pi'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.pi, 'settings.json'),
+    label: '~/.pi/agent/settings.json',
+    format: 'jsonc',
+    tracked: 'outside-repo',
+    modelKey: 'defaultModel',
+    modelKeys: ['defaultModel', 'model'],
+    modelPriority: 1,
+    precedence:
+      'Global Pi settings for all projects. The project .pi/settings.json overrides it by key; PI_CODING_AGENT_DIR relocates this agent directory.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+  {
+    id: 'pi.project.settings',
+    runners: ['pi'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.pi', 'settings.json'),
+    label: '.pi/settings.json',
+    format: 'jsonc',
+    tracked: 'tracked',
+    modelKey: 'defaultModel',
+    modelKeys: ['defaultModel', 'model'],
+    modelPriority: 2,
+    precedence:
+      'Project settings override the global Pi settings by key and are suitable for sharing with the repository.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+  {
+    id: 'pi.user.memory',
+    runners: ['pi'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.pi, 'AGENTS.md'),
+    label: '~/.pi/agent/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Global instructions loaded by Pi for every project.',
+    docsUrl: PI_CONFIG_DOCS,
+  },
+
   // ---- Cursor Agent CLI ----
   {
     id: 'cursor.user.settings',
@@ -438,6 +562,66 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: CURSOR_CLI_CONFIG_DOCS,
   },
 
+  // ---- Gemini CLI ----
+  {
+    id: 'gemini.user.settings',
+    runners: ['gemini'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.gemini, 'settings.json'),
+    label: '~/.gemini/settings.json',
+    format: 'json',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    modelKey: 'model.name',
+    modelPriority: 1,
+    precedence:
+      'Applies to all Gemini CLI sessions for the current user. User settings override system defaults; project settings, the system settings file, environment variables and command-line arguments override them. MCP servers live under "mcpServers".',
+    docsUrl: GEMINI_CONFIG_DOCS,
+  },
+  {
+    id: 'gemini.project.settings',
+    runners: ['gemini'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, '.gemini', 'settings.json'),
+    label: '.gemini/settings.json',
+    format: 'json',
+    tracked: 'tracked',
+    holdsMcp: true,
+    modelKey: 'model.name',
+    modelPriority: 2,
+    precedence:
+      'Applies only when running Gemini CLI from that specific project. Project settings override user settings and system defaults. MCP servers live under "mcpServers". Runs read the committed copy.',
+    docsUrl: GEMINI_CONFIG_DOCS,
+  },
+  {
+    id: 'gemini.user.memory',
+    runners: ['gemini'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.gemini, 'GEMINI.md'),
+    label: '~/.gemini/GEMINI.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence:
+      'Global context file: provides default instructions for all your projects. Loaded first; GEMINI.md files found in the workspace and its parent directories are concatenated after it.',
+    docsUrl: GEMINI_MEMORY_DOCS,
+  },
+  {
+    id: 'gemini.project.memory',
+    runners: ['gemini'],
+    kind: 'memory',
+    scope: 'project',
+    resolve: (repo) => join(repo, 'GEMINI.md'),
+    label: 'GEMINI.md',
+    format: 'markdown',
+    tracked: 'tracked',
+    precedence:
+      'The CLI searches for GEMINI.md files in your configured workspace directories and their parent directories, and concatenates them after the global ~/.gemini/GEMINI.md. Runs read the committed copy.',
+    docsUrl: GEMINI_MEMORY_DOCS,
+  },
+
   // ---- Shared: cezar's private, per-project MCP servers (spec 2026-10-07-private-project-mcp) ----
   {
     id: 'cezar.private.mcp',
@@ -451,14 +635,43 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     holdsMcp: true,
     private: true,
     precedence:
-      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor and pi have no launch-time MCP channel.',
+      'Private MCP servers for this project only — same shape as .mcp.json (key: mcpServers). Lives in cezar\'s git-ignored data dir, never in a worktree, so it is never committed. cezar adds these servers to every run of this project at launch (Claude --mcp-config, Codex thread config, OpenCode OPENCODE_CONFIG_CONTENT, Junie/Copilot/Kimi ACP session); the agent\'s own MCP config still loads, and on a name clash this file wins. Cursor and pi have no launch-time MCP channel.',
     docsUrl: PRIVATE_MCP_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----
+  // ---- Kimi Code ----
+  {
+    id: 'kimi.user.config',
+    runners: ['kimi'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kimi, 'config.toml'),
+    label: '~/.kimi-code/config.toml',
+    format: 'toml',
+    tracked: 'outside-repo',
+    modelKey: 'default_model',
+    modelPriority: 1,
+    precedence:
+      'User-level only: Kimi Code has no project config file. default_model names one of the [models."<alias>"] tables; providers, thinking effort and MCP client settings live here too.',
+    docsUrl: KIMI_DOCS,
+  },
+  {
+    id: 'kimi.user.memory',
+    runners: ['kimi'],
+    kind: 'memory',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kimi, 'AGENTS.md'),
+    label: '~/.kimi-code/AGENTS.md',
+    format: 'markdown',
+    tracked: 'outside-repo',
+    precedence: 'Personal instructions for every project. Loaded before the repository’s AGENTS.md files.',
+    docsUrl: KIMI_DOCS,
+  },
+
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot, Pi, Antigravity AND Kimi ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode', 'copilot'],
+    runners: ['codex', 'opencode', 'copilot', 'pi', 'antigravity', 'kimi'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -466,7 +679,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex, OpenCode and Copilot CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI, Pi, Antigravity CLI and Kimi (Claude ignores it). Codex and Kimi concatenate it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set; Pi loads it as project context; Antigravity reads it alongside GEMINI.md. Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

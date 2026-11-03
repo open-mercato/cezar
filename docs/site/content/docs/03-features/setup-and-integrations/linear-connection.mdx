@@ -1,0 +1,26 @@
+---
+title: "Connect a project to Linear"
+description: "Browse Linear issues without leaving Cezar."
+related:
+  links:
+    - guides/common-questions
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/tracker-section.tsx
+    line: 84
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Save an API key for the repository, then select a Linear project or team. Only that scope appears in the issue view. Other Cezar projects do not inherit the credentials.
+
+## Where to find it
+
+Settings → project → Issue tracker
+
+## How to use it
+
+1. Choose Configure Linear credentials and save the API key.
+2. Open Browse Linear.
+3. Find and select a project or team, then click Connect.
+
+> **Good to know**: Changing credentials requires selecting the scope again. Removing the local connection does not revoke the token at the provider.

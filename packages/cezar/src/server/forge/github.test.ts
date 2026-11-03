@@ -17,6 +17,7 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import {
   pickBranchPr,
+  fetchGithubListPages,
   AGGREGATE_CHECK_NAME,
   __clearCommentsCacheForTests,
   __clearMergeStateCacheForTests,
@@ -28,6 +29,7 @@ import {
   fetchTimelinePages,
   fetchCommentCounts,
   fetchCommitChecks,
+  fetchPrHeadChecks,
   fetchPrChecks,
   fetchPrMergeState,
   fetchRefStatuses,
@@ -1622,8 +1624,10 @@ describe('fetchGithub omits statusCheckRollup from the list call (#664)', () => 
     });
 
     const data = await fetchGithub('/repo/typed-limit', false, 150);
-    expect(calls.length).toBe(2);
-    for (const argv of calls) {
+    const listCalls = calls.filter(argv => argv.some(arg => arg.startsWith('issuesLimit=')));
+    expect(listCalls).toHaveLength(2);
+    expect(calls.filter(argv => argv.some(arg => arg.includes('closedByPullRequestsReferences')))).toHaveLength(3);
+    for (const argv of listCalls) {
       for (const key of ['issuesLimit', 'prsLimit']) {
         const at = argv.findIndex((a) => a.startsWith(`${key}=`));
         expect(argv[at - 1]).toBe('-F');
@@ -1701,7 +1705,7 @@ describe('searchGithubItems (#730)', () => {
 
   it('resolves a bare number through `pr view`, which finds merged and closed PRs alike', async () => {
     const argvs = ghSpy((argv) =>
-      argv[0] === 'pr' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/pulls/4507')
         ? JSON.stringify({
             number: 4507,
             title: 'a merged pr',
@@ -1713,6 +1717,7 @@ describe('searchGithubItems (#730)', () => {
             isDraft: false,
             additions: 3,
             deletions: 1,
+            commentsCount: 0,
           })
         : '',
     );
@@ -1722,16 +1727,44 @@ describe('searchGithubItems (#730)', () => {
     expect(res.available).toBe(true);
     expect(res.items.map((i) => i.number)).toEqual([4507]);
     expect(res.items[0]?.kind).toBe('pr');
-    // A view lookup carries no state filter at all — that is exactly why it reaches a merged PR.
-    const view = argvs.find((a) => a[0] === 'pr' && a[1] === 'view');
+    // The REST lookup carries no state filter at all — that is exactly why it reaches a merged PR.
+    const view = argvs.find((a) => a[0] === 'api' && a[1]?.includes('/pulls/4507'));
     expect(view).toBeDefined();
-    expect(view).toContain('4507');
+    expect(view?.join(' ')).toContain('/pulls/4507');
     expect(view?.join(' ')).not.toContain('--state');
+  });
+
+  it('preserves the numeric view comment count without per-result hydration', async () => {
+    const argvs = ghSpy((argv) =>
+      argv[0] === 'api' && argv[1]?.includes('/issues/851')
+        ? JSON.stringify({
+            number: 851,
+            title: 'an issue with discussion',
+            author: { login: 'someone' },
+            createdAt: '2026-07-25T07:08:17Z',
+            labels: [],
+            body: 'b',
+            url: 'https://github.com/owner/n/issues/851',
+            commentsCount: 2,
+          })
+        : '',
+    );
+
+    const res = await searchGithubItems('/repo/search-number-comments', 'issue', '851');
+
+    expect(res.items[0]?.comments).toBe(2);
+    // Remote resolution's git probes share the spy; exactly one GitHub call is the bound.
+    const apiCalls = argvs.filter((a) => a[0] === 'api');
+    expect(apiCalls).toHaveLength(1);
+    const view = apiCalls[0]!;
+    expect(view[1]).toContain('/issues/851');
+    expect(view).toContain('--jq');
+    expect(view[view.indexOf('--jq') + 1]).toContain('.comments');
   });
 
   it('accepts the `#4507` spelling the search box invites', async () => {
     ghSpy((argv) =>
-      argv[0] === 'issue' && argv[1] === 'view'
+      argv[0] === 'api' && argv[1]?.includes('/issues/4507')
         ? JSON.stringify({
             number: 4507,
             title: 'an issue',
@@ -1740,6 +1773,7 @@ describe('searchGithubItems (#730)', () => {
             labels: [],
             body: '',
             url: 'https://github.com/owner/n/issues/4507',
+            commentsCount: 0,
           })
         : '',
     );
@@ -1789,6 +1823,10 @@ describe('searchGithubItems (#730)', () => {
     expect(res.items[0]?.number).toBe(4507);
     // `commentsCount` is the search API's spelling of the list tier's `comments`.
     expect(res.items[0]?.comments).toBe(20);
+    // Text search deliberately does not hydrate per-PR diffstat; the numeric view path may
+    // provide additions/deletions for its one result without making this path N+1.
+    expect(res.items[0]?.additions).toBeUndefined();
+    expect(res.items[0]?.deletions).toBeUndefined();
     expect(res.items[0]?.checks).toBeNull();
     expect(res.labelColors).toEqual({ security: 'D93F0B' });
     const search = argvs.find((a) => a[0] === 'search');
@@ -1884,7 +1922,7 @@ describe('searchGithubItems (#730)', () => {
   it('falls back to a text search when the number resolves to nothing', async () => {
     const argvs = ghSpy((argv) => {
       if (argv[0] === 'repo') return 'owner/n\n';
-      if (argv[0] === 'pr' && argv[1] === 'view') return new Error('no pull requests found for 4507');
+      if (argv[0] === 'api' && argv[1]?.includes('/pulls/4507')) return new Error('no pull requests found for 4507');
       if (argv[0] === 'search') return JSON.stringify([searchHit({ title: 'mentions 4507' })]);
       return '';
     });
@@ -1982,7 +2020,7 @@ describe('searchGithubItems (#730)', () => {
       // The list tier: `gh pr list` without --state returns OPEN PRs only, and #4507 is merged.
       else if (argv[0] === 'pr' && argv[1] === 'list') stdout = '[]';
       else if (argv[0] === 'issue' && argv[1] === 'list') stdout = '[]';
-      else if (argv[0] === 'pr' && argv[1] === 'view') {
+      else if (argv[0] === 'api' && argv[1]?.includes('/pulls/4507')) {
         stdout = JSON.stringify({
           number: 4507,
           title: 'a merged pr',
@@ -1991,6 +2029,7 @@ describe('searchGithubItems (#730)', () => {
           labels: [],
           body: '',
           url: 'https://github.com/owner/n/pull/4507',
+          commentsCount: 0,
           isDraft: false,
           additions: 0,
           deletions: 0,
@@ -3467,5 +3506,88 @@ describe('GH_HOST pinning (GitHub Enterprise)', () => {
     });
     await resolveRepoHandle('/repo/no-origin');
     expect(ghEnv('/repo/no-origin').env?.GH_HOST).toBe('acme.ghe.com');
+  });
+});
+
+/** #1750: an exhausted side must not restart from page one when the other side keeps paging. */
+describe('fetchGithubListPages exhausted sides', () => {
+  const node = (n: number) => ({ number: n, title: `#${n}`, author: { login: 'x' }, createdAt: '2026-07-01T00:00:00Z', labels: { nodes: [] }, url: `https://github.com/o/n/${n}`, comments: { totalCount: 0 }, isDraft: false, additions: 0, deletions: 0 });
+  /** A fake GitHub with `issues` issues and `prs` PRs: a missing cursor means first page. */
+  const fakeGraphql = (issues: number, prs: number) => async (_q: string, v: Record<string, string>) => {
+    const side = (total: number, size: number, cursor?: string) => {
+      const start = cursor ? Number(cursor) : 0;
+      const n = Math.max(0, Math.min(size, total - start));
+      return { totalCount: total, nodes: Array.from({ length: n }, (_, i) => node(start + i + 1)), pageInfo: { hasNextPage: start + n < total, endCursor: String(start + n) } };
+    };
+    return JSON.stringify({ data: { repository: {
+      issues: side(issues, Number(v.issuesLimit), v.issuesCursor),
+      pullRequests: side(prs, Number(v.prsLimit), v.prsCursor),
+    } } });
+  };
+  const walk = async (issues: number, prs: number, limit: number) => {
+    const run = fakeGraphql(issues, prs);
+    const seen = { issues: [] as number[], prs: [] as number[] };
+    let cursors: Parameters<typeof fetchGithubListPages>[4] = {};
+    for (let guard = 0; guard < 20; guard++) {
+      const page = await fetchGithubListPages(run, 'o', 'n', limit, cursors);
+      seen.issues.push(...page.issues.nodes.map((n) => n.number));
+      seen.prs.push(...page.pullRequests.nodes.map((n) => n.number));
+      const ic = page.issues.pageInfo.hasNextPage ? page.issues.pageInfo.endCursor ?? undefined : undefined;
+      const pc = page.pullRequests.pageInfo.hasNextPage ? page.pullRequests.pageInfo.endCursor ?? undefined : undefined;
+      if (!ic && !pc) break;
+      cursors = { issuesCursor: ic, prsCursor: pc, issuesDone: !ic, prsDone: !pc };
+    }
+    return seen;
+  };
+  const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
+
+  it('lists every PR once when issues outlast PRs', async () => {
+    expect(await walk(25, 5, 10)).toEqual({ issues: range(25), prs: range(5) });
+  });
+  it('lists every issue once when PRs outlast issues', async () => {
+    expect(await walk(5, 25, 10)).toEqual({ issues: range(5), prs: range(25) });
+  });
+});
+
+describe('fetchPrHeadChecks (#1533)', () => {
+  const SHA = 'a'.repeat(40);
+  const OLD = 'b'.repeat(40);
+  const route = (pr: unknown, rollup: unknown) =>
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      let stdout = '';
+      if (argv[0] === 'pr') {
+        if (pr === 'fail') return cb(new Error('offline'), null);
+        stdout = JSON.stringify(pr);
+      } else if (argv[0] === 'repo') stdout = 'o/r\n';
+      else if (argv[0] === 'api') stdout = JSON.stringify({ data: { repository: { c0: rollup } } });
+      cb(null, { stdout, stderr: '' });
+    });
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('is stale while the PR head is a previous commit, whatever that head’s checks say', async () => {
+    route({ headRefOid: OLD, mergeable: 'MERGEABLE' }, { statusCheckRollup: { state: 'FAILURE' } });
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'stale', headOid: OLD });
+  });
+
+  it('reads the rollup of the exact commit once the head matches', async () => {
+    route({ headRefOid: SHA, mergeable: 'MERGEABLE' }, { statusCheckRollup: { state: 'SUCCESS' } });
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'checks', glyph: 'passing' });
+  });
+
+  it('reports a conflicting PR at the current head at once', async () => {
+    route({ headRefOid: SHA, mergeable: 'CONFLICTING' }, null);
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'conflict' });
+  });
+
+  it('is unavailable (keep polling) when gh fails', async () => {
+    route('fail', null);
+    expect(await fetchPrHeadChecks('/r', 7, SHA)).toEqual({ kind: 'unavailable' });
   });
 });

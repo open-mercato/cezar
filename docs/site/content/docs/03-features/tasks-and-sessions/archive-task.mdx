@@ -1,0 +1,24 @@
+---
+title: "Archive a task"
+description: "Remove completed work from the current task list."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/use-run-actions.ts
+    line: 71
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Choose Archive when work is finished to tidy up the task list.
+
+## Where to find it
+
+Tasks → task actions
+
+## How to use it
+
+1. Open the task's actions menu.
+2. Choose Archive.
+
+> **Good to know**: Archiving also cancels a pending resume scheduled after a provider's usage limit resets.

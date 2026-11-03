@@ -1,3 +1,4 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,11 +23,17 @@ vi.mock('./cursor-bin.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./cursor-bin.ts')>(),
   resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
 }));
+// Same reason for Kimi: `kimi-runner.test.ts` covers the real resolver.
+vi.mock('./kimi-runner.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./kimi-runner.ts')>(),
+  resolveKimiExecutable: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_KIMI_BIN || 'kimi',
+}));
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
 
 import { PROVIDER_IDS } from './provider-auth.ts';
+import { GEMINI_AUTH_FAILURE_MESSAGE, GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 import {
   ProviderAuthService,
   cliVersionFrom,
@@ -77,9 +84,24 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // `agy models` lists the signed-in account's models and exits 0 (live agy 1.4.0 output).
+  antigravity: {
+    stdout: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)\n',
+    stderr: '',
+    exitCode: 0,
+  },
+  // `gemini --version`: Gemini CLI has no auth-status command, so this only proves the install; the
+  // credentials come from the environment (`gemini-credentials.ts`).
+  gemini: { stdout: '0.60.0\n', stderr: '', exitCode: 0 },
+  kimi: {
+    stdout: 'kimi type=kimi models=1\n',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
+  CEZ_AGY_BIN: process.env.CEZ_AGY_BIN,
   CEZ_AGENT_MODELS_LOCKED: process.env.CEZ_AGENT_MODELS_LOCKED,
   CEZ_DRY_RUN: process.env.CEZ_DRY_RUN,
   CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
@@ -89,9 +111,14 @@ const originalEnv = {
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
   CEZ_CURSOR_AGENT_BIN: process.env.CEZ_CURSOR_AGENT_BIN,
+  CEZ_GEMINI_BIN: process.env.CEZ_GEMINI_BIN,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME,
+  CEZ_KIMI_BIN: process.env.CEZ_KIMI_BIN,
 };
 
 beforeEach(() => {
+  delete process.env.CEZ_AGY_BIN;
   delete process.env.CEZ_AGENT_MODELS_LOCKED;
   delete process.env.CEZ_DRY_RUN;
   delete process.env.CEZ_CLAUDE_BIN;
@@ -101,6 +128,11 @@ beforeEach(() => {
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
   delete process.env.CEZ_CURSOR_AGENT_BIN;
+  delete process.env.CEZ_GEMINI_BIN;
+  // Gemini's connected-ness is an environment read (the setup file strips the host's): give every
+  // case a key so "all connected" still means every provider. The gemini block below removes it.
+  process.env.GEMINI_API_KEY = 'AIza-test-key';
+  delete process.env.CEZ_KIMI_BIN;
 });
 
 afterEach(() => {
@@ -122,6 +154,9 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
+  if (executable === 'agy') return connectedResults.antigravity!;
+  if (executable.includes('gemini')) return connectedResults.gemini!;
+  if (executable.includes('kimi')) return connectedResults.kimi!;
   return connectedResults.pi!;
 }
 
@@ -916,6 +951,32 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'disconnected' } });
   });
 
+  // Telemetry f67df9d2: pi 0.73.1 with a piped stdin writes its whole answer to stderr, exit 0.
+  it.each([
+    [
+      'disconnected',
+      'No models available. Use /login to log into a provider via OAuth or API key. See:\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/providers.md\n'
+        + '  /usr/lib/node_modules/@mariozechner/pi-coding-agent/docs/models.md\n',
+    ],
+    [
+      'connected',
+      'provider   model              context  max-out  thinking  images\n'
+        + 'anthropic  claude-sonnet-4-5  200K     64K      yes       yes\n',
+    ],
+  ] as const)('reads a pi 0.73 stderr-only answer as %s', async (expected, stderr) => {
+    const onInconclusive = vi.fn();
+    const service = new ProviderAuthService({
+      onInconclusive,
+      runCommand: runner((executable) => executable === 'pi'
+        ? { stdout: '', stderr, exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: expected } });
+    expect(onInconclusive).not.toHaveBeenCalledWith(expect.objectContaining({ provider: 'pi' }));
+  });
+
   it('does not guess from unrecognized pi model output', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => executable === 'pi'
@@ -928,6 +989,27 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
+  it('probes Antigravity with `agy models` like any other installed CLI — no opt-in', async () => {
+    const runCommand = vi.fn(runner());
+    expect((await statuses(new ProviderAuthService({ runCommand }))).antigravity?.status).toBe('connected');
+    expect(runCommand.mock.calls.some(([bin, args]) => bin === 'agy' && args[0] === 'models')).toBe(true);
+  });
+
+  it('reads a signed-out agy as disconnected and an unrelated failure as unknown', async () => {
+    const signedOut = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agy'
+        ? { stdout: '', stderr: 'Please sign in to continue', exitCode: 1 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(signedOut)).resolves.toMatchObject({ antigravity: { status: 'disconnected' } });
+    const broken = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'agy'
+        ? { stdout: '', stderr: 'network unreachable', exitCode: 1 }
+        : resultFor(executable)),
+    });
+    await expect(statuses(broken)).resolves.toMatchObject({ antigravity: { status: 'unknown' } });
+  });
+
   it('always returns every provider in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
@@ -940,6 +1022,9 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'antigravity' },
+        { provider: 'gemini' },
+        { provider: 'kimi' },
       ],
     });
   });
@@ -964,6 +1049,9 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp', '--no-auto-update'], timeoutMs: 10_000 },
+      { executable: 'agy', args: ['models'], timeoutMs: 10_000 },
+      { executable: 'gemini', args: ['--version'], timeoutMs: 10_000 },
+      { executable: 'kimi', args: ['provider', 'list'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1493,6 +1581,9 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1606,6 +1697,9 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'antigravity', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1774,6 +1868,89 @@ describe('ProviderAuthService', () => {
       expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('opencode', '/oc-work'))
         .toBe("'opencode' auth login");
     });
+  });
+});
+
+describe('gemini provider status (#581): an environment read, never a login probe', () => {
+  let geminiHome: string;
+  beforeEach(() => {
+    geminiHome = mkdtempSync(join(tmpdir(), 'cez-gemini-home-'));
+    process.env.GEMINI_CLI_HOME = geminiHome;
+    delete process.env.GEMINI_API_KEY;
+  });
+  afterEach(() => {
+    rmSync(geminiHome, { recursive: true, force: true });
+  });
+
+  it('is connected when GEMINI_API_KEY is in the environment', async () => {
+    process.env.GEMINI_API_KEY = 'AIza-test';
+    const runCommand = runner();
+    const rows = await statuses(new ProviderAuthService({ runCommand, platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'connected', hint: undefined });
+    expect(runCommand).toHaveBeenCalledWith('gemini', ['--version'], 10_000);
+  });
+
+  it('is connected when the .env Gemini CLI loads itself names a key (the value is never read out)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', '.env'), 'GEMINI_API_KEY=AIza-from-file\n');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('is connected when the CLI is configured for an auth method that still works (a keychain key is invisible)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"gemini-api-key"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('a host configured only for Google sign-in is not evidence of working credentials (UNSUPPORTED_CLIENT)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"oauth-personal"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is connected when the Code Assist selector is on (Workspace / Standard licences)', async () => {
+    process.env.GOOGLE_GENAI_USE_GCA = 'true';
+    try {
+      const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+      expect(rows.gemini!.status).toBe('connected');
+    } finally {
+      delete process.env.GOOGLE_GENAI_USE_GCA;
+    }
+  });
+
+  it('a steady `unknown` Gemini does not shorten every other provider’s cache window', async () => {
+    let now = 1_000;
+    const runCommand = runner();
+    const service = new ProviderAuthService({ runCommand, platform: 'linux', now: () => now });
+    expect((await statuses(service)).gemini!.status).toBe('unknown');
+    now += 9 * 60_000;
+    await service.status();
+    expect(runCommand).toHaveBeenCalledTimes(PROBE_ROUND);
+  });
+
+  it('is unknown — never disconnected — with the API-key hint when no credential is visible', async () => {
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is not-installed with an install hint when the CLI is absent, and honours CEZ_GEMINI_BIN', async () => {
+    process.env.CEZ_GEMINI_BIN = '/tools/gemini custom';
+    const runCommand = runner((executable) =>
+      executable === '/tools/gemini custom'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand, platform: 'linux' });
+    const rows = await statuses(service);
+    expect(rows.gemini!.status).toBe('not-installed');
+    expect(rows.gemini!.hint).toContain('npm i -g @google/gemini-cli');
+    expect(service.loginCommand('gemini')).toBe("'/tools/gemini custom'");
+  });
+
+  it('a runtime Gemini auth failure is recognized by the server-side latch', () => {
+    expect(isRuntimeProviderAuthFailure(GEMINI_AUTH_FAILURE_MESSAGE)).toBe(true);
   });
 });
 
@@ -2052,6 +2229,42 @@ describe('inconclusive probe reports', () => {
     expect(await probe.cliVersion()).toBe('1.34.1');
   });
 
+  // #1580 (telemetry 298c2e1f): exit 0, 36 bytes of non-frame stdout, and `--version` with no semver.
+  describe('a `copilot` that is not a working Copilot CLI', () => {
+    const rowFor = async (version: ProviderCommandResult, onInconclusive = vi.fn()) => {
+      const service = new ProviderAuthService({
+        runCommand: async (executable, args) => {
+          if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+          if (args.includes('--version')) return version;
+          return { stdout: 'x'.repeat(36), stderr: 'y'.repeat(103), exitCode: 0 };
+        },
+        onInconclusive,
+      });
+      return (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    };
+
+    it('is not-installed with the update hint and sends no report when --version has no semver', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: 'hello\n', stderr: '', exitCode: 0 }, onInconclusive);
+      expect(row).toMatchObject({ status: 'not-installed', hint: expect.stringContaining('npm i -g @github/copilot') });
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('is not-installed when an old CLI rejects --no-auto-update', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: "error: unknown option '--no-auto-update'", exitCode: 1 }, onInconclusive);
+      expect(row?.status).toBe('not-installed');
+      expect(onInconclusive).not.toHaveBeenCalled();
+    });
+
+    it('guards: a version printed on stderr only still counts as a Copilot CLI', async () => {
+      const onInconclusive = vi.fn();
+      const row = await rowFor({ stdout: '', stderr: 'GitHub Copilot CLI 1.0.98.\n', exitCode: 0 }, onInconclusive);
+      expect(row?.status).toBe('unknown');
+      expect(onInconclusive).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // Telemetry f67df9d2: an asdf shim named `pi`, exit 1, nothing on stdout, Python's version on stderr.
   it('reports a version-manager shim with no version behind it as not-installed, not inconclusive', async () => {
     const onInconclusive = vi.fn();
@@ -2121,8 +2334,10 @@ describe('inconclusive probe reports', () => {
 
   it('keeps the generic hint when Copilot spoke ACP but the answer was unreadable', async () => {
     const service = new ProviderAuthService({
-      runCommand: async (executable) => executable === 'copilot'
-        ? { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
+      runCommand: async (executable, args) => executable === 'copilot'
+        ? args.includes('--version')
+          ? { stdout: 'GitHub Copilot CLI 1.0.98.\n', stderr: '', exitCode: 0 }
+          : { stdout: '{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}', stderr: '', exitCode: 0 }
         : { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' },
     });
     const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
@@ -2150,6 +2365,36 @@ describe('inconclusive probe reports', () => {
     expect(result).toMatchObject({ exitCode: 0, timedOut: false });
     expect(result.stdout).toContain('"sessionId":"s"');
   });
+
+  // Telemetry 5f52beba: Copilot 1.0.103 (Windows) answered session/new, then never exited on EOF;
+  // the timeout killed it and its complete answer was reported as a hang.
+  it('keeps an ACP answer whose server outlives EOF, and stops waiting for it to exit', async () => {
+    const lingering = [
+      "const rl = require('node:readline').createInterface({ input: process.stdin });",
+      "rl.on('line', (line) => { const { id } = JSON.parse(line);",
+      "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result: id === 1 ? { sessionId: 's' } : {} }) + '\\n'); });",
+      'setInterval(() => {}, 1_000);',
+    ].join('\n');
+    const onInconclusive = vi.fn();
+    const results: Array<{ signal?: string; timedOut?: boolean }> = [];
+    const service = new ProviderAuthService({
+      runCommand: async (executable, _args, _timeoutMs, _env, stdin) => {
+        if (executable !== 'copilot') return { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' };
+        const result = await defaultRunProviderCommand(process.execPath, ['-e', lingering], 8_000, undefined, stdin);
+        results.push(result);
+        return result;
+      },
+      onInconclusive,
+    });
+    const started = Date.now();
+    const row = (await service.status({ refresh: true })).providers.find((p) => p.provider === 'copilot');
+    expect(row?.status).toBe('connected');
+    expect(onInconclusive).not.toHaveBeenCalled();
+    expect(Date.now() - started).toBeLessThan(6_000);
+    // cezar's own linger kill is not an interruption: no `signal` for wasInterrupted() to re-ask over.
+    expect(results.at(-1)).toMatchObject({ timedOut: false });
+    expect(results.at(-1)?.signal).toBeUndefined();
+  }, 20_000);
 
   // 298c2e1f regressed in 0.16.1: the CLI then exits 0 on EOF with only `initialize` answered,
   // which read as unrecognized output and never got the longer re-ask a timeout gets.

@@ -152,7 +152,7 @@ function FallbackFile({
           {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
         </span>
         <span className="ml-auto shrink-0">
-          <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
+          <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-meta" />
         </span>
       </header>
       {shouldPreviewImage(file) ? (

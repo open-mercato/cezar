@@ -9,10 +9,19 @@ How cezar reaches npm. Two paths, deliberately separate
   moves `latest` — a push publishes nothing.
 - **Previews** are **CI-driven**: the `publish-snapshot` job in
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
-  after a fully green `verify` run — on `develop` pushes and same-repo PRs only.
+  after fully green `verify`, `vitest` and `webhooks-cross-platform` runs — on `develop`
+  pushes and same-repo PRs only.
 - **Nightlies** are **clock-driven**: [`nightly.yml`](../.github/workflows/nightly.yml)
   cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-run@nightly`
   is always the trunk. Also runnable on demand from the Actions tab.
+
+The Linux jobs run the full unit suites, typecheck, build and packaged-CLI tests.
+`webhooks-cross-platform` runs the webhook suite on Linux, macOS and Windows;
+its macOS and Windows legs also build and run `npm run test:package`, including
+installation of the tarball and a dry-run CLI workflow. Linux package checks run
+in `verify` instead of being duplicated in the matrix. A failing matrix leg blocks
+preview publication; blocking merges additionally requires branch protection.
+Developers keep using the existing local commands on their own operating system.
 
 Four packages are in the release, always at the same version; three of them ship:
 
@@ -61,7 +70,7 @@ made with that token start no workflows.
 | [`Release cut`](../.github/workflows/release-cut.yml) | `main` | With main at `X.Y.Z`: creates `release/vX.Y.x` at main's tip, adds the `backport release/vX.Y.x` / `backport main` labels, hands main's `# Unreleased` to the line, and opens the PR moving main (manifests, cockpit, lockfile) to `X.(Y+1).0`. A re-run from the same main commit finishes a half-done cut; once main has moved past it, it refuses. |
 | [`Release`](../.github/workflows/release.yml) | a `release/vX.Y.x` branch (the *Use workflow from* picker) | Picks the version (below), stamps every manifest, the lockfile and `CHANGELOG.md`, commits that to the line, verifies and builds **that commit**, then tags it `vX.Y.Z`. It publishes nothing itself. |
 | [`Release publish`](../.github/workflows/release-publish.yml) | the `vX.Y.Z` tag (started by the tag) | Runs **at the tagged commit**, so npm provenance attests the code that ships. Checks the tag names the manifests and sits on its line, skips a version already released, resolves the dist-tag, builds, publishes, opens the changelog PR to `main`, and **last** creates the GitHub Release. One publish at a time across all lines. |
-| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line (carrying its category, priority, risk and QA labels — never `qa-approved` — plus `backport`, `review`); `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. Fork PRs are skipped (no secrets on `pull_request`): port them by hand. |
+| [`Backport`](../.github/workflows/backport.yml) | — (labels) | A merged PR labelled `backport release/vX.Y.x` is cherry-picked into a PR on that line (carrying its category, priority, risk and QA labels — never `qa-approved` — plus `backport`, `review`); `backport main` forward-ports a hotfix that landed on a line first. Conflicts open a draft with instructions. Runs from a scan of PRs merged in the last 30 days (on every push to `main`, every 15 minutes, and on same-repo PR events), so **fork PRs and labels added after a merge are covered too**. The label is the source of truth: a backport is owed until an open or merged backport PR exists — closing one with its branch deleted re-runs it; remove the label to stop it. |
 
 **How Release picks the version.** A release is *done* when its GitHub Release
 exists; the tag pins its commit.
@@ -158,15 +167,20 @@ committed and posts the commands on the original PR. Never merge the draft as is
    lists what `main` changed there that the line never got.
 2. **Decide what that commit is:**
    - **a fix the line should have too:** backport it first (label its PR
-     `backport release/v0.16.x`, merge that backport), then close the draft and re-run
-     the original's backport: remove its label and add it again. No hand edits.
+     `backport release/v0.16.x`, merge that backport), then close the draft **and delete
+     its branch** (`gh pr close <n> --delete-branch`): the next scan (within 15 minutes)
+     opens a fresh backport on top. No hand edits. A closed draft whose branch is kept is
+     left alone: the action would reopen that stale branch instead of cherry-picking again.
    - **a feature, or unrelated:** resolve on the draft's branch. Keep the line's code
      and apply only what the original PR intended. Taking `main`'s version of a whole
      file is right only when the original PR replaced that file and the leftover
      difference is harmless (#1642: a one-line test-fixture tweak from #1427).
-   - **the code moved or was refactored on `main`:** close the draft and port the fix
-     by hand in a PR against the line where the code lives, labelled `backport`, linking
-     the original.
+   - **the code moved or was refactored on `main`:** port the fix by hand **on the
+     draft's branch** (reset it to the line, write the fix where the code lives there,
+     force-push) — keeping that PR is what tells the scan the backport exists.
+
+   If the bug turns out not to exist on the line, remove the label from the original PR
+   and close the draft with `--delete-branch`.
 3. **Validate on the branch** (the release tests at least; the full gate for code),
    push, run `gh pr ready <n>`, and comment what conflicted and how it was resolved.
 4. **Review** it like any backport: CI green, and its diff changes only what the
@@ -241,7 +255,7 @@ prereleases are inert).
 | `scripts/release.mts` | publishes the release set in dependency order under `--dist-tag` (`latest` by default) |
 | `scripts/tsconfig.release.json` | strict typecheck of the `.mts` release tooling (`npm run typecheck:release`); Node runs it directly with type stripping (Node ≥ 22.18), importing `packages/cezar/src/release/*.ts` — no build step |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
-| `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
+| `ci.yml` → `publish-snapshot` | gate (`needs: [verify, vitest, webhooks-cross-platform]`), same-repo guard, provenance permissions, sticky PR comment, step summary |
 | `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
 | `npm-preview-cleanup.yml` | dist-tag removal on PR close |
 

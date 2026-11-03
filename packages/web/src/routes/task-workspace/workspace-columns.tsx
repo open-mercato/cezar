@@ -33,6 +33,7 @@ import {
   type ViewId,
   type WorkspaceColumn,
 } from './layout-state'
+import { useDragHover } from './use-drag-hover'
 import { FullViewExit, WorkspaceMaximizeContext } from './maximize'
 import { VIEW_ICONS, ViewItems, ViewTiles } from './view-picker'
 
@@ -313,7 +314,9 @@ function ColumnHeader({
   /** After the close button, at the header's far right — the full-view exit. */
   trailing?: ReactNode
 }) {
-  const [dropTarget, setDropTarget] = useState(false)
+  const { over: dropTarget, reset: resetDropTarget, handlers: dropHover } = useDragHover((event) =>
+    event.dataTransfer.types.includes('text/cez-column'),
+  )
   const ViewIcon = VIEW_ICONS[column.view]
   const startDrag = (event: React.DragEvent) => {
     event.dataTransfer.setData('text/cez-column', String(index))
@@ -327,11 +330,10 @@ function ColumnHeader({
         if (!event.dataTransfer.types.includes('text/cez-column')) return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'move'
-        setDropTarget(true)
       }}
-      onDragLeave={() => setDropTarget(false)}
+      {...dropHover}
       onDrop={(event) => {
-        setDropTarget(false)
+        resetDropTarget()
         // Re-checked here, not just in `onDragOver`: `Number('')` is 0 and passes
         // `Number.isInteger`, so a foreign drop that reached this handler would have reordered
         // column 0.

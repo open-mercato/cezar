@@ -1,3 +1,4 @@
+import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
 import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
@@ -17,6 +18,7 @@ import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-ro
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
+import { AssetsRoute } from './routes/assets/assets-route'
 import { InboxRoute } from './routes/inbox'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
@@ -204,6 +206,7 @@ function ProjectScopeRoute() {
       {/* React Router keeps the matched child mounted when only this parent param changes.
           Project-local queries and mount-time state must instead start from the project the URL
           now names. Key the child boundary (not the provider, whose unmount resets API scope). */}
+      <ProjectWebhookNotifications key={`webhooks:${projectId}`} projectId={projectId} />
       <Outlet key={projectId} />
     </ProjectScopeProvider>
   )
@@ -298,6 +301,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/tracker/*', pageLabel: 'Tracker' },
+  { pattern: '/assets', pageLabel: 'Assets' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
@@ -396,6 +400,23 @@ export const AppRoutes = memo(function AppRoutes() {
           element={
             <Suspense fallback={<GitTabLoading tab="preview" />}>
               <TaskWorkspaceRoute view="browser" />
+            </Suspense>
+          }
+        />
+        {/* Spec 2026-10-22-html-artifacts-and-impact: `:name` is the open asset. */}
+        <Route
+          path="tasks/:id/assets"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="assets" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/assets/:name"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="assets" />
             </Suspense>
           }
         />
@@ -582,6 +603,10 @@ export const AppRoutes = memo(function AppRoutes() {
         {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
             bundle like the overview does. */}
         <Route path="inbox" element={<InboxRoute />} />
+
+        {/* The project Assets page (spec 2026-10-22-html-artifacts-and-impact, Phase 3): a table, no
+            preview — light enough to ride the main bundle like the inbox. */}
+        <Route path="assets" element={<AssetsRoute />} />
 
         {/* The workflow node editor (spec 2026-09-30-workflow-node-editor): /workflows opens a new
             canvas, /workflows/:name deep-links a saved workflow (v1 files open as graphs). */}

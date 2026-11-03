@@ -1,0 +1,25 @@
+---
+title: "Default browsing and checkout folders"
+description: "Set separate folders for browsing and new repositories."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/projects-section.tsx
+    line: 122
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Default browse folder sets where folder browsing starts and the highest directory accessible in the picker. Default checkout folder sets the destination for Clone from GitHub and New project.
+
+## Where to find it
+
+Settings → Global → Projects
+
+## How to use it
+
+1. Set Default browse folder for Open local folder.
+2. Set Default checkout folder for new projects.
+3. Save and check the relevant add-project form.
+
+> **Good to know**: Changing the checkout folder does not move registered projects.

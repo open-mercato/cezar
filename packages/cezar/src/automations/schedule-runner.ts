@@ -1,5 +1,5 @@
 import { fireDeferred } from './deferred-lifecycle.ts';
-import { nextOccurrence, occurrencesBetween } from '@open-mercato/cezar-contract';
+import { nextScheduleOccurrence, scheduleOccurrencesBetween } from '@open-mercato/cezar-contract';
 import type { AutomationStore } from './store.ts';
 import type { AutomationLogRecord, AutomationReceipt, ScheduleAutomationDefinition } from './types.ts';
 
@@ -77,13 +77,17 @@ export class ScheduleRunner {
    * occurrence after now, which is then persisted so every process agrees on it.
    */
   dueAt(definition: ScheduleAutomationDefinition): number | null {
+    // #1818: another cockpit may have edited/removed a secondary trigger since this timer
+    // captured its definition. Never repopulate its cleared due state from the stale union.
+    const current = this.handle.store.get(definition.id);
+    if (!current || current.revision !== definition.revision) return null;
     if (definition.deferredStart) {
       const saved = definition.deferredStart;
       return definition.enabled ? Math.max(saved.manualRequested ? 0 : Date.parse(saved.notBefore), saved.holdUntil ? Date.parse(saved.holdUntil) : 0) : null;
     }
     const state = this.handle.store.state(definition.id) ?? {};
     if (state.nextRunAt) return Date.parse(state.nextRunAt);
-    const next = nextOccurrence(definition.schedule, this.now(), this.handle.timeZone);
+    const next = nextScheduleOccurrence(definition, this.now(), this.handle.timeZone);
     if (next === null) return null;
     this.handle.store.setState(definition.id, (current) => ({ ...current, revision: definition.revision, nextRunAt: new Date(next).toISOString() }));
     return next;
@@ -100,7 +104,12 @@ export class ScheduleRunner {
       return this.launch(definition, { at: new Date(due).toISOString(), trigger: 'schedule' }, now);
     }
     // Late. Every occurrence from the due one up to now was missed; the newest may catch up.
-    const missed = occurrencesBetween(definition.schedule, due, now + 1, this.handle.timeZone);
+    // #1818: scan only the latest recurrence window, never the first 1,000 of years of sleep.
+    // Every recurring shape repeats within nine days (including DST); once is just one instant.
+    const from = definition.schedule.type === 'once' ? due : Math.max(due, now - 9 * 86_400_000);
+    const missed = scheduleOccurrencesBetween(definition, from, now + 1, this.handle.timeZone, 4_000);
+    if (from > due) this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision,
+      result: 'skipped', reason: 'Older missed occurrences omitted; catch-up scans only the latest nine days.' });
     const latest = missed.at(-1) ?? due;
     const skippedCount = Math.max(0, missed.length - 1);
     if (now - latest <= SCHEDULE_CATCH_UP_MS) {
@@ -152,6 +161,8 @@ export class ScheduleRunner {
     }
     try {
       if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
+      const current = store.get(definition.id);
+      if (!current || current.revision !== definition.revision) return { result: 'skipped', reason: 'The automation changed before this occurrence was reserved.' };
       const eventId = occurrence.trigger === 'manual' ? `manual:${occurrence.at}` : `schedule:${occurrence.at}`;
       const receipt = store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId, occurrenceAt: occurrence.at });
       if (!receipt) {
@@ -294,7 +305,7 @@ export class ScheduleRunner {
 }
 
 function nextIso(definition: ScheduleAutomationDefinition, afterMs: number, timeZone: string): string | undefined {
-  const next = nextOccurrence(definition.schedule, afterMs, timeZone);
+  const next = nextScheduleOccurrence(definition, afterMs, timeZone);
   return next === null ? undefined : new Date(next).toISOString();
 }
 

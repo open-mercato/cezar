@@ -281,6 +281,22 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
   })
 
+  it('failed by a transient provider error → the dock says it retries, not that a limit was hit', () => {
+    renderView(
+      <ThreadView
+        run={run('failed', {
+          error: 'step "work" failed: API Error: 529 Overloaded',
+          autoResumeAt: '2026-08-03T17:00:30.000Z',
+          autoResumeReason: 'transient',
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    const hint = document.querySelector('[data-slot="thread-dock"] [data-slot="auto-resume-hint"]')
+    expect(hint?.textContent).toContain('Temporary provider failure — this task retries automatically at')
+    expect(hint?.textContent).not.toContain('Usage limit')
+  })
+
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
     renderView(
       <ThreadView
@@ -1534,6 +1550,17 @@ describe('ThreadView', () => {
 
     renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
     expect(document.querySelector('[data-slot="start-now"]')).toBeNull()
+  })
+
+  it('the queued placeholder\'s Run First posts promote, also under a usage-limit hold', async () => {
+    const urlOf = (input: RequestInfo | URL) => (input instanceof Request ? input.url : String(input))
+    const fetchMock = vi.fn((_input: RequestInfo | URL) =>
+      Promise.resolve(new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })),
+    )
+    renderView(<ThreadView run={run('queued', { queueWaitReason: { kind: 'account-resume' } })} thread={reduceThread([])} />)
+    vi.stubGlobal('fetch', fetchMock)
+    fireEvent.click(document.querySelector('[data-slot="promote-run"]') as HTMLElement)
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => urlOf(url).endsWith('/promote'))).toBe(true))
   })
 
   it('the first real event replaces the queued placeholder', () => {

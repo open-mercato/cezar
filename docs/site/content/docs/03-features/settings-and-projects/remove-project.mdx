@@ -1,0 +1,25 @@
+---
+title: "Remove a project from the list"
+description: "Remove a repository from Cezar's workspace while keeping its files and task history."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/remove-project.tsx
+    line: 15
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Remove from workspace removes the project's entry from the workspace.
+
+## Where to find it
+
+Settings → Global → Projects → Remove / project settings
+
+## How to use it
+
+1. Open project settings.
+2. Choose Remove from workspace.
+3. Confirm the selected project.
+
+> **Good to know**: Unregistering a project does not delete files or task history. It does not return automatically after restart; you can add it again from disk. The startup project and projects with running tasks cannot be removed through this panel.
