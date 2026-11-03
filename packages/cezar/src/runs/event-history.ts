@@ -571,6 +571,8 @@ function pruneSettledHistory(fold: ContextFold): void {
 
 function foldContextEvent(fold: ContextFold, event: RunHistoryEvent): void {
   fold.asOfSeq = Math.max(fold.asOfSeq, event.seq);
+  // Only legacy transcripts carry a TodoWrite `tool-call`; new ones persist no v1 tool calls
+  // and get the same plan from the `plan.updated` the mapper emits for that frame.
   if (event.type === 'plan.updated' || (event.type === 'tool-call' && stringField(event, 'tool') === 'TodoWrite')) {
     fold.latestPlan = event;
     return;
