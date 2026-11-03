@@ -5,7 +5,7 @@ import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderAuthService } from '../core/provider-auth.ts';
 import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.ts';
-import { attachmentLibraryDir, type RunManager } from '../workflows/run.ts';
+import { attachmentLibraryDir, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
 import { createApp } from './server.ts';
@@ -28,6 +28,7 @@ describe('queued prompt stack routes (#472)', () => {
   let record: RunRecord;
   /** Which rung the fake engine answers on. */
   let rung: 'live' | 'queued' | 'starting' | 'closed';
+  let queuedContent: PastedContent[] | undefined;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-472-routes-'));
@@ -37,11 +38,13 @@ describe('queued prompt stack routes (#472)', () => {
     // rather than a bounds 400), so the fixture must look queued as well as answer on that rung.
     store.updateRun(record.id, { status: 'queued' });
     rung = 'queued';
+    queuedContent = undefined;
 
     manager = {
       sendMessage: () => rung === 'live',
-      enqueueMessage: (id: string, content: Array<{ type: string; text?: string }>): QueuedMessage | null => {
+      enqueueMessage: (id: string, content: PastedContent[]): QueuedMessage | null => {
         if (rung !== 'queued') return null;
+        queuedContent = content;
         const message: QueuedMessage = {
           id: `msg-${(store.getRun(id)?.queuedMessages?.length ?? 0) + 1}`,
           text: content.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n'),
@@ -123,6 +126,25 @@ describe('queued prompt stack routes (#472)', () => {
     expect(body.queued).toBe(true);
     expect(body.message.text).toBe('stack me');
     expect(store.getRun(record.id)?.queuedMessages?.map((m) => m.text)).toEqual(['stack me']);
+  });
+
+  /** #926 — the browser posts screenshots through this route while the run waits for a slot.
+   * Keep this at the HTTP boundary: a route that accidentally strips image blocks would still
+   * pass the text-only queued-stack test and the UI would only report the generic Load failed.
+   * The original filename is metadata for attachment-library persistence; it is intentionally
+   * not part of the vendor image block delivered to the queued manager. */
+  it('passes a queued screenshot through the message route', async () => {
+    const res = await post({
+      text: 'inspect this screenshot',
+      images: [{ mediaType: 'image/png', data: 'aW1hZ2U=', name: 'evidence.png' }],
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ queued: true });
+    expect(queuedContent).toEqual([
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aW1hZ2U=' } },
+      { type: 'text', text: 'inspect this screenshot' },
+    ]);
   });
 
   it('does not probe or require provider credentials to amend a queued prompt', async () => {

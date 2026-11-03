@@ -256,3 +256,9 @@ describe('lifecycle attention', () => {
     expect(deriveAttention(run({worktreeLifecycle:{worktreeId:'worktree',generation:1,activeOperationId:'operation',phase:'setup',state:'running',needsAttention:false}})).label).toBe('preparing worktree')
   })
 })
+
+it('shows a pending fallback as switching agent without asking for attention', () => {
+  const record = run({ status: 'queued', fallbackEpisode: { pending: true, attempted: ['claude:default'] } })
+  expect(deriveAttention(record)).toEqual({ bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' })
+  expect(wantsAttention(record)).toBe(false)
+})

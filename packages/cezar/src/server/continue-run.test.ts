@@ -31,6 +31,7 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     images?: Array<{ type: string; source: { media_type: string; data: string } }>;
     runner?: string;
     model?: string;
+    reasoningEffort?: string;
     agentProfile?: string;
   };
   let captured: { id: string; opts: ContinueOpts } | undefined;
@@ -106,6 +107,14 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured?.opts.model).toBe('gpt-5.1-codex');
   });
 
+  it('plumbs a reasoning effort override, including the explicit native-default reset', async () => {
+    expect((await post({ runner: 'codex', reasoningEffort: 'high' })).status).toBe(200);
+    expect(captured?.opts.reasoningEffort).toBe('high');
+
+    expect((await post({ reasoningEffort: '' })).status).toBe(200);
+    expect(captured?.opts.reasoningEffort).toBe('');
+  });
+
   it('an empty POST omits both — the run keeps its current backend (backward compat)', async () => {
     const res = await post({});
     expect(res.status).toBe(200);
@@ -128,6 +137,9 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     );
 
     expect((await post({ runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
+    expect((await post({ runner: 'codex', reasoningEffort: 'high' })).status).toBe(409);
     expect(captured).toBeUndefined();
 
     expect((await post({ runner: 'codex' })).status).toBe(200);
@@ -215,6 +227,14 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured).toBeUndefined();
   });
 
+  /** #1735: an over-limit body used to answer a bare "Payload Too Large" the cockpit could not explain. */
+  it('answers an over-limit body with a JSON 413 naming the limit', async () => {
+    const res = await post({ text: 'x', pad: 'A'.repeat(33 * 1024 * 1024) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(((await res.json()) as { error: string }).error).toContain('32 MiB');
+  });
+
   it('refuses a reference to an upload that is gone, with the wording the composer matches', async () => {
     const res = await post({ images: [{ uploadId: 'a'.repeat(24) }] });
     expect(res.status).toBe(400);
@@ -242,7 +262,7 @@ describe('POST /api/v1/runs/:id/continue override', () => {
   });
 
   it('rejects an unknown runner with a 400 and never reaches the manager', async () => {
-    const res = await post({ runner: 'gemini' });
+    const res = await post({ runner: 'no-such-runner' });
     expect(res.status).toBe(400);
     expect(captured).toBeUndefined();
   });
