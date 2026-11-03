@@ -35,6 +35,10 @@ describe('every mutating route carries a typed body into AppType', () => {
   // mount is the same sub-app, so it stands or falls with this one.
   type _Checks = [
     Assert<HasTypedBody<'/api/v1/runs', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/impact', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/deferred-start/options', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/deferred-start/preview', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/deferred-start', '$post'>>,
     Assert<HasTypedBody<'/api/v1/tracker/association', '$put'>>,
     Assert<HasTypedBody<'/api/v1/tracker/connection', '$put'>>,
     Assert<HasTypedBody<'/api/v1/plan', '$post'>>,
@@ -67,6 +71,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/runs/:id/archive', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/pin', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/continue', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/todos/:id/start', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/messages', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/open-in', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/git/commit', '$post'>>,

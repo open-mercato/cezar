@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
+import { attachmentCountBucket, telemetryEventInputSchema, telemetryRouteSchema } from '@open-mercato/cezar-api-client'
 
 import {
   apiRouteShape,
   clientSurface,
   errorToastReport,
   isBenignError,
+  isForeignError,
   isCanonicalRoute,
   routeShape,
   scrubToastMessage,
@@ -33,6 +34,8 @@ describe('isCanonicalRoute', () => {
     expect(isCanonicalRoute('/settings/global/appearance')).toBe(true)
     expect(isCanonicalRoute('/')).toBe(false)
     expect(isCanonicalRoute('/settings/agents')).toBe(false)
+    // A redirect to the first global section, not a page — counting it double-counts every visit.
+    expect(isCanonicalRoute('/settings/global')).toBe(false)
     expect(isCanonicalRoute('/inbox')).toBe(false)
   })
 })
@@ -58,6 +61,34 @@ describe('isBenignError', () => {
   })
 })
 
+describe('isForeignError', () => {
+  const plain = document.createElement('html')
+  const translated = document.createElement('html')
+  translated.className = 'translated-ltr'
+  const removeChild = Object.assign(
+    new Error("Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node."),
+    { name: 'NotFoundError' },
+  )
+
+  it('drops a cross-origin "Script error." and a wallet extension, by signature only (e3f14c69, 62a6f399)', () => {
+    expect(isForeignError({ message: 'Script error.', filename: '' }, plain)).toBe(true)
+    expect(isForeignError({
+      message: "TypeError: undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')",
+      error: new TypeError("undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')"),
+    }, plain)).toBe(true)
+    // A "Script error." that names our own bundle, or carries an error, is ours.
+    expect(isForeignError({ message: 'Script error.', filename: 'http://127.0.0.1:4321/assets/index-abc.js' }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Script error.', error: new Error('Script error.') }, plain)).toBe(false)
+    expect(isForeignError({ message: "TypeError: undefined is not an object (evaluating 'run.ethereumish')" }, plain)).toBe(false)
+  })
+
+  it('drops React losing a node only while the page is machine-translated (f09eb833, 07d1d922)', () => {
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, translated)).toBe(true)
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Uncaught TypeError: x is undefined', error: new TypeError('x is undefined') }, translated)).toBe(false)
+  })
+})
+
 describe('clientSurface', () => {
   it('reads the desktop shell stamp', () => {
     expect(clientSurface()).toBe('browser')
@@ -75,6 +106,20 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
+  })
+
+  it('carries scheduling events with closed option labels only', () => {
+    expect(telemetryEventInputSchema.safeParse({ event: 'schedule_menu_opened', label: 'new_task' }).success).toBe(true)
+    for (const label of ['now', 'at', 'usage_reset']) expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'usage_reset' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'now' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label: '2099-01-01 09:00' }).success).toBe(false)
+  })
+})
+
+describe('attachment count buckets (telemetry 7054e5f2)', () => {
+  it('buckets every count into the closed label set', () => {
+    expect([1, 2, 4, 5, 10, 11, 20, 25].map(attachmentCountBucket)).toEqual(['1', '2-4', '2-4', '5-10', '5-10', '11-20', '11-20', '11-20'])
   })
 })
 
@@ -151,6 +196,29 @@ describe('scrubToastMessage', () => {
     expect(scrubToastMessage("branch 'feature/login' already exists", [])).toBe('branch <value> already exists')
     expect(scrubToastMessage('cannot push cez/1a2b3c4d to acme/shop', [])).toBe('cannot push <path> to <path>')
     expect(scrubToastMessage("can't open /Users/me/code/shop/README.md", [])).toBe("can't open <path>")
+  })
+
+  /** Telemetry 0f1255b6: a refused attachment's name split one error into a group per file. */
+  it('masks file names, so every refusal of one kind is one error group', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    expect(scrub('“Screenshot 2026-10-15 at 00.29.50.png” skipped — max 20 attachments per message')).toBe(
+      '<value> skipped — max 20 attachments per message',
+    )
+    expect(scrub('“image.png” skipped — max 20 attachments per message')).toBe(
+      '<value> skipped — max 20 attachments per message',
+    )
+    expect(scrub('image.png skipped — max 4 attachments per message')).toBe('<file> skipped — max 4 attachments per message')
+    expect(scrub('notes.v2.MD is too large (max 5 MB)')).toBe('<file> is too large (max 5 MB)')
+    expect(scrub('cezar 0.15.2 is out')).toBe('cezar 0.15.2 is out')
+  })
+
+  /** Telemetry 5fc3ffbb, d77d0047: any file is attachable since #1510, not just images and text. */
+  it('masks document, archive and media file names too', () => {
+    const scrub = (m: string) => scrubToastMessage(m, [])
+    for (const name of ['offer_1.docx', 'budget.xlsx', 'backup.tar.gz', 'clip.mp4', 'deck.pptx', 'lista-opcje.jpg']) {
+      expect(scrub(`${name} skipped — max 4 attachments per message`)).toBe('<file> skipped — max 4 attachments per message')
+    }
+    expect(scrub('node.js and example.com stay')).toBe('node.js and example.com stay')
   })
 
   it('masks the names and ids of known projects, longest first and whole words only', () => {

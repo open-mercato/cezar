@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { GithubAutomationDefinition, AutomationEvent } from './types.ts';
@@ -115,6 +116,7 @@ export class GithubPoller {
     const run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], {
       maxBuffer: 4 * 1024 * 1024,
       timeout: GITHUB_COMMAND_TIMEOUT_MS,
+      env: ghEnv(),
     })).stdout);
     const host = this.host;
     this.run = host

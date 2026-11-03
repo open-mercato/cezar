@@ -12,14 +12,15 @@ describe('PROFILE_ENV_VAR', () => {
   it('names one variable per provider that can carry an account', () => {
     expect(PROFILE_ENV_VAR.claude).toBe('CLAUDE_CONFIG_DIR');
     expect(PROFILE_ENV_VAR.codex).toBe('CODEX_HOME');
+    expect(PROFILE_ENV_VAR.kimi).toBe('KIMI_CODE_HOME');
   });
 
-  it('leaves OpenCode unsupported — its credentials do not follow its config dir', () => {
+  it('leaves OpenCode unsupported - its credentials do not follow its config dir', () => {
     expect(PROFILE_ENV_VAR.opencode).toBeNull();
     expect(supportsProfiles('opencode')).toBe(false);
-    // omp joined claude/codex: `PI_CODING_AGENT_DIR` moves the whole agent base, agent.db
+    // omp joined claude/codex (and kimi): `PI_CODING_AGENT_DIR` moves the whole agent base, agent.db
     // included, so a second OMP account can carry its own credentials.
-    expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex', 'omp']);
+    expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex', 'omp', 'kimi']);
   });
 
   it('omp names the whole agent dir, credentials included', () => {
@@ -38,6 +39,7 @@ describe('profileEnv', () => {
       CLAUDE_CONFIG_DIR: '/home/u/.claude-klaudiusz',
     });
     expect(profileEnv('codex', '/home/u/.codex-klaudiusz')).toEqual({ CODEX_HOME: '/home/u/.codex-klaudiusz' });
+    expect(profileEnv('kimi', '/home/u/.kimi-work')).toEqual({ KIMI_CODE_HOME: '/home/u/.kimi-work' });
   });
 
   it('adds NOTHING for the default profile — the zero-config path must stay untouched', () => {

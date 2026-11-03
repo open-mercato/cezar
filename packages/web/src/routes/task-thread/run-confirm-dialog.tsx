@@ -24,11 +24,14 @@ export type RunConfirmKind = 'cancel' | 'delete'
 export function RunConfirmDialog({
   run,
   confirming,
+  lifecycleDelete = false,
   onOpenChange,
   onConfirm,
 }: {
   run: ApiRun
   confirming: RunConfirmKind | null
+  /** Cleanup scripts run first, so a delete may retain the task instead of removing it. */
+  lifecycleDelete?: boolean
   onOpenChange: (open: boolean) => void
   onConfirm: (kind: RunConfirmKind) => void
 }) {
@@ -40,8 +43,9 @@ export function RunConfirmDialog({
           <AlertDialogDescription>
             {confirming === 'delete' ? (
               <>
-                This removes the run, its transcript, its worktree and its branch. There is no
-                undo.
+                {lifecycleDelete
+                  ? 'Cleanup runs before the task, transcript, worktree, and branch are removed. If cleanup needs attention, the task and worktree are retained for your decision.'
+                  : 'This removes the run, its transcript, its worktree and its branch. There is no undo.'}
                 <span className="mt-1 block truncate font-medium text-foreground" title={runTitle(run)}>
                   {runTitle(run)}
                 </span>

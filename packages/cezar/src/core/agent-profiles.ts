@@ -59,6 +59,12 @@ import type { ProviderId } from './provider-auth.ts';
  *   the probe agrees with the CLI, and cezar sets the variable per account per omp run only
  *   (`profileEnv`), never host-wide. A host that exports it for pi therefore also repoints omp's
  *   base — omp's own behaviour, not cezar's, and the reason the pi entry above stays `null`.
+ * - **gemini** → `null` for now (spec 2026-09-19 Q14). `GEMINI_CLI_HOME` relocates `.gemini`, but
+ *   on 2026-09-19 a fresh `GEMINI_CLI_HOME` (and even a fresh `HOME`) still authenticated with the
+ *   stored API key (`__fixtures__/gemini/README.md`), so it does not provably move credentials.
+ * - **kimi** → `KIMI_CODE_HOME`. Verified against `kimi` 0.39.1 on 2026-09-30: under a fresh
+ *   `KIMI_CODE_HOME` the CLI reports "No providers configured" — config AND the OAuth
+ *   credential live under that home, so a second account can be carried the same way as Claude.
  */
 export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   claude: 'CLAUDE_CONFIG_DIR',
@@ -69,6 +75,11 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   junie: null,
   copilot: null,
   omp: 'PI_CODING_AGENT_DIR',
+  // The CLI documents no home variable; its state is `~/.gemini/antigravity-cli`, relocated only
+  // by moving `HOME` itself, which would also move every tool the agent's Bash calls touch.
+  antigravity: null,
+  gemini: null,
+  kimi: 'KIMI_CODE_HOME',
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -125,8 +136,12 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   pi: [],
   // junie cannot carry profiles either (`PROFILE_ENV_VAR.junie === null`) — same reason.
   junie: [],
-  // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
+  // Same for copilot (`PROFILE_ENV_VAR.copilot === null`) and antigravity.
   copilot: [],
   // `PI_CODING_AGENT_DIR` moves the whole base; `config.yml` + `agent.db` are its signature files.
   omp: ['config.yml', 'agent.db'],
+  antigravity: [],
+  // Same as pi: `PROFILE_ENV_VAR.gemini === null`, kept only for exhaustiveness.
+  gemini: [],
+  kimi: ['config.toml', 'credentials'],
 };

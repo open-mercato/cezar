@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 /**
  * Project settings shows WHERE the project is (project-location.tsx): the registry's absolute
@@ -49,7 +50,7 @@ function seededClient() {
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
-    capabilities: { localHandoff: true, followups: true, singleProject: false, automations: false },
+    capabilities: { localHandoff: true, terminal: false, followups: true, singleProject: false, automations: false },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [
@@ -72,9 +73,11 @@ function seededClient() {
 function renderAt(entry: string) {
   render(
     <QueryClientProvider client={seededClient()}>
-      <MemoryRouter initialEntries={[entry]}>
-        <AppRoutes />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppRoutes />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
@@ -134,6 +137,36 @@ describe('the project folder in settings', () => {
     expect(writeText).toHaveBeenCalledWith(ROOT)
   })
 
+  // Telemetry 24be63a4: a remote cockpit on plain http has no `navigator.clipboard`; the nav
+  // footer's Copy (on every project settings page, /settings/agents included) threw from onClick.
+  it('copies without a secure-context clipboard instead of throwing', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined })
+    const execCommand = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true, writable: true })
+    const errors: unknown[] = []
+    const onError = (event: ErrorEvent) => {
+      errors.push(event.error)
+      event.preventDefault()
+    }
+    window.addEventListener('error', onError)
+    try {
+      renderAt('/settings/agents')
+      const copy = await waitFor(() => {
+        const el = document.querySelector<HTMLElement>('[data-slot="settings-nav"] [data-action="project-location-copy"]')
+        expect(el).not.toBeNull()
+        return el!
+      })
+
+      fireEvent.click(copy)
+
+      expect(errors).toEqual([])
+      expect(execCommand).toHaveBeenCalledWith('copy')
+    } finally {
+      window.removeEventListener('error', onError)
+      Reflect.deleteProperty(document, 'execCommand')
+    }
+  })
+
   it('"Open with" lists the machine\'s apps, minus the agent CLIs', async () => {
     renderAt('/settings')
     // `cli:claude` is detected and offered for a task worktree, but opening the CHECKOUT in an
@@ -167,9 +200,9 @@ describe('the project folder in settings', () => {
   })
 
   it('global settings shows no project folder — it describes no project', async () => {
-    renderAt('/settings/global')
+    renderAt('/settings/global/notifications')
     await waitFor(() => {
-      expect(document.querySelector('[data-slot="settings-index"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="settings-nav"][data-scope="global"]')).not.toBeNull()
     })
     expect(document.querySelector('[data-slot="project-location"]')).toBeNull()
   })

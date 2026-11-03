@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
@@ -70,6 +70,20 @@ async function waitForStatus(url: string, id: string, wanted: string[]): Promise
 
 /** `health.forge` is recomputed on an interval (server.ts `HEALTH_TTL_MS`), not per request —
  *  after removing the fixture's remote, wait for the server to have actually noticed. */
+async function waitForUserMessage(eventsFile: string, text: RegExp): Promise<void> {
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    const lines = existsSync(eventsFile) ? readFileSync(eventsFile, 'utf8').split('\n') : []
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const event = JSON.parse(line) as { type?: string; text?: string }
+      if (event.type === 'user-message' && text.test(event.text ?? '')) return
+    }
+    await new Promise((done) => setTimeout(done, 250))
+  }
+  throw new Error(`no user-message matching ${text} in ${eventsFile}`)
+}
+
 async function waitForNoForge(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const health = (await (await fetch(`${url}/api/v1/health`)).json()) as { forge: unknown }
@@ -151,19 +165,18 @@ afterAll(async () => {
 })
 
 describe('the Changes tab against a live dry run', () => {
-  it('the Session header tab navigates to /changes: tree, toolbar and the real diff', () => {
+  it('the Changes card shows tree, toolbar and the real diff', () => {
     browser.goto(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="run-tabs"]') !== null`)
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/changes`)}"]`)
+    browser.waitForFunction(`document.querySelector('[data-slot="layout-card"][data-fixed="changes"]') !== null`)
+    browser.click(`[data-slot="layout-card"][data-fixed="changes"]`)
 
-    // Client-side navigation into the lazy chunk — wait for the toolbar to exist.
+    // A layout is not a URL (spec §5.3): the card swaps the stage in place.
     browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
 
-    // The Changes tab is the active one now.
+    // The Changes card is the active one now.
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
     ).toBe('Changes')
 
@@ -185,7 +198,7 @@ describe('the Changes tab against a live dry run', () => {
     // Create PR's enablement rides the /api/v1/health answer (forge), and health probes the
     // real codex/opencode/gh CLIs — slow. Wait for the policy to settle rather than sample.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="git-button"] [data-action="create-pr"]')?.disabled === false`,
+      `document.querySelector('[data-slot="git-button"] [data-action="create-pr"]:not([aria-disabled="true"])')?.disabled === false`,
     )
     expect(browser.evaluate(`document.querySelector('[data-slot="git-button"] [data-action]').dataset.action`)).toBe(
       'create-pr',
@@ -215,7 +228,7 @@ describe('the Changes tab against a live dry run', () => {
     expect(browser.count('[data-slot="changes-tree"]')).toBe(1)
   })
 
-  it('Commit: the dialog prefills the auto-summary, commits for real in the worktree', async () => {
+  it('Commit goes to the task’s agent — it runs git itself, so no commit dialog opens', async () => {
     // With a GitHub remote the policy's next step is always Create PR (above) — plain Commit
     // only surfaces once there is no supported forge. Drop the fixture's origin so the policy
     // degrades there instead of risking a real push against it (no remote, no push to stall on).
@@ -229,41 +242,23 @@ describe('the Changes tab against a live dry run', () => {
     await waitForNoForge(baseUrl)
     browser.reload()
     browser.waitForFunction(
-      `document.querySelector('[data-slot="git-button"] [data-action="commit"]')?.disabled === false`,
+      `document.querySelector('[data-slot="git-button"] [data-action="commit"]:not([aria-disabled="true"])')?.disabled === false`,
     )
 
     browser.click('[data-slot="git-button"] [data-action="commit"]')
-    // Radix dialog animates in — wait for the textarea, then check the prefill.
-    browser.waitForFunction(`document.querySelector('[data-slot="commit-message"]') !== null`)
-    const prefill = browser.evaluate(
-      `document.querySelector('[data-slot="commit-message"]').value`,
-    ) as string
-    expect(prefill.length).toBeGreaterThan(0)
-
-    browser.fill('[data-slot="commit-message"]', 'docs: notes touched by the changes e2e')
-    browser.click('[data-slot="commit-confirm"]')
-    // Success closes the dialog (a 409 would keep it open — that path is unit-tested).
-    browser.waitForFunction(`document.querySelector('[data-slot="commit-message"]') === null`)
-
-    // The commit is REAL — read it back from the run's worktree.
-    const subject = execFileSync('git', ['-C', worktreePath, 'log', '-1', '--format=%s'], {
-      encoding: 'utf8',
-    }).trim()
-    expect(subject).toBe('docs: notes touched by the changes e2e')
-
-    // The diff stays anchored at the merge-base, so the committed changes still show —
-    // now including the file this test added.
-    browser.waitForFunction(`document.querySelector('[data-slot="diff-file"][data-path="notes.md"]') !== null`)
-    browser.waitForFunction(`document.querySelector('[data-slot="tree-file"][data-path="edited-by-e2e.md"]') !== null`)
+    // The prompt reached the task — a live message or a continue both land as a `user-message` in
+    // the run's event log. The mock agent does not run git, so the commit itself is unit-tested.
+    await waitForUserMessage(join(dataRoot, '.ai/cezar/runs', `${runId}.ndjson`), /^Commit$/)
+    // The commit dialog is the server fallback for a task with no agent to ask — not this one.
+    expect(browser.count('[data-slot="commit-message"]')).toBe(0)
   })
 
-  it('the Files tab opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
+  it('the Code card opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
+    browser.click(`[data-slot="layout-card"][data-fixed="files"]`)
     browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
-    expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
     ).toBe('Files')
   })
@@ -287,10 +282,8 @@ describe('the Changes tab against a live dry run', () => {
         `(() => { const el = document.querySelector('[data-slot="changes-tree"]'); return el === null || el.offsetParent === null })()`,
       ),
     ).toBe(true)
-    // The tabs remain a tappable segment row and the page does not overflow sideways.
-    // Session / Changes / Commits / Files / Graph / Notes — the whole row survives the phone
-    // framing (it scrolls within itself rather than widening the page).
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(6)
+    // The layout strip folds what does not fit into `…` rather than widening the page.
+    expect(browser.count('[data-slot="layout-card"]')).toBeGreaterThan(0)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/changes-mobile.png`)

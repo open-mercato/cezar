@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,8 +53,19 @@ describe('buildCopilotArgs', () => {
   });
 
   it('carries the model and every additional directory', () => {
-    expect(buildCopilotArgs({ model: 'claude-sonnet-4', additionalDirectories: ['/srv/shared', '/srv/docs'] }))
-      .toEqual(['--acp', '--allow-all-tools', '--no-auto-update', '--model', 'claude-sonnet-4', '--add-dir', '/srv/shared', '--add-dir', '/srv/docs']);
+    const shared = join(cwd, 'shared');
+    const docs = join(cwd, 'docs');
+    mkdirSync(shared);
+    mkdirSync(docs);
+    expect(buildCopilotArgs({ model: 'claude-sonnet-4', additionalDirectories: [shared, docs] }))
+      .toEqual(['--acp', '--allow-all-tools', '--no-auto-update', '--model', 'claude-sonnet-4', '--add-dir', shared, '--add-dir', docs]);
+  });
+
+  it('skips an additional directory that does not exist — the CLI refuses to start on one (telemetry 3db0206b)', () => {
+    const file = join(cwd, 'a-file');
+    writeFileSync(file, '');
+    expect(buildCopilotArgs({ additionalDirectories: [join(cwd, 'gone'), file, cwd] }))
+      .toEqual(['--acp', '--allow-all-tools', '--no-auto-update', '--add-dir', cwd]);
   });
 });
 
@@ -66,6 +77,10 @@ describe('copilotExitMessage', () => {
   it('otherwise reports the code and the tail of stderr, inventing no exit-code meanings', () => {
     expect(copilotExitMessage(7, 'line one\nline two')).toBe('Copilot CLI exited with code 7 — line one | line two');
     expect(copilotExitMessage(null, '')).toBe('Copilot CLI exited with code null');
+  });
+
+  it('says a mid-turn exit dropped the prompt, so a code 0 does not read as success', () => {
+    expect(copilotExitMessage(0, '', true)).toBe('Copilot CLI quit mid-turn without answering the prompt (exit code 0)');
   });
 });
 
@@ -206,6 +221,33 @@ describe('CopilotAcpRunner — session lifecycle', () => {
     expect(toolStatuses.at(-1)).toBe('failed');
     // cezar asked for the stop, so its own teardown signal is not reported as an agent failure.
     expect(c.events.filter((e) => e.type === 'error')).toEqual([]);
+  });
+
+  it('end() during a turn is cezar closing the session, not an agent failure (telemetry 2e3b122d)', async () => {
+    const c = collect();
+    const session = new CopilotAcpRunner({ bin: MOCK }).startSession(
+      { userPrompt: 'go', cwd, env: { CEZ_MOCK_COPILOT_PROMPT_HANGS: '1' } },
+      c.onEvent,
+      { onUiEvent: c.onUiEvent },
+    );
+    await waitFor(() => c.ui.some((e) => e.type === 'turn.started'));
+    session.end();
+    await session.result;
+
+    expect(c.events.filter((e) => e.type === 'error')).toEqual([]);
+    expect(c.ui.filter((e) => e.type === 'session.error')).toEqual([]);
+    expect(c.ui).toContainEqual(expect.objectContaining({ type: 'turn.completed', stopReason: 'cancelled' }));
+  });
+
+  it('a CLI that quits cleanly mid-turn on its own says the prompt went unanswered', async () => {
+    const c = collect();
+    const session = new CopilotAcpRunner({ bin: MOCK }).startSession(
+      { userPrompt: 'go', cwd, env: { CEZ_MOCK_COPILOT_EXIT_MID_TURN: '1' } },
+      c.onEvent,
+      { onUiEvent: c.onUiEvent },
+    );
+    await session.result;
+    expect(c.events).toContainEqual({ type: 'error', message: 'Copilot CLI quit mid-turn without answering the prompt (exit code 0)' });
   });
 
   it('auto-approves a permission request and notes it, rather than parking the run', async () => {

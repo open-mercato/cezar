@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { runnerSchema } from '@open-mercato/cezar-api-client'
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiMessageItem, UiToolItem } from '@open-mercato/cezar-api-client'
 
@@ -594,22 +594,19 @@ describe('reduceThread — provider authorization recovery', () => {
     }])
   })
 
-  it('persists a junie authorization incident (the runner deliberately left unknown-but-usable)', () => {
+  it('keeps the named agent account a rejection came from (telemetry 9e4a95db)', () => {
     expect(reduceThread([
-      line(1, 'provider-auth-required', {
-        provider: 'junie',
-        authFailureId: 'incident-1',
-        stepId: 'work',
-      }),
+      line(1, 'provider-auth-required', { provider: 'claude', authFailureId: 'incident-1', profileId: 'work' }),
     ]).turns[0]?.items).toEqual([{
       kind: 'provider-auth-required',
       id: 'v1:1',
-      provider: 'junie',
+      provider: 'claude',
       authFailureId: 'incident-1',
+      profileId: 'work',
     }])
   })
 
-  it.each(runnerSchema.options)('persists an incident for the %s runner', (provider) => {
+  it.each(RUNNER_IDS)('persists an incident for the %s runner', (provider) => {
     expect(reduceThread([
       line(1, 'provider-auth-required', { provider, authFailureId: 'incident-1' }),
     ]).turns[0]?.items).toEqual([{
@@ -644,6 +641,38 @@ describe('reduceThread — provider authorization recovery', () => {
       line(3, 'turn.completed', { turnId: 'turn-1', stopReason: 'error' }),
     ]
     expect(reduceThread(events)).toEqual(reduceThread(events))
+  })
+})
+
+describe('reduceThread — outdated agent CLI', () => {
+  const OUTDATED = 'OpenCode 1.18.0 or newer is required to use the free tier'
+
+  it('offers the update once per turn, after the error, for the session\'s backend', () => {
+    const { turns } = reduceThread([
+      line(1, 'session.started', { sessionId: 's', backend: 'opencode' }),
+      line(2, 'session.error', { message: OUTDATED, fatal: false }),
+      line(3, 'error', { message: `opencode: ${OUTDATED}` }),
+    ])
+    expect(turns[0]?.items).toEqual([
+      { kind: 'note', id: 'v2:2', text: OUTDATED, tone: 'danger' },
+      { kind: 'agent-update-required', id: 'v2:2:update', provider: 'opencode' },
+      { kind: 'note', id: 'v1:3', text: `opencode: ${OUTDATED}`, tone: 'danger' },
+    ])
+  })
+
+  it('offers nothing for other errors, or without a known backend', () => {
+    const items = (events: RunEvent[]) => reduceThread(events).turns.flatMap((turn) => turn.items)
+    expect(items([
+      line(1, 'session.started', { sessionId: 's', backend: 'opencode' }),
+      line(2, 'session.error', { message: 'Invalid API key', fatal: false }),
+    ]).some((item) => item.kind === 'agent-update-required')).toBe(false)
+    expect(items([line(1, 'session.error', { message: OUTDATED, fatal: false })])
+      .some((item) => item.kind === 'agent-update-required')).toBe(false)
+  })
+
+  it('names the run\'s runner when the error comes before any session started (OpenCode bootstrap)', () => {
+    const { turns } = reduceThread([line(1, 'error', { message: `opencode: ${OUTDATED}` })], { runner: 'opencode' })
+    expect(turns[0]?.items).toContainEqual({ kind: 'agent-update-required', id: 'v1:1:update', provider: 'opencode' })
   })
 })
 

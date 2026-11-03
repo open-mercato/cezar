@@ -1,0 +1,29 @@
+---
+title: "Set how often to check CI"
+description: "Choose whether to stop a waiting session or resume it periodically to check again."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workspace/config.ts
+    line: 96
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-24-monitoring-session-auto-wake.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Park stops the session while it waits for a result. With Re-check, you set the interval between checks.
+
+## Where to find it
+
+Settings → Resources → Monitoring wake-up
+
+## How to use it
+
+1. Choose Park or Re-check.
+2. For Re-check, set the interval.
+3. Check the task's next wake-up time.
+
+> **Good to know**: By default, Re-check checks every 5 minutes, with a maximum of 40 automatic wake-ups. Park stops automatic checking without starting further model turns.

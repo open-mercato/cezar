@@ -2,7 +2,7 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:ch
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AgentEvent, AgentRunResult, AgentRunSpec, AgentRunner, AgentSession, ContentBlock, SessionOptions } from './agent-runner.ts';
-import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { assertReasoningEffortSupported, isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import type { AgentToolCallRecord } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { readNdjson } from './ndjson.ts';
@@ -77,6 +77,7 @@ export class OmpRpcRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    assertReasoningEffortSupported('omp', spec.reasoningEffort);
     const child = nodeSpawn(this.bin, buildOmpArgs(spec), {
       cwd: spec.cwd,
       env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),

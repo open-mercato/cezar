@@ -7,6 +7,7 @@ import { queryKeys, workspaceQueryKeys } from '@/api/queries'
 import { createQueryClient } from '@/api/query-client'
 import type { WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
 import { AppRoutes } from '@/routes'
+import { ThemeProvider } from '@/components/theme-provider'
 
 let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
@@ -18,6 +19,8 @@ function serve(overrides: Partial<WorkspaceConfigResponse> = {}) {
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    orgSkillsRepos: [],
+    systemPrompt: null,
     composerDefaults: {
       autonomous: null,
       worktree: null,
@@ -54,6 +57,7 @@ function serve(overrides: Partial<WorkspaceConfigResponse> = {}) {
           config.skillsAutoUpdate = body.skillsAutoUpdate as boolean | null
           config.effectiveSkillsAutoUpdate = config.skillsAutoUpdate ?? true
         }
+        if (body && 'orgSkillsRepos' in body) config.orgSkillsRepos = body.orgSkillsRepos as typeof config.orgSkillsRepos
         return json(config)
       }
       return new Promise<never>(() => {})
@@ -71,9 +75,11 @@ function renderSkills() {
   })
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={['/settings/global/skills']}>
-        <AppRoutes />
-      </MemoryRouter>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={['/settings/global/skills']}>
+          <AppRoutes />
+        </MemoryRouter>
+      </ThemeProvider>
     </QueryClientProvider>,
   )
 }
@@ -111,4 +117,16 @@ describe('Global settings → Skills', () => {
     await waitFor(() => expect(puts().at(-1)?.body).toEqual({ skillsAutoUpdate: null }))
   })
 
+  it('adds and removes an organisation skills repository', async () => {
+    serve()
+    renderSkills()
+    const input = await screen.findByLabelText('Organisation skills repositories')
+    fireEvent.change(input, { target: { value: 'acme/skills' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add repository' }))
+    await waitFor(() =>
+      expect(puts().at(-1)?.body).toEqual({ orgSkillsRepos: [{ repo: 'acme/skills', ref: 'main' }] }),
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove acme/skills' }))
+    await waitFor(() => expect(puts().at(-1)?.body).toEqual({ orgSkillsRepos: [] }))
+  })
 })

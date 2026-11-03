@@ -1,6 +1,6 @@
 import type { ApiRun, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 import { useProviderStatus } from '@/api/queries'
-import { providerStatusFor } from '@/lib/provider-status'
+import { providerRowRunnable, providerStatusFor } from '@/lib/provider-status'
 
 const PROVIDER_LABEL: Record<Runner, string> = {
   claude: 'Claude Code',
@@ -11,6 +11,9 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
   omp: 'OMP',
+  antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
+  kimi: 'Kimi Code',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */
@@ -44,7 +47,7 @@ function providerAvailability(
       reason: `${PROVIDER_LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`,
     }
   }
-  if (row?.status !== 'connected') {
+  if (!row || !providerRowRunnable(row)) {
     return {
       provider,
       usable: false,

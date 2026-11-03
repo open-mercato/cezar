@@ -449,8 +449,8 @@ function synthesizeUrl(
 /** The strongest known tracker reference — what a row with space for exactly one shows (the
  *  sidebar row, the per-project table). PRs win once one exists; issue-driven queued runs still
  *  expose their already-known issue immediately. */
-export function taskReference(run: TaskReferenceInput): TaskReference | undefined {
-  return taskReferences(run)[0]
+export function taskReference(run: TaskReferenceInput, repoBase?: string): TaskReference | undefined {
+  return taskReferences(run, repoBase)[0]
 }
 
 /** The PR chip's `#402`. Null when the URL's last segment is not a number — a forge we don't
@@ -542,4 +542,13 @@ export function compareGroups(runs: readonly RunRecord[], view: ListView): Compa
     if (!members.every((member) => TERMINAL_STATUSES.has(member.status))) return []
     return [{ groupId, title: groupTitle(first), count: members.length }]
   })
+}
+
+/** Width of one nesting step in the Task cell — the sidebar's own step. */
+export const TASK_INDENT_PX = 14
+
+/** Floor of the Task column for a row at `depth`: the indent is added on top of the 220px a root
+ *  gets, so a nested title keeps the room it would have had unindented (#979). */
+export function taskCellMinWidth(depth: number): number {
+  return 220 + Math.max(0, depth) * TASK_INDENT_PX
 }

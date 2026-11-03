@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { runnerSchema } from '@open-mercato/cezar-api-client'
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import {
   mergeProviderAuthDismissals,
@@ -45,7 +45,7 @@ describe('visibleProviderAuthIncidents', () => {
 
   it('surfaces and dismisses an incident for every runner in the contract', () => {
     const status: ProviderStatusResponse = {
-      providers: runnerSchema.options.map((provider) => ({
+      providers: RUNNER_IDS.map((provider) => ({
         provider,
         status: 'disconnected',
         enabled: true,
@@ -53,7 +53,7 @@ describe('visibleProviderAuthIncidents', () => {
       })),
     }
     const incidents = visibleProviderAuthIncidents(status, {})
-    expect(incidents.map((incident) => incident.provider).sort()).toEqual([...runnerSchema.options].sort())
+    expect(incidents.map((incident) => incident.provider)).toEqual(RUNNER_IDS)
     const dismissals = providerAuthDismissals(mergeProviderAuthDismissals({}, incidents))
     expect(visibleProviderAuthIncidents(status, dismissals)).toEqual([])
   })

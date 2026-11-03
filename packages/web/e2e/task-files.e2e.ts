@@ -1,11 +1,11 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 
 /**
  * The Files tab (R5 Step 1.6) end-to-end against a LIVE dry run, same doctrine as
@@ -120,10 +120,9 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 180_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('the Files tab against a live dry-run worktree', () => {
@@ -133,7 +132,7 @@ describe('the Files tab against a live dry-run worktree', () => {
 
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="layout-card"][data-active]').textContent.trim()`,
       ),
     ).toBe('Files')
     // The real worktree root: the committed fixture files plus the src dir.
@@ -196,8 +195,8 @@ describe('the Files tab against a live dry-run worktree', () => {
         `document.querySelector('[data-slot="files-tree"]').offsetParent !== null`,
       ),
     ).toBe(true)
-    // Session / Changes / Commits / Files / Graph / Notes.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(6)
+    // The layout strip folds what does not fit into `…` rather than widening the page.
+    expect(browser.count('[data-slot="layout-card"]')).toBeGreaterThan(0)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/files-mobile.png`)

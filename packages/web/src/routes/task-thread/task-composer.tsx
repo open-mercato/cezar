@@ -63,7 +63,7 @@ export function TaskComposer({
 
   // One delivery path for both modes, because the record that picks between them can be stale:
   // a 409 refetches it and, when the truth names the other endpoint, delivers there instead.
-  const deliverPrompt = useDeliverPrompt(run, continueAction)
+  const deliverPrompt = useDeliverPrompt(run, continueAction.continueWith)
 
   const hasDiffComments = diffComments.comments.length > 0
   // Only to tell a registry skill from a backend's own slash command (`commentsRideWith`) —
@@ -155,6 +155,7 @@ export function TaskComposer({
         // are a message on their own.
         allowEmptySubmit={continuable || hasDiffComments}
         sendAriaLabel={continuable ? 'Continue' : 'Send'}
+        sendShortcut="↵"
         stop={stoppable ? { label: 'Stop the run', onStop: stopRun.request, pending: stopRun.pending } : undefined}
         placeholder={
           queued ? 'Add to the prompt — sent when the run starts…'

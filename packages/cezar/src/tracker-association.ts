@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { renameWithRetry } from './fs-rename.ts';
 import {
   trackerAssociationSchema,
   trackerSourceSchema,
@@ -95,7 +96,7 @@ export async function writeTrackerAssociation(
       const previous = await fs.readFile(path, 'utf8').then(text => persistedSchema.parse(JSON.parse(text))).catch(() => null);
       const merged = { ...previous, ...parsed.data, source: { ...previous?.source, ...parsed.data.source } };
       await fs.writeFile(temporary, `${JSON.stringify(merged, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
-      await fs.rename(temporary, path);
+      await renameWithRetry(temporary, path);
       return true;
     } catch {
       await fs.unlink(temporary).catch(() => undefined);

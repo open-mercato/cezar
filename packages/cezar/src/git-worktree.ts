@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
@@ -29,6 +30,8 @@ interface GitResult {
 interface RegisteredWorktree {
   path: string;
   branch?: string;
+  /** Its directory is gone; `git worktree prune` would drop the registration. */
+  prunable?: boolean;
 }
 
 /** Run git, never throw — degradation is the caller's policy. */
@@ -217,6 +220,12 @@ export async function chooseForkBase(
   return resolved;
 }
 
+/** Does the local branch exist? False on any git failure (never throws). */
+export async function localBranchExists(repoRoot: string, branch: string): Promise<boolean> {
+  if (!isSafeGitRef(branch)) return false;
+  return (await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])).ok;
+}
+
 export function worktreePathFor(repoRoot: string, runId: string): string {
   return join(repoRoot, WORKTREES_DIR, runId);
 }
@@ -240,6 +249,8 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
       current = { path: line.slice('worktree '.length) };
     } else if (current && line.startsWith('branch ')) {
       current.branch = line.slice('branch '.length);
+    } else if (current && (line === 'prunable' || line.startsWith('prunable '))) {
+      current.prunable = true;
     } else if (!line && current) {
       worktrees.push(current);
       current = undefined;
@@ -247,6 +258,22 @@ async function registeredWorktrees(repoRoot: string): Promise<RegisteredWorktree
   }
   if (current) worktrees.push(current);
   return worktrees;
+}
+
+/**
+ * Local branches checked out in a worktree OTHER than the one at `dir`, mapped to that
+ * worktree's path. git refuses to check such a branch out a second time (telemetry da5ca728).
+ * A worktree whose directory is gone does not count — `git worktree prune` releases its branch.
+ */
+export async function branchesCheckedOutElsewhere(dir: string): Promise<Map<string, string>> {
+  const top = await git(dir, ['rev-parse', '--show-toplevel']);
+  const self = top.ok ? canonicalPath(top.stdout.trim()) : canonicalPath(dir);
+  const held = new Map<string, string>();
+  for (const wt of await registeredWorktrees(dir)) {
+    if (wt.prunable || !wt.branch?.startsWith('refs/heads/') || canonicalPath(wt.path) === self) continue;
+    held.set(wt.branch.slice('refs/heads/'.length), wt.path);
+  }
+  return held;
 }
 
 function worktreeInfo(path: string, branch: string, baseBranch: string): WorktreeInfo {
@@ -260,6 +287,13 @@ function canonicalPath(path: string): string {
   } catch {
     return resolve(path);
   }
+}
+
+/** A checkout (and its lifecycle install) on a near-full disk dies half-written with ENOSPC —
+ *  refuse up front with the same reclaim hint the agent spawn guard gives (9cdcedc3). */
+function refuseBelowDiskFloor(worktreePath: string): void {
+  const refusal = diskFloorRefusal('worktree', worktreePath);
+  if (refusal) throw new Error(refusal);
 }
 
 /**
@@ -282,6 +316,17 @@ export async function createWorktree(
   baseBranch: string,
   opts: { branch?: string } = {},
 ): Promise<WorktreeInfo> {
+  const {materialized: _materialized, ...info} = await createWorktreeWithOutcome(repoRoot, runId, baseBranch, opts);
+  return info;
+}
+
+/** Internal generation boundary; the public helper retains its original response shape. */
+export async function createWorktreeWithOutcome(
+  repoRoot: string,
+  runId: string,
+  baseBranch: string,
+  opts: { branch?: string } = {},
+): Promise<WorktreeInfo & { materialized: boolean }> {
   let base = baseBranch;
   if (!base || base === 'HEAD') {
     // Detached HEAD — pin the base to the current commit so the record and
@@ -310,7 +355,7 @@ export async function createWorktree(
         `managed worktree path is registered to ${atPath.branch ?? 'a detached HEAD'}, expected ${branchRef}`,
       );
     }
-    return worktreeInfo(atPath.path, branch, base);
+    return {...worktreeInfo(atPath.path, branch, base), materialized: false};
   }
 
   // If the directory survived but its administrative entry did not, let Git
@@ -326,7 +371,7 @@ export async function createWorktree(
           `managed worktree path is registered to ${atPath.branch ?? 'a detached HEAD'}, expected ${branchRef}`,
         );
       }
-      return worktreeInfo(atPath.path, branch, base);
+      return {...worktreeInfo(atPath.path, branch, base), materialized: false};
     }
     const entries = await readdir(absolutePath).catch(() => ['unreadable']);
     if (entries.length > 0) {
@@ -344,24 +389,26 @@ export async function createWorktree(
       if (basename(byBranch.path) !== runId) {
         throw new Error(`task branch ${branch} is already checked out at ${byBranch.path}`);
       }
-      return worktreeInfo(byBranch.path, branch, base);
+      return {...worktreeInfo(byBranch.path, branch, base), materialized: false};
     }
+    refuseBelowDiskFloor(absolutePath);
     const attach = await git(repoRoot, ['worktree', 'add', absolutePath, branch]);
     if (!attach.ok) {
       throw new Error(`git worktree reattach failed: ${attach.stderr.trim() || attach.stdout.trim()}`);
     }
-    return worktreeInfo(absolutePath, branch, base);
+    return {...worktreeInfo(absolutePath, branch, base), materialized: true};
   }
 
   // Task branches do not need upstream metadata: every diff/base decision passes
   // the resolved ref explicitly. `git worktree add` otherwise writes branch.*
   // tracking keys to the repository-wide config when `base` is origin/<name>,
   // making concurrent task launches contend on the shared config.lock.
+  refuseBelowDiskFloor(absolutePath);
   const create = await git(repoRoot, ['worktree', 'add', '--no-track', '-b', branch, absolutePath, base]);
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }
-  return worktreeInfo(absolutePath, branch, base);
+  return {...worktreeInfo(absolutePath, branch, base), materialized: true};
 }
 
 /**
@@ -546,6 +593,7 @@ export async function worktreeChangedPaths(dir: string): Promise<string[]> {
 export async function commitAll(
   dir: string,
   message: string,
+  excludedPaths: readonly string[] = [],
 ): Promise<{ result: 'committed'; sha: string } | { result: 'nothing' } | { result: 'failed'; error: string }> {
   const status = await git(dir, ['status', '--porcelain']);
   if (!status.ok) return { result: 'failed', error: 'git status failed' };
@@ -553,6 +601,17 @@ export async function commitAll(
   const unresolved = await unresolvedConflicts(dir, status.stdout);
   if (unresolved) return { result: 'failed', error: `refusing to commit: ${unresolved}` };
   await git(dir, ['add', '-A']);
+  let exclusionResetFailed = false;
+  for (const path of excludedPaths) {
+    const reset = await git(dir, ['reset', '--quiet', '--', path]);
+    if (!reset.ok) exclusionResetFailed = true;
+  }
+  if (exclusionResetFailed) {
+    await git(dir, ['reset', '--quiet']);
+    return { result: 'failed', error: 'unable to preserve excluded check paths' };
+  }
+  const staged = await git(dir, ['diff', '--cached', '--quiet']);
+  if (staged.ok) return { result: 'nothing' };
   const identityArgs = (await gitHasIdentity(dir)) ? [] : ['-c', 'user.name=cezar', '-c', 'user.email=cezar@local'];
   const commit = await git(dir, [...identityArgs, 'commit', '--no-verify', '-m', message]);
   if (!commit.ok) return { result: 'failed', error: (commit.stderr || commit.stdout).trim().split('\n')[0] || 'git commit failed' };
@@ -841,6 +900,7 @@ export async function worktreeShortstat(
 export async function pruneOrphans(
   repoRoot: string,
   validIds: ReadonlySet<string>,
+  canRemove?: (runId: string) => Promise<boolean>,
 ): Promise<string[]> {
   await git(repoRoot, ['worktree', 'prune']);
   let entries: Dirent[];
@@ -853,6 +913,7 @@ export async function pruneOrphans(
   const registered = await registeredWorktrees(repoRoot);
   for (const entry of entries) {
     if (!entry.isDirectory() || validIds.has(entry.name)) continue;
+    if (canRemove && !await canRemove(entry.name).catch(() => false)) continue;
     const path = worktreePathFor(repoRoot, entry.name);
     // An orphan has no record, so its branch is whatever the worktree has checked out — a
     // named branch (spec 2026-10-11-branch-naming-instructions) is not derivable from the id.

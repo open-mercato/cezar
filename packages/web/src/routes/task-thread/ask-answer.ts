@@ -111,7 +111,12 @@ export interface AskAnswerDelivery {
  * same reason the card does — a task parked at `review` has no live session, and a prompt that
  * only worked on a running task would be offered exactly when it could not be taken.
  */
-export function useAskAnswer(run: ApiRun, projectId?: string): AskAnswerDelivery {
+export function useAskAnswer(
+  run: ApiRun,
+  projectId?: string,
+  /** `message_sent`'s label: what the message is, for telemetry's closed set. */
+  surface: 'ask_answer' | 'git_step' = 'ask_answer',
+): AskAnswerDelivery {
   // `projectId` only from a surface standing OUTSIDE the run's project — the global Tasks page.
   // Everywhere else the scope is already the run's own and naming it would be noise.
   const sendMessage = useSendMessage(run.id, projectId)
@@ -145,7 +150,7 @@ export function useAskAnswer(run: ApiRun, projectId?: string): AskAnswerDelivery
     // No runner override: the server keeps the run's own backend and model, so answering a
     // question cannot silently switch engines when another provider happens to be connected.
     return resume.mutateAsync({ text }).then((result) => {
-      trackMessageSent('ask_answer')
+      trackMessageSent(surface)
       return result
     })
   }
@@ -165,7 +170,7 @@ export function useAskAnswer(run: ApiRun, projectId?: string): AskAnswerDelivery
       }
       try {
         await sendMessage.mutateAsync({ text })
-        trackMessageSent('ask_answer')
+        trackMessageSent(surface)
       } catch (sendError) {
         // The cached record said "live" but the session had already closed — resume instead
         // of dropping the answer the user just gave. The old session can still be settling

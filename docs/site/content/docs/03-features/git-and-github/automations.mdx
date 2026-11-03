@@ -1,0 +1,29 @@
+---
+title: "GitHub automations"
+description: "Start tasks when issues and pull requests change in matching ways."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/editor-github-fields.tsx
+    line: 44
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-25-github-automations.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Choose GitHub events, the polling interval, and filters for authors, assignees, labels, or reviewers. When an event matches, the rule creates a normal task with the saved prompt, workflow, and agent.
+
+## Where to find it
+
+Automations → New automation → When GitHub changes
+
+## How to use it
+
+1. Select events and filters, then describe the task.
+2. Save the rule and check Preview matches.
+3. Enable the rule to process future changes.
+
+> **Good to know**: The feature has been available by default since the interface redesign. `CEZ_AUTOMATIONS=0` disables it. A rule starts working after the user enables it and does not create tasks for earlier matches.

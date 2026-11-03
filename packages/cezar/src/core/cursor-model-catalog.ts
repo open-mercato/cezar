@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
 import type { ModelOption } from './runner-model-catalog.ts';
+import { spawnableCommand } from './windows-shim.ts';
 
 const exec = promisify(execFile);
 
@@ -51,7 +52,11 @@ export async function discoverCursorModels(
   const run =
     options.run ??
     (async (executable, runEnv, timeout) =>
-      exec(executable, ['models'], { timeout, env: runEnv, maxBuffer: 2 * 1024 * 1024 }));
+      exec(...spawnableCommand(executable, ['models']), {
+        timeout,
+        env: runEnv,
+        maxBuffer: 2 * 1024 * 1024,
+      }));
 
   const { stdout, stderr } = await run(bin, env, timeoutMs);
   const models = parseCursorModelsOutput(`${stdout}\n${stderr}`);

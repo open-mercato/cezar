@@ -1,3 +1,4 @@
+import { ProjectWebhookNotifications } from './hooks/use-webhook-toasts'
 import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
@@ -17,6 +18,7 @@ import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-ro
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
+import { AssetsRoute } from './routes/assets/assets-route'
 import { InboxRoute } from './routes/inbox'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
@@ -40,33 +42,22 @@ const DashboardRoute = lazyRoute('dashboard', () =>
   import('./routes/dashboard').then((m) => ({ default: m.DashboardRoute })),
 )
 
-/** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
- *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
- *  before any route renders. The Suspense fallback is the same loading state the route itself
- *  shows while fetching, so the split is invisible to the user. */
-const TaskThreadRoute = lazyRoute('task-thread', () =>
-  import('./routes/task-thread/task-thread').then((m) => ({ default: m.TaskThreadRoute })),
-)
-
 /** Lazy for the same reason: the compare view renders Progress excerpts through Streamdown and
  *  full diffs through the Shiki singleton — thread-chunk weight the home screen must not pay. */
 const CompareVariantsRoute = lazyRoute('compare', () =>
   import('./routes/compare-variants').then((m) => ({ default: m.CompareVariantsRoute })),
 )
 
-/** Lazy because both tabs render the shared run header, which lives in the thread chunk
- *  (markdown stack and all) — a static import here would pull that into the main bundle. */
-const TaskChangesRoute = lazyRoute('task-changes', () =>
-  import('./routes/task-git/task-changes').then((m) => ({ default: m.TaskChangesRoute })),
-)
-const TaskFilesRoute = lazyRoute('task-files', () =>
-  import('./routes/task-git/task-files').then((m) => ({ default: m.TaskFilesRoute })),
-)
 const TaskCommitsRoute = lazyRoute('task-commits', () =>
   import('./routes/task-git/task-commits').then((m) => ({ default: m.TaskCommitsRoute })),
 )
 const TaskNotesRoute = lazy(() =>
   import('./routes/task-thread/task-notes').then((m) => ({ default: m.TaskNotesRoute })),
+)
+/** The task workspace (spec `.ai/specs/2026-10-07-task-workspace.md`): `/tasks/:id` and its
+ *  view deep links all render it, with `view` naming the card a link opens. */
+const TaskWorkspaceRoute = lazyRoute('task-workspace', () =>
+  import('./routes/task-workspace/task-workspace').then((m) => ({ default: m.TaskWorkspaceRoute })),
 )
 
 /** Lazy because the repo view renders through the `<Diff>` facade and the Shiki singleton —
@@ -84,10 +75,6 @@ const TrackerRoute = lazyRoute('tracker', () =>
   import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
 )
 
-/** The live workflow graph of a task (same spec, phase 3) — the editor's chunk, loaded lazily. */
-const TaskGraphRoute = lazyRoute('task-graph', () =>
-  import('./routes/workflow-graph/task-graph').then((m) => ({ default: m.TaskGraphRoute })),
-)
 
 /** The workflow node editor (spec 2026-09-30-workflow-node-editor) — the Workflows surface. Lazy
  *  so React Flow stays out of the main bundle. */
@@ -219,6 +206,7 @@ function ProjectScopeRoute() {
       {/* React Router keeps the matched child mounted when only this parent param changes.
           Project-local queries and mount-time state must instead start from the project the URL
           now names. Key the child boundary (not the provider, whose unmount resets API scope). */}
+      <ProjectWebhookNotifications key={`webhooks:${projectId}`} projectId={projectId} />
       <Outlet key={projectId} />
     </ProjectScopeProvider>
   )
@@ -313,6 +301,7 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/tracker/*', pageLabel: 'Tracker' },
+  { pattern: '/assets', pageLabel: 'Assets' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
@@ -354,7 +343,15 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id"
           element={
             <Suspense fallback={<ThreadLoading />}>
-              <TaskThreadRoute />
+              <TaskWorkspaceRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/chat"
+          element={
+            <Suspense fallback={<ThreadLoading />}>
+              <TaskWorkspaceRoute view="session" />
             </Suspense>
           }
         />
@@ -362,7 +359,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/changes"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskChangesRoute />
+              <TaskWorkspaceRoute view="changes" />
             </Suspense>
           }
         />
@@ -370,7 +367,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/files"
           element={
             <Suspense fallback={<GitTabLoading tab="files" />}>
-              <TaskFilesRoute />
+              <TaskWorkspaceRoute view="files" />
             </Suspense>
           }
         />
@@ -378,7 +375,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/graph"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskGraphRoute />
+              <TaskWorkspaceRoute view="graph" />
             </Suspense>
           }
         />
@@ -386,7 +383,7 @@ export const AppRoutes = memo(function AppRoutes() {
           path="tasks/:id/commits"
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
-              <TaskCommitsRoute />
+              <TaskWorkspaceRoute view="commits" />
             </Suspense>
           }
         />
@@ -395,6 +392,39 @@ export const AppRoutes = memo(function AppRoutes() {
           element={
             <Suspense fallback={<GitTabLoading tab="notes" />}>
               <TaskNotesRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/preview"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="browser" />
+            </Suspense>
+          }
+        />
+        {/* Spec 2026-10-22-html-artifacts-and-impact: `:name` is the open asset. */}
+        <Route
+          path="tasks/:id/assets"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="assets" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/assets/:name"
+          element={
+            <Suspense fallback={<GitTabLoading tab="preview" />}>
+              <TaskWorkspaceRoute view="assets" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/terminal"
+          element={
+            <Suspense fallback={<GitTabLoading tab="terminal" />}>
+              <TaskWorkspaceRoute view="terminal" />
             </Suspense>
           }
         />
@@ -573,6 +603,10 @@ export const AppRoutes = memo(function AppRoutes() {
         {/* The follow-up inbox (R6 Step 1.2): light — no markdown stack — so it rides the main
             bundle like the overview does. */}
         <Route path="inbox" element={<InboxRoute />} />
+
+        {/* The project Assets page (spec 2026-10-22-html-artifacts-and-impact, Phase 3): a table, no
+            preview — light enough to ride the main bundle like the inbox. */}
+        <Route path="assets" element={<AssetsRoute />} />
 
         {/* The workflow node editor (spec 2026-09-30-workflow-node-editor): /workflows opens a new
             canvas, /workflows/:name deep-links a saved workflow (v1 files open as graphs). */}

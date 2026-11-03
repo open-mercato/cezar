@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { isAbsolutePath } from '../paths.ts';
@@ -228,7 +229,7 @@ export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
       // No inherited stdin and `GH_PROMPT_DISABLED`: an unauthenticated `gh`
       // must fail with a message the dialog can show, not block on a prompt
       // nobody can see.
-      env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
+      env: { ...ghEnv(), GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
     });
     const tail: string[] = [];
     let settled = false;
