@@ -143,6 +143,12 @@ describe('AssetsView', () => {
     expect(frame()!.getAttribute('src')).toMatch(/^\/api\/v1\/runs\/r1\/artifacts\/report\/index\.html#theme=(dark|light)$/)
   })
 
+  it('says how many files a truncated listing holds, not a fixed cap', async () => {
+    listing = { artifacts: [SHOT, DEMO, NOTES], truncated: true }
+    mount()
+    expect(await screen.findByText('Showing the newest 3 files; the folder has more')).toBeTruthy()
+  })
+
   it('keeps the selection local when the view shares its layout', async () => {
     mount('/tasks/r1/assets', false)
     await waitFor(() => expect(frame()).not.toBeNull())

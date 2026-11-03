@@ -87,6 +87,17 @@ describe('scanArtifacts (spec 2026-10-22-html-artifacts Q5)', () => {
     expect(listing.truncated).toBe(true);
   });
 
+  it("keeps a folder's page in the listing when another folder's screenshots fill the cap", async () => {
+    mkdirSync(join(dir, 'site'));
+    writeFileSync(join(dir, 'site', 'index.html'), '<title>Site</title>');
+    utimesSync(join(dir, 'site', 'index.html'), new Date(0), new Date(0));
+    mkdirSync(join(dir, 'shots'));
+    for (let i = 0; i < MAX_ARTIFACTS + 6; i++) writeFileSync(join(dir, 'shots', `s${i}.png`), 'x');
+    const listing = await scanArtifacts(dir);
+    expect(listing.artifacts.find((a) => a.name === 'site/index.html')?.title).toBe('Site');
+    expect(listing.artifacts.filter((a) => a.name.includes('/'))).toHaveLength(MAX_ARTIFACTS);
+  });
+
   it('lists a file over 10 MB as other, whatever its extension', async () => {
     writeFileSync(join(dir, 'big.html'), '');
     truncateSync(join(dir, 'big.html'), MAX_ARTIFACT_BYTES + 1);

@@ -162,7 +162,9 @@ export function AssetsView({ runId, routed, run }: { runId: string; routed: bool
           </span>
         ) : null}
         {listing.data.truncated ? (
-          <span className="hidden text-meta text-muted-foreground md:inline">Showing the first 64 files</span>
+          <span className="hidden text-meta text-muted-foreground md:inline">
+            Showing the newest {listing.data.artifacts.length} files; the folder has more
+          </span>
         ) : null}
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           <Button

@@ -162,7 +162,12 @@ export async function scanArtifacts(dir: string, { nested = true }: { nested?: b
   for (const sub of subdirs) await listFiles(join(dir, sub), `${sub}/`, below);
   const newest = (a: { name: string; mtimeMs: number }, b: { name: string; mtimeMs: number }) =>
     b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name);
-  const kept = [...top.sort(newest).slice(0, MAX_ARTIFACTS), ...below.sort(newest).slice(0, MAX_ARTIFACTS)].sort(newest);
+  // Below the top, pages outrank supporting files at the cap: one folder's screenshots must not
+  // push another folder's index.html out of the switcher.
+  const page = (name: string) => /\.(?:html?|md|markdown)$/i.test(name);
+  const pagesFirst = (a: { name: string; mtimeMs: number }, b: { name: string; mtimeMs: number }) =>
+    Number(page(b.name)) - Number(page(a.name)) || newest(a, b);
+  const kept = [...top.sort(newest).slice(0, MAX_ARTIFACTS), ...below.sort(pagesFirst).slice(0, MAX_ARTIFACTS)].sort(newest);
   const artifacts: RunArtifact[] = [];
   for (const file of kept) {
     const kind = kindOf(file.name, file.size);
