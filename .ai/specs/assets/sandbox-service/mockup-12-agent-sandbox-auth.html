@@ -20,11 +20,11 @@
     </div>
     <div class="card">
       <b>In sandboxes</b>
-      <p class="muted sm" style="margin:4px 0 10px">A task that runs in a sandbox under this account gets a <b>copy</b> of its login, so Claude signs in there the same way it does here. The copy is deleted with the sandbox.</p>
+      <p class="muted sm" style="margin:4px 0 10px">A task that runs in a sandbox under this account gets a filtered <b>copy</b> of its login, so Claude signs in there the same way it does here. The copy is deleted with the sandbox.</p>
       <div class="kv">
-        <div>Copied</div><div><span class="mono">~/.claude-klaudiusz</span> (settings, CLAUDE.md, plugins, MCP config) <span class="muted">+ the login from the macOS Keychain, written in as the Linux credentials file</span></div>
-        <div>Not copied (size)</div><div class="mono sm">projects/ · sessions/ · history.jsonl · caches · logs</div>
-        <div>Refreshed logins</div><div>If Claude refreshes the login inside a sandbox, the new token is copied back here at turn end. Only credential files are copied back, never settings.</div>
+        <div>Copied</div><div>Authentication files from <span class="mono">~/.claude-klaudiusz</span> <span class="muted">+ the login from the macOS Keychain, written in as the Linux credentials file. Settings, memory, plugins and MCP config stay on this computer.</span></div>
+        <div>Not copied</div><div class="mono sm">settings · CLAUDE.md · plugins · MCP config · projects/ · sessions/ · history.jsonl · caches · logs</div>
+        <div>Refreshed logins</div><div>If Claude refreshes the login inside a sandbox, cezar writes it back only when it is provably newer than the current host login. Conflicts stop for review; settings are never copied back.</div>
         <div>Who can read it</div><div>The agent and anything running in the same sandbox: check steps and terminals. Helper sandboxes (<span class="mono">cez sandbox up</span>) never get it.</div>
       </div>
       <div style="margin-top:14px"><b class="sm">Allowed remote destinations</b> <span class="muted sm">· local microVMs never ask</span></div>
