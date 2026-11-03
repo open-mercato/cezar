@@ -1,0 +1,55 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Sandboxes launched by the agent</title><link rel="stylesheet" href="mockup.css">
+<style>
+.views{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid #262626}
+.views span{padding:10px 12px;color:#a1a1aa}.views span.on{color:#fff;border-bottom:2px solid #ececee}
+.split{flex:1;display:flex;min-height:0}
+.chat{flex:1;padding:18px 24px;overflow:hidden}
+.msg{margin-bottom:14px;max-width:760px}
+.tool{border:1px solid #262626;border-radius:10px;background:#121212;margin:8px 0;overflow:hidden}
+.tool .h{padding:7px 12px;font-size:12.5px;color:#b4b4bb;border-bottom:1px solid #262626;display:flex;gap:8px;align-items:center}
+.tool pre{margin:0;padding:10px 12px;font:12px/1.55 "JetBrains Mono",ui-monospace,Menlo,monospace;color:#d4d4d8;white-space:pre-wrap}
+.g{color:#86efac}.y{color:#fcd34d}.r{color:#fca5a5}.v{color:#c4b5fd}.m{color:#71717a}
+.dock{width:360px;border-left:1px solid #262626;padding:16px;background:#111}
+.sb{border:1px solid #2a2a2f;border-radius:10px;padding:10px 12px;margin-top:10px;background:#171717}
+.sb .t{display:flex;justify-content:space-between;align-items:center}
+.mini{display:flex;gap:6px;margin-top:8px}
+.mini .btn{padding:3px 8px;font-size:12px}
+</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small></small></div><div class="group">Active</div><div class="nav on"><span class="ic" style="color:#86efac">●</span>Test Open Mercato setup paths</div></aside>
+<main class="main">
+  <div class="top"><h1>Test Open Mercato setup paths</h1><span class="pill">💻 this computer</span><span class="pill violet">⬡ 3 helper sandboxes</span></div>
+  <div class="views"><span class="on">Chat</span><span>Changes</span><span>Preview</span><span>Terminal</span><span>Notes</span></div>
+  <div class="split">
+    <div class="chat">
+      <div class="msg">I'll check each README install path on clean machines, in parallel, without touching the Docker services already running on this host.</div>
+      <div class="tool"><div class="h">▸ Bash <span class="m">cez sandbox types</span></div><pre>ubuntu-16g     microsandbox · ubuntu:24.04 · 4 vCPU · 16 GiB      <span class="g">agent may launch</span>
+node24-small   microsandbox · node:24-bookworm-slim · 2 vCPU · 4 GiB  <span class="g">agent may launch</span>
+box-vm         microsandbox over SSH · build-box · 8 vCPU · 32 GiB   <span class="g">agent may launch</span>
+cloud-large-eu Daytona · Acme work org · billed                    <span class="y">not allowed for agents</span></pre></div>
+      <div class="tool"><div class="h">▸ Bash <span class="m">for t in ubuntu-16g node24-small box-vm; do cez sandbox up $t --name try-$t --copy-worktree &amp; done; wait</span></div><pre><span class="v">⬡</span> try-ubuntu-16g    running  (1.9 s, cached snapshot)
+<span class="v">⬡</span> try-node24-small  running  (1.2 s)
+<span class="v">⬡</span> try-box-vm        running  (4.8 s, on build-box)</pre></div>
+      <div class="tool"><div class="h">▸ Bash <span class="m">cez sandbox exec try-ubuntu-16g -- bash -lc "yarn install &amp;&amp; yarn mercato init"</span></div><pre>…
+<span class="r">error</span> Cannot find module 'pg-native' — postgres client libs missing on a clean Ubuntu
+<span class="m">exit 1</span></pre></div>
+      <div class="msg">There's the bug the host hid: the README never says to install <code>libpq-dev</code>. Fixing the docs and the postinstall check, then re-running all three.</div>
+    </div>
+    <div class="dock">
+      <div style="display:flex;justify-content:space-between;align-items:center"><b>Sandboxes in this task</b><span class="muted sm">3 / 3 allowed</span></div>
+      <div class="sb"><div class="t"><b class="mono sm">try-ubuntu-16g</b><span class="pill warn" style="font-size:11px"><span class="dot"></span>last exec: exit 1</span></div>
+        <div class="muted sm mono">microsandbox · ubuntu:24.04 · 4 vCPU · 16 GiB</div>
+        <div class="mini"><span class="btn">Terminal</span><span class="btn">Logs</span><span class="btn">Ports</span><span class="btn ghost">Stop</span></div></div>
+      <div class="sb"><div class="t"><b class="mono sm">try-node24-small</b><span class="pill ok" style="font-size:11px"><span class="dot"></span>exit 0</span></div>
+        <div class="muted sm mono">microsandbox · node:24-bookworm-slim · 2 vCPU · 4 GiB</div>
+        <div class="mini"><span class="btn">Terminal</span><span class="btn">Logs</span><span class="btn">Ports</span><span class="btn ghost">Stop</span></div></div>
+      <div class="sb"><div class="t"><b class="mono sm">try-box-vm</b><span class="pill violet" style="font-size:11px"><span class="dot"></span>running exec</span></div>
+        <div class="muted sm mono">SSH build-box · microVM · 8 vCPU · 32 GiB</div>
+        <div class="mini"><span class="btn">Terminal</span><span class="btn">Logs</span><span class="btn">Ports</span><span class="btn ghost">Stop</span></div></div>
+      <p class="muted sm" style="margin-top:14px">The task's agent started these with <span class="mono">cez sandbox up</span>. They are removed when the task lands or is archived, and stopped while it waits for you.</p>
+    </div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>
