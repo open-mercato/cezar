@@ -5416,6 +5416,7 @@ export class RunManager {
       const preparing: ActiveRun = {
         ownerToken: effectiveOwnerToken, cancelled: false, interrupt: () => undefined,
         cwd: beforePreparation.worktreePath, autonomous: beforePreparation.autonomous === true, autoContinues: 0,
+        supervisedContinues: 0, emptyTurnStreak: 0,
         autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
         checkInProgress: false, autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
       };
