@@ -216,9 +216,15 @@ describe('RunStore — dispatch secondary indexes (#1216)', () => {
     expect(store.listRunsByParent(root.id).map((run) => run.id)).toEqual(expectedChildren);
     store.flush();
 
+    // Same members after a reload, in the reloaded store's own listRuns order: equal createdAt
+    // ties follow runs.json order there, which need not be creation order.
     const reopened = RunStore.open(dataDir, { keepLive: true });
-    expect(reopened.listRunsByRoot(root.id).map((run) => run.id)).toEqual(expectedTree);
-    expect(reopened.listRunsByParent(root.id).map((run) => run.id)).toEqual(expectedChildren);
+    const reloaded = reopened.listRuns();
+    expect(reopened.listRunsByRoot(root.id).map((run) => run.id))
+      .toEqual(reloaded.filter((run) => run.dispatch?.rootRunId === root.id).map((run) => run.id));
+    expect(reopened.listRunsByParent(root.id).map((run) => run.id))
+      .toEqual(reloaded.filter((run) => run.dispatch?.parentRunId === root.id).map((run) => run.id));
+    expect(new Set(reopened.listRunsByRoot(root.id).map((run) => run.id))).toEqual(new Set(expectedTree));
   });
 
   it('reassigns and removes indexed records without leaving stale membership', () => {

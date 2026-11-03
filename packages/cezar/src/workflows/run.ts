@@ -3324,7 +3324,8 @@ export class RunManager {
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
-      ...(deferredBindingActive(parent, runs) ? { deferredBinding: parent.deferredBinding } : {}),
+      // Every descendant carries this tree's root, so the tree index holds all the runs it reads.
+      ...(deferredBindingActive(parent, this.store.listRunsByRoot(rootRunId)) ? { deferredBinding: parent.deferredBinding } : {}),
       runner: childRunner,
       ...(childModel ? { model: childModel } : {}),
       autonomous: true,

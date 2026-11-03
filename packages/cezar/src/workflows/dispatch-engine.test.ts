@@ -742,10 +742,15 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     store.updateRun(grandchild.id, { status: 'queued', dispatch: { rootRunId: root.id, parentRunId: child.id } });
     // Queued in the manager's own queue so `cancel` has something to drop.
     (manager as unknown as { queue: string[] }).queue.push(grandchild.id);
-    const fullScan = vi.spyOn(store, 'listRuns');
-    fullScan.mockClear();
+    // The descendant walk must use the parent index; slot release still rescans the queue.
+    const listRuns = store.listRuns.bind(store);
+    let treeScans = 0;
+    vi.spyOn(store, 'listRuns').mockImplementation(() => {
+      if (new Error().stack?.includes('cancelDescendants')) treeScans++;
+      return listRuns();
+    });
     expect(manager.cancel(root.id)).toBe(true);
-    expect(fullScan).not.toHaveBeenCalled();
+    expect(treeScans).toBe(0);
     expect(store.getRun(grandchild.id)?.status).toBe('cancelled');
     await waitFor(root.id, (r) => r?.status === 'cancelled');
   }, 40_000);
