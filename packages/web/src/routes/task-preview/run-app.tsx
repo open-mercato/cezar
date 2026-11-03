@@ -318,7 +318,7 @@ export function RunAppPanel({
               className="flex-col items-start gap-0"
             >
               <span className="font-mono text-xs">{entry.command}</span>
-              <span className="text-[11px] text-soft-foreground">
+              <span className="text-meta text-soft-foreground">
                 {entry.source}
                 {entry.detail ? ` — ${entry.detail}` : ''}
               </span>
@@ -394,7 +394,7 @@ export function RunAppPanel({
             onClick={() => start({ services: [suggested] }, { remember: true })}
           >
             <PlayIcon aria-hidden="true" />
-            Run <code className="font-mono text-[12px]">{suggested}</code>
+            Run <code className="font-mono text-label">{suggested}</code>
           </Button>
         ) : null}
         {menu}

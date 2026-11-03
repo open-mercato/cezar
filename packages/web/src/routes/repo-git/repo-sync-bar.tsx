@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { ArrowDownIcon, ArrowUpIcon, CloudUploadIcon, RefreshCwIcon } from 'lucide-react'
 
-import type { RepoSyncAction } from '@/api/client'
+import { ApiError, type RepoSyncAction } from '@/api/client'
 import { useRepoSync, useRepoSyncAction } from '@/api/queries'
 import type { BranchTracking, RepoSync } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
@@ -21,13 +21,16 @@ export function RepoSyncBar() {
   const run = (which: RepoSyncAction) =>
     action.mutate(which, {
       onSuccess: (result) => toast(result.message),
-      onError: (error) => toast(error.message, { tone: 'danger' }),
+      // A 409 is git's verdict on the checkout — diverged, rejected, an in-place task running —
+      // and says what to do; anything else is unexpected and stays reported (telemetry 9202a06a).
+      onError: (error) =>
+        toast(error.message, { tone: 'danger', expected: error instanceof ApiError && error.status === 409 }),
     })
   const busy = action.isPending
   const pending = action.variables
 
   return (
-    <div data-slot="repo-sync" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+    <div data-slot="repo-sync" className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta">
       {s.upstream ? (
         <span data-slot="repo-upstream" className="truncate font-mono text-soft-foreground" title="Upstream">
           → {s.upstream}
@@ -151,7 +154,7 @@ export function BranchTrackingBadge({ name, sync }: { name: string; sync: RepoSy
         ? 'local only'
         : null
   return (
-    <span data-slot="branch-tracking" className="flex shrink-0 items-center gap-1 text-[11px]">
+    <span data-slot="branch-tracking" className="flex shrink-0 items-center gap-1 text-meta">
       {label ? <span className="text-soft-foreground">{label}</span> : <SyncCounts ahead={local!.ahead} behind={local!.behind} />}
     </span>
   )

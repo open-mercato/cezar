@@ -348,6 +348,8 @@ describe('the review gate on the thread', () => {
       expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
         text: 'Review feedback:\nuse the available provider',
         runner: 'codex',
+        // The delivery seam's key: a re-post of these notes cannot reopen the session twice.
+        idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     )
   })
@@ -423,6 +425,15 @@ describe('the review gate on the thread', () => {
     )
     const link = document.querySelector('[data-slot="pr-link"]') as HTMLAnchorElement
     expect(link.href).toBe('https://github.com/x/y/pull/9')
+    expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
+  })
+
+  it('an impact run (a subject) offers no Draft PR — its report is what is reviewed', () => {
+    stubFetch()
+    renderWithProviders(
+      <ReviewPanel run={run('review', { subject: { kind: 'pr', number: 12, headSha: 'abc1234' } })} />,
+    )
+    expect(document.querySelector('[data-slot="review-draft-pr"]')).toBeNull()
     expect(screen.queryByRole('button', { name: /Draft PR/ })).toBeNull()
   })
 

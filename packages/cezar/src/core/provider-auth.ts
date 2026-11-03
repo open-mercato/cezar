@@ -1,18 +1,24 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { opendirSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
-import { isSignalTerminationExit } from './agent-runner.ts';
+import { RUNNER_IDS, isSignalTerminationExit, type RunnerId } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveAntigravityBin } from './antigravity-runner.ts';
 import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+/** Every runner is a provider cezar verifies — one tuple, the contract's. */
+export const PROVIDER_IDS = RUNNER_IDS;
+export type ProviderId = RunnerId;
 export type ProviderConnectionState =
   | 'connected'
   | 'disconnected'
@@ -119,6 +125,10 @@ interface ProviderDescriptor {
    * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
    */
   foreign?: (executable: string, version: ProviderCommandResult) => boolean;
+  /** What `foreign` reports instead of the generic "not a working CLI" text. */
+  foreignHint?: (result: ProviderCommandResult) => string | undefined;
+  /** What to tell the user when `parse` answers `unknown` on purpose (default: the generic hint). */
+  unknownHint?: string;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -183,9 +193,10 @@ const RUNTIME_AUTH_VERIFY_COOLDOWN_MS = 60_000;
  *  wrong answer, and it is now paid in the background; fixing it properly means per-provider
  *  timestamps and merging partial probe results. */
 function cacheTtlFor(rows: readonly ProviderStatus[]): number {
-  // Junie deliberately remains `unknown` after a successful handshake, so it must not force
-  // every other provider's cached credential result onto the short negative-answer window.
-  return rows.filter((row) => row.provider !== 'junie').every((row) => row.status === 'connected')
+  // Junie deliberately remains `unknown` after a successful handshake, and Gemini's status is an
+  // environment read that stays `unknown` without a visible key — neither may force every other
+  // provider's cached credential result onto the short negative-answer window.
+  return rows.filter((row) => row.provider !== 'junie' && row.provider !== 'gemini').every((row) => row.status === 'connected')
     ? CONNECTED_TTL_MS
     : UNSETTLED_TTL_MS;
 }
@@ -195,6 +206,17 @@ const INTERRUPTED_HINT = 'Authentication check was interrupted. Try again.';
 const RUNTIME_AUTH_HINT =
   'Authentication was rejected during a run. Reconnect, then try again.';
 const ANSI_SEQUENCE = /\u001B\[[0-?]*[ -/]*[@-~]/g;
+/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
+ *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
+ *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
+ *  "another process is refreshing" variant is transient and deliberately not matched. An account
+ *  policy or a vendor-side verification is just as invisible to the status probe (75ae746c, c65a5ac5). */
+const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
+  /\boauth session expired and could not be refreshed\b/i,
+  /\brefresh token is no longer valid\b/i,
+  /\bhas disabled claude subscription access\b/i,
+  /\bidentity verification is required to continue\b/i,
+] as const;
 const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:failed to authenticate|authentication failed|unauthenticated|unauthorized)\b/i,
   /\bproviderautherror\b/i,
@@ -202,6 +224,13 @@ const RUNTIME_AUTH_FAILURE_PATTERNS = [
   /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth|access|refresh)?\s*token\b/i,
   /\b(?:oauth|token|credential|unauthorized|unauthenticated)\b.{0,80}\b401\b/i,
   /\b401\b.{0,80}\b(?:oauth|token|credential|unauthorized|unauthenticated)\b/i,
+  // The CLI's own sign-in instruction, not prose about a login screen: Claude's "Not logged in ·
+  // Please run /login" (bca23063), Cursor's "Authentication required. Please run 'agent login'
+  // first" (1e673dee).
+  /\b(?:not logged in|authentication required)\b[\s.,:;·—-]{1,6}please run\b[^\n]{0,30}\blogin\b/i,
+  // OpenCode's provider-key rejection as the whole line or after a label (e41761a1).
+  /(?:^|:)\s*invalid credentials?\s*[.!]?\s*$/im,
+  ...DEFINITIVE_AUTH_FAILURE_PATTERNS,
 ] as const;
 const RUNTIME_API_KEY_FAILURE_PATTERNS = [
   // Vendor-shaped errors can carry a process prefix before the actual
@@ -218,15 +247,6 @@ export function isRuntimeProviderAuthFailure(message: string): boolean {
   return [...RUNTIME_AUTH_FAILURE_PATTERNS, ...RUNTIME_API_KEY_FAILURE_PATTERNS]
     .some((pattern) => pattern.test(message));
 }
-
-/** Claude Code's own verdict after its token refresh was refused (`OAuthRefreshDeadError`), while
- *  `claude auth status` keeps answering `loggedIn: true` from the token still on disk — so the
- *  self-check cleared the latch and the next run failed the same way (telemetry 9e4a95db). The
- *  "another process is refreshing" variant is transient and deliberately not matched. */
-const DEFINITIVE_AUTH_FAILURE_PATTERNS = [
-  /\boauth session expired and could not be refreshed\b/i,
-  /\brefresh token is no longer valid\b/i,
-] as const;
 
 export function isDefinitiveProviderAuthFailure(message: string): boolean {
   return DEFINITIVE_AUTH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
@@ -263,7 +283,7 @@ function parseCodexStatus(result: ProviderCommandResult): ProviderConnectionStat
         || line === 'logged in using access token'
         || line === 'logged in using personal access token'
         || line === 'logged in using amazon bedrock api key'
-        || /^logged in using an api key - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
+        || /^(?:logged in using an api key|api key configured) - (?:\*{3}|\S{8}\*{3}\S{5})$/.test(line)
       ) {
         return 'connected';
       }
@@ -349,7 +369,9 @@ function parseJunieStatus(_result: ProviderCommandResult): ProviderConnectionSta
 
 function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  const lines = normalizedLines(result.stdout);
+  // pi ≥ 0.73 reroutes stdout to stderr whenever stdin is not a TTY (`takeOverStdout` in its
+  // main.js), so the probe's whole answer arrives on stderr (telemetry f67df9d2, after #1548).
+  const lines = normalizedLines(result.stdout, result.stderr);
   if (lines.some((line) => /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/.test(line))) {
     return 'connected';
   }
@@ -390,7 +412,8 @@ function copilotAcpProbeStdin(): ProviderStdin {
 /** The `session/new` response (id 1) has arrived, as a result or an error. */
 export function copilotAcpAnswered(stdout: string): boolean {
   return /"id"\s*:\s*1\s*,\s*"(?:result|error)"\s*:/.test(stdout)
-    || /"Authentication required"/i.test(stdout);
+    || /"Authentication required"/i.test(stdout)
+    || /"sessionId"\s*:\s*"/.test(stdout);
 }
 
 function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionState | null {
@@ -402,6 +425,17 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * Gemini CLI has no `auth status` subcommand (#581): `--version` proves the CLI is there, and the
+ * credentials are read where the CLI itself reads them (`gemini-credentials.ts`). Evidence of a key,
+ * a gateway or a Vertex project is `connected`; its absence is `unknown`, never `disconnected` — a
+ * keychain-stored key or a Workspace login is invisible from outside — and carries the API-key hint.
+ */
+function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return geminiHasCredentials() ? 'connected' : 'unknown';
+}
+
 /** Telemetry 298c2e1f: a `copilot` that answered with no JSON-RPC frame never started an ACP
  *  server — an old Copilot CLI, or another program of that name (AWS Copilot) first on PATH. */
 function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefined {
@@ -409,6 +443,16 @@ function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefi
   return 'The `copilot` command did not start GitHub Copilot CLI\'s ACP server. Update it with '
     + '`npm i -g @github/copilot`, or point CEZ_COPILOT_BIN at the GitHub Copilot CLI if another '
     + 'program named `copilot` comes first on PATH.';
+}
+
+/** `kimi provider list`: one `<name>  type=…  models=N  source=…` row per provider, or
+ *  "No providers configured." before `kimi login`. */
+function parseKimiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
+  const lines = normalizedLines(result.stdout);
+  if (lines.some((line) => /\stype=\S+\s+models=[1-9]\d*/.test(line))) return 'connected';
+  if (lines.some((line) => line.includes('no providers configured'))) return 'disconnected';
+  return null;
 }
 
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
@@ -495,9 +539,54 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     stdin: copilotAcpProbeStdin,
     // The version of the binary the probe ran, not a cached newer package.
     versionArgs: ['--no-auto-update', '--version'],
+    // No ACP frame and no semver on stdout or stderr: not a Copilot CLI that can run here, so a
+    // status of its own, not a crash report on every boot (telemetry 298c2e1f, #1580).
+    foreign: (_executable, version) => !process.env.CEZ_COPILOT_BIN
+      && (version.exitCode !== 0 || (cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)) === null),
+    foreignHint: copilotUnrecognizedHint,
     unrecognizedHint: copilotUnrecognizedHint,
   },
+  {
+    id: 'antigravity',
+    overrideEnv: 'CEZ_AGY_BIN',
+    executable: () => resolveAntigravityBin(),
+    // `agy models` needs a session: signed in it lists the account's models and exits 0 (agy 1.4.0),
+    // signed out it exits 1 asking to sign in - without prompting and without spending a request.
+    statusArgs: ['models'],
+    // agy has no login subcommand; the first interactive `agy` launch runs the Google sign-in.
+    loginArgs: [],
+    updateArgs: ['update'],
+    installHint: 'Install the Antigravity CLI (https://antigravity.google/docs/cli), then run `agy` once and sign in with Google.',
+    parse: parseAntigravityStatus,
+  },
+  {
+    id: 'gemini',
+    executable: () => process.env.CEZ_GEMINI_BIN ?? 'gemini',
+    overrideEnv: 'CEZ_GEMINI_BIN',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's `/auth` is where a key is entered.
+    loginArgs: [],
+    installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
+    parse: parseGeminiStatus,
+    unknownHint: GEMINI_AUTH_HINT,
+  },
+  {
+    id: 'kimi',
+    overrideEnv: 'CEZ_KIMI_BIN',
+    executable: () => resolveKimiExecutable(),
+    statusArgs: ['provider', 'list'],
+    loginArgs: ['login'],
+    installHint: 'Install Kimi Code, then run `kimi login`.',
+    parse: parseKimiStatus,
+  },
 ];
+
+function parseAntigravityStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (text.includes('sign in') || text.includes('authentication required')) return 'disconnected';
+  return null;
+}
 
 function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   // probe() already handles ENOENT / any other errorCode before calling parse() — result here
@@ -561,6 +650,20 @@ function cursorUnrecognizedHint(result: ProviderCommandResult): string | undefin
     + 'CEZ_CURSOR_AGENT_BIN at Cursor\'s `cursor-agent` if another program named `agent` comes first on PATH.';
 }
 
+/**
+ * Where a probe runs when cezar's own working directory is unusable — deleted, or a folder the
+ * macOS app may not read — and `undefined` (inherit, as always) otherwise. Every CLI then failed
+ * before answering, `claude --version` included (telemetry 35838a52, b82b92cf).
+ */
+export function probeCwdFallback(): string | undefined {
+  try {
+    opendirSync(process.cwd()).closeSync();
+    return undefined;
+  } catch {
+    return homedir();
+  }
+}
+
 export function defaultRunProviderCommand(
   executable: string,
   args: readonly string[],
@@ -570,8 +673,12 @@ export function defaultRunProviderCommand(
 ): Promise<ProviderCommandResult> {
   // A Windows `.cmd` shim runs as `node <script>`: execFile throws EINVAL on the shim (a330744e).
   const [file, argv] = spawnableCommand(executable, args);
+  const cwd = probeCwdFallback();
   return new Promise((resolve) => {
     let closeTimer: NodeJS.Timeout | undefined;
+    let lingerTimer: NodeJS.Timeout | undefined;
+    let closedUnanswered = false;
+    let answered = false;
     const child = execFile(
       file,
       argv,
@@ -579,6 +686,7 @@ export function defaultRunProviderCommand(
         timeout: timeoutMs,
         windowsHide: true,
         maxBuffer: 256 * 1024,
+        ...(cwd ? { cwd } : {}),
         // Inherit, then override: an auth probe is a short read-only CLI call, not a spawned
         // agent, so it does not go through `buildChildEnv`'s allowlist — the CLI still needs the
         // host's PATH and HOME to run at all. `env` is only ever a profile's config-dir variable.
@@ -586,20 +694,26 @@ export function defaultRunProviderCommand(
       },
       (error, stdout, stderr) => {
         clearTimeout(closeTimer);
+        clearTimeout(lingerTimer);
         const commandError = error as (NodeJS.ErrnoException & {
           killed?: boolean;
           signal?: string | null;
         }) | null;
         const code = commandError?.code;
-        const timedOut = commandError?.code === 'ETIMEDOUT'
-          || (commandError?.killed === true && commandError.signal === 'SIGTERM');
+        // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
+        // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
+        // An answer in hand is not a hang, however the CLI then failed to exit (telemetry 5f52beba).
+        const timedOut = !answered && (commandError?.code === 'ETIMEDOUT'
+          || (commandError?.killed === true && commandError.signal === 'SIGTERM')
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout))));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
           timedOut,
-          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
+          // The linger kill after an answer is cezar's own cleanup, not an interruption to re-ask over.
+          ...(!timedOut && !answered && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );
@@ -621,10 +735,18 @@ export function defaultRunProviderCommand(
     };
     const onData = (chunk: Buffer | string): void => {
       seen += String(chunk);
-      if (closeWhen(seen)) close();
+      if (!closeWhen(seen)) return;
+      answered = true;
+      close();
+      // Copilot 1.0.103 on Windows answered session/new and then outlived EOF until cezar's
+      // timeout killed it, twice, and the answer was reported as a hang (telemetry 5f52beba).
+      lingerTimer = setTimeout(() => child.kill(), STDIN_CLOSE_MARGIN_MS);
     };
     output.on('data', onData);
-    closeTimer = setTimeout(close, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
+    closeTimer = setTimeout(() => {
+      closedUnanswered = true;
+      close();
+    }, Math.max(0, timeoutMs - STDIN_CLOSE_MARGIN_MS));
     input.write(stdin.payload);
   });
 }
@@ -1306,9 +1428,21 @@ export class ProviderAuthService {
       };
     }
     const status = descriptor.parse(result);
+    if (status === 'unknown') return { provider: descriptor.id, status, hint: descriptor.unknownHint ?? UNKNOWN_HINT };
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
+    // A launcher whose shell could not find (127) or run (126) what it wraps: nothing ran, so the
+    // install is broken, not the auth check inconclusive (telemetry a5c13018).
+    if (result.exitCode === 127 || result.exitCode === 126) {
+      const said = result.stderr.replace(ANSI_SEQUENCE, '').trim().split(/\r?\n/)[0]?.trim().slice(0, 160);
+      return {
+        provider: descriptor.id,
+        status: 'not-installed',
+        hint: `\`${executable}\` could not start (exit ${result.exitCode}${said ? `: "${said}"` : ''}). `
+          + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
+      };
+    }
     // OpenCode 1.x can fail before producing an auth-list answer (for example, while starting its
     // local service). That is an operational failure, not a new stdout format to fix.
     if (descriptor.id === 'opencode' && result.exitCode === 1 && !result.stdout.trim() && result.stderr.trim()) {
@@ -1326,8 +1460,9 @@ export class ProviderAuthService {
         return {
           provider: descriptor.id,
           status: 'not-installed',
-          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
-            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+          hint: descriptor.foreignHint?.(result)
+            ?? `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+              + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
         };
       }
     }

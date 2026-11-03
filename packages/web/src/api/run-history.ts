@@ -1,10 +1,12 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
-import type { RunEvent, RunHistoryPage } from '@open-mercato/cezar-api-client'
+import type { ApiRun, RunEvent, RunHistoryPage, RunRecord } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useThrottledValue } from '@/lib/use-throttled-value'
 import { getRunHistory, getRunHistoryContext } from './client'
+import { mergeRun } from './events'
+import { queryKeys } from './queries'
 import { liveItemKey, useRunEvents, type RunEventCompaction } from './run-events'
 
 const MAX_HISTORY_PAGES = 5
@@ -273,14 +275,23 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
       if (compactingOwnerRef.current === ownerKey) compactingOwnerRef.current = undefined
     }
   }, [historyKey, ownerKey, queryClient, runId, tailKey])
+  // The workspace stream's `run` frame is slim; this stream carries the whole record, which is
+  // what keeps the thread's steps, prompt and queued messages live. Only an existing detail
+  // cache is patched, as the workspace stream does.
+  const onRun = useCallback((run: RunRecord) => {
+    const key = queryKeys.runs.detail(run.id)
+    if (queryClient.getQueryData(key) === undefined) return
+    queryClient.setQueryData<ApiRun>(key, (previous) => (previous === undefined ? run : mergeRun(previous, run)))
+  }, [queryClient])
   const liveFrames = useRunEvents(newestPage && !fallback ? runId : undefined, newestPage ? {
     cursor: newestPage.liveCursor,
     afterSeq: newestPage.asOfSeq,
     compactWhenOver: LIVE_COMPACTION_SIZE_TRIGGER,
     compactAt: COMPACT_LIVE_AT_EVENTS,
     onCompact: compactLive,
-  } : {})
-  const fallbackFrames = useRunEvents(fallback ? runId : undefined)
+    onRun,
+  } : { onRun })
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined, { onRun })
   const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
   const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const fallbackTailRef = useRef<{ runId: string | undefined; scope: string; events: RunEvent[] }>({

@@ -1,12 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, stopFixtureServer } from './agent-browser'
 
 /**
  * The task quick-list, in a real browser, against a real cezar serving real runs.
@@ -50,6 +50,9 @@ const FIXTURE = [
     createdAt: ago(40 * 60_000),
     finishedAt: ago(26 * 60_000),
     tokensUsed: 128_400,
+    // The quick-list and table show directional IN/OUT usage (#742), not the lump `tokensUsed`.
+    inputTokens: 100_000,
+    outputTokens: 28_400,
     diffStat: { adds: 128, dels: 14, files: 6 },
     pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/396',
     archived: false,
@@ -64,6 +67,8 @@ const FIXTURE = [
     createdAt: ago(30 * 60_000),
     finishedAt: ago(12 * 60_000),
     tokensUsed: 96_249,
+    inputTokens: 80_000,
+    outputTokens: 16_249,
     runner: 'claude',
     groupId: 'fix-group-1',
     variant: 'A',
@@ -79,6 +84,8 @@ const FIXTURE = [
     createdAt: ago(30 * 60_000),
     finishedAt: ago(11 * 60_000),
     tokensUsed: 41_800,
+    inputTokens: 30_000,
+    outputTokens: 11_800,
     runner: 'codex',
     groupId: 'fix-group-1',
     variant: 'B',
@@ -150,6 +157,7 @@ async function waitForHealth(url: string): Promise<void> {
   throw new Error(`cezar e2e: the fixture server never answered at ${url}`)
 }
 
+
 let browser: AgentBrowser
 let server: ChildProcess
 let dataRoot: string
@@ -196,10 +204,9 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 90_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('task quick-list', () => {
@@ -227,13 +234,13 @@ describe('task quick-list', () => {
     // tile, not two rows — so "Needs you" holds two things, not three.
     // Both are `review`, so the tie breaks on recency: the variant group started 30 minutes ago,
     // the PR review 40 — newest first. The PR row reads title (the auto-SUMMARY, not the raw
-    // fixture title), then its `+128 −14` diff pair, then the PR chip.
+    // fixture title), then its `+128 −14` diff pair; the PR chip (`#396`) leads the row.
     expect(rowsIn('Needs you')).toEqual([
       'Add skills autocomplete to composer×2',
-      'Structured changes endpoint for the git view+128 −14PR',
+      '#396Structured changes endpoint for the git view+128 −14',
     ])
     // fix-done recorded a diff on its last turn; fix-failed predates diffStat and shows none.
-    expect(rowsIn('Recent')).toEqual(['README parallel-agents tagline+9 −22h', 'Bump zod to v43h'])
+    expect(rowsIn('Recent')).toEqual(['README parallel-agents tagline+9 −22h, unread', 'Bump zod to v43h, unread'])
   })
 
   it('renders the diff pair through the success/danger tokens, not as plain text', () => {
@@ -299,8 +306,8 @@ describe('task quick-list', () => {
     browser.click(TILE)
     browser.waitForFunction(`document.querySelector('${ROW}[data-run-id="fix-var-a"]') !== null`)
     // What actually differs between A and B — the backend and the spend.
-    expect(textOf(`${ROW}[data-run-id="fix-var-a"]`)).toBe('Aclaude · 96.2k')
-    expect(textOf(`${ROW}[data-run-id="fix-var-b"]`)).toBe('Bcodex · 41.8k')
+    expect(textOf(`${ROW}[data-run-id="fix-var-a"]`)).toBe('Aclaude · IN 80.0k · OUT 16.2k')
+    expect(textOf(`${ROW}[data-run-id="fix-var-b"]`)).toBe('Bcodex · IN 30.0k · OUT 11.8k')
     // Each variant is still its own deep link.
     expect(
       browser.evaluate(`document.querySelector('${ROW}[data-run-id="fix-var-b"] a').getAttribute('href')`)
@@ -385,7 +392,7 @@ describe('tasks table overview', () => {
       const pr = tr.querySelector('[data-slot="pr-chip"]')
       return { text: tr.textContent, prHref: pr.href, prTarget: pr.target }
     })()`) as { text: string; prHref: string; prTarget: string }
-    expect(reviewRow.text).toContain('128.4k')
+    expect(reviewRow.text).toContain('100.0k / 28.4k')
     expect(reviewRow.text).toContain('Structured changes endpoint for the git view')
     expect(reviewRow.text).not.toContain('add a structured changes endpoint plz')
     expect(reviewRow.prHref).toBe('https://github.com/open-mercato/cezar/pull/396')
@@ -607,6 +614,8 @@ describe('a row under width contention, in a column the user can widen', () => {
             workflow: 'default',
             task: 'nested dispatch row',
             status: 'done',
+            // Required by the run schema: one record without it empties the WHOLE index.
+            tokensUsed: 0,
             createdAt: ago(3 * 3_600_000),
             finishedAt: ago((3 - index) * 600_000),
             seenAt: ago(60_000),
@@ -632,9 +641,8 @@ describe('a row under width contention, in a column the user can widen', () => {
     wideProject = await bootProjectId(wideUrl)
   }, 90_000)
 
-  afterAll(() => {
-    wideServer?.kill()
-    if (wideRoot) rmSync(wideRoot, { recursive: true, force: true })
+  afterAll(async () => {
+    await stopFixtureServer(wideServer, wideRoot)
   })
 
   beforeEach(() => {
@@ -708,6 +716,10 @@ describe('a row under width contention, in a column the user can widen', () => {
             const r = el.getBoundingClientRect()
             if (r.width === 0 || getComputedStyle(el).display === 'none') continue
             if (el.classList.contains('sr-only')) continue
+            // At rest the row actions (pin/archive) are a 0-wide, clipped, transparent box (#1417):
+            // painted nowhere. Hovered, the box has width and its buttons are measured like the rest.
+            const actions = el.closest('[data-slot="task-row-actions"]')
+            if (actions && actions.getBoundingClientRect().width === 0) continue
             worst = Math.max(worst, r.right - edge)
           }
           return worst
@@ -734,7 +746,13 @@ describe('a row under width contention, in a column the user can widen', () => {
 
       // Hovered: the pin takes the kind chip's slot instead of pushing the row past the column.
       browser.hover(`[data-slot="task-row"][data-run-id="${id}"]`)
-      expect(shown(id, 'dispatch-kind')).toBe('none')
+      // The whole trailing-meta wrapper yields (`display: none` on the ANCESTOR, #1417), so the
+      // chip's own computed display is unchanged — assert it paints no box instead.
+      expect(
+        browser.evaluate(
+          `document.querySelector('[data-run-id="${id}"] [data-slot="dispatch-kind"]').getClientRects().length`
+        )
+      ).toBe(0)
       expect(
         Number(
           browser.evaluate(
@@ -855,9 +873,8 @@ describe('empty quick-list', () => {
     emptyProject = await bootProjectId(emptyUrl)
   }, 60_000)
 
-  afterAll(() => {
-    emptyServer?.kill()
-    if (emptyRoot) rmSync(emptyRoot, { recursive: true, force: true })
+  afterAll(async () => {
+    await stopFixtureServer(emptyServer, emptyRoot)
   })
 
   it('shows the honest empty state — a fresh cezar has nothing to list', () => {

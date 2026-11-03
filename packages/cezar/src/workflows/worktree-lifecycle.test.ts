@@ -59,7 +59,8 @@ afterEach(async () => {
   projects.length = 0; vi.restoreAllMocks(); vi.unstubAllEnvs();
 });
 
-describe('RunManager worktree lifecycle admission', () => {
+// Real runs: well under a second alone, past the 5 s default under the full parallel suite.
+describe('RunManager worktree lifecycle admission', { timeout: 20_000 }, () => {
   it.each(['reclaim', 'remove-worktree', 'delete-task', 'discard-variant'] as const)('sweeps the last PR head ref only after %s teardown removes its worktree', async intent => {
     const p = await project();
     await writeLifecycleConfig(p.root, {afterCreate: [entry('true')], beforeRemove: [entry('touch {{ root_path }}/cleanup-started; while [ ! -e {{ root_path }}/release-cleanup ]; do sleep 0.02; done')]}, null);
@@ -367,7 +368,7 @@ describe('RunManager worktree lifecycle admission', () => {
 
 // A continuation awaits `requiresGate` before it registers in `active`; a cancel landing in that
 // window used to be refused, and the run then started anyway (nightly 39225790502).
-describe('cancelling a continuation still awaiting its lifecycle gate', () => {
+describe('cancelling a continuation still awaiting its lifecycle gate', { timeout: 20_000 }, () => {
   it.each([
     ['an explicit Continue', false],
     ['a continuation dequeued by the pump', true],

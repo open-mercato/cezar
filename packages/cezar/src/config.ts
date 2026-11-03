@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { perRunner } from '@open-mercato/cezar-contract';
 import { worktreeLifecycleConfigSchema } from '@open-mercato/cezar-contract';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
@@ -99,16 +100,7 @@ const configSchema = z.object({
    * `.catch(undefined)` keeps the key additive-safe like `systemPrompt`: a
    * bad value degrades to unset without discarding the rest of the config.
    */
-  defaultModels: z
-    .object({
-      claude: z.string().trim().min(1).max(200).optional(),
-      codex: z.string().trim().min(1).max(200).optional(),
-      opencode: z.string().trim().min(1).max(200).optional(),
-      junie: z.string().trim().min(1).max(200).optional(),
-      cursor: z.string().trim().min(1).max(200).optional(),
-      pi: z.string().trim().min(1).max(200).optional(),
-      copilot: z.string().trim().min(1).max(200).optional(),
-    })
+  defaultModels: perRunner(z.string().trim().min(1).max(200).optional())
     .optional()
     .catch(undefined),
   /**
@@ -253,7 +245,7 @@ async function ownWorktreeRetention(repoRoot: string): Promise<number | undefine
  * "the user said nothing". So we probe the raw file for the key's presence — the
  * same reason `ownWorktreeRetention` below reads the raw JSON.
  */
-export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+export async function projectGatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
   const none = new Set<string>();
   let raw: string;
   try {
@@ -269,12 +261,22 @@ export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
     }
     // The user took control of the source list — nothing is gated; a value the
     // schema would refuse degrades to the default too (same as `loadConfig`).
-    if ((parsed as Record<string, unknown>).skillsRepos !== undefined) return none;
+    if ((parsed as Record<string, unknown>).skillsRepos !== undefined && configSchema.safeParse(parsed).success) {
+      return none;
+    }
     return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
   } catch {
     // Malformed JSON degrades to the default (which loadConfig also does).
     return new Set(DEFAULT_SKILLS_REPOS.map((r) => r.repo));
   }
+}
+
+/** A repo the user added in Global settings is an explicit choice — never gated, whatever the project says. */
+export async function gatedSkillsRepos(repoRoot: string): Promise<Set<string>> {
+  const gated = await projectGatedSkillsRepos(repoRoot);
+  const org = (await loadWorkspaceConfig().catch(() => null))?.orgSkillsRepos ?? [];
+  for (const src of org) gated.delete(src.repo);
+  return gated;
 }
 
 /**

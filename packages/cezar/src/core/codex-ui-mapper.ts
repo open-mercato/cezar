@@ -37,6 +37,7 @@ import type {
   UiToolItem,
 } from './ui-events.ts';
 import { toolDisplay } from './tool-display.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 
 /** The two reasoning delta channels, accumulated separately — see
  *  `CodexUiMapperState.reasonings`. */
@@ -276,7 +277,9 @@ function turnStopReason(params: Record<string, unknown>, failed: boolean): StopR
 export function codexTurnError(method: string, params: Record<string, unknown>): string | undefined {
   const turn = isRecord(params.turn) ? params.turn : {};
   if (method !== 'turn/failed' && turn.status !== 'failed') return undefined;
-  return errorMessage(params.error) ?? errorMessage(turn.error) ?? 'codex turn failed';
+  const message = errorMessage(params.error) ?? errorMessage(turn.error);
+  // The Responses API's error body arrives verbatim as the message (36b68a95).
+  return message === undefined ? 'codex turn failed' : unwrapJsonErrorEnvelope(message);
 }
 
 // ---- plan -------------------------------------------------------------------

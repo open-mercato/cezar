@@ -1,9 +1,14 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
+import type { RunnerId } from './agent-runner.ts';
+import { resolveAntigravityBin } from './antigravity-runner.ts';
 import { isForeignCursorAgent } from './cursor-bin.ts';
 import { cliVersionFrom } from './provider-auth.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { ghEnv } from './gh-env.ts';
 import { spawnableCommand } from './windows-shim.ts';
 
@@ -13,7 +18,7 @@ const exec = (bin: string, args: readonly string[], opts: { timeout: number; env
   execAsync(...spawnableCommand(bin, args), opts);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'git';
+  name: RunnerId | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -21,7 +26,7 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `cursor` / `pi` / `junie` / `copilot`
+ * the optional `codex` / `opencode` / `cursor` / `pi` / `junie` / `copilot` / `agy` / `gemini`
  * alternatives), `gh` (GitHub auth for PR creation) and `git`. Nothing is required except at
  * least one agent CLI — the GUI degrades gracefully, only offers the
  * runners that are present, and shows the hints for the rest.
@@ -34,7 +39,10 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeCursor(),
     probePi(),
     probeJunie(),
+    probeAntigravity(),
     probeCopilot(),
+    probeGemini(),
+    probeKimi(),
     probeGh(),
     probeGit(),
   ]);
@@ -204,6 +212,40 @@ async function probeJunie(): Promise<BackendCheck> {
   }
 }
 
+async function probeAntigravity(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'antigravity', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveAntigravityBin();
+  try {
+    // `--version` needs no login and no network — the auth state is provider-auth.ts's job.
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    const version = stdout.trim();
+    // agy prints a bare semver ("1.4.0"); anything else is another program that happens to be
+    // called `agy` on PATH.
+    if (version && !/^v?\d+\.\d+/.test(version)) {
+      return {
+        name: 'antigravity',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like the Antigravity CLI (got: ${version.slice(0, 80)})`,
+      };
+    }
+    return {
+      name: 'antigravity',
+      available: true,
+      version: version || 'installed',
+      hint: 'if not authenticated, run `agy` once and sign in with your Google account',
+    };
+  } catch {
+    return {
+      name: 'antigravity',
+      available: false,
+      hint: 'optional: install the Antigravity CLI (https://antigravity.google/docs/cli) and sign in with `agy` to use the Antigravity runner',
+    };
+  }
+}
+
 async function probeCopilot(): Promise<BackendCheck> {
   // Dry-run stands the runner up on the shared mock, so report it present.
   if (process.env.CEZ_DRY_RUN === '1') {
@@ -226,6 +268,52 @@ async function probeCopilot(): Promise<BackendCheck> {
       name: 'copilot',
       available: false,
       hint: 'optional: install GitHub Copilot CLI (`npm i -g @github/copilot`) and run `copilot login` to use the copilot runner',
+    };
+  }
+}
+
+async function probeGemini(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the bundled ACP mock (`scripts/mock-gemini-acp.mjs`).
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'gemini', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_GEMINI_BIN ?? 'gemini';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'gemini',
+      available: true,
+      version: stdout.trim(),
+      // Individuals need an API key: Google sign-in no longer works for Gemini CLI (spec U11).
+      ...(geminiHasCredentials() ? {} : { hint: GEMINI_AUTH_HINT }),
+    };
+  } catch {
+    return {
+      name: 'gemini',
+      available: false,
+      hint: `optional: install Gemini CLI (npm i -g @google/gemini-cli) to use the Gemini runner. ${GEMINI_AUTH_HINT}`,
+    };
+  }
+}
+
+async function probeKimi(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'kimi', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveKimiExecutable();
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'kimi',
+      available: true,
+      version: stdout.trim(),
+      hint: 'if not authenticated, run `kimi login`',
+    };
+  } catch {
+    return {
+      name: 'kimi',
+      available: false,
+      hint: 'optional: install Kimi Code (https://moonshotai.github.io/kimi-code/) and run `kimi login` to use the Kimi runner',
     };
   }
 }

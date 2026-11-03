@@ -14,6 +14,7 @@ const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
 const HEALTH: HealthResponse = {
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   repoRoot: '/home/u/cezar',
   repo: null,
   checks: [],
@@ -25,7 +26,7 @@ const HEALTH: HealthResponse = {
     designMode: false,
     followups: true,
     singleProject: false,
-    automations: false,
+    automations: false, webhooks: false,
     dispatch: false,
     tokenMetrics: true,
     tokenUsageMetrics: true,

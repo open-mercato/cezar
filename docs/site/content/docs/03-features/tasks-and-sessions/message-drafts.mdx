@@ -1,0 +1,25 @@
+---
+title: "Message and attachment drafts"
+description: "Return to an unsent message after switching tasks or refreshing."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/task-composer.tsx
+    line: 109
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar saves unsent text and attachments as a draft belonging to the task. It removes the draft after a successful send. If the message is rejected, the draft remains available to edit or send again.
+
+## Where to find it
+
+Task → Chat → message field
+
+## How to use it
+
+1. Start writing a message and add attachments.
+2. Switch to another task, then return.
+3. Finish the draft and send it.
+
+> **Good to know**: To survive a page refresh, drafts require the host to allow Cezar data to be saved.

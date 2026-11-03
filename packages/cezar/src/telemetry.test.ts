@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
+import { DEV_TELEMETRY_SERVICE, TELEMETRY_POLICY_VERSION, deviceSid, flushTelemetry, initTelemetry, installCrashReporter, loadTelemetryConsent, scrub, setTelemetryConsent, stampedTelemetryService, registerTelemetryContext, registerDailyInventory, reportError, sendDailyPing, telemetryBlockedBy, telemetryEnabled, telemetryRuntime, telemetryVersion, track, uuidv7 } from './telemetry.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 
 describe('telemetry', () => {
@@ -130,6 +130,15 @@ describe('telemetry', () => {
     expect(out).not.toContain(homedir());
   });
 
+  it('keeps a home-directory cwd as ~, not <repo> (the desktop sidecar runs from home)', () => {
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(homedir());
+    try {
+      expect(scrub(`at ${join(homedir(), '.npm', 'x.js')}`)).toBe(`at ${join('~', '.npm', 'x.js')}`);
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
   it('masks a registered project root outside the home directory', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cez-roots-'));
     vi.stubEnv('CEZ_HOME', home);
@@ -221,6 +230,36 @@ describe('telemetry', () => {
       const config = await loadWorkspaceConfig();
       expect(sent()[0]!.body.indexKey).toBe(config.cezarId);
       expect(config.lastActiveOn).toBe(new Date().toISOString().slice(0, 10));
+    });
+
+    it('follows cezar_run with one feature_inventory per configured feature, once a day', async () => {
+      await setTelemetryConsent('granted');
+      registerDailyInventory(async () => [{ label: 'automations_enabled', value: 2 }, { label: 'workflows_custom', value: 1 }]);
+      try {
+        await sendDailyPing();
+        await sendDailyPing();
+        await flushTelemetry();
+        const config = await loadWorkspaceConfig();
+        expect(sent().map((s) => [s.event, s.body.label, s.body.value, s.body.indexKey])).toEqual([
+          ['cezar_run', undefined, undefined, config.cezarId],
+          ['feature_inventory', 'automations_enabled', 2, config.cezarId],
+          ['feature_inventory', 'workflows_custom', 1, config.cezarId],
+        ]);
+      } finally {
+        registerDailyInventory(undefined);
+      }
+    });
+
+    it('still pings when the inventory fails', async () => {
+      await setTelemetryConsent('granted');
+      registerDailyInventory(() => Promise.reject(new Error('unreadable')));
+      try {
+        await sendDailyPing();
+        await flushTelemetry();
+        expect(sent().map((s) => s.event)).toEqual(['cezar_run']);
+      } finally {
+        registerDailyInventory(undefined);
+      }
     });
 
     it('lets CEZ_TELEMETRY=0 and DO_NOT_TRACK=1 override a yes', async () => {

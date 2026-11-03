@@ -38,7 +38,8 @@ const ADDED: DiffFileChange = {
 /** The engine chunk loads lazily — settle on a rendered file header before asserting. */
 async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
   const view = render(ui)
-  await screen.findByText(settleText)
+  // The engine chunk's first import in a busy worker can exceed findBy's 1s default.
+  await screen.findByText(settleText, {}, { timeout: 5000 })
   return view
 }
 
@@ -68,6 +69,26 @@ describe('Diff facade', () => {
     expect(screen.getByText('added')).not.toBeNull()
     const files = document.querySelectorAll('[data-slot="diff-file"]')
     expect(files).toHaveLength(2)
+  })
+
+  it('copies a file path from its header without toggling the file', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    try {
+      render(<Diff files={[{ ...MODIFIED, path: 'src/b.ts', oldPath: 'src/a.ts', status: 'renamed' }]} />)
+      const copy = await screen.findByRole('button', { name: 'Copy file path' })
+      const toggle = document.querySelector('[data-slot="diff-file-header"]') as HTMLElement
+      const expanded = toggle.getAttribute('aria-expanded')
+
+      fireEvent.click(copy)
+
+      expect(writeText).toHaveBeenCalledWith('src/b.ts')
+      await screen.findByRole('button', { name: 'Copied' })
+      expect(toggle.getAttribute('aria-expanded')).toBe(expanded)
+      expect(toggle.querySelector('button')).toBeNull()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('shows the aggregate ± stat across files', async () => {
@@ -274,13 +295,51 @@ describe('Diff facade — image previews (#365)', () => {
     expect(onOpenInApp).toHaveBeenCalledWith('assets/logo.png')
   })
 
-  it('never renders a preview for a deleted image — only the new side is ever servable', async () => {
+  it('never renders a preview for a deleted image without oldImageSrc', async () => {
     const imageSrc = vi.fn((path: string) => `/raw/${path}`)
     await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} />, 'assets/gone.png')
 
     expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
     expect(imageSrc).not.toHaveBeenCalled()
     expect(screen.getByText(/only the new side can be previewed/)).not.toBeNull()
+  })
+
+  it('previews a deleted image from its old side when oldImageSrc is wired', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    const sides = document.querySelectorAll('[data-slot="diff-image-side"]')
+    expect(sides).toHaveLength(1)
+    expect(sides[0]?.getAttribute('data-side')).toBe('old')
+    expect(sides[0]?.querySelector('img')?.getAttribute('src')).toBe('/old/assets/gone.png')
+    expect(sides[0]?.querySelector('figcaption')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+  })
+
+  it('shows before | after for a modified image, and the new side alone for an added one', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    const { rerender } = await renderDiff(
+      <Diff files={[IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />,
+      'assets/logo.png',
+    )
+    const srcs = [...document.querySelectorAll('[data-slot="diff-image-side"] img')].map((img) => img.getAttribute('src'))
+    expect(srcs).toEqual(['/old/assets/logo.png', '/raw/assets/logo.png'])
+
+    rerender(<Diff files={[{ ...IMAGE, status: 'added' }]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />)
+    expect(document.querySelectorAll('[data-slot="diff-image-side"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="diff-image-preview"] img')?.getAttribute('src')).toBe('/raw/assets/logo.png')
+  })
+
+  it('a side the server refuses shows a note instead of a broken image', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    fireEvent.error(document.querySelector('[data-slot="diff-image-side"] img')!)
+    expect(document.querySelector('[data-slot="diff-image-side"] img')).toBeNull()
+    expect(screen.getByText(/can’t be previewed/)).not.toBeNull()
   })
 })
 

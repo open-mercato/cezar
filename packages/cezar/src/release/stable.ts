@@ -1,4 +1,4 @@
-/** Stable-release decisions — the pure half of `scripts/release.mjs`.
+/** Stable-release decisions — the pure half of `scripts/release.mts`.
  *
  *  Sibling of `snapshot.ts`, but for the *owner-driven* `latest` channel. The
  *  `Release` workflow (`.github/workflows/release.yml`) is run manually and
@@ -83,39 +83,88 @@ export function nextMinorVersion(version: string): string | null {
 }
 
 export type ReleasePlan =
-  | { ok: true; version: string; bumped: boolean; previousTag: string | null }
+  | { ok: true; version: string; bumped: boolean; resume: boolean; previousTag: string | null }
   | { ok: false; error: string };
 
 /**
  * What a release from a `release/vX.Y.x` branch publishes.
  *
- * The committed version ships as-is while no tag names it (the line's first `x.y.0`); once it
- * is tagged, the release bumps the patch first — past any tag already taken, so a re-run after a
- * half-finished release never collides. The branch and the manifests must agree on the line.
+ * A release is done when its GitHub Release exists (created last); the tag pins its commit.
+ * - The line's newest tag has no GitHub Release → **resume** that version at its tag. Backports
+ *   merged since wait for the next patch, so one npm version never mixes two commits.
+ * - Otherwise the committed version ships as-is while no tag names it (a fresh line's `x.y.0`,
+ *   or a bump whose run died before tagging); once tagged, the patch is bumped first.
+ * - An untagged version with packages already on npm is refused: publishing it from the tip
+ *   would mix revisions. Restore its tag at the published commit instead.
  */
 export function planRelease(input: {
   branch: string;
   manifestVersion: string;
   tags: readonly string[];
+  /** Tags that have a GitHub Release. */
+  releasedTags: readonly string[];
+  /** Whether any release-set package already has `manifestVersion` on npm. */
+  manifestPublished: boolean;
 }): ReleasePlan {
   const line = parseReleaseBranch(input.branch);
   if (!line) return { ok: false, error: `"${input.branch}" is not a release/vX.Y.x branch` };
-  const base = parseStableVersion(input.manifestVersion);
-  if (!base) return { ok: false, error: `manifest version "${input.manifestVersion}" is not a plain x.y.z` };
+  const manifest = input.manifestVersion.trim();
+  const base = parseStableVersion(manifest);
+  if (!base) return { ok: false, error: `manifest version "${manifest}" is not a plain x.y.z` };
   if (base[0] !== line.major || base[1] !== line.minor) {
+    return { ok: false, error: `manifest version ${manifest} does not belong to ${input.branch}` };
+  }
+  const tags = input.tags.map((t) => t.trim());
+  const previousOf = (version: string) =>
+    tags
+      .filter((t) => parseStableVersion(t) && compareStableVersions(t, version) < 0)
+      .sort(compareStableVersions)
+      .at(-1) ?? null;
+
+  const newest = newestLineTag(tags, line);
+  if (newest && !input.releasedTags.includes(newest)) {
+    const version = newest.slice(1);
+    return { ok: true, version, bumped: false, resume: true, previousTag: previousOf(version) };
+  }
+
+  const taken = new Set(tags);
+  let version = manifest;
+  while (taken.has(`v${version}`)) version = computeStableVersion('patch', version)!;
+  const bumped = version !== manifest;
+  if (!bumped && input.manifestPublished) {
     return {
       ok: false,
-      error: `manifest version ${input.manifestVersion} does not belong to ${input.branch}`,
+      error: `${manifest} is on npm but has no v${manifest} tag — restore the tag at the commit it was published from (never delete a release tag)`,
     };
   }
-  const taken = new Set(input.tags.map((t) => t.trim()));
-  let version = input.manifestVersion.trim();
-  while (taken.has(`v${version}`)) version = computeStableVersion('patch', version)!;
-  const previous = input.tags
-    .filter((t) => parseStableVersion(t) && compareStableVersions(t, version) < 0)
-    .sort(compareStableVersions)
-    .at(-1);
-  return { ok: true, version, bumped: version !== input.manifestVersion.trim(), previousTag: previous ?? null };
+  return { ok: true, version, bumped, resume: false, previousTag: previousOf(version) };
+}
+
+/** The highest `vX.Y.Z` tag of one line, or `null`. */
+export function newestLineTag(
+  tags: readonly string[],
+  line: { major: number; minor: number },
+): string | null {
+  return (
+    tags
+      .filter((t) => {
+        const v = /^v/.test(t) ? parseStableVersion(t) : null;
+        return v !== null && v[0] === line.major && v[1] === line.minor;
+      })
+      .sort(compareStableVersions)
+      .at(-1) ?? null
+  );
+}
+
+/** The highest stable version among the release set's `latest` dist-tags — what a new release
+ *  must reach to move `latest`. Judging one package misses a half-published run. */
+export function highestLatest(latests: readonly (string | null | undefined)[]): string | null {
+  return (
+    latests
+      .filter((v): v is string => typeof v === 'string' && parseStableVersion(v) !== null)
+      .sort(compareStableVersions)
+      .at(-1) ?? null
+  );
 }
 
 /**

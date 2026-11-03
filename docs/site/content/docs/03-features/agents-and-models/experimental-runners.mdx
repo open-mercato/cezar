@@ -1,0 +1,26 @@
+---
+title: "Try OpenCode or pi"
+description: "Choose OpenCode or pi to try Cezar's experimental support for these agents."
+version: experimental
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/runner-factory.ts
+    line: 20
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Depending on its configuration, OpenCode can use open or local models. The README marks both OpenCode and pi as experimental.
+
+## Where to find it
+
+Settings → Agents
+
+## How to use it
+
+1. Install and configure the CLI you want to use.
+2. Check that Cezar detects it in Settings → Agents.
+3. Select the agent and try it on a small task.
+
+> **Good to know**: Protocol support and behavior may differ between these agents. Test the selected agent on your own tasks.

@@ -44,6 +44,15 @@ describe('attachment staging (telemetry 7054e5f2)', () => {
     expect(api.stageUpload).toHaveBeenCalledTimes(1)
   })
 
+  it('does not fall back to inline bytes when the upload was refused as too large (#1735)', async () => {
+    const tooLarge = Object.assign(new Error('413'), { status: 413 })
+    api.stageUpload.mockRejectedValue(tooLarge)
+    const a = attachment('CCCC')
+    const send = vi.fn(async (wire: unknown) => wire)
+    await expect(sendWithStaged([a], send)).rejects.toBe(tooLarge)
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('falls back to inline bytes when staging fails, and retries on the next send', async () => {
     const failure = new Error('offline')
     api.stageUpload.mockRejectedValueOnce(failure)

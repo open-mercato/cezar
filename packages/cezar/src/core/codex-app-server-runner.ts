@@ -37,11 +37,13 @@ import {
   type CodexUiMapping,
   type CodexUiMapperState,
 } from './codex-ui-mapper.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { explainCodexModelError } from './agent-errors.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
   /** Waits between `thread/resume` retries while another process holds the thread. */
   resumeLockRetryMs?: readonly number[];
@@ -65,6 +67,34 @@ const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 
  * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
+/**
+ * The `thread/start` / `thread/resume` overrides. Full access is the `auto` preset shared by all
+ * backends; besides avoiding prompts, it keeps container installs working when bubblewrap cannot
+ * create a UID map (#563). `CEZ_CODEX_NETWORK=0` remains the explicit sandbox opt-out, and under
+ * it the run's artifacts directory is added as a writable root, or a sandboxed run could not
+ * publish (spec 2026-10-22-html-artifacts-and-impact).
+ */
+export function codexThreadOverrides(
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  mcpConfig: Record<string, unknown> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const sandboxed = env.CEZ_CODEX_NETWORK === '0';
+  const artifacts = sandboxed ? spec.env?.CEZ_ARTIFACTS_DIR : undefined;
+  // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+  // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+  const config = artifacts
+    ? { ...mcpConfig, 'sandbox_workspace_write.writable_roots': [artifacts] }
+    : mcpConfig;
+  return {
+    model: spec.model,
+    cwd: spec.cwd,
+    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    approvalPolicy: 'never',
+    config,
+  };
+}
+
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
 
@@ -181,25 +211,21 @@ class CodexSession implements AgentSession {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-        this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+      this.child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!this.hasExited()) {
+          this.terminatedByCezar = true;
+          this.child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     // Handshake → thread → first turn. Kicked off concurrently with the read
     // loop below (which resolves the request() promises this awaits).
@@ -211,6 +237,7 @@ class CodexSession implements AgentSession {
         const readLoop = async () => {
           for await (const line of readNdjson(this.child.stdout)) {
             if (this.timedOut) break;
+            deadline.touch();
             let msg: CodexAppServerMessage;
             try {
               msg = JSON.parse(line) as CodexAppServerMessage;
@@ -243,7 +270,7 @@ class CodexSession implements AgentSession {
           this.end();
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
@@ -269,8 +296,7 @@ class CodexSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `codex app-server timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('codex app-server', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }
@@ -367,7 +393,7 @@ class CodexSession implements AgentSession {
         message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
       };
     }
-    return { type: 'error', message: `codex: turn failed: ${detail}` };
+    return { type: 'error', message: `codex: turn failed: ${explainCodexModelError(detail, this.spec.model)}` };
   }
 
   end(): void {
@@ -424,18 +450,7 @@ class CodexSession implements AgentSession {
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
 
-    const overrides = {
-      model: this.spec.model,
-      cwd: this.spec.cwd,
-      // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
-      // keeps container installs working when bubblewrap cannot create a UID map (#563).
-      // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
-      approvalPolicy: 'never',
-      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
-      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
-      config: this.privateMcpConfig(),
-    };
+    const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
     if (this.spec.resume && this.spec.sessionId) {
       this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {
@@ -501,10 +516,22 @@ class CodexSession implements AgentSession {
     // with its default (no summary), so the reasoning thread stays empty even
     // though the mapper and UI can render it. The override persists for this
     // turn and every subsequent turn, so seeding it on turn/start is enough.
+    //
+    // `effort` rides the same request but does NOT depend on that persistence
+    // claim, which was written about `summary` alone. It needs no equivalent,
+    // because there is no turn this branch does not cover: `turn/steer` above
+    // injects into a turn that ALREADY started here with the effort applied
+    // (it is gated on an active turn id, so it is never a turn of its own), and
+    // every genuinely new turn comes back through this branch and re-sends
+    // `this.spec.reasoningEffort`, which is fixed for the session. So no turn
+    // can run at a different effort than the one selected for the session.
+    // Omitted when unset — absence is what preserves the App Server's native
+    // default, and the run record distinguishes "unset" from any chosen value.
     const res = await this.rpc.request('turn/start', {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }
@@ -634,7 +661,7 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: turnError });
+          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).

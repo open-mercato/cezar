@@ -14,6 +14,7 @@ import type {
   Skill,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
+import type { ReasoningEffortOption } from '@/components/reasoning-effort-pill'
 
 /**
  * The new-task form's picker rules and its POST body, as pure functions — the exact semantics
@@ -56,6 +57,9 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'antigravity', label: 'antigravity', desc: 'Google Antigravity CLI (agy)' },
+  { id: 'gemini', label: 'gemini', desc: 'Gemini CLI (ACP)' },
+  { id: 'kimi', label: 'kimi', desc: 'Kimi Code (ACP)' },
 ]
 
 export interface ModelPreset {
@@ -78,6 +82,7 @@ export interface ModelPreset {
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
+    { id: 'fable', label: 'fable', desc: 'Most capable, for the hardest tasks' },
     { id: 'opus', label: 'opus', desc: 'Deep reasoning for hard tasks' },
     { id: 'sonnet', label: 'sonnet', desc: 'Fast and cheap' },
     { id: 'haiku', label: 'haiku', desc: 'Fastest — simple, scoped tasks' },
@@ -108,6 +113,23 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
   ],
+  // Antigravity's slugs (`gemini-3.8-flash-high`, …) come from `agy models` for the signed-in
+  // account; nothing dated is listed here, and the field stays free text for any slug it prints.
+  antigravity: [
+    { id: '', label: 'auto', desc: 'Use your Antigravity default model' },
+  ],
+  // Gemini CLI has no host catalog in cezar: the ids its ACP `session/new` answer lists (0.60), the
+  // server's `KNOWN_PRESETS_BY_RUNNER.gemini`. A free API key serves the Flash models only.
+  gemini: [
+    { id: '', label: 'auto', desc: 'Use your Gemini CLI default model' },
+    { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash', desc: 'Fast; available on a free API key' },
+    { id: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview', desc: 'Preview Flash model' },
+    { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', desc: 'Fastest, cheapest' },
+    { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro', desc: 'Deeper reasoning (paid tiers)' },
+  ],
+  kimi: [
+    { id: '', label: 'auto', desc: 'Use your Kimi default model' },
+  ],
 }
 
 /**
@@ -123,6 +145,7 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
 const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
   claude: /^claude[-.]/,
   codex: /^gpt[-.]/,
+  gemini: /^gemini[-.]/,
 }
 
 /** Runners that pick with the canonical `provider/model` convention and span every provider the
@@ -141,12 +164,18 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
  *  on the other backends. */
 const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
 
+/** Runners whose own catalog ids ARE other vendors' bare ids (Copilot's `claude-sonnet-4`,
+ *  Cursor's `gpt-5`) — mirrors `VENDOR_ID_HOSTING_RUNNERS` in `core/model-presets.ts`. */
+const VENDOR_ID_HOSTING_RUNNERS: readonly Runner[] = ['copilot', 'cursor']
+
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).
  * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
 export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
   if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
+  // Before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id.
+  if (VENDOR_ID_HOSTING_RUNNERS.includes(runner) && Object.values(NATIVE_MODEL_ID_PREFIX).some((p) => p.test(model))) return false
   return Object.entries(MODELS_BY_RUNNER).some(
     ([other, presets]) =>
       other !== runner &&
@@ -201,6 +230,8 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   opencode: 'OpenCode',
   junie: 'Junie',
   cursor: 'Cursor',
+  antigravity: 'Antigravity',
+  kimi: 'Kimi',
 }
 
 export function modelCatalogStatus(
@@ -213,6 +244,27 @@ export function modelCatalogStatus(
   if (catalog?.stale) return `Using cached ${name} model list`
   if (failed || catalog?.source === 'unavailable') return `Latest ${name} models unavailable`
   return undefined
+}
+
+/** The App Server advertises effort levels per Codex model, never per runner. */
+export function reasoningEffortsForModel(
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): readonly ReasoningEffortOption[] {
+  if (runner !== 'codex' || model === '' || catalog?.runner !== 'codex') return []
+  return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
+}
+
+/** A stale draft effort is never sent after its runner/model capability disappears. */
+export function resolveReasoningEffort(
+  picked: string | null,
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): string {
+  const options = reasoningEffortsForModel(runner, model, catalog)
+  return picked !== null && options.some((option) => option.id === picked) ? picked : ''
 }
 
 /** Which runners the pill offers, from the health checks (legacy `renderChrome`). The `claude`
@@ -321,6 +373,8 @@ export function buildCreateRunBody(opts: {
   /** `null` — nothing picked — runs the built-in `quick-task`. */
   source: TaskSource | null
   model: string
+  /** Empty means the selected Codex model's native default; it is omitted on the wire. */
+  reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -362,6 +416,7 @@ export function buildCreateRunBody(opts: {
     task,
     source,
     model,
+    reasoningEffort,
     modelsLocked,
     runner,
     runnerExplicit,
@@ -387,6 +442,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
+    ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.
@@ -413,15 +469,16 @@ export function buildCreateRunBody(opts: {
 
 /**
  * The project's preselected skill (spec 2026-10-20-trunk-based-projects): its Ask skill for a
- * read-only task, else its default skill — only when that skill exists in the catalog.
+ * read-only task, else its default skill — only when that skill exists in the catalog. `null`
+ * skills means the catalog failed to load: keep the configured name and let the server judge it.
  */
 export function projectDefaultSource(
   config: { defaultSkill?: string | null; askSkill?: string | null } | undefined,
   readOnly: boolean,
-  skills: readonly Skill[],
+  skills: readonly Skill[] | null,
 ): TaskSource | null {
   const name = (readOnly ? config?.askSkill : config?.defaultSkill) ?? null
-  return name && skills.some((skill) => skill.name === name) ? { source: 'skill', ref: name } : null
+  return name && (skills === null || skills.some((skill) => skill.name === name)) ? { source: 'skill', ref: name } : null
 }
 
 /** A trunk-based project asks by default when the message reads as a question. */

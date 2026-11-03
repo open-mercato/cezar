@@ -1,5 +1,6 @@
-import { deferredBindingSchema, queueWaitReasonSchema } from '@open-mercato/cezar-contract';
+import { deferredBindingSchema, queueWaitReasonSchema, trackerAccessSchema } from '@open-mercato/cezar-contract';
 import { EventEmitter } from 'node:events';
+import { runLifecycleSnapshot, type RunLifecycleObserver, type RunLifecycleSnapshot } from './lifecycle.ts';
 import { randomUUID } from 'node:crypto';
 import { threadId } from 'node:worker_threads';
 import { hostname, uptime } from 'node:os';
@@ -35,7 +36,8 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -92,6 +94,8 @@ const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: z.enum(['pending', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled', 'skipped']),
   iterations: z.number(),
+  // #1300: unreadable accounting follows the same bounded fallback as legacy records.
+  retriesUsed: z.number().int().nonnegative().optional().catch(undefined),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
@@ -108,6 +112,8 @@ const stepStateSchema = z.object({
   /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
    *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
   backend: storedRunnerSchema.optional(),
+  /** Reasoning level selected when this agent step began; absent retains the native default. */
+  reasoningEffort: z.string().trim().min(1).max(64).optional(),
   /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
    *  id (spec 2026-07-29-agent-profiles). Recorded rather than re-derived because a session id
    *  only means something inside the config dir that created it: `sessionId` and `profileId` are
@@ -179,6 +185,8 @@ export const runRecordSchema = z.object({
    *  (#image-display) — persisted like agent screenshots, served from `/images/`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Optional so runs written before the feature still parse. */
+  reasoningEffort: z.string().trim().min(1).max(64).optional(),
   /** Canonical provider/model identity (#405) — the normalised `provider/model`
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
@@ -197,6 +205,11 @@ export const runRecordSchema = z.object({
    *  own selection — an override for Claude says nothing about which Codex account a mixed
    *  workflow's codex step should use. Absent = follow the project. */
   agentProfile: z.string().optional(),
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(), incarnation: z.string().nullable(), revocation: z.string().nullable(),
+  }).optional().catch(undefined),
   /** Echo of the extra system prompt this run actually used (R2): the
    *  `POST /api/runs` override, or the `config.json` default it fell back to.
    *  Deliberately NOT the full composed prompt — skill bodies and the handoff
@@ -252,6 +265,8 @@ export const runRecordSchema = z.object({
       event: trackerAutomationEventSchema.optional(),
       timestamp: z.string().optional(),
       change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string().url(),
     })
@@ -270,7 +285,11 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10); a bad one drops the field. */
+  subject: runSubjectSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
+  attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
+  completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
    *  Optional/absent on old runs; cleared when the run resumes or ends. */
@@ -332,6 +351,22 @@ export const runRecordSchema = z.object({
   /** Consecutive automatic resumes since the last human turn — the safety cap's counter.
    *  Persisted so a restart cannot reset a loop back to zero. */
   autoResumeAttempts: z.number().int().min(0).optional().catch(undefined),
+  /** Accounts this run exhausted before a fallback moved it on (spec 2026-10-20-agent-usage-limit-fallback):
+   *  known reset times also persist in the workspace hold store, independently of this run. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional().catch(undefined),
+  /** The current unattended fallback episode: every provider:account already tried (the starting one
+   *  included) and the continuation step reserved for the successor. Reset by a human Continue. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    /** Selection ended without a successor, or was cancelled; automatic recovery must not reopen it. */
+    done: z.boolean().optional(),
+  }).optional().catch(undefined),
+  /** Which automatic resume `autoResumeAt`/`autoResumeAttempts` belong to: a usage limit's reset
+   *  window, or a retry after a transient provider failure — which holds no account. Absent = limit. */
+  autoResumeReason: z.enum(['usage_limit', 'transient']).optional().catch(undefined),
   createdAt: z.string(),
   startedAt: z.string().optional(),
   finishedAt: z.string().optional(),
@@ -431,6 +466,10 @@ export const runRecordSchema = z.object({
    *  the key rather than persist a `false` older cezars never wrote. */
   pinned: z.boolean().optional(),
   pinnedAt: z.string().optional(),
+  /** "Run First" (brief 2026-09-23-queued-task-run-next): the ISO time a queued run was
+   *  promoted to the front of its queue. Present only while the run is still `queued` —
+   *  `updateRun` retires it on any other status — so it survives a restart and nothing else. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -496,12 +535,39 @@ export interface RunEvent {
 
 /** A layout file this young may belong to a run another process has not saved to the index yet. */
 const ORPHAN_LAYOUT_GRACE_MS = 10 * 60_000;
-const MAX_RUNS_KEPT = 300;
+const DEFAULT_RUNS_KEPT = 300;
+const DEFAULT_ARCHIVED_KEPT = 500;
+/** `CEZ_RUNS_KEEP` / `CEZ_ARCHIVED_RUNS_KEEP`: how many settled runs the index keeps (at least 1; live runs and active dispatch trees are never pruned). */
+function keepLimit(name: string, fallback: number): number {
+  const n = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
 /** Every save rewrites the whole index, and a live run touches its record at event rate. */
 const SAVE_DEBOUNCE_MS = 1_000;
-const MAX_ARCHIVED_KEPT = 500;
 /** Statuses the run manager still acts on — a record in one of them must outlive pruning. */
 const LIVE_STATUSES: ReadonlySet<string> = new Set<RunStatus>(['queued', 'running', 'waiting']);
+
+/**
+ * A record this version cannot read, kept verbatim (spec 2026-09-19-runner-seam-native-backends,
+ * Phase 0 — `runs.json` downgrade safety). A newer cezar may have written a runner id, a status or
+ * a field this one does not know; parsing the index as one array used to fail on that element,
+ * start empty, and the next save then overwrote every run. Salvaged records are invisible to the
+ * read API — nothing that consumes a `RunRecord` can be handed a shape it does not know — but not
+ * to lifecycle: `deleteRun` and `pruneOldRuns` address them through this header, and `saveNow`
+ * writes `raw` back unchanged, so an upgrade reads the record again exactly as it was.
+ */
+interface SalvagedRecord {
+  id: string;
+  createdAt: string;
+  archived: boolean;
+  raw: unknown;
+}
+/** The minimal header a record needs to be addressed and ordered; anything less is dropped as today. */
+const salvageHeaderSchema = z.object({
+  id: z.string().min(1),
+  createdAt: z.string().min(1),
+  archived: z.boolean().catch(false),
+});
 
 // Any host: GitHub Enterprise lives on arbitrary domains (`isGithubHost` can't be asked from a regex).
 const PR_URL_RE = /https:\/\/[^/\s]+\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
@@ -521,6 +587,12 @@ const MAX_TOOL_INPUT_HAYSTACK_CHARS = 8_192;
 /** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
  *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
 export type RepoHandle = { owner: string; name: string };
+
+/** What a run's agent publishes for the user (spec 2026-10-22-html-artifacts-and-impact) — outside
+ *  the worktree, so it never reaches autosave, Changes or a PR, and survives Discard. */
+export function artifactsDir(dataDir: string, runId: string): string {
+  return join(dataDir, 'artifacts', runId);
+}
 
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
  *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
@@ -581,6 +653,13 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+  run.autoResumeReason = undefined;
+}
+
+/** The OS refused the write (EPERM/EACCES/EROFS) — the file is there, cezar may not touch it. */
+function isAccessDenied(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'EPERM' || code === 'EACCES' || code === 'EROFS';
 }
 
 /**
@@ -913,6 +992,12 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
   if (run.status !== 'waiting') run.askParked = undefined;
+  // A "Run First" place is a place in the QUEUE — the `failed` written above for readers that do
+  // not recover gives it up, exactly as `updateRun` retires it on any other status. Left behind,
+  // a later Continue would re-queue the run carrying a mark the user never renewed.
+  if (run.status !== 'queued') run.promotedAt = undefined;
+  if (run.status !== 'waiting') run.attentionRequest = undefined;
+  if (run.status !== 'done') run.completionReason = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
   // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
   // could match the created number. The evidence is all still on the record — only the
@@ -1129,14 +1214,38 @@ function lockRunIndex(dataDir: string): () => void {
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
  * file per run. Also the in-process event bus the SSE endpoints subscribe to:
- * emits `('run', RunRecord)` and `('event', { runId, event: RunEvent })`.
+ * emits `('run', RunRecord)`, `('event', { runId, event: RunEvent })` and
+ * `('artifacts', { runId, artifacts, truncated })`.
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  private lifecycleObserver?: RunLifecycleObserver;
+  private lifecycleSnapshots = new Map<string, RunLifecycleSnapshot>();
+
+  /** Attaching establishes a baseline, never a backlog of historical notifications. */
+  setLifecycleObserver(observer: RunLifecycleObserver | undefined): void {
+    this.lifecycleObserver = observer;
+    this.lifecycleSnapshots.clear();
+    if (observer) for (const run of this.runs.values()) this.lifecycleSnapshots.set(run.id, runLifecycleSnapshot(run));
+  }
+
+  get hasLifecycleObserver(): boolean { return this.lifecycleObserver !== undefined; }
+
+  private observeLifecycle(id: string, run: RunRecord | undefined): void {
+    if (!this.lifecycleObserver) return;
+    const before = this.lifecycleSnapshots.get(id);
+    const after = run ? runLifecycleSnapshot(run) : undefined;
+    // Advance before invoking any listener: a reentrant mutation sees the outer transition.
+    if (after) this.lifecycleSnapshots.set(id, after);
+    else this.lifecycleSnapshots.delete(id);
+    try { this.lifecycleObserver(before, after, run ? 'change' : 'delete'); } catch { /* Capture cannot interrupt tasks. */ }
+  }
   /** The backend of each run's latest session (`session.started`), naming its agent errors. */
   private sessionBackends = new Map<string, string>();
   /** Local snapshot at open/last successful save, for merging only our subsequent changes. */
   private persisted = new Map<string, string>();
+  /** Records preserved unread — see `SalvagedRecord`. Keyed like `runs`; an id is in one or the other. */
+  private readonly salvaged = new Map<string, SalvagedRecord>();
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
@@ -1146,7 +1255,7 @@ export class RunStore extends EventEmitter {
 
   getIndexReadHealth() { return { ...this.indexReadHealth }; }
 
-  /** `open` could not create `runs/`: events stay live-only instead of failing every run. */
+  /** `runs/` or an event file is unwritable: events stay live-only instead of failing every run. */
   private eventsUnwritable = false;
 
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
@@ -1157,6 +1266,11 @@ export class RunStore extends EventEmitter {
   private constructor(private readonly dataDir: string) {
     super();
     this.setMaxListeners(100);
+  }
+
+  /** Stable identity for observers that outlive a store instance. */
+  getDataDir(): string {
+    return this.dataDir;
   }
 
   /** See `reconcileLoadedRun` for what `keepLive` (#367) decides about live-looking rows. */
@@ -1175,16 +1289,37 @@ export class RunStore extends EventEmitter {
     if (existsSync(indexPath)) {
       try {
         const raw = JSON.parse(readFileSync(indexPath, 'utf8'));
-        const parsed = z.array(runRecordSchema).safeParse(raw);
-        if (parsed.success) {
-          for (const run of parsed.data) {
-            store.persisted.set(run.id, JSON.stringify(run));
-            store.runs.set(run.id, reconcileLoadedRun(run, opts));
+        if (Array.isArray(raw)) {
+          // Per-record salvage: one element this version cannot read costs only itself. It is kept
+          // verbatim under its header (see `SalvagedRecord`) so the next save carries it over and a
+          // later version reads it again; an element without a usable header cannot be addressed
+          // or ordered and is dropped, as the whole-array parse used to drop everything.
+          let dropped = 0;
+          for (const entry of raw) {
+            const parsed = runRecordSchema.safeParse(entry);
+            if (parsed.success) {
+              // A readable copy wins over an unreadable one of the same id, whichever came first.
+              store.salvaged.delete(parsed.data.id);
+              store.persisted.set(parsed.data.id, JSON.stringify(parsed.data));
+              store.runs.set(parsed.data.id, reconcileLoadedRun(parsed.data, opts));
+              continue;
+            }
+            const header = salvageHeaderSchema.safeParse(entry);
+            if (header.success && !store.runs.has(header.data.id)) store.salvaged.set(header.data.id, { ...header.data, raw: entry });
+            else dropped++;
+          }
+          if (store.salvaged.size > 0 || dropped > 0) {
+            const preserved = store.salvaged.size;
+            console.warn(
+              `[cez] runs.json: ${preserved} task record${preserved === 1 ? '' : 's'} this version cannot read ${preserved === 1 ? 'was' : 'were'} preserved unread` +
+                (dropped > 0 ? `; ${dropped} without a usable id/createdAt header ${dropped === 1 ? 'was' : 'were'} dropped` : ''),
+            );
+            store.indexReadHealth = { state: 'complete', omittedRuns: preserved + dropped, reason: 'Some task records could not be read by this server' };
           }
           // Only behind an index that actually loaded — an unreadable one would orphan every layout.
-          pruneOrphanLayouts(dataDir, new Set(store.runs.keys()), ORPHAN_LAYOUT_GRACE_MS);
+          pruneOrphanLayouts(dataDir, new Set([...store.runs.keys(), ...store.salvaged.keys()]), ORPHAN_LAYOUT_GRACE_MS);
         } else {
-          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
         store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
@@ -1277,9 +1412,11 @@ export class RunStore extends EventEmitter {
     workflow: string;
     task: string;
     model?: string;
+    reasoningEffort?: string;
     runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
+    fallbackPolicy?: RunRecord['fallbackPolicy'];
     generateFollowups?: boolean;
     autonomous?: boolean;
     worktree?: false;
@@ -1299,8 +1436,10 @@ export class RunStore extends EventEmitter {
       workflow: input.workflow,
       task: input.task,
       model: input.model,
+      reasoningEffort: input.reasoningEffort,
       runner: input.runner,
       agentProfile: input.agentProfile,
+      fallbackPolicy: input.fallbackPolicy,
       generateFollowups: input.generateFollowups,
       autonomous: input.autonomous,
       worktree: input.worktree,
@@ -1335,6 +1474,9 @@ export class RunStore extends EventEmitter {
       delete run.referencedIssueNumberSeeded;
     }
     const normalized = { ...patch };
+    const resultingStatus = normalized.status ?? run.status;
+    if (resultingStatus !== 'waiting') normalized.attentionRequest = undefined;
+    if (resultingStatus !== 'done') normalized.completionReason = undefined;
     if (normalized.status && !['running', 'waiting', 'queued'].includes(normalized.status)) {
       normalized.activity = undefined;
       normalized.monitoringWakeAt = undefined;
@@ -1352,6 +1494,13 @@ export class RunStore extends EventEmitter {
     // enforcing the invariant here spares every one of those callers the bookkeeping.
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
+    }
+    // "Run First" (brief 2026-09-23-queued-task-run-next) is a place in the QUEUE, so any run
+    // leaving it — starting, cancelled, failed — gives the place up. A run that later comes back
+    // (a Continue deferred for capacity, a usage-limit send-back) re-enters at the tail like
+    // everyone else instead of silently jumping the line on a stale mark.
+    if (normalized.status && normalized.status !== 'queued') {
+      normalized.promotedAt = undefined;
     }
     // An unanswered question belongs to the `failed` run its closed session left behind: the
     // Continue that answers it (`running`/`queued`), and every settlement, retire it.
@@ -1406,6 +1555,7 @@ export class RunStore extends EventEmitter {
       const value = out[field];
       if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
+    if (out.attentionRequest) out.attentionRequest = { ...out.attentionRequest, questions: out.attentionRequest.questions.map(q => ({ ...q, question: this.redactText(q.question, runId), ...(q.options ? { options: q.options.map(o => ({ ...o, label: this.redactText(o.label, runId), ...(o.description ? { description: this.redactText(o.description, runId) } : {}) })) } : {}) })) };
     return out;
   }
 
@@ -1615,10 +1765,20 @@ export class RunStore extends EventEmitter {
   private persistEvent(runId: string, event: RunEvent): void {
     const line = `${JSON.stringify(event)}\n`;
     if (!this.eventsUnwritable) {
-      appendFileSync(this.eventsPath(runId), line, 'utf8');
+      try {
+        appendFileSync(this.eventsPath(runId), line, 'utf8');
+      } catch (err) {
+        // Access denied mid-session (macOS privacy prompt, EPERM on the file) degrades like `open`
+        // does: a throw here 500'd the message the user was sending (telemetry 73c6e796). Anything
+        // else — a removed project's ENOENT (#1105) — still throws.
+        if (!isAccessDenied(err)) throw err;
+        this.eventsUnwritable = true;
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[cez] cannot write task history (${message}); events stay live-only until it is writable again`);
+      }
       return;
     }
-    // Degraded since `open` (already warned): retry, so access granted mid-session starts persisting.
+    // Degraded (already warned): retry, so access granted mid-session starts persisting.
     try {
       mkdirSync(join(this.dataDir, 'runs'), { recursive: true });
       appendFileSync(this.eventsPath(runId), line, 'utf8');
@@ -1642,8 +1802,17 @@ export class RunStore extends EventEmitter {
     this.persistEvent(runId, full);
     this.emit('event', { runId, event: full });
     if (full.type === 'session.started' && typeof full.backend === 'string') this.sessionBackends.set(runId, full.backend);
+    // A new step or Continue may run another backend: the last session's no longer names it.
+    if (full.type === 'step-start') this.sessionBackends.delete(runId);
     if ((full.type === 'error' || full.type === 'session.error') && typeof full.message === 'string') {
-      reportAgentError(this.sessionBackends.get(runId) ?? run.runner, { type: full.type, message: full.message, fatal: full.fatal });
+      // The step's backend is recorded before spawn, so it names a session that failed before
+      // `session.started` too — a per-step runner or a Continue override, not `run.runner`.
+      const stepBackend = run.steps.find((s) => s.id === full.stepId)?.backend;
+      reportAgentError(stepBackend ?? this.sessionBackends.get(runId) ?? run.runner, {
+        type: full.type,
+        message: full.message,
+        fatal: full.fatal,
+      });
     }
     if (this.janitorSettled(run)) return full;
 
@@ -1705,7 +1874,8 @@ export class RunStore extends EventEmitter {
    */
   private janitorSettled(run: RunRecord): boolean {
     return (
-      run.pullRequestUrl !== undefined &&
+      (run.pullRequestUrl !== undefined ||
+        (run.referencedPrCandidates?.length ?? 0) >= MAX_PR_CANDIDATES) &&
       (run.referencedIssueCandidates?.length ?? 0) >= MAX_PR_CANDIDATES &&
       !(run.markerRefs?.issue === undefined && run.referencedIssueUrl && run.issueNumber === undefined)
     );
@@ -1930,21 +2100,12 @@ export class RunStore extends EventEmitter {
   }
 
   deleteRun(id: string): boolean {
-    const existed = this.forget(id);
+    // A record this version cannot read is still the user's to delete, prompt text included.
+    const existed = this.forget(id) || this.salvaged.delete(id);
     if (existed) {
-      try {
-        rmSync(this.eventsPath(id), { force: true });
-        rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
-        rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
-        // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
-        // unreachable by definition, and it may be holding megabytes of pasted screenshots.
-        deleteRunDrafts(this.dataDir, id);
-      } catch {
-        // best effort — the index is authoritative
-      }
+      this.deleteRunFiles(id);
       this.seqs.delete(id);
       this.scheduleSave();
-      this.emit('deleted', id);
     }
     return existed;
   }
@@ -2057,50 +2218,78 @@ export class RunStore extends EventEmitter {
     return join(this.dataDir, 'runs', `${runId}-images`);
   }
 
+  /** Fan a changed artifact listing out to the SSE streams (spec 2026-10-22-html-artifacts). */
+  publishArtifacts(runId: string, listing: { artifacts: RunArtifact[]; truncated: boolean; versions?: RunArtifactVersion[] }): void {
+    if (!this.runs.has(runId)) return;
+    this.emit('artifacts', { runId, ...listing });
+  }
+
   private touch(run: RunRecord): void {
+    this.observeLifecycle(run.id, run);
     this.scheduleSave();
     this.emit('run', run);
   }
 
-  /** Forget a run, and remember that we did. Dropping it from the map is no longer enough on its
+  /** Forget a run, and remember that we did. Every removal path funnels through this boundary,
+   * including retention pruning, so lifecycle subscribers cannot miss cleanup. Dropping it from
+   * the map is no longer enough on its
    *  own: `saveNow` unions the on-disk index back in, and the copy it re-reads is one THIS process
    *  wrote moments ago — so a plain `delete` would come straight back as a record whose event file
    *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
    *  which is exactly how long a deletion has to outlive its own index entry. */
   private forget(id: string): boolean {
     this.forgotten.add(id);
+    if (this.runs.has(id)) this.observeLifecycle(id, undefined);
     this.sessionBackends.delete(id);
     this.persisted.delete(id);
-    return this.runs.delete(id);
+    const existed = this.runs.delete(id);
+    if (existed) this.emit('deleted', id);
+    return existed;
   }
 
   /** A live run, and the dispatch parent/root of one, is never pruned: the run manager still
    *  writes to it, and evicting a long-lived parent while it dispatched threw `unknown run`
    *  (telemetry 73c6e796). The cap is a soft bound — live runs count toward it but never leave. */
   private pruneOldRuns(): void {
-    const all = this.listRuns();
+    // Retention covers salvaged headers too, so records this version cannot read are bounded by
+    // the same caps and cannot pile up across downgrade/upgrade cycles.
+    const runs = this.listRuns();
+    const all: Array<{ id: string; createdAt: string; archived: boolean }> = [...runs, ...this.salvaged.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
     const pinned = new Set<string>();
-    for (const run of all) {
+    for (const run of runs) {
       if (!LIVE_STATUSES.has(run.status)) continue;
       pinned.add(run.id);
       if (run.dispatch?.parentRunId) pinned.add(run.dispatch.parentRunId);
       if (run.dispatch?.rootRunId) pinned.add(run.dispatch.rootRunId);
     }
     const stalePool = [
-      ...all.filter((r) => !r.archived).slice(MAX_RUNS_KEPT),
-      ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
+      ...all.filter((r) => !r.archived).slice(keepLimit('CEZ_RUNS_KEEP', DEFAULT_RUNS_KEPT)),
+      ...all.filter((r) => r.archived).slice(keepLimit('CEZ_ARCHIVED_RUNS_KEEP', DEFAULT_ARCHIVED_KEPT)),
     ].filter((r) => !pinned.has(r.id));
     for (const stale of stalePool) {
       this.forget(stale.id);
-      try {
-        rmSync(this.eventsPath(stale.id), { force: true });
-        rmSync(this.handoffPath(stale.id), { force: true });
-        rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
-        deleteRunDrafts(this.dataDir, stale.id);
-        deleteRunLayouts(this.dataDir, stale.id); // spec 2026-10-07-task-workspace §5.3
-      } catch {
-        // best effort
-      }
+      this.salvaged.delete(stale.id);
+      this.deleteRunFiles(stale.id);
+    }
+  }
+
+  /** Per-run files die on EVERY path a task leaves the store by: deletion and retention. */
+  private deleteRunFiles(id: string): void {
+    try {
+      rmSync(this.eventsPath(id), { force: true });
+      rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
+      rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+      rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
+      // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
+      // unreachable by definition, and it may be holding megabytes of pasted screenshots.
+      deleteRunDrafts(this.dataDir, id);
+      deleteRunLayouts(this.dataDir, id); // spec 2026-10-07-task-workspace §5.3
+      // Mediated tracker state (server/tracker/task-access.ts paths): issue text and comment bodies.
+      rmSync(join(this.dataDir, 'runs', `${id}.tracker-context.json`), { force: true });
+      rmSync(join(this.dataDir, 'runs', `${id}.tracker-operations`), { recursive: true, force: true });
+    } catch {
+      // best effort — the index is authoritative
     }
   }
 
@@ -2151,18 +2340,31 @@ export class RunStore extends EventEmitter {
    * separate durable tombstone protocol; it is not provided here. An unreadable index retains
    * the historical best-effort behavior of preserving our local records.
    */
-  private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
+  private mergeWithIndexOnDisk(indexPath: string): unknown[] {
     let raw: unknown;
-    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { return this.listRuns(); }
-    if (!Array.isArray(raw)) return this.listRuns();
+    try { raw = JSON.parse(readFileSync(indexPath, 'utf8')); } catch { raw = undefined; }
     const merged = new Map<string, RunRecord>();
-    for (const entry of raw) {
-      const id: unknown = (entry as { id?: unknown } | null)?.id;
-      if (typeof id !== 'string' || this.forgotten.has(id)) continue;
-      const parsed = runRecordSchema.safeParse(entry);
-      if (parsed.success) merged.set(id, parsed.data);
+    // Rows this version cannot read (salvaged at open, or written since by a newer cezar) go back
+    // verbatim instead of being dropped (spec 2026-09-19-runner-seam-native-backends, Phase 0).
+    const verbatim = new Map<string, { createdAt: string; value: unknown }>();
+    for (const record of this.salvaged.values()) verbatim.set(record.id, { createdAt: record.createdAt, value: record.raw });
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        const id: unknown = (entry as { id?: unknown } | null)?.id;
+        if (typeof id !== 'string' || this.forgotten.has(id)) continue;
+        const parsed = runRecordSchema.safeParse(entry);
+        if (parsed.success) {
+          merged.set(id, parsed.data);
+          verbatim.delete(id);
+          continue;
+        }
+        if (this.runs.has(id)) continue;
+        const header = salvageHeaderSchema.safeParse(entry);
+        if (header.success) verbatim.set(id, { createdAt: header.data.createdAt, value: entry });
+      }
     }
     for (const mine of this.runs.values()) {
+      verbatim.delete(mine.id);
       const before = this.persisted.get(mine.id);
       const disk = merged.get(mine.id);
       if (!before || !disk || disk.createdAt !== mine.createdAt) {
@@ -2179,6 +2381,12 @@ export class RunStore extends EventEmitter {
       }
       merged.set(mine.id, combined as RunRecord);
     }
-    return [...merged.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const entries: Array<{ id: string; createdAt: string; value: unknown }> = [
+      ...[...merged.values()].map((run) => ({ id: run.id, createdAt: run.createdAt, value: run as unknown })),
+      ...[...verbatim].map(([id, row]) => ({ id, createdAt: row.createdAt, value: row.value })),
+    ];
+    return entries
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+      .map((entry) => entry.value);
   }
 }

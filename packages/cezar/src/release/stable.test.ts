@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   compareStableVersions,
   computeStableVersion,
+  highestLatest,
+  newestLineTag,
   isReleaseBump,
   nextMinorVersion,
   parseReleaseBranch,
@@ -154,39 +156,77 @@ describe('release lines', () => {
 
 describe('planRelease', () => {
   const tags = ['v0.14.0', 'v0.15.0', 'v0.15.1', 'v0.15.2', 'desktop-v0.1.7'];
-
-  it('bumps the patch first once the committed version is tagged', () => {
-    expect(planRelease({ branch: 'release/v0.15.x', manifestVersion: '0.15.2', tags })).toEqual({
-      ok: true,
-      version: '0.15.3',
-      bumped: true,
-      previousTag: 'v0.15.2',
+  const released = ['v0.14.0', 'v0.15.0', 'v0.15.1', 'v0.15.2'];
+  const plan = (over: Partial<Parameters<typeof planRelease>[0]> = {}) =>
+    planRelease({
+      branch: 'release/v0.15.x',
+      manifestVersion: '0.15.2',
+      tags,
+      releasedTags: released,
+      manifestPublished: true,
+      ...over,
     });
+
+  it('bumps the patch first once the committed version is tagged and released', () => {
+    expect(plan()).toEqual({ ok: true, version: '0.15.3', bumped: true, resume: false, previousTag: 'v0.15.2' });
   });
 
   it("ships a fresh line's x.y.0 as committed", () => {
-    expect(planRelease({ branch: 'release/v0.16.x', manifestVersion: '0.16.0', tags })).toEqual({
+    expect(plan({ branch: 'release/v0.16.x', manifestVersion: '0.16.0', manifestPublished: false })).toEqual({
       ok: true,
       version: '0.16.0',
       bumped: false,
+      resume: false,
       previousTag: 'v0.15.2',
     });
   });
 
-  it('skips past versions already tagged by an earlier, half-finished run', () => {
-    const plan = planRelease({ branch: 'release/v0.15.x', manifestVersion: '0.15.1', tags });
-    expect(plan).toMatchObject({ ok: true, version: '0.15.3', bumped: true });
+  it('ships a bump whose run died before tagging, as long as nothing reached npm', () => {
+    expect(plan({ manifestVersion: '0.15.3', manifestPublished: false })).toMatchObject({
+      ok: true,
+      version: '0.15.3',
+      bumped: false,
+      resume: false,
+    });
   });
 
-  it('takes the previous tag from below the version, even when a newer line exists', () => {
-    const plan = planRelease({ branch: 'release/v0.15.x', manifestVersion: '0.15.2', tags: [...tags, 'v0.16.0'] });
-    expect(plan).toMatchObject({ version: '0.15.3', previousTag: 'v0.15.2' });
+  it('resumes a tagged version that has no GitHub Release, at that version, never a newer one', () => {
+    expect(plan({ manifestVersion: '0.15.3', tags: [...tags, 'v0.15.3'] })).toEqual({
+      ok: true,
+      version: '0.15.3',
+      bumped: false,
+      resume: true,
+      previousTag: 'v0.15.2',
+    });
+  });
+
+  it('refuses an untagged version that already has packages on npm (a deleted tag)', () => {
+    const result = plan({ manifestVersion: '0.15.3', manifestPublished: true });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(/restore the tag/);
+  });
+
+  it('judges resume by its own line only', () => {
+    // v0.16.0 has no Release yet, but it is another line's business.
+    expect(plan({ tags: [...tags, 'v0.16.0'] })).toMatchObject({ version: '0.15.3', resume: false, previousTag: 'v0.15.2' });
   });
 
   it('refuses a branch that is not a release line, or manifests from another line', () => {
-    expect(planRelease({ branch: 'main', manifestVersion: '0.16.0', tags }).ok).toBe(false);
-    expect(planRelease({ branch: 'release/v0.15.x', manifestVersion: '0.16.0', tags }).ok).toBe(false);
-    expect(planRelease({ branch: 'release/v0.15.x', manifestVersion: '0.15.2-nightly.1', tags }).ok).toBe(false);
+    expect(plan({ branch: 'main', manifestVersion: '0.16.0' }).ok).toBe(false);
+    expect(plan({ manifestVersion: '0.16.0' }).ok).toBe(false);
+    expect(plan({ manifestVersion: '0.15.2-nightly.1' }).ok).toBe(false);
+  });
+});
+
+describe('newestLineTag / highestLatest', () => {
+  it('picks the newest tag of one line, ignoring other lines and non-release tags', () => {
+    expect(newestLineTag(['v0.15.9', 'v0.15.10', 'v0.16.0', 'desktop-v0.15.99'], { major: 0, minor: 15 })).toBe('v0.15.10');
+    expect(newestLineTag(['v0.16.0'], { major: 0, minor: 15 })).toBeNull();
+  });
+
+  it('takes the highest stable latest across the release set', () => {
+    expect(highestLatest(['0.16.1', '0.16.2', null, '0.16.2-nightly.1'])).toBe('0.16.2');
+    expect(highestLatest([null, undefined])).toBeNull();
   });
 });
 

@@ -20,9 +20,21 @@
 //                 a server whose turn boundary the runner has to synthesize.
 //   `#drop-then-die` destroy the message POST's socket AND then close the event
 //                 bus: the drop was real, and the runner has to say so.
+//   `#retry-limit` hold the POST open and report a `session.status` retry with a
+//                 spent-quota `action` and `next` hours away (`MOCK_RETRY_NEXT` pins it),
+//                 as a spent free tier does. `MOCK_RETRY_STATUS` (JSON) replaces the status
+//                 and `MOCK_RETRY_SESSION` the session it is reported for.
+//   `#retry-soon` report a retry due in 1 s with no `action`, then finish normally.
 //   `#permission <path>` ask `external_directory` for <path> and, like the
 //                 real server, finish the turn only once the prompt is answered;
 //                 the final text names the reply.
+//   `#question` ask via the native `question` tool (`question.asked`) and, like the
+//                 real server, finish the turn only once `POST /question/:id/reply`
+//                 (final text echoes the answers) or `/reject` arrives.
+//   `#question-free` the same, but with a free-text question that has no options.
+//   `#limit-cost` an assistant message that spent $0.02, then one a spent free tier rejects
+//                 (429 `FreeUsageLimitError`) yet still carries a $0.0005 `cost`.
+//   `#fail-cost`  the same, but the second message fails mid-stream (500): its cost is real.
 // `MOCK_LEGACY_PERMISSION=1` serves only the pre-rework session-scoped reply route.
 // `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
 // the no-event-bus fallback.
@@ -52,6 +64,7 @@ let sse = null;
 /** The one prompt a turn is blocked on, and what answering it does. A single
  *  slot compared by id — never a lookup keyed by the request URL. */
 let pendingPermission = null;
+let pendingQuestion = null;
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
 };
@@ -132,6 +145,20 @@ const server = createServer((req, res) => {
       pending.finish(reply);
       return;
     }
+    const questionRoute = url.match(/^\/question\/([^/]+)\/(reply|reject)$/);
+    if (req.method === 'POST' && questionRoute) {
+      const pending = pendingQuestion?.id === questionRoute[1] ? pendingQuestion : null;
+      if (!pending) {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end('{}');
+        return;
+      }
+      pendingQuestion = null;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('true');
+      pending.finish(questionRoute[2] === 'reject' ? 'rejected' : `answered ${body}`);
+      return;
+    }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
       turn += 1;
       const MESSAGE_ID = messageId();
@@ -149,6 +176,50 @@ const server = createServer((req, res) => {
           : promptText.includes('#no-idle')
             ? 'no-idle'
             : 'default';
+
+      if (promptText.includes('#http-error')) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ name: 'InternalError', data: { message: 'Provider rejected the configured model' } }));
+        return;
+      }
+
+      if (promptText.includes('#limit-cost') || promptText.includes('#fail-cost')) {
+        const limit = promptText.includes('#limit-cost');
+        const error = limit
+          ? { name: 'FreeUsageLimitError', data: { message: 'Rate limit exceeded. Please try again later.', statusCode: 429 } }
+          : { name: 'APIError', data: { message: 'upstream closed the stream', statusCode: 500 } };
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        send({ type: 'message.updated', properties: { info: info({ cost: 0.02 }) } });
+        send({ type: 'message.updated', properties: { info: info({ id: `${messageId()}_b`, cost: 0.0205, error }) } });
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 50);
+        return;
+      }
+
+      if (promptText.includes('#question')) {
+        const id = `que_mock_${turn}`;
+        pendingQuestion = { id, finish: (what) => {
+          send({
+            type: 'message.part.updated',
+            properties: {
+              part: { id: `prt_que${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: `question ${what}`, time: { start: 1, end: 2 } },
+            },
+          });
+          setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 20);
+        } };
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        const options = promptText.includes('#question-free') ? [] : [
+          { label: 'Approach A', description: 'the quick one' },
+          { label: 'Approach B', description: 'the thorough one' },
+        ];
+        send({
+          type: 'question.asked',
+          properties: { id, sessionID: SESSION_ID, questions: [{ question: 'Which approach should I use?', header: 'Approach', options }] },
+        });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ info: info({}), parts: [] }));
+        return;
+      }
 
       const asked = promptText.match(/#permission (\S+)/);
       if (asked) {
@@ -178,6 +249,21 @@ const server = createServer((req, res) => {
         res.end(JSON.stringify({ info: info({}), parts: [] }));
         return;
       }
+
+      const retryStatus = (extra) =>
+        send({
+          type: 'session.status',
+          properties: { sessionID: process.env.MOCK_RETRY_SESSION ?? SESSION_ID, status: { type: 'retry', attempt: 1, ...extra } },
+        });
+      if (promptText.includes('#retry-limit')) {
+        retryStatus(process.env.MOCK_RETRY_STATUS ? JSON.parse(process.env.MOCK_RETRY_STATUS) : {
+          message: 'Free usage exceeded, subscribe to Go',
+          action: { reason: 'free_tier_limit', provider: 'opencode', title: 'Free limit reached', message: 'Subscribe', label: 'subscribe' },
+          next: Number(process.env.MOCK_RETRY_NEXT) || Date.now() + 3 * 60 * 60_000,
+        });
+        return; // the POST stays open, like the real server's retry loop
+      }
+      if (promptText.includes('#retry-soon')) retryStatus({ message: 'Overloaded', next: Date.now() + 1_000 });
 
       // The other half of the #897 shape: the POST drops AND the session is
       // really gone. Swallowing the drop must not swallow this.

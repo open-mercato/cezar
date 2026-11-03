@@ -1,11 +1,23 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredBindingSchema, queueWaitReasonSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
+import { webhookAttentionRequestSchema, webhookCompletionReasonSchema } from './webhooks.ts';
 import { worktreeLifecycleProjectionSchema } from './worktree-lifecycle.ts';
 import { runnerSchema } from './health.ts';
+import { runSubjectSchema } from './artifacts.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+
+/** `GET /runs` query: `full=1` keeps each run's `workflowDef` (about 1.3 MB per run), which the list omits by default. */
+export const runsListQuerySchema = z.object({ full: z.enum(['1']).optional() });
+export type RunsListQuery = z.infer<typeof runsListQuerySchema>;
+
+/** `GET /workspace/events` query: `slim=1` opts into the slim `run` frame (`workspaceRunEventSchema`). */
+export const workspaceEventsQuerySchema = z.object({ slim: z.enum(['1']).optional() });
+export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
@@ -82,6 +94,8 @@ export const stepStateSchema = z.object({
   kind: z.enum(['agent', 'check']),
   status: stepStatusSchema,
   iterations: z.number(),
+  /** Consumed onFail retries (#1300); absent on older run records. */
+  retriesUsed: z.number().int().nonnegative().optional(),
   tokensUsed: z.number(),
   inputTokens: usageCounterSchema.optional(),
   outputTokens: usageCounterSchema.optional(),
@@ -97,6 +111,8 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Reasoning level selected when this agent step started. Absent means the native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
    *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
    *  that created it, so resume and Continue read this rather than the project's current
@@ -168,12 +184,22 @@ export const runRecordSchema = z.object({
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Absent means the App Server's native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
   /** The composer's per-task agent account (spec 2026-07-29-agent-profiles), applying to steps
    *  on `runner`. Absent = the run follows the project's own selection. */
   agentProfile: z.string().optional(),
+  /** Enabled policy captured at task creation; manual Continue does not refresh it. */
+  fallbackPolicy: z.object({
+    enabled: z.boolean(),
+    candidates: z.array(z.object({ provider: z.string(), profileId: z.string(), model: z.string().optional() })).max(10),
+    revision: z.number().int().nonnegative(),
+    incarnation: z.string().nullable(),
+    revocation: z.string().nullable(),
+  }).optional(),
   /** Echo of the extra system prompt the run used (POST override or config default). */
   systemPrompt: z.string().optional(),
   /** false when the run deliberately disabled follow-up todo generation. Absent means enabled. */
@@ -242,6 +268,8 @@ export const runRecordSchema = z.object({
           labelName: z.string().optional(),
         })
         .optional(),
+      issueId: z.string().optional(),
+      access: trackerAccessSchema.optional(),
       key: z.string(),
       url: z.string(),
     })
@@ -252,7 +280,12 @@ export const runRecordSchema = z.object({
    * always has.
    */
   dispatch: dispatchSchema.optional(),
+  /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10). Absent on every
+   *  ordinary task. */
+  subject: runSubjectSchema.optional(),
   status: runStatusSchema,
+  attentionRequest: webhookAttentionRequestSchema.optional(),
+  completionReason: webhookCompletionReasonSchema.optional(),
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
@@ -266,6 +299,19 @@ export const runRecordSchema = z.object({
   autoResumeAt: z.string().optional(),
   /** Consecutive automatic resumes since the last human turn, against the safety cap. */
   autoResumeAttempts: z.number().optional(),
+  /** Accounts this run exhausted before a fallback moved it on; each holds its queue until its reset. */
+  usageLimitHolds: z.array(z.object({ account: z.string().min(1), until: z.string().datetime() })).max(20).optional(),
+  /** The unattended fallback episode: provider:account keys already tried and the reserved successor step. */
+  fallbackEpisode: z.object({
+    /** Selecting a successor, before a continuation is reserved. Run status is queued. */
+    pending: z.boolean().optional(),
+    attempted: z.array(z.string()).max(20),
+    current: z.object({ key: z.string(), stepId: z.string() }).optional(),
+    done: z.boolean().optional(),
+  }).optional(),
+  /** What the pending resume waits out: a usage limit's reset, or a transient provider failure's
+   *  retry backoff. Absent on records written before it existed — read as `usage_limit`. */
+  autoResumeReason: z.enum(['usage_limit', 'transient']).optional(),
   /** ISO-8601 instant the run's session ended (inactivity, a crash, a restart) while a `CEZ:ASK`
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
@@ -363,6 +409,10 @@ export const runRecordSchema = z.object({
    *  add later — "pinned oldest first" and "unpin what you pinned a month ago" both need it,
    *  and neither can be reconstructed after the fact. */
   pinnedAt: z.string().optional(),
+  /** "Run First": when this queued run was promoted to the front of its queue. Present only
+   *  while `status === 'queued'`; the newest promotion starts first, before every unpromoted
+   *  queued run. Never bypasses a parallel cap. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -529,6 +579,36 @@ export const runIndexEntrySchema = z.object({
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
 
+const workspaceRunEventOmitted = {
+  task: true,
+  systemPrompt: true,
+  queuedMessages: true,
+  steps: true,
+  workflowDef: true,
+} as const;
+
+/**
+ * The record keys the workspace stream's `run` frame leaves out: the prompt text and the step
+ * and workflow structure. Only the task thread reads them, and it receives the whole record on
+ * its own per-run stream (`GET /runs/:id/events` → `run`). A consumer patching a cached record
+ * from this frame keeps its own copies of these keys rather than dropping them.
+ */
+export const WORKSPACE_RUN_EVENT_OMITTED_KEYS = Object.keys(workspaceRunEventOmitted) as Array<
+  keyof typeof workspaceRunEventOmitted
+>;
+
+/**
+ * The `run` frame on `GET /api/v1/workspace/events`: the stored record minus
+ * `WORKSPACE_RUN_EVENT_OMITTED_KEYS`, stamped with the owning `project`. Every other record key
+ * rides it, so a list row patched from it answers as a `GET /runs` row does. It is not a strict
+ * superset of `runIndexEntrySchema`: that row also carries the live `usage` sample, which this
+ * frame never has (`withUsage` attaches it to route answers only).
+ */
+export const workspaceRunEventSchema = runRecordSchema.omit(workspaceRunEventOmitted).extend({
+  project: z.string(),
+});
+export type WorkspaceRunEvent = z.infer<typeof workspaceRunEventSchema>;
+
 /**
  * `GET /workspace/runs-index`.
  *
@@ -614,6 +694,11 @@ export type DeleteRunResponse = z.infer<typeof deleteRunResponseSchema>;
 export const finishResponseSchema = z.object({ finished: z.literal(true) });
 export type FinishResponse = z.infer<typeof finishResponseSchema>;
 
+/** `POST /runs/:id/start-now` — start a queued run over the parallel cap; not queued, or its account
+ *  held by a usage limit, is a 409. */
+export const startNowResponseSchema = z.object({ started: z.literal(true) });
+export type StartNowResponse = z.infer<typeof startNowResponseSchema>;
+
 /** `POST /runs/:id/land` — an in-place task's Commit to the base branch (spec
  *  2026-10-20-trunk-based-projects). Every outcome is a 200 carrying a human `message`. */
 export const landResponseSchema = z.object({
@@ -652,8 +737,9 @@ export type AdoptPrResponse = z.infer<typeof adoptPrResponseSchema>;
 /**
  * `POST /runs/:id/messages` — one of three shapes (#472), by how far the run has got:
  * `delivered` (a live session took it), `queued` (still waiting for a slot, so it was stacked
- * onto the prompt and the stored entry rides along), `deferred` (mid-spawn, so it was buffered
- * and arrives as an ordinary follow-up turn once the session opens). Anything else is a 409.
+ * onto the prompt and the stored entry rides along), `deferred` (mid-spawn or between sessions,
+ * so it was buffered: it arrives as a follow-up turn once a session opens, else as a Continue once
+ * the run settles). Anything else is a 409.
  *
  * A union, not one object of optional flags: exactly one of the three keys is ever present, and
  * the flattened DTO shape admitted `{}`. Pre-#472 clients only ever saw `delivered`.
@@ -1122,6 +1208,7 @@ export const createRunInputBaseSchema = z
     /** May be empty when `images` carries the task — `createRunInputSchema` requires one. */
     task: z.string().max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
@@ -1196,11 +1283,33 @@ export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: attachmentListSchema.default([]),
+    /** One per message, reused by its retries: a key that already landed is not delivered again. */
+    idempotencyKey: z.string().uuid().optional(),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
     message: 'message needs text or at least one attachment',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
+
+/**
+ * `POST /runs/:id/continue` ("Continue"/"Send back", spec 003 / #401): every field optional, so an
+ * empty POST reopens the last session on the run's current backend. A runner/model/account
+ * override picks the engine for the continuation; `text`/`images` bound like a live message's.
+ */
+export const continueInputSchema = z.object({
+  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
+  images: attachmentListSchema.optional(),
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  /** Empty string is the explicit reset to the native default; omission keeps the run's choice. */
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = keep the
+   *  account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
+  /** One per Continue, reused by its retries: a key that already landed is not continued again. */
+  idempotencyKey: z.string().uuid().optional(),
+});
+export type ContinueInput = z.input<typeof continueInputSchema>;
 
 /**
  * `PATCH /runs/:id` (#389). `title` is trimmed server-side, 1–300 chars, and the edit sets both
