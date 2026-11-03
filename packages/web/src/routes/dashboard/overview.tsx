@@ -182,7 +182,7 @@ export function Overview({
                   Inspect completed tasks
                 </Button>
               </p>
-              <p className="font-mono text-[11px] text-soft-foreground">
+              <p className="font-mono text-meta text-soft-foreground">
                 <time dateTime={data.asOf} title={new Date(data.asOf).toLocaleString()}>
                   Updated {shortAge(data.asOf)} ago
                 </time>
@@ -246,7 +246,7 @@ export function Overview({
                   (label) => (
                     <th
                       key={label}
-                      className={`whitespace-nowrap px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.1em] text-soft-foreground ${label === 'Project' ? '' : 'text-right'}`}
+                      className={`whitespace-nowrap px-3 py-2 eyebrow text-soft-foreground ${label === 'Project' ? '' : 'text-right'}`}
                     >
                       {label}
                     </th>

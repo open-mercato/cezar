@@ -8,7 +8,7 @@ export const eventLabels: Record<WebhookTaskEventType | 'webhook.test', string> 
 }
 // Same chrome as the other Settings selects (resources-section).
 const selectStyle = 'h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50'
-const hintStyle = 'text-[13px] text-muted-foreground'
+const hintStyle = 'text-ui text-muted-foreground'
 export type WebhookDraft = { format: CreateWebhook['format']; name: string; url: string; profile: CreateWebhook['profile']; preset: CreateWebhook['preset']; events: WebhookTaskEventType[]; scope: CreateWebhook['scope']; graceSeconds: CreateWebhook['graceSeconds']; local: boolean; scheduled: boolean }
 export function webhookDraft(receiver?: WebhookReceiver): WebhookDraft {
   return { format: receiver?.format ?? 'cezar.json.v1', name: receiver?.name ?? '', url: '', profile: receiver?.profile ?? 'minimal', preset: receiver?.preset ?? 'attention', events: receiver?.events ?? [], scope: receiver?.scope ?? 'main_and_questions', graceSeconds: receiver?.graceSeconds ?? 180, local: receiver?.allowLocalNetwork ?? false, scheduled: receiver?.includeScheduledFailures ?? false }
@@ -49,8 +49,8 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     <Field id={`${prefix}-url`} label={chat ? 'Webhook URL' : 'Receiver URL'}>
       <Input id={`${prefix}-url`} type="url" value={url} onChange={event => change('url', event.target.value)} required={!receiver} autoComplete="off" placeholder={receiver ? 'Leave blank to keep the current URL' : format === 'slack.v1' ? 'https://hooks.slack.com/services/…' : format === 'discord.v1' ? 'https://discord.com/api/webhooks/…' : 'https://your-receiver.example/webhook'} />
       {receiver && <p className={hintStyle}>Current: {receiver.destination} (path hidden)</p>}
-      {url.startsWith('http:') && <p className="text-[13px] text-warning">Plain HTTP is not encrypted. Use HTTPS outside a trusted local network.</p>}
-      {!chat && suggestedFormat && <div role="status" className="flex flex-wrap items-center gap-2 text-[13px] text-warning">
+      {url.startsWith('http:') && <p className="text-ui text-warning">Plain HTTP is not encrypted. Use HTTPS outside a trusted local network.</p>}
+      {!chat && suggestedFormat && <div role="status" className="flex flex-wrap items-center gap-2 text-ui text-warning">
         <span>This is a {suggestedFormat === 'slack.v1' ? 'Slack' : 'Discord'} webhook. Switch the destination to post channel messages.</span>
         <Button type="button" size="sm" variant="outline" className="text-foreground" onClick={() => changeFormat(suggestedFormat!)}>Use {suggestedFormat === 'slack.v1' ? 'Slack' : 'Discord'}</Button>
       </div>}
@@ -59,7 +59,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
       {chat ? <p className={hintStyle}>Keep this URL secret — anyone who has it can post to the channel. {destinationName} receivers need no signing key.</p> : <>
         <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={local} onChange={event => change('local', event.target.checked)} />Allow a receiver on this computer or private network</label>
         {local && <p className={hintStyle}>Tests will contact this private address. Hosted cezar sends to public HTTPS receivers only.</p>}
-        <a className="text-[13px] text-muted-foreground underline underline-offset-2 hover:text-foreground" href={`${guideHref}#external-automation-receivers`} target="_blank" rel="noreferrer">How to build a receiver</a>
+        <a className="text-ui text-muted-foreground underline underline-offset-2 hover:text-foreground" href={`${guideHref}#external-automation-receivers`} target="_blank" rel="noreferrer">How to build a receiver</a>
       </>}
     </Field>
     <Field id={`${prefix}-events`} label="Events"><select id={`${prefix}-events`} className={selectStyle} value={preset} onChange={event => change('preset', event.target.value as CreateWebhook['preset'])}>
@@ -67,7 +67,7 @@ export function WebhookForm({ receiver, draft, setDraft, pending, blocked = fals
     {preset === 'custom' && <fieldset className="flex flex-col gap-2"><legend className="mb-1 text-sm font-medium">Choose events</legend>{Object.entries(eventLabels).filter(([type]) => type !== 'webhook.test').map(([type, label]) => <label key={type} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={events.includes(type as WebhookTaskEventType)} onChange={event => change('events', event.target.checked ? [...events, type as WebhookTaskEventType] : events.filter(value => value !== type))} />{label}</label>)}</fieldset>}
     <Field id={`${prefix}-profile`} label="Message content"><select id={`${prefix}-profile`} className={selectStyle} value={profile} onChange={event => change('profile', event.target.value as CreateWebhook['profile'])}><option value="minimal">Minimal — IDs, status and your own title</option><option value="standard">Standard — task titles, questions and errors</option></select>
       <p className={hintStyle}>Prompts and transcripts are never sent. Redaction of other text is best effort.</p>
-      {chat && profile === 'standard' && <p className="text-[13px] text-warning">Standard posts task titles, questions and error text to your {destinationName} channel.</p>}
+      {chat && profile === 'standard' && <p className="text-ui text-warning">Standard posts task titles, questions and error text to your {destinationName} channel.</p>}
     </Field>
     {chat ? <ChatPreview format={format} profile={profile} /> : <details><summary className="cursor-pointer text-sm font-medium">Preview JSON · {profile === 'minimal' ? 'Minimal' : 'Standard'}</summary>
       <p className={`mt-2 ${hintStyle}`}>Example data only — nothing is sent.</p>

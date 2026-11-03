@@ -53,7 +53,7 @@ export function ReviewPanel({ run, diffComments }: { run: ApiRun; diffComments?:
         className="flex items-center gap-2.5 rounded-md border border-violet/30 bg-violet/10 px-3.5 py-2.5"
       >
         <EyeIcon className="size-4 shrink-0 text-violet" aria-hidden="true" />
-        <p className="min-w-0 text-[13px]">
+        <p className="min-w-0 text-ui">
           <span className="font-semibold">Review the changes before anything lands.</span>{' '}
           <span className="text-muted-foreground">
             Read the diff, send notes back, draft a PR — or accept. Nothing merges on its own.
@@ -179,7 +179,7 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
             submitNotes()
           }
         }}
-        className="min-h-[52px] text-[13px]"
+        className="min-h-[52px] text-ui"
       />
       {commentCount > 0 ? (
         <p data-slot="review-diff-comments" className="text-xs text-muted-foreground">
@@ -232,7 +232,8 @@ function ReviewActions({ run, diffComments }: { run: ApiRun; diffComments?: Diff
               PR ↗
             </a>
           </Button>
-        ) : (
+        ) : run.subject ? null : (
+          // An impact run's report is what is reviewed; it proposes no PR (the server 409s, Q11).
           <Button
             data-slot="review-draft-pr"
             variant="outline"
@@ -281,7 +282,7 @@ function ManualMergeLine({ command }: { command: string }) {
           .then(() => toast('Command copied to clipboard.'))
           .catch(() => toast(`Run manually: ${command}`))
       }}
-      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-meta text-soft-foreground hover:bg-muted hover:text-foreground"
     >
       <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
       <span className="truncate">manual path: {command}</span>
@@ -333,7 +334,7 @@ export function AcceptCelebration({ status }: { status: RunStatus }) {
     >
       <TwinkleBackdrop />
       <div className="flex justify-center pt-24">
-        <span className="rounded-full border border-violet/30 bg-violet/15 px-4 py-1.5 text-[13px] font-medium text-violet shadow-modal">
+        <span className="rounded-full border border-violet/30 bg-violet/15 px-4 py-1.5 text-ui font-medium text-violet shadow-modal">
           ✓ Changes accepted
         </span>
       </div>
