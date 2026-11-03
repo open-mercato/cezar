@@ -8,7 +8,7 @@ Today every cezar task runs in a git worktree **on the host**. That worktree sha
 
 This spec proposes a **Sandbox service**. It is future behavior, not something that exists today:
 
-- **Sandbox accounts**: where machines come from. Four kinds:
+- **Sandbox accounts**: where machines come from. There are three providers, offering four ways to run:
   - local [microsandbox](https://github.com/superradcompany/microsandbox) microVMs;
   - **SSH hosts**, which run microsandbox remotely or open a plain SSH session;
   - [Daytona](https://www.daytona.io) cloud sandboxes.
@@ -27,7 +27,7 @@ The worktree on the host stays the source of truth, so review, diff and landing 
 
 ## Resolved assumptions (autonomous defaults)
 
-Rows Q1–Q7 were written by `om-auto-write-spec`. Rows marked **user** came from the requester on 2026-11-03 and are decided. Rows marked ⚠ block the merge until the owner confirms them.
+Rows marked **user** came from the requester on 2026-11-03 and are decided. Every other row is an autonomous default written by `om-auto-write-spec`, and each one is reversible. Rows marked ⚠ block the merge until the owner confirms them.
 
 | # | Question | Applied answer | Why |
 |---|---|---|---|
@@ -36,13 +36,13 @@ Rows Q1–Q7 were written by `om-auto-write-spec`. Rows marked **user** came fro
 | Q3 | Should the feature be on by default, or behind a `CEZ_*` opt-in flag? | **The surface is available by default, but nothing boots, connects or bills until the user acts.** Detection is a local `PATH`/`/dev/kvm` probe. Daytona and SSH hosts are contacted only after an account is added. A sandbox starts only for a task where one was picked. `CEZ_SANDBOXES=0` hides everything. | Same shape as dispatch and automations: the per-task pick is the opt-in. AGENTS.md § Zero config still requires an owner-ratified exception. ⚠ NEEDS HUMAN CONFIRMATION |
 | Q4 | One spec or several? | **One spec, delivered in phases.** | Every provider answers the same question, "where does this task execute". Each one is a class behind one seam. |
 | Q5 | Are sandbox types per workspace or per project? | **Per workspace** (`~/.cezar/sandboxes.json`), plus a per-project **default type**. | Mirrors agent accounts. |
-| Q6 | How long does a sandbox live? | **One sandbox per run.** It is created at run start and **stopped** when the run parks or reaches review. Continue restarts it. It is **deleted** when the run lands or is archived, or when its worktree is pruned. | Continue keeps the installed toolchain, and a stopped sandbox costs almost nothing. |
+| Q6 | How long does a sandbox live? (Full state table under Architecture → Lifecycle.) | **One sandbox per run.** It is created at run start and **stopped** when the run parks or reaches review. Continue restarts it. It is **deleted** when the run lands or is archived, or when its worktree is pruned. | Continue keeps the installed toolchain, and a stopped sandbox costs almost nothing. |
 | Q7 | Should Terminal and Preview work inside a sandbox? | **Yes, for every provider, including SSH.** | **user** (2026-11-03): "add sandbox terminal support in terminal tab and preview also all integrated", "same way with terminal and preview supported". |
 | Q8 | How does Preview reach a port inside a microVM? | **Through a cezar-run port proxy.** Every sandbox port becomes a `127.0.0.1:<ephemeral>` port on the cockpit host. So the Preview's existing local framing and Design Mode (which accepts loopback only) work unchanged. Daytona uses its native preview URL as the proxy's upstream. SSH uses `ssh -O forward -L`. | **user**: "for the preview microsandbox maybe should have additional proxy … make it". |
 | Q9 | Should cezar check for microsandbox and explain how to install it? | **Yes.** Detection gives the exact reason, with OS-specific install steps and a **Run in a terminal tab** action. | **user**: "check if microsandbox is installed, if not let user know how to make it given different OS". |
 | Q10 | Should SSH be a provider? | **Yes, with two modes per host:** microsandbox microVMs on the host, or a plain SSH session with no isolation. | **user**: "run microsandbox over SSH … configure SSH server as a sandbox provider", "also run tasks in SSH session". |
 | Q11 | Can a task's agent start sandboxes itself? | **Yes, through `cez sandbox`** (see "Sandboxes launched from inside a task"). | **user**: "a way to start sandboxes (using configured providers) from inside the task too — not only for the coding but for doing some particular tasks as well". |
-| Q12 | What limits apply to sandboxes the agent starts itself? | **At most 3 at once per run.** The agent can use only the types marked *agents may launch*. That flag defaults to **on** for local and SSH microVM types and **off** for billed (Daytona) and no-isolation (SSH shell) types. The agent never sees account keys and cannot create types. | These are the smallest defaults that still allow a three-OS test matrix. A billed provider needs a human's explicit tick, the same reasoning as the `budget` carve-out in dispatch. All of it is reversible per type. |
+| Q12 | What limits apply to sandboxes the agent starts itself? | **At most 3 at once per run.** The agent can use only the types marked *agents may launch*. That flag defaults to **on only for local microsandbox types**. It defaults to **off** for anything remote or billed: SSH microVMs, SSH shells and Daytona. Helpers receive **no agent credentials**, only the type's own env and secrets. The agent never sees account keys and cannot create types. | These are the smallest defaults that still allow a local three-OS test matrix. Starting machines on someone's remote box needs a human's tick, and an unattended helper never holds a model key (review finding). A billed provider needs a human's explicit tick, the same reasoning as the `budget` carve-out in dispatch. All of it is reversible per type. |
 
 ## 📝 Problem Statement
 
@@ -143,6 +143,7 @@ cez sandbox ls | logs <name> | down <name> | down --all
 
 | Piece | Where | Status |
 |---|---|---|
+| Lifecycle | `sandbox/service.ts`. The states are `creating → running ⇄ stopped → removed`, plus `failed`, and they apply to the task's sandbox and to helpers alike. **Transitions out of each state:**<br>• `creating`: provider ok → `running`; error → `failed`.<br>• `running`: run parks, reaches review, or the user clicks Stop → `stopped`; run lands or is archived, worktree pruned, or `cez sandbox down` → `removed`; provider lost → `failed`.<br>• `stopped`: Continue or a helper `exec` → `running`; land, archive or prune → `removed`.<br>• `failed`: **Retry** (same type) → `creating`; **Retry on this computer** (task sandbox only); archive → `removed`.<br>The sweep removes only sandboxes whose run is **absent, landed or archived**. It never touches a parked run's sandbox, however old. A `stopped` sandbox that the provider has meanwhile deleted (e.g. Daytona auto-archive) becomes `failed` on Continue, with **Retry**, which recreates it from the type and re-syncs the worktree. | **new** |
 | Store | `workspace/sandboxes.ts` → `cezarHomeDir()/sandboxes.json` | **new**, cloned from `workspace/agent-accounts.ts`: loose stored schema, per-entry salvage, atomic `mergeWrite…` at mode 0600, never cached |
 | API keys | `sealManaged('sandbox', accountId, key)` / `openManaged` (`workspace/secrets.ts:143`) | existing primitive |
 | Provider seam | `sandbox/provider.ts` `SandboxProvider`: `detect()`, `test(account)`, `create(type, ctx)`, `start`, `stop`, `remove`, `exec(cmd, args, {cwd, env, stdin, tty, cols, rows}) → SandboxProcess` (a ChildProcess/IPty-compatible shape), `syncIn`, `syncOut`, `openPort(guestPort) → hostPort`, `closePort`, `reverse(hostPort) → guestPort`, `stats()` | **new** |
@@ -339,7 +340,7 @@ Every new route goes into the BACKWARD_COMPATIBILITY.md §2 inventory, and the c
 | The dev server rejects an unknown `Host` | The proxy sends `Host: localhost:<guestPort>`, so Vite and Next accept it. |
 | An HMR websocket | The proxy passes the upgrade through. Covered by a test. |
 | The port proxy's host port is taken, or ephemeral ports run out | The next free ephemeral port is used. After 3 failures, Preview shows "could not forward :3000". |
-| The cezar process dies | The boot sweep reattaches sandboxes whose runs are `running`, through restart recovery. Orphans are stopped, then removed after 24 h. SSH task directories older than 24 h with no run are removed. Port proxies are rebuilt on demand. |
+| The cezar process dies | The boot sweep reattaches sandboxes whose runs are `running`, through restart recovery. Orphans are removed per the lifecycle rule: no run, or the run landed or was archived. A parked run's sandbox is never swept. SSH task directories follow the same rule. Port proxies are rebuilt on demand. |
 | A sync patch fails to apply (SSH or Daytona) | The run parks. The patch is saved to `.ai/cezar/tmp/<id>/sandbox.patch` and an error is shown. Host edits are already blocked during a turn by the agent lease. |
 | Network `none` | The agent cannot reach its model, so the editor offers *Agent API only*: an allow-list derived from the runner plus the git remote. |
 | An agent calls `cez sandbox up` for a type it may not launch, or past the cap | Exit 1. The reason names the setting a human can change ("cloud-large-eu is billed; tick *Agents may launch* in Settings → Sandboxes"). Nothing boots. |
@@ -381,7 +382,10 @@ Every new route goes into the BACKWARD_COMPATIBILITY.md §2 inventory, and the c
 2. **Phase 2: run in a local microsandbox.** Picker, `SandboxExec` for the agent and check steps, Terminal tab target, run header, lifecycle and sweep.
 3. **Phase 3: port proxy and relay.** Preview and Design Mode for sandbox ports, detected-URL mapping, **Forward another port**, and the agent's `cez` reverse channel.
 4. **Phase 4: SSH.** SSH sessions and microsandbox over SSH. ControlMaster, bundle and patch sync, `-L`/`-R` forwarding, plus terminal and Preview parity.
-5. **Phase 5: `cez sandbox` for agents.** Helper sandboxes started from inside any task, with the cap, the per-type flag, the panel, and exec, cp and port commands. It depends only on Phases 1–3. The SSH and Daytona types work as soon as their phases land.
+5. **Phase 5: `cez sandbox` for agents.** Helper sandboxes started from inside any task, with the cap, the per-type flag, the panel, and exec, cp and port commands.
+   - It needs Phases 1–3 for local microsandbox helpers launched by a task running on the host.
+   - Calling `cez` from a task that itself runs in a sandbox needs that provider's reverse channel: Phase 3 for local, Phase 4 for SSH, and none for Daytona in v1.
+   - SSH and Daytona types become launchable when their phases land and a human ticks the flag.
 6. **Phase 6: Daytona and the remaining runners.** Daytona provider (session exec, PTY terminals, signed-preview upstream), ACP and OpenCode transports, automations and `cez task create --sandbox`, dispatch inheritance.
 
 ## 📋 Implementation Plan
@@ -428,6 +432,11 @@ Every new route goes into the BACKWARD_COMPATIBILITY.md §2 inventory, and the c
 29. The `sandbox` field in automations, `cez task create --sandbox`, and dispatch inheritance.
 
 ## 🔍 Review notes
+
+- **Scope (reviewer finding, kept open for the owner).** A fresh-context scope review recommended splitting this into five specs: the foundation with local microsandbox, SSH, Daytona, `cez sandbox` helpers, and runner/orchestration coverage. Their risk classes differ.
+  - **This draft keeps one document**, because the requester asked for one integrated design. All five share one seam (`SandboxExec`, `openPort`, `reverse`, lifecycle) that would otherwise be specified five times.
+  - **Each phase ships as its own implementation PR** with its own review.
+  - If the owner prefers separate specs, the phases split cleanly along those lines without redesign.
 
 - **Scope cohesion:** one capability, choosing where a task executes. The providers and the Terminal/Preview integration all go through one seam (`SandboxExec`, `openPort`, `reverse`), so splitting them would duplicate that seam's design across specs.
 - **Canonical mechanisms reused:**
