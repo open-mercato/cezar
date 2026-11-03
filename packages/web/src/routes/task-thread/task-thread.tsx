@@ -28,6 +28,7 @@ import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
+import { ThreadArtifactCards } from '../task-assets/thread-artifact-cards'
 import { AutoResumeHint } from './auto-resume-hint'
 import { useFinishRun } from './use-finish-run'
 import { usePromoteRun, useStartRunNow } from './use-start-run-now'
@@ -369,6 +370,7 @@ export function ThreadView({
           renderMode={mode}
           rowModels={rows}
         />
+        <ThreadArtifactCards runId={run.id} />
 
         {thread.turns.length === 0 ? (
           run.status === 'queued' ? (

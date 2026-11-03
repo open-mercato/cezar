@@ -3,14 +3,14 @@ import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
 
-import type { AgentSetupProvider } from '@open-mercato/cezar-contract';
+import { agentSetupProviderSchema, type AgentSetupProvider } from '@open-mercato/cezar-contract';
 
 /**
  * How each agent is installed (spec 2026-10-26-first-run-onboarding, "Set up an agent here"). The
  * only place the install commands of the first-run page live; a request can never add to them.
  */
 
-export const AGENT_SETUP_PROVIDERS: readonly AgentSetupProvider[] = ['claude', 'codex', 'opencode', 'cursor', 'copilot'];
+export const AGENT_SETUP_PROVIDERS: readonly AgentSetupProvider[] = agentSetupProviderSchema.options;
 
 const NPM_PACKAGE: Partial<Record<AgentSetupProvider, string>> = {
   claude: '@anthropic-ai/claude-code',

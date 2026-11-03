@@ -1,7 +1,7 @@
 import { AgentUsageHolds } from '../workspace/agent-usage-holds.ts';
 import { completionReason } from './completion-reason.ts';
 import { WorktreeLifecycleCoordinator } from '../worktree-lifecycle/coordinator.ts';
-import type { WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
+import type { RunSubject, WebhookAttentionRequest, TrackerAssociation, UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import { saveUsageWindows } from '../workspace/usage-windows.ts';
 import { probeCodexIdentity, probeCodexUsageWindows } from '../core/codex-usage-probe.ts';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
@@ -10,7 +10,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, renameSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdir, realpath, access, writeFile } from 'node:fs/promises';
-import { assertCezarHomeWriteIsSandboxed, cezarHomeDir } from '../paths.ts';
+import { assertCezarHomeWriteIsSandboxed, cezarHomeDir, cezBinPath } from '../paths.ts';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import {
   parseAskMarker,
@@ -35,7 +35,7 @@ import { diskFullAgentErrorText } from '../disk-space.ts';
 import { accountStateHint, classifyAgentFailure, isOauthRefreshRace, transientRetryCap, transientRetryDelayMs } from '../core/agent-failure-class.ts';
 import { reportAgentError } from '../runs/agent-error-telemetry.ts';
 import { createRunner } from '../core/runner-factory.ts';
-import type { RunnerId } from '../core/agent-runner.ts';
+import { REASONING_EFFORT_UNSUPPORTED_ERROR, type RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner, pinSurvivesRunnerSwitch } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -98,6 +98,9 @@ import { createOrSwitchBranch } from '../server/git-changes.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+import { artifactsDir } from '../runs/store.ts';
+import { artifactsPromptPart, scanArtifacts, watchArtifacts } from '../runs/artifacts.ts';
+import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
@@ -142,7 +145,7 @@ import {
 import { extractTaskRefs, refineTaskRefs, titleRefNumber } from '../runs/task-refs.ts';
 import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, NAMER_TIMEOUT_MS, postValidateTitle } from '../runs/auto-name.ts';
-import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { assessedWithoutChanges, diffHasChanges, reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveAccountId, resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
 import { recordedProfileFor } from '../server/recorded-profile.ts';
 import { DEFAULT_AGENT_ACCOUNT_ID, loadAgentAccounts, type AgentAccountStore } from '../workspace/agent-accounts.ts';
@@ -201,8 +204,9 @@ import {
 } from './graph.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
- *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet. */
-const RESUMABLE_BACKENDS: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'codex', 'pi']);
+ *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; Gemini
+ *  resumes through ACP `session/load` (#581). */
+const RESUMABLE_BACKENDS: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'codex', 'pi', 'gemini']);
 /**
  * The reply to a one-question ask card without the card's own framing: a click on an option
  * sends `<header>: <label>` (`web/src/routes/task-thread/ask-card.tsx` `formatAnswer`), a typed
@@ -257,6 +261,45 @@ async function configuredModelProvider(
   repoRoot: string,
 ): Promise<string | undefined> {
   return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
+}
+
+/**
+ * The run-level selection belongs to the task runner, not every Codex-looking step in a mixed
+ * workflow. A workflow that starts as Claude and explicitly delegates one step to Codex must opt
+ * that step in itself; otherwise a Codex-only setting from the task would leak across engines.
+ */
+export function resolveStepReasoningEffort(
+  step: Pick<WorkflowStepDef, 'runner' | 'reasoningEffort'>,
+  taskBackend: RunnerId,
+  runReasoningEffort: string | undefined,
+): string | undefined {
+  const backend = step.runner ?? taskBackend;
+  if (backend !== 'codex') return undefined;
+  return step.reasoningEffort ?? (taskBackend === 'codex' ? runReasoningEffort : undefined);
+}
+
+/** Return the first configuration error that must stop execution before any agent spawn. */
+export function reasoningEffortIssue(
+  workflow: Pick<WorkflowDef, 'steps'>,
+  taskBackend: RunnerId,
+  runReasoningEffort: string | undefined,
+): string | undefined {
+  const agentSteps = workflow.steps.filter((step) => stepKind(step) === 'agent');
+  const invalidStep = agentSteps.find(
+    (step) => step.reasoningEffort !== undefined && (step.runner ?? taskBackend) !== 'codex',
+  );
+  if (invalidStep) {
+    return `step "${invalidStep.id}": ${REASONING_EFFORT_UNSUPPORTED_ERROR}`;
+  }
+  if (runReasoningEffort === undefined) return undefined;
+  if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
+  // A run-level effort that every Codex step happens to override is NOT an error: being
+  // overridable is what a default IS, and the documented precedence (step effort, then run
+  // effort, then Codex's own default) says exactly that. An earlier revision failed the run
+  // here, which killed a workflow whose steps each pinned their own valid effort — a legal
+  // configuration — before a single agent spawned. The two cases worth refusing are already
+  // above: a step whose backend cannot take an effort, and a non-Codex task backend.
+  return undefined;
 }
 /** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
 const CANCEL_GRACE_MS = 1_000;
@@ -510,6 +553,8 @@ interface ContinueRunOptions {
   images?: PastedContent[];
   runner?: RunnerId;
   model?: string;
+  /** Empty string resets Codex to its native effort default; omission preserves the run choice. */
+  reasoningEffort?: string;
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
    *  account the run is already on. */
   agentProfile?: string;
@@ -620,6 +665,9 @@ interface ActiveRun {
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
+  /** The artifacts directory watcher while this owner is live (spec 2026-10-22-html-artifacts);
+   *  set at BOTH construction sites by `prepareArtifactsSession`, closed in `dropActive`. */
+  artifactsWatch?: { close: () => void };
   /** The attachment library actually granted to this session at spawn (#987). A library that
    *  appears later must not be advertised to a session whose fixed grant was absent. */
   grantedAttachmentLibrary?: string;
@@ -919,6 +967,8 @@ export interface StartRunInput {
   /** Where the task came from (telemetry only, `task_origin`); unset = derived in `taskOriginOf`. */
   origin?: TaskOrigin;
   model?: string;
+  /** Per-task Codex reasoning level. Undefined delegates to the native App Server default. */
+  reasoningEffort?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
   runner?: RunnerId;
   /** Agent account for this task (spec 2026-07-29-agent-profiles), applying to steps that run
@@ -974,6 +1024,9 @@ export interface StartRunInput {
    * forces a worktree — testing a PR in the user's own checkout would test the wrong tree.
    */
   forkRef?: { sha: string; label: string; pr: RunRecord['prHead'] & object; prUrl: string; untrusted: boolean };
+  /** What an impact run assesses, pinned by `POST /impact` (spec 2026-10-22-html-artifacts-and-
+   *  impact Q10). Internal like `forkRef`: `POST /runs` has no such field. */
+  subject?: RunSubject;
   /** Internal (#1300): this job resumes the agent step a usage limit interrupted. Set only by
    *  `fireAutoResume` (and a restart that revives that queued job), never derived in `execute`. */
   usageLimitResume?: boolean;
@@ -1064,6 +1117,8 @@ export function agentDirectories(
   // brief, its notes, its inbox. Same rule as TMPDIR: the env names it, so the file tools must
   // reach it.
   if (env.CEZ_TREE_DIR) dirs.push(env.CEZ_TREE_DIR);
+  // The artifacts directory (spec 2026-10-22-html-artifacts): named in every step's prompt.
+  if (env.CEZ_ARTIFACTS_DIR) dirs.push(env.CEZ_ARTIFACTS_DIR);
   return dirs;
 }
 
@@ -1683,6 +1738,7 @@ export class RunManager {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
+      CEZ_ARTIFACTS_DIR: artifactsDir(this.dataDir, runId),
       ...agentTmpEnv(this.dataDir, runId),
       // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
       // which project the run belongs to. Absent (not empty) while the feature is off, so the env
@@ -1691,8 +1747,9 @@ export class RunManager {
       ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
       // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
       // `cez` that happens to be on its PATH without the command (observed on the first live run).
-      // Not gated on dispatch: `node "$CEZ_BIN" handoff …` needs no cockpit, only this binary.
-      ...(process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
+      // Always set: `cez impact` and `cez handoff` are local and must work with dispatch off
+      // (spec 2026-10-22 Q7).
+      CEZ_BIN: cezBinPath(),
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
@@ -1869,7 +1926,9 @@ export class RunManager {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
-      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined } : input),
+      ...(agentModelsLocked(this.repoRoot)
+        ? { ...input, model: undefined, reasoningEffort: undefined }
+        : input),
       // A root started with the composer's Dispatch toggle always gets a worktree: children fork
       // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
       // what `execute()` reads, not only on the record.
@@ -1883,6 +1942,7 @@ export class RunManager {
       workflow: workflow.name,
       task: input.task,
       model: effectiveInput.model,
+      reasoningEffort: effectiveInput.reasoningEffort,
       runner: input.runner,
       // The composer's per-task account (spec 2026-07-29-agent-profiles). Persisted at creation
       // so a queued run picks it up at dequeue and every later resume reads the same answer.
@@ -1915,6 +1975,7 @@ export class RunManager {
       this.store.updateRun(run.id, { inPlaceBranch: true, ...(input.branch ? { branch: input.branch } : {}) });
     }
     if (run.worktree === false && input.readOnly) this.store.updateRun(run.id, { readOnly: true });
+    if (input.subject) this.store.updateRun(run.id, { subject: input.subject });
     // A pull-request head run (spec 2026-10-06-agentic-e2e-checks Phase 3): the fetched sha is
     // recorded as the fork point BEFORE the run is queued, so `execute` — and a restart that
     // revives the queued run — forks from it through the "recorded fork point wins" rule rather
@@ -2660,6 +2721,13 @@ export class RunManager {
     this.waiting.delete(runId);
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
+    // The terminal rescan: whatever the last turn wrote after its own turn end still shows up.
+    state?.artifactsWatch?.close();
+    if (state) state.artifactsWatch = undefined;
+    // The signature is forgotten after it: one per run ever ended would otherwise never leave memory.
+    void this.rescanArtifacts(runId, { render: true }).finally(() => {
+      if (!this.active.has(runId)) this.artifactSignatures.delete(runId);
+    });
     this.active.delete(runId);
     this.releaseCheckStateIfUncontinuable(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
@@ -2913,6 +2981,41 @@ export class RunManager {
    */
   private prepareAutomationsSession(state: ActiveRun): void {
     state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
+  }
+
+  /**
+   * The artifacts directory for this owner (spec 2026-10-22-html-artifacts-and-impact): created,
+   * and watched while live. Called from BOTH `ActiveRun` construction sites; never throws.
+   */
+  private prepareArtifactsSession(runId: string, state: ActiveRun): void {
+    const dir = artifactsDir(this.dataDir, runId);
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      return; // a read-only data dir: no artifacts, the run itself is unaffected
+    }
+    state.artifactsWatch?.close();
+    state.artifactsWatch = watchArtifacts(dir, () => void this.rescanArtifacts(runId));
+  }
+
+  /** Last published listing per run, so an unchanged rescan stays silent on the SSE bus. */
+  private readonly artifactSignatures = new Map<string, string>();
+
+  /**
+   * Rescan a run's artifacts and publish the listing when it changed. The ONE helper both
+   * turn-end handlers, the watcher and the terminal transition call (spec Q2). `render` (turn
+   * ends and the terminal transition, never the watcher, which fires mid-write) first runs the
+   * impact backstop: a `review.json` newer than its `impact.html` is rendered here.
+   */
+  async rescanArtifacts(runId: string, options: { render?: boolean } = {}): Promise<void> {
+    const dir = artifactsDir(this.dataDir, runId);
+    if (options.render) await backstopRender(dir);
+    const listing = await scanArtifacts(dir);
+    const signature = JSON.stringify(listing);
+    const previous = this.artifactSignatures.get(runId) ?? JSON.stringify({ artifacts: [], truncated: false });
+    if (signature === previous) return;
+    this.artifactSignatures.set(runId, signature);
+    this.store.publishArtifacts(runId, listing);
   }
 
   /**
@@ -3868,6 +3971,7 @@ export class RunManager {
     return this.hydrateQueuedInput(run.id, {
       task: run.task,
       model: run.model,
+      reasoningEffort: run.reasoningEffort,
       runner: run.runner,
       agentProfile: run.agentProfile,
       // No `systemPrompt`: the record keeps only the COMPOSED prompt, never the bare override, so
@@ -5043,7 +5147,7 @@ export class RunManager {
     internal: { freshSessionAllowed?: boolean } = {},
   ): { ok: boolean; error?: string } {
     if (this.lifecycle.isBlocked(runId)) return {ok: false, error: 'Resolve the worktree lifecycle operation first'};
-    if (agentModelsLocked(this.repoRoot) && opts.model?.trim()) {
+    if (agentModelsLocked(this.repoRoot) && (opts.model?.trim() || opts.reasoningEffort?.trim())) {
       return { ok: false, error: AGENT_MODELS_LOCKED_ERROR };
     }
     const run = this.store.getRun(runId);
@@ -5081,6 +5185,9 @@ export class RunManager {
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
+    if (opts.reasoningEffort && targetRunner !== 'codex') {
+      return { ok: false, error: REASONING_EFFORT_UNSUPPORTED_ERROR };
+    }
     // A session id only resolves inside the config dir that created it (spec
     // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
     // backend does: `claude --resume <id>` under another login finds nothing and would silently
@@ -5103,7 +5210,9 @@ export class RunManager {
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
-    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined) {
+    const runnerChanged = opts.runner !== undefined && opts.runner !== (run.runner ?? 'claude');
+    const engineChanged = runnerChanged || opts.model !== undefined;
+    if (opts.runner !== undefined || opts.model !== undefined || opts.reasoningEffort !== undefined || opts.agentProfile !== undefined) {
       // Guard the pairing before persisting anything: the model override applies to the runner
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
@@ -5138,6 +5247,13 @@ export class RunManager {
           : inheritedPinIsForeign
             ? { model: undefined }
             : {}),
+        // Omission retains the run selection, while either an engine change or the empty
+        // Continue reset token explicitly returns to the App Server's native default.
+        ...(opts.reasoningEffort !== undefined
+          ? { reasoningEffort: opts.reasoningEffort || undefined }
+          : engineChanged
+            ? { reasoningEffort: undefined }
+            : {}),
         // Persisted BEFORE scheduling, like the runner/model pair: `runContinuation` resolves the
         // account off the record, and every later continuation then defaults to it.
         ...(opts.agentProfile !== undefined
@@ -5159,6 +5275,18 @@ export class RunManager {
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
+    const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : opts.reasoningEffort !== undefined
+        ? opts.reasoningEffort || undefined
+        : engineChanged
+          ? undefined
+          : targetRunner === 'codex'
+            ? sessionStep?.reasoningEffort ?? run.reasoningEffort
+            : undefined;
+    if (continuationReasoningEffort) {
+      this.store.updateStep(runId, stepId, { reasoningEffort: continuationReasoningEffort });
+    }
     const prompt = opts.text?.trim() || 'Continue.';
     const images = opts.images ?? [];
     if (deferForCapacity) {
@@ -5252,6 +5380,9 @@ export class RunManager {
       if (this.abandonCancelledStart(runId)) return;
     }
     const record = this.store.getRun(runId);
+    const continuationReasoningEffort = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : record?.steps.find((step) => step.id === stepId)?.reasoningEffort;
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
@@ -5337,6 +5468,7 @@ export class RunManager {
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+    this.prepareArtifactsSession(runId, state);
 
     // Cancellation may have retired this continuation while its async preparation was running.
     // Do not let the late promise make a durably cancelled run look active again.
@@ -5358,6 +5490,7 @@ export class RunManager {
       startedAt: new Date().toISOString(),
       sessionId: spawnSessionId,
       backend,
+      ...(continuationReasoningEffort ? { reasoningEffort: continuationReasoningEffort } : {}),
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
@@ -5439,6 +5572,7 @@ export class RunManager {
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
+        void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
         // Did the backend end this turn purely to compact its own context (#955)? Absent on
         // every runner that has no such signal, and on every recording written before the
@@ -5741,6 +5875,7 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
             state.automationsPrompt,
             record?.systemPrompt,
+            artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
           ),
           userPrompt: attachments.length
@@ -5759,6 +5894,7 @@ export class RunManager {
           onUsageWindows: continueProfile.onUsageWindows,
           mcpServers: continueMcp,
           model: continueModel,
+          reasoningEffort: continuationReasoningEffort,
           sessionId: launchSessionId,
           resume,
           timeoutMs: 0,
@@ -5906,6 +6042,21 @@ export class RunManager {
     // the config default. Per-step `runner` can still override it below.
     const config = await loadConfig(this.repoRoot);
     const taskBackend: RunnerId = input.runner ?? config.defaultRunner;
+    const effortIssue = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : reasoningEffortIssue(workflow, taskBackend, input.reasoningEffort);
+    if (effortIssue) {
+      const finishedAt = new Date().toISOString();
+      this.store.updateRun(runId, {
+        status: 'failed',
+        error: effortIssue,
+        finishedAt,
+        currentStepId: undefined,
+      });
+      emit({ type: 'lifecycle', message: `run failed — ${effortIssue}` });
+      this.dropActive(runId);
+      return;
+    }
     // The account may have gone into a usage-limit hold since this run was dequeued — the queue
     // gate cannot be the only one, because dequeue is not the moment of no return. Nothing has
     // happened yet here, so the run goes back to the queue untouched (spec
@@ -6166,6 +6317,7 @@ export class RunManager {
     // twin is in `runContinuation`.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+    this.prepareArtifactsSession(runId, state);
     let runError: string | null = null;
     let idleFailed = false;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
@@ -7559,7 +7711,14 @@ export class RunManager {
 
     const sessionId = graphHooks?.resumeSessionId ?? randomUUID();
     const backend = step.runner ?? taskBackend;
-    this.store.updateStep(runId, step.id, { sessionId, backend });
+    const reasoningEffort = agentModelsLocked(this.repoRoot)
+      ? undefined
+      : resolveStepReasoningEffort(step, taskBackend, input.reasoningEffort);
+    this.store.updateStep(runId, step.id, {
+      sessionId,
+      backend,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    });
 
     const stepRecord = this.store.getRun(runId)?.steps.find((s) => s.id === step.id);
     const startTokens = stepRecord?.tokensUsed ?? 0;
@@ -7625,6 +7784,7 @@ export class RunManager {
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
+        void this.rescanArtifacts(runId, { render: true }); // the guarantee behind the watcher (spec 2026-10-22-html-artifacts Q2), plus the impact backstop
         const sessionOpen = !state.cancelled && state.session?.open;
         // The twin of `runContinuation`'s read — see there for why the field is absent on
         // every runner and every recording that predates it (#955).
@@ -7900,6 +8060,7 @@ export class RunManager {
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             state.automationsPrompt,
             extraSystemPrompt,
+            artifactsPromptPart(artifactsDir(this.dataDir, runId)),
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
               : HANDOFF_ONLY_INSTRUCTIONS,
@@ -7919,6 +8080,7 @@ export class RunManager {
           onUsageWindows: stepProfile.onUsageWindows,
           mcpServers: stepMcp,
           model: backendModel,
+          reasoningEffort,
           sessionId: launchSessionId,
           resume,
           // Interactive sessions have no runner timeout — the idle timer rules.
@@ -8760,9 +8922,10 @@ export class RunManager {
     const run = this.store.getRun(runId);
     if (!run?.worktreePath || !existsSync(run.worktreePath)) return false;
     const diff = await worktreeDiff(run.worktreePath, run.baseBranch ?? 'HEAD');
-    const hasDiff = diff.trim().length > 0 && !diff.startsWith('(diff failed');
+    // An impact run's diff is empty by construction; its report is what the gate reviews (Q11).
+    const reviewable = diffHasChanges(diff) || assessedWithoutChanges(run, diff);
     const config = await loadConfig(this.repoRoot);
-    return hasDiff && reviewGateEnabled(config) && run.autonomous !== true;
+    return reviewable && reviewGateEnabled(config) && run.autonomous !== true;
   }
 
   /**

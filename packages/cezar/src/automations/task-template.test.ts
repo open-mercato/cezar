@@ -194,6 +194,24 @@ describe('scheduled automation task templates (spec 2026-09-14)', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('carries the task\'s reasoning effort into the launched run, so Start later keeps what the composer showed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-schedule-effort-'));
+    try {
+      const store = RunStore.open(join(root, '.ai/cezar'));
+      const inputs: Array<Record<string, unknown>> = [];
+      const manager = {
+        startRun: (workflow: { name: string }, input: Record<string, unknown>) => {
+          inputs.push(input);
+          return store.createRun({ title: 'automation', workflow: workflow.name, task: String(input.task), steps: [] });
+        },
+      } as unknown as RunManager;
+      const schedule = { ...nightly, task: { ...nightly.task, workflow: 'quick-task', runner: 'codex' as const, reasoningEffort: 'high' } };
+      await launchScheduledRun({ root, manager, store, definition: schedule, occurrence, receiptId: 'effort', projectName: 'p', timeZone: 'UTC', dispatchEnabled: false });
+      expect(inputs[0]).toMatchObject({ runner: 'codex', reasoningEffort: 'high' });
+      store.flush();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('launches a scheduled run with automationTrigger provenance and the dispatch intent only when dispatch is on', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cezar-schedule-launch-'));
     try {

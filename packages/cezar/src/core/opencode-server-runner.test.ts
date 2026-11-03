@@ -410,7 +410,7 @@ describe('#1756 cost on a turn a usage limit rejected', () => {
   });
 });
 
-describe('dc1a91a6 an OpenCode 2.x server', () => {
+describe('dc1a91a6 a server with neither the 2.x probe nor the 1.x session route', () => {
   const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');
 
   it('fails with an actionable message instead of a bare 405', async () => {
@@ -424,7 +424,7 @@ describe('dc1a91a6 an OpenCode 2.x server', () => {
     expect(events.filter((e) => e.type === 'error')).toEqual([
       { type: 'error', message: `opencode: ${unsupportedServerMessage(405)}` },
     ]);
-    expect(unsupportedServerMessage(405)).toMatch(/OpenCode 2\.x .* not supported yet — install OpenCode 1\.x/);
+    expect(unsupportedServerMessage(405)).not.toMatch(/not supported yet/);
   }, 30_000);
 });
 

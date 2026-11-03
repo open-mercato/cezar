@@ -50,6 +50,8 @@ const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
   pi: 'pi --session',
   copilot: 'copilot --resume',
   antigravity: 'agy --conversation',
+  gemini: 'gemini --resume',
+  kimi: 'kimi --session',
 }
 
 /** The per-backend take-over command. Records without a runner recorded predate the runner

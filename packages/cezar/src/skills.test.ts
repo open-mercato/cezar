@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  BUILTIN_SKILLS_DIR,
   discoverSkills,
   filterImportedTeamSkills,
   parseFrontmatter,
@@ -272,5 +273,45 @@ describe('the built-in create-cezar-automation skill', () => {
     const matches = (await discoverSkills(repoRoot)).filter((s) => s.name === 'create-cezar-automation');
     expect(matches).toHaveLength(1);
     expect(matches[0]).toMatchObject({ source: 'ai', body: 'House version' });
+  });
+});
+
+/** The bundled skill directory (spec 2026-10-22-html-artifacts-and-impact Q6). */
+describe('built-in skill directory', () => {
+  async function repo(): Promise<string> {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cez-skills-bundled-'));
+    tempDirs.push(repoRoot);
+    await mkdir(join(repoRoot, '.ai/cezar'), { recursive: true });
+    // No team repos: nothing is cloned in the background.
+    await writeFile(join(repoRoot, '.ai/cezar/config.json'), '{"skillsRepos": []}');
+    return repoRoot;
+  }
+
+  it('ships change-impact, resolved from the package (src under tsx, dist when installed)', async () => {
+    expect(BUILTIN_SKILLS_DIR.replace(/\\/g, '/')).toMatch(/\/packages\/cezar\/skills\/$|\/cezar\/skills\/$/);
+    const skill = (await discoverSkills(await repo())).find((s) => s.name === 'change-impact');
+    expect(skill).toMatchObject({ source: 'builtin', path: join(BUILTIN_SKILLS_DIR, 'change-impact', 'SKILL.md') });
+    expect(skill?.body).toContain('cez impact render');
+  });
+
+  it('has the LOWEST precedence: a user copy anywhere wins', async () => {
+    const repoRoot = await repo();
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-skills-pkg-'));
+    tempDirs.push(bundled);
+    await mkdir(join(bundled, 'change-impact'), { recursive: true });
+    await writeFile(join(bundled, 'change-impact/SKILL.md'), '---\nname: change-impact\n---\nShipped');
+    await writeFile(join(bundled, 'only-shipped.md'), '---\nname: only-shipped\n---\nShipped too');
+    await mkdir(join(repoRoot, '.agents/skills/change-impact'), { recursive: true });
+    await writeFile(join(repoRoot, '.agents/skills/change-impact/SKILL.md'), '---\nname: change-impact\n---\nHouse');
+    const skills = await discoverSkills(repoRoot, bundled);
+    const impact = skills.filter((s) => s.name === 'change-impact');
+    expect(impact).toHaveLength(1);
+    expect(impact[0]).toMatchObject({ source: 'agents', body: 'House' });
+    expect(skills.find((s) => s.name === 'only-shipped')).toMatchObject({ source: 'builtin' });
+  });
+
+  it('a missing package dir is an empty tier, never an error', async () => {
+    const skills = await discoverSkills(await repo(), join(tmpdir(), 'cez-no-such-skills-dir'));
+    expect(skills.some((s) => s.name === 'change-impact')).toBe(false);
   });
 });

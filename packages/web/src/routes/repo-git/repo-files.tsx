@@ -6,6 +6,8 @@ import { useRepoTree } from '@/api/queries'
 import { CenteredState } from '@/components/centered-state'
 import { cn } from '@/lib/utils'
 
+import { ImpactControl } from '../task-assets/impact-control'
+import { isSpecPath } from '../task-assets/impact-model'
 import { FilePreview } from '../task-git/file-preview'
 import { buildPathTree, type PathTreeDir } from '../task-git/file-tree'
 import { isImagePath } from '../task-git/worktree-files'
@@ -120,7 +122,11 @@ export function RepoFilesSection({
               Back to the file tree
             </button>
           ) : null}
-          <FilePreview source={{ kind: 'repo' }} path={selected} />
+          <FilePreview
+            source={{ kind: 'repo' }}
+            path={selected}
+            headerActions={isSpecPath(selected) ? <ImpactControl subject={{ kind: 'spec', path: selected }} /> : undefined}
+          />
         </div>
       </div>
     </Section>

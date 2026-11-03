@@ -11,7 +11,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import { assertReasoningEffortSupported, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { disclaimedCommand } from './disclaim-spawn.ts';
 import { readNdjson } from './ndjson.ts';
@@ -84,6 +84,7 @@ export class AntigravityRunner implements AgentRunner {
   }
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
+    assertReasoningEffortSupported('antigravity', spec.reasoningEffort);
     const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
     const args = buildAntigravityArgs(spec);
     // The dry-run mock is a node script; on Windows `disclaimedCommand` already routes scripts to
