@@ -121,6 +121,23 @@ describe('layouts and the run store', () => {
     expect(existsSync(file(first.id))).toBe(false);
   });
 
+  it('removes the tracker context and operation receipts of a run retention forgets', () => {
+    const store = RunStore.open(dataDir);
+    const first = store.createRun(input(0));
+    // Backdated: runs created within one millisecond have no defined retention order.
+    store.updateRun(first.id, { status: 'done', createdAt: new Date(Date.now() - 3_600_000).toISOString() });
+    const context = join(dataDir, 'runs', `${first.id}.tracker-context.json`);
+    const receipts = join(dataDir, 'runs', `${first.id}.tracker-operations`);
+    mkdirSync(receipts, { recursive: true });
+    writeFileSync(context, '{}');
+    writeFileSync(join(receipts, 'op.json'), '{}');
+    for (let n = 1; n <= 320; n++) store.createRun(input(n));
+    store.flush();
+    expect(store.getRun(first.id)).toBeUndefined();
+    expect(existsSync(context)).toBe(false);
+    expect(existsSync(receipts)).toBe(false);
+  });
+
   it('sweeps orphaned layouts when the store opens, and never those of a run it still has', () => {
     const store = RunStore.open(dataDir);
     const kept = store.createRun(input(0));

@@ -32,12 +32,13 @@ describe('Chip', () => {
     expect(chip.className).toContain('font-semibold')
   })
 
-  it('renders the skill grammar: violet border, mono', () => {
+  it('renders the skill grammar: violet border, the row\'s own face and weight', () => {
     const chip = chipOf(<Chip skill>om-spec-writing</Chip>)
 
     expect(chip.getAttribute('data-skill')).toBe('true')
     expect(chip.className).toContain('border-violet')
-    expect(chip.className).toContain('font-mono')
+    expect(chip.className).not.toContain('font-mono')
+    expect(chip.className).not.toContain('font-semibold')
   })
 
   it('renders the dashed affordance, an icon and the chevron', () => {

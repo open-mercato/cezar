@@ -27,6 +27,7 @@ import {
   type WorkspaceLayout,
 } from './layout-state'
 import { stripTabs, type StripTab } from './strip'
+import { useDragHover } from './use-drag-hover'
 import { VIEW_ICONS } from './view-picker'
 
 /** The row's `gap-0.5`, and the `…` button that folds the tabs that do not fit (28px + that gap). */
@@ -77,6 +78,7 @@ export function LayoutCards({
   onColumnDropClose,
   keyHints = NO_HINTS,
   showKeyHints = false,
+  badges,
 }: {
   layouts: readonly WorkspaceLayout[]
   active: string
@@ -111,6 +113,8 @@ export function LayoutCards({
    *  for ⌘1. Printed on the tabs while `showKeyHints` (⌘ held), and always in the `…` menu. */
   keyHints?: ReadonlyMap<string, string>
   showKeyHints?: boolean
+  /** A count shown on a view's tab (the Assets tab's published files). */
+  badges?: Partial<Record<ViewId, number>>
 }) {
   /*
    * The row never scrolls: the tabs that do not fit fold into a `…` menu. How many fit is MEASURED,
@@ -126,7 +130,7 @@ export function LayoutCards({
   const [width, setWidth] = useState(0)
   const [fit, setFit] = useState<number | null>(null)
   // The layout menu names the active layout, so its width — and the room left — follows it.
-  const signature = `${items.join('|')}#${showLayouts && fixedActive === null ? active : ''}`
+  const signature = `${items.join('|')}#${showLayouts && fixedActive === null ? active : ''}#${JSON.stringify(badges ?? {})}`
 
   useEffect(() => {
     const root = rootRef.current
@@ -203,9 +207,9 @@ export function LayoutCards({
   const overflow = items.filter((tab) => !visible.includes(tab))
 
   // A column header held over the row: dropping it closes that column.
-  const [closeTarget, setCloseTarget] = useState(false)
   const acceptsColumn = (event: React.DragEvent) =>
     onColumnDropClose !== undefined && event.dataTransfer.types.includes(COLUMN_DRAG_TYPE)
+  const { over: closeTarget, reset: resetCloseTarget, handlers: closeHover } = useDragHover(acceptsColumn)
 
   return (
     <div
@@ -220,14 +224,10 @@ export function LayoutCards({
         if (!acceptsColumn(event)) return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'move'
-        setCloseTarget(true)
       }}
-      onDragLeave={(event) => {
-        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
-        setCloseTarget(false)
-      }}
+      {...closeHover}
       onDrop={(event) => {
-        setCloseTarget(false)
+        resetCloseTarget()
         if (!acceptsColumn(event)) return
         const raw = event.dataTransfer.getData(COLUMN_DRAG_TYPE)
         const index = Number(raw)
@@ -245,7 +245,7 @@ export function LayoutCards({
               data-strip-item=""
               aria-current={notesActive ? 'page' : undefined}
               className={cn(
-                'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-medium',
+                'relative -mb-px flex h-9 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-ui font-medium',
                 notesActive
                   ? 'border-foreground text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground',
@@ -293,7 +293,7 @@ export function LayoutCards({
             }}
             onDragEnd={() => onViewDragEnd?.()}
             className={cn(
-              'relative -mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-[13px] font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
+              'relative -mb-px h-9 shrink-0 gap-1.5 rounded-none border-b-2 border-transparent px-2.5 text-ui font-medium text-muted-foreground hover:bg-transparent hover:text-foreground active:translate-y-0',
               (selected || on) && 'text-foreground',
               selected && 'border-foreground',
             )}
@@ -302,6 +302,15 @@ export function LayoutCards({
               <Icon aria-hidden="true" className="size-3.5 shrink-0" />
             </TabIcon>
             {label}
+            {badges?.[view] ? (
+              <span
+                data-slot="tab-badge"
+                aria-label={`${badges[view]} ${label.toLowerCase()}`}
+                className="rounded-full bg-muted px-1.5 py-px text-micro font-semibold tabular-nums text-muted-foreground"
+              >
+                {badges[view]}
+              </span>
+            ) : null}
             {on && !selected ? (
               <span aria-hidden="true" className="absolute top-2 right-1 size-1.5 rounded-full bg-primary" />
             ) : null}
@@ -381,7 +390,7 @@ export function LayoutCards({
  *  chord floats over the tab's corner and the icon keeps its space. */
 function TabIcon({ hint, children }: { hint: string | undefined; children: ReactNode }) {
   const kbdClass =
-    'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-[10px] leading-none font-semibold text-background'
+    'pointer-events-none flex shrink-0 items-center justify-center rounded-[4px] bg-foreground font-mono text-micro leading-none font-semibold text-background'
   if (!hint) return children
   if (hint.length === 1) {
     return (
@@ -489,7 +498,7 @@ function LayoutMenu({
             data-active-layout={current ? current.name : undefined}
             aria-label={current ? `Layout: ${layoutDisplayName(current.name)}` : 'Layouts'}
             title="Layouts — open a saved one, or save what is on screen"
-            className={cn('h-7 max-w-48 shrink-0 gap-1.5 px-2 text-[12.5px]', current ? 'text-foreground' : 'text-muted-foreground')}
+            className={cn('h-7 max-w-48 shrink-0 gap-1.5 px-2 text-label', current ? 'text-foreground' : 'text-muted-foreground')}
           >
             <LayoutGlyph count={current?.columns.length ?? 2} />
             <span className="truncate max-md:hidden">{current ? layoutDisplayName(current.name) : 'Layout'}</span>

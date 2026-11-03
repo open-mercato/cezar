@@ -243,6 +243,21 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     )
   })
 
+  it('an up nav key after clicking prose releases the stick and holds while the thread grows (#1800)', () => {
+    openThread()
+    const AWAY = `(() => { const m = document.querySelector('[data-slot="thread-rows"]').closest('[data-slot="main"]'); return m.scrollHeight - m.scrollTop - m.clientHeight })()`
+    browser.waitForFunction(`${AWAY} < 80`)
+    // A click on prose leaves <body> focused, so the key never passes through the scroller.
+    browser.tapAt(700, 300)
+    expect(browser.evaluate(`document.activeElement === document.body`)).toBe(true)
+    browser.press('PageUp')
+    browser.waitForFunction(`${AWAY} > 200`)
+
+    // Growth at the tail (a streamed row) must not drag the reader back down.
+    browser.evaluate(`(() => { const el = document.createElement('div'); el.style.height = '400px'; document.querySelector('[data-slot="thread-rows"]').appendChild(el) })()`)
+    browser.waitForFunction(`${AWAY} > 600`)
+  }, 90_000)
+
   it('restores the scroll position across a client-side leave and return', () => {
     // Park mid-thread (a position the arrival logic would never pick on its own).
     parkAt(`Math.round((m.scrollHeight - m.clientHeight) / 2)`)
