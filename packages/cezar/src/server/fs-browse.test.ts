@@ -9,6 +9,7 @@ import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 import type { FsBrowseResponse } from './fs-browse.ts';
+import { browseDirectory } from './fs-browse.ts';
 
 /**
  * `GET /api/v1/fs/browse` (multi-project spec, step 4.1) — the directory picker
@@ -180,6 +181,21 @@ describe('GET /api/v1/fs/browse (step 4.1)', () => {
     expect((await body(await browse(`?path=${encodeURIComponent(join(home, 'link-inside'))}`))).path)
       // Navigating a contained link lands on its realpath.
       .toBe(join(home, 'projects/repo'));
+  });
+
+  it('caps candidates before rejecting a broken symlink, without refilling the cap', async () => {
+    const capped = join(home, 'capped');
+    mkdirSync(capped);
+    for (let i = 0; i < 999; i += 1) mkdirSync(join(capped, `dir-${String(i).padStart(4, '0')}`));
+    mkdirSync(join(capped, 'zz-final-dir'));
+    symlinkSync(join(capped, 'does-not-exist'), join(capped, 'zz-broken-link'));
+
+    const result = await browseDirectory({ root: capped });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.body.truncated).toBe(true);
+    expect(result.body.dirs).toHaveLength(999);
+    expect(result.body.dirs.some((entry) => entry.name === 'zz-final-dir')).toBe(false);
   });
 
   it('404s for a missing path, a file, and a NUL byte — never a filesystem detail', async () => {

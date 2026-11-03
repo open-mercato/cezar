@@ -1,0 +1,26 @@
+---
+title: "Create an agent task from Jira or Linear"
+description: "Send an issue description to a task with your chosen workflow."
+related:
+  links:
+    - guides/common-questions
+    - architecture/operations
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/tracker/tracker-handoff.tsx
+    line: 93
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The details panel lets you select a workflow or skills, an agent, and additional instructions. If some source content cannot be transferred, the form identifies what is missing and lets you add context.
+
+## Where to find it
+
+Jira / Linear → issue → task panel
+
+## How to use it
+
+1. Open the issue and choose a workflow or skills.
+2. Check warnings about omitted content and fill in Supplemental context if needed.
+3. Add a Custom instruction and start the task.
+
+> **Good to know**: You can also drag an issue row into the message field to prepare an agent task. This does not change the issue content in Jira or Linear.

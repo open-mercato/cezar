@@ -8,6 +8,7 @@ import { workspaceQueryKeys } from '@/api/queries'
 import type { ProjectsResponse, WorkspaceLastLocation } from '@open-mercato/cezar-api-client'
 import { LAST_LOCATION_STORAGE_KEY } from '@/lib/last-location'
 import { LastLocationController } from './last-location-controller'
+import { resetSettingsReturn, settingsReturnLocation } from '@/lib/settings-return'
 
 const REGISTRY: ProjectsResponse = {
   bootProject: 'boot',
@@ -51,6 +52,8 @@ function NavigationControls() {
     <>
       <button onClick={() => navigate('/p/boot/tasks/middle')}>Middle</button>
       <button onClick={() => navigate('/p/other/tasks/final?tab=events#tool-3')}>Final</button>
+      <button onClick={() => navigate('/settings/global/appearance')}>Global settings</button>
+      <button onClick={() => navigate('/p/boot/settings/agents')}>Project settings</button>
     </>
   )
 }
@@ -90,6 +93,17 @@ afterEach(() => {
 })
 
 describe('LastLocationController', () => {
+  it('feeds the settings return store with every NON-settings location (unified settings)', () => {
+    resetSettingsReturn()
+    mount('/p/boot/git')
+    expect(settingsReturnLocation()).toEqual({ pathname: '/p/boot/git', search: '', hash: '' })
+    // A settings page is never a way back — the previous page stays recorded across it.
+    fireEvent.click(screen.getByText('Global settings'))
+    expect(settingsReturnLocation()?.pathname).toBe('/p/boot/git')
+    fireEvent.click(screen.getByText('Project settings'))
+    expect(settingsReturnLocation()?.pathname).toBe('/p/boot/git')
+  })
+
   it('remembers a valid scoped URL exactly, in this browser', () => {
     mount('/p/boot/tasks/run-1/changes?file=src%2Findex.ts#L12')
 

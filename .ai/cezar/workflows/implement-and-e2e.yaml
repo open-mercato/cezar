@@ -1,0 +1,33 @@
+name: implement-and-e2e
+description: Implement, unit-test, then prove it in a real browser (set up by cezar).
+steps:
+  - id: deps
+    name: Install
+    command: "npm ci --prefer-offline --no-audit"
+
+  - id: implement
+    name: Implement
+    prompt: |
+      {{task}}
+
+      If a browser check fails, read .e2e/summary.md and the pages under
+      .e2e/failures/ before changing anything. Use the `e2e` skill for anything
+      you change under tests/.
+
+  - id: unit
+    name: Unit tests
+    command: "npm test"
+    onFail:
+      retry: implement
+      max: 2
+
+  - id: browser
+    name: Browser e2e
+    command: |
+      E2E_TELEMETRY_DISABLED=1 npx --no-install e2e run --reporter list,markdown --max-failures 3; code=$?
+      [ -f .e2e/summary.md ] && cat .e2e/summary.md
+      exit $code
+    onFail:
+      retry: implement
+      max: 2
+      retryOn: [1]

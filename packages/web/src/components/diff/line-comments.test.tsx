@@ -27,7 +27,8 @@ const MODIFIED: DiffFileChange = {
 
 async function renderDiff(ui: React.ReactElement, settleText = 'src/a.ts') {
   const view = render(ui)
-  await screen.findByText(settleText)
+  // The engine chunk's first import in a busy worker can exceed findBy's 1s default.
+  await screen.findByText(settleText, {}, { timeout: 5000 })
   return view
 }
 

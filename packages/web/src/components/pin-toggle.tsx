@@ -1,10 +1,11 @@
 import { PinIcon } from 'lucide-react'
+import { IconTooltip } from '@/components/ui/icon-tooltip'
 import { cn } from '@/lib/utils'
 
 /**
  * The pin control (#935) — one button, shared by every surface that lists a task: the sidebar
- * quick-list row, the Tasks table row, the mobile card. (The thread header spells the same
- * action as a labelled button beside Archive, because a header has room for the word.)
+ * quick-list row, the Tasks table row, the mobile card. (The thread header has its own icon
+ * button for it, styled ON with the same `TOGGLE_ON_CLASS`.)
  *
  * Shared rather than re-styled per surface for the reason the status dot is: a pin is one idea,
  * and three hand-rolled variants of it would drift into three different meanings of "filled".
@@ -15,6 +16,16 @@ import { cn } from '@/lib/utils'
  * `stopPropagation` because two of the three surfaces are row-click navigation targets: the
  * click belongs to the pin, not to "open the task".
  */
+/**
+ * The ON state of every icon toggle — pinned, unread, archived: the icon turns violet and its
+ * shape fills with a translucent violet. One pattern, so a reader learns it once. Translucent
+ * rather than solid because a solid fill erases the inner lines of an envelope or an archive box
+ * (the pin, which has none, reads the same either way). Pair it with `aria-pressed`.
+ */
+export const TOGGLE_ON_CLASS = 'text-violet hover:text-violet [&_svg]:fill-violet/25'
+/** The same ON state for an icon on its own — a menu row, whose label must keep its own colour. */
+export const TOGGLE_ON_ICON_CLASS = 'text-violet fill-violet/25'
+
 export function PinToggle({
   pinned,
   onToggle,
@@ -26,29 +37,30 @@ export function PinToggle({
   className?: string
 }) {
   return (
-    <button
-      type="button"
-      data-slot="pin-toggle"
-      data-pinned={pinned ? 'true' : undefined}
-      // A toggle, so `aria-pressed` — the same call `ViewTab` and the column headers make.
-      aria-pressed={pinned}
-      aria-label={pinned ? 'Unpin task' : 'Pin task'}
-      title={pinned ? 'Unpin from the top of the list' : 'Pin to the top of the list'}
-      // Deliberately never disabled while the mutation is in flight: `usePinRun` invalidates
-      // rather than patching optimistically, so a row's `run.pinned` is stale until the refetch
-      // lands, and a second click would only re-send an idempotent `{pinned: true}`. Greying the
-      // control out for the length of a round trip would cost more than the duplicate it saves.
-      onClick={(event) => {
-        event.stopPropagation()
-        onToggle(!pinned)
-      }}
-      className={cn(
-        'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
-        pinned && 'text-violet hover:text-violet',
-        className,
-      )}
-    >
-      <PinIcon className={cn('size-3', pinned && 'fill-current')} aria-hidden="true" />
-    </button>
+    <IconTooltip label={pinned ? 'Unpin from the top of the list' : 'Pin to the top of the list'}>
+      <button
+        type="button"
+        data-slot="pin-toggle"
+        data-pinned={pinned ? 'true' : undefined}
+        // A toggle, so `aria-pressed` — the same call `ViewTab` and the column headers make.
+        aria-pressed={pinned}
+        aria-label={pinned ? 'Unpin task' : 'Pin task'}
+        // Deliberately never disabled while the mutation is in flight: `usePinRun` invalidates
+        // rather than patching optimistically, so a row's `run.pinned` is stale until the refetch
+        // lands, and a second click would only re-send an idempotent `{pinned: true}`. Greying the
+        // control out for the length of a round trip would cost more than the duplicate it saves.
+        onClick={(event) => {
+          event.stopPropagation()
+          onToggle(!pinned)
+        }}
+        className={cn(
+          'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+          pinned && TOGGLE_ON_CLASS,
+          className,
+        )}
+      >
+        <PinIcon className="size-3" aria-hidden="true" />
+      </button>
+    </IconTooltip>
   )
 }

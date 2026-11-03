@@ -247,7 +247,7 @@ describe('AskCard — picks survive the row unmounting', () => {
   it('drops the held picks once the ask resolves', () => {
     const { rerender } = renderAsk(twoQuestionAsk)
     fireEvent.click(screen.getByRole('button', { name: /date-fns/ }))
-    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: ['date-fns'] })
+    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: { labels: ['date-fns'] } })
 
     rerender(
       <MemoryRouter>
@@ -275,7 +275,7 @@ describe('AskCard — picks survive the row unmounting', () => {
     expect(screen.getByRole('button', { name: /date-fns/ }).getAttribute('aria-pressed')).toBe('false')
     cleanup()
     renderAsk({ ...reused, resolved: true, answer: 'Host: Fly' })
-    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: ['date-fns'] })
+    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: { labels: ['date-fns'] } })
   })
 
   it('a half-answered card names the questions still missing a pick', () => {
@@ -409,5 +409,112 @@ describe('AskCard — answering after the session has ended', () => {
     ).toBeTruthy()
     expect(mutateAsync).not.toHaveBeenCalled()
     expect(continueAsync).not.toHaveBeenCalled()
+  })
+})
+
+// The user's own answer and "I need more context" — both alongside the agent's options.
+describe('AskCard — Other… and Need more info', () => {
+  const otherButton = () => screen.getByRole('button', { name: 'Other…' })
+  const moreInfoButton = () => screen.getByRole('button', { name: 'Need more info' })
+  const ownAnswer = () => screen.getByRole('textbox', { name: /Your own answer/ }) as HTMLTextAreaElement
+
+  it('one-tap card: Other… opens a field whose Send posts the typed text, on one line', () => {
+    renderAsk(singleAsk)
+    fireEvent.click(otherButton())
+    expect(mutateAsync).not.toHaveBeenCalled()
+    const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
+    expect(send.disabled).toBe(true)
+    fireEvent.change(ownAnswer(), { target: { value: '  Temporal,\nonce it ships  ' } })
+    fireEvent.click(send)
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Temporal, once it ships' })
+  })
+
+  it('one-tap card: Enter in the field sends, Shift+Enter does not', () => {
+    renderAsk(singleAsk)
+    fireEvent.click(otherButton())
+    fireEvent.change(ownAnswer(), { target: { value: 'Day.js' } })
+    fireEvent.keyDown(ownAnswer(), { key: 'Enter', shiftKey: true })
+    expect(mutateAsync).not.toHaveBeenCalled()
+    fireEvent.keyDown(ownAnswer(), { key: 'Enter' })
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Library: Day.js' })
+  })
+
+  it('one-tap card: Need more info sends the request at once', () => {
+    renderAsk(singleAsk)
+    fireEvent.click(moreInfoButton())
+    expect(mutateAsync).toHaveBeenCalledWith({
+      text: 'Library: I need more information to answer this — please explain the context and ask again.',
+    })
+  })
+
+  it('multi-question card: each question can be answered by own text or Need more info', () => {
+    renderAsk(twoQuestionAsk)
+    const send = screen.getByRole('button', { name: 'Send answer' }) as HTMLButtonElement
+    const [libraryOther] = screen.getAllByRole('button', { name: 'Other…' })
+    const [, styleMoreInfo] = screen.getAllByRole('button', { name: 'Need more info' })
+
+    fireEvent.click(libraryOther!)
+    // An open but empty field is not an answer.
+    expect(send.disabled).toBe(true)
+    fireEvent.change(ownAnswer(), { target: { value: 'Temporal' } })
+    fireEvent.click(styleMoreInfo!)
+    expect(styleMoreInfo!.getAttribute('aria-pressed')).toBe('true')
+    expect(send.disabled).toBe(false)
+    fireEvent.click(send)
+    expect(mutateAsync).toHaveBeenCalledTimes(1)
+    expect(mutateAsync).toHaveBeenCalledWith({
+      text:
+        'Library: Temporal\n' +
+        'Style: I need more information to answer this — please explain the context and ask again.',
+    })
+  })
+
+  it('single-select: a pick, own text and Need more info replace one another', () => {
+    renderAsk(twoQuestionAsk)
+    const [libraryOther] = screen.getAllByRole('button', { name: 'Other…' })
+    const [libraryMoreInfo] = screen.getAllByRole('button', { name: 'Need more info' })
+    const dateFns = screen.getByRole('button', { name: /date-fns/ })
+
+    fireEvent.click(dateFns)
+    fireEvent.click(libraryOther!)
+    expect(dateFns.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(libraryMoreInfo!)
+    expect(libraryOther!.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByRole('textbox')).toBeNull()
+    fireEvent.click(dateFns)
+    expect(libraryMoreInfo!.getAttribute('aria-pressed')).toBe('false')
+    expect(readAskSelections('r1', twoQuestionAsk)).toEqual({ 0: { labels: ['date-fns'] } })
+  })
+
+  it('multi-select: own text joins the picked options', () => {
+    renderAsk(multiAsk)
+    fireEvent.click(screen.getByRole('button', { name: /Profile/ }))
+    fireEvent.click(otherButton())
+    fireEvent.change(ownAnswer(), { target: { value: 'Notifications' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+    expect(mutateAsync).toHaveBeenCalledWith({ text: 'Sections: Profile, Notifications' })
+  })
+
+  it('keeps the typed text across an unmount and remount of the card', () => {
+    const first = renderAsk(twoQuestionAsk)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Other…' })[0]!)
+    fireEvent.change(ownAnswer(), { target: { value: 'Temporal' } })
+    first.unmount()
+
+    renderAsk(twoQuestionAsk)
+    expect(ownAnswer().value).toBe('Temporal')
+  })
+})
+
+describe('AskCard — Other… focus', () => {
+  it('focuses the field when opened, but not when an open field remounts', () => {
+    const first = renderAsk(twoQuestionAsk)
+    fireEvent.click(screen.getAllByRole('button', { name: 'Other…' })[0]!)
+    expect(document.activeElement).toBe(screen.getByRole('textbox'))
+    first.unmount()
+
+    renderAsk(twoQuestionAsk)
+    expect(screen.getByRole('textbox')).toBeTruthy()
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
   })
 })

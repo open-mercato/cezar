@@ -1,3 +1,4 @@
+import { AutomationLaunchOutcome } from './task-template.ts';
 import type { AutomationDefinition, AutomationRuntimeState } from './types.ts';
 import type { AutomationStore } from './store.ts';
 
@@ -166,6 +167,20 @@ export async function launchEventCandidate(input: {
     store.appendReceipt({ ...receipt, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
     store.appendLog({ ...identity, ...input.log, result: 'launched', receiptId: receipt.receiptId, runId: launched.runId });
   } catch (error) {
+    // A launch that ended without a run on purpose (a closed PR, a fork head) or on an
+    // unreachable PR head: recorded against this event, never thrown into the poll cycle —
+    // one PR's state must not back off the whole automation. `failed` keeps the retryable
+    // `launch-error` receipt, so Retry works once the network or `gh` auth is back.
+    if (error instanceof AutomationLaunchOutcome) {
+      store.appendReceipt({
+        ...receipt,
+        status: error.result === 'skipped' ? 'skipped' : 'launch-error',
+        ...(error.result === 'failed' ? { error: error.reason.slice(0, 2_000) } : {}),
+        updatedAt: new Date().toISOString(),
+      });
+      store.appendLog({ ...identity, ...input.log, result: error.result, reason: error.reason, receiptId: receipt.receiptId });
+      return;
+    }
     store.appendReceipt({
       ...receipt, status: 'launch-error',
       error: error instanceof Error ? error.message : String(error),

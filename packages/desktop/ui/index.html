@@ -87,6 +87,22 @@
         animation: spin 0.9s linear infinite;
         margin-top: 4px;
       }
+      .progress {
+        width: 100%;
+        height: 4px;
+        border-radius: 2px;
+        background: var(--border);
+        overflow: hidden;
+      }
+      .progress > div {
+        height: 100%;
+        width: 0;
+        background: var(--accent);
+        transition: width 0.15s linear;
+      }
+      .progress-text {
+        font-variant-numeric: tabular-nums;
+      }
       @keyframes spin {
         to {
           transform: rotate(360deg);
@@ -135,6 +151,90 @@
       .button:hover {
         filter: brightness(0.96);
       }
+      .report {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        max-width: 420px;
+        margin-top: 4px;
+        padding: 16px 18px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--card);
+      }
+      .report-title {
+        margin: 0;
+        font: 600 14px/1.3 var(--sans);
+        color: var(--foreground);
+      }
+      .report-note {
+        margin: 0;
+        font-size: 11.5px;
+        opacity: 0.7;
+        max-width: 360px;
+      }
+      .button.restart {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
+        padding: 0 14px;
+      }
+      .button.send {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        height: 40px;
+        min-width: 220px;
+        padding: 0 20px;
+        border-radius: 8px;
+        font: 600 14px/1 var(--sans);
+        box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 30%, transparent);
+        transition: transform 0.1s ease, box-shadow 0.15s ease;
+      }
+      .button.send:hover:not(:disabled) {
+        filter: none;
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 45%, transparent);
+      }
+      .button.send:disabled {
+        opacity: 0.7;
+        cursor: default;
+        box-shadow: none;
+      }
+      .report-done {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        text-align: left;
+        max-width: 400px;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+      .report-done .check {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #0d0d0d;
+        font: 700 11px/18px var(--sans);
+        text-align: center;
+      }
+      .report-done strong {
+        display: block;
+        font-size: 12.5px;
+        margin-bottom: 2px;
+      }
+      .report-done span {
+        font-size: 11.5px;
+        opacity: 0.8;
+      }
       .hidden {
         display: none;
       }
@@ -148,10 +248,31 @@
         <h1 id="title">Starting cezar…</h1>
         <p id="detail">Launching the local cockpit.</p>
         <div id="spinner" class="spinner"></div>
+        <div id="progress" class="progress hidden"><div></div></div>
+        <p id="progress-text" class="progress-text hidden"></p>
         <pre id="log" class="hidden"></pre>
+        <div id="report" class="report hidden">
+          <p class="report-title">Help us fix this</p>
+          <button id="send-report" class="button primary send" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>
+            <span id="send-report-label">Send error report</span>
+          </button>
+          <p id="report-note" class="report-note">
+            Sends the error shown here, and its log if there is one, to the cezar team, with your home folder and project paths masked. Nothing else.
+          </p>
+        </div>
+        <div id="report-done" class="report-done hidden" role="status">
+          <div class="check" aria-hidden="true">✓</div>
+          <div>
+            <strong>Thanks, the cezar team has your report</strong>
+            <span id="report-done-detail">We will look into it shortly. A fix reaches you as an update, which the app installs on its own.</span>
+          </div>
+        </div>
         <div id="actions" class="actions hidden">
-          <a class="button primary" href="https://nodejs.org/en/download" target="_blank" rel="noreferrer">Download Node.js</a>
-          <button id="retry" class="button" type="button">Try again</button>
+          <button id="retry" class="button restart" type="button">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+            <span id="retry-label">Restart cezar</span>
+          </button>
         </div>
         <p id="hint" class="hidden"></p>
       </div>
@@ -166,6 +287,8 @@
         fail(title, detail, log) {
           this.set(title, detail)
           document.getElementById('spinner').classList.add('hidden')
+          document.getElementById('progress').classList.add('hidden')
+          document.getElementById('progress-text').classList.add('hidden')
           const pre = document.getElementById('log')
           pre.textContent = log || ''
           pre.classList.toggle('hidden', !log)
@@ -178,20 +301,61 @@
           pre.textContent += (pre.textContent ? '\n' : '') + line
           pre.scrollTop = pre.scrollHeight
         },
+        // The failure page's error report: `sent` (the user opted in, it went on its own) or
+        // `offer` (a button that sends this one report — the shell's `send_error_report`).
+        report(mode) {
+          const box = document.getElementById('report')
+          const button = document.getElementById('send-report')
+          if (mode === 'sent') {
+            this.reportDone('The problem was reported. We will look into it shortly; a fix reaches you as an update, which the app installs on its own.')
+          } else if (mode === 'offer') {
+            box.classList.remove('hidden')
+            button.onclick = function () {
+              this.disabled = true
+              document.getElementById('send-report-label').textContent = 'Sending…'
+              if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('send_error_report')
+            }
+          }
+        },
+        // The confirmation that replaces the button once a report is out.
+        reportDone(detail) {
+          document.getElementById('report').classList.add('hidden')
+          if (detail) document.getElementById('report-done-detail').textContent = detail
+          document.getElementById('report-done').classList.remove('hidden')
+        },
+        reportSent(ok) {
+          const button = document.getElementById('send-report')
+          if (ok) {
+            this.reportDone()
+          } else {
+            button.disabled = false
+            document.getElementById('send-report-label').textContent = 'Could not send. Try again'
+          }
+        },
+        // A download running in the shell (the managed Node runtime): `fraction` 0..1, or
+        // negative when the size is unknown (the bar then stays put and only the text moves).
+        progress(fraction, text) {
+          const bar = document.getElementById('progress')
+          bar.classList.remove('hidden')
+          if (fraction >= 0) bar.firstElementChild.style.width = Math.min(100, fraction * 100).toFixed(1) + '%'
+          const label = document.getElementById('progress-text')
+          label.classList.remove('hidden')
+          label.textContent = text
+        },
       }
       const params = new URLSearchParams(location.search)
-      if (params.get('needs_node')) {
-        window.cezarSplash.fail(params.get('title') || 'cezar needs Node.js', params.get('error') || '', '')
-        const actions = document.getElementById('actions')
-        actions.classList.remove('hidden')
-        document.getElementById('retry').onclick = function () {
-          this.disabled = true
-          this.textContent = 'Checking…'
-          if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('retry_start')
-          setTimeout(() => { this.disabled = false; this.textContent = 'Try again' }, 4000)
-        }
-      } else if (params.get('error')) {
+      if (params.get('report')) window.cezarSplash.report(params.get('report'))
+      // Every failure page: the error, its log, the report card and "Restart cezar" — which checks
+      // for updates and restarts the app (`restart_app`).
+      if (params.get('error')) {
         window.cezarSplash.fail(params.get('title') || 'cezar stopped', params.get('error'), params.get('log') || '')
+        document.getElementById('actions').classList.remove('hidden')
+        document.getElementById('retry').onclick = function () {
+          const label = document.getElementById('retry-label')
+          this.disabled = true
+          label.textContent = 'Restarting…'
+          if (window.__TAURI_INTERNALS__) window.__TAURI_INTERNALS__.invoke('restart_app')
+        }
       } else if (params.get('title')) {
         window.cezarSplash.set(params.get('title'), params.get('detail') || '')
       }

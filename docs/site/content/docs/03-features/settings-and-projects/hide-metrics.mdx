@@ -1,0 +1,28 @@
+---
+title: "Hide tokens or costs"
+description: "Turn off the display of selected usage data."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/server/capabilities.ts
+    line: 235
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-28-hide-token-metrics.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Set `CEZ_HIDE_TOKEN_USAGE=1` to hide token data, or `CEZ_HIDE_COST=1` to hide cockpit costs. The older `CEZ_HIDE_TOKEN_METRICS=1` flag hides both.
+
+## Where to find it
+
+Server environment variables
+
+## How to use it
+
+1. Set `CEZ_HIDE_TOKEN_USAGE=1` or `CEZ_HIDE_COST=1`.
+2. Restart the server.
+3. Check the view.
+
+> **Good to know**: These settings affect presentation. They do not change billing or the usage data saved by the server and returned by the API.

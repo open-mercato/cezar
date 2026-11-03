@@ -9,6 +9,7 @@ import {
   removeProject,
   shouldRegisterProject,
 } from './projects.ts';
+import { track } from '../telemetry.ts';
 
 /**
  * `cezar projects` (spec 2026-07-20-multi-project-workspace, step 5.2) — the
@@ -145,6 +146,7 @@ async function addCommand(root: string, io: ProjectsCommandIo): Promise<number> 
   // Registration dedupes by realpath, so a second `add` of the same folder
   // (or a symlink to it) reports the entry that already exists.
   io.log(known.has(entry.id) ? `  = ${entry.id} (already registered)  ${entry.root}` : `  + ${entry.id}  ${entry.root}`);
+  if (!known.has(entry.id)) track('project_added', { label: 'cli' });
   return 0;
 }
 
@@ -156,10 +158,10 @@ async function removeCommand(id: string | undefined, io: ProjectsCommandIo): Pro
   // Unlike `DELETE /api/v1/projects/:projectId`, there is no boot-project
   // refusal here: that rule exists because a running server would break its own
   // sidebar, and the CLI runs with no server and no boot project. Removing the
-  // repo you normally serve is therefore allowed — and, since boot registration
-  // became seed-once (`shouldAutoRegisterProject`), it STAYS removed: the next
-  // `cezar serve` in it will serve the folder without re-registering it. The
-  // line below says what was and was not touched; `add` puts it back.
+  // repo you normally serve is therefore allowed. A later normal `cezar serve`
+  // in that eligible root adds it back because serve is an explicit add/open
+  // gesture; headless/non-serve boot still uses `shouldAutoRegisterProject`.
+  // The line below says exactly what this command did and did not touch.
   if (!(await removeProject(id))) {
     io.error(`unknown project: ${id}`);
     return 1;

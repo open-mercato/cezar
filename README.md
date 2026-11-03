@@ -17,6 +17,9 @@
   English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a>
 </p>
 
+> Compatibility note: GitHub list rows may omit `body` in the next minor release. Consumers should
+> hydrate full text from `/api/v1/github/comments/:kind/:number` (`detail.body`) now.
+
 <div align="center">
   <h2>
     One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
@@ -52,7 +55,7 @@
 ## Features
 
 - 💯&nbsp;Free and open source.
-- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `junie`, `opencode` or `pi` login. No API key needed.
+- 🖥️&nbsp;Uses your own `claude`, `codex`, `copilot`, `cursor`, `agy` (Antigravity), `gemini`, `junie`, `kimi` (Kimi Code), `opencode` or `pi` login. No API key needed.
 - ☁️&nbsp;Easy to set up on a VPS, so your agents keep working when your laptop is closed.
 - 📱&nbsp;Fully responsive. Start and review tasks from your phone.
 - 🔀&nbsp;Every task gets its own git worktree, so several agents can work at the same time. Extra tasks wait in a queue.
@@ -122,7 +125,8 @@
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
 [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
-[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli) or [pi](https://github.com/badlogic/pi-mono).
+[Cursor Agent](https://cursor.com/docs/cli/overview), [Google Antigravity CLI](https://antigravity.google/docs/cli), [Junie](https://junie.jetbrains.com/cli), [Kimi Code](https://moonshotai.github.io/kimi-code/), [pi](https://github.com/badlogic/pi-mono) or
+[Gemini CLI](https://github.com/google-gemini/gemini-cli) (needs an API key, Vertex AI or a Workspace licence — personal Google sign-in no longer works for it).
 `git` and `gh` are optional.
 
 ```bash
@@ -130,7 +134,10 @@ cd your-repo
 npx cezar-run
 ```
 
-This opens the cockpit at `http://localhost:4321`. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli` still works too — it's the same package under its older name.
+This opens the cockpit at `http://localhost:4321`. If a compatible cockpit is already running,
+the command reuses it, adds the current project when needed, and opens that project's page instead
+of starting a duplicate server. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli`
+still works too — it's the same package under its older name.
 
 ```bash
 npx cezar-run run "add a --json flag to the export command"   # headless, no browser
@@ -198,6 +205,10 @@ its children share that budget. Nothing auto-merges.
 
 ## Documentation
 
+The [documentation site](docs/site/README.md) has searchable feature pages, step-by-step guides, and architecture diagrams. Run it locally with `npm run docs:dev`.
+
+Project lifecycle notifications are opt-in: run cezar with `CEZ_WEBHOOKS=1`, then open the project's **Settings → Webhooks**. See the [receiver guide](packages/cezar/docs/webhooks.md) for signed JSON, native Slack/Discord notifications, external automation receivers and delivery limits.
+
 The [reference](docs/reference.md) covers everything else:
 [configuration](docs/reference.md#configuration-optional),
 [environment variables](docs/reference.md#how-it-runs-agents),
@@ -221,6 +232,8 @@ npm run dev
 ## License
 
 **MIT** © Patryk Lewczuk. Full text in [LICENSE](LICENSE).
+
+Windows installers are covered by the [code signing policy](docs/code-signing-policy.md).
 
 ## Jira and Linear
 

@@ -1,3 +1,4 @@
+import type { AgentRunSpec, RunnerId } from '../core/agent-runner.ts';
 import { z } from 'zod';
 import { loadConfig } from '../config.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -56,10 +57,17 @@ export const NAMER_SYSTEM_PROMPT =
   'request or issue, set "pr" or "issue" to that number and do NOT repeat the number inside the title ' +
   'text. Never invent a number that is not in the task.';
 
+/** Appended to the system prompt only when the project has branch naming instructions. */
+export const NAMER_BRANCH_PROMPT =
+  ' Also set "branch": a git branch name for this task, derived from the task, that follows the ' +
+  'user\'s branch naming instructions exactly (prefix, separators, case). Use only letters, digits, ' +
+  '"-", "_", "." and "/"; never spaces. Keep it under 80 characters.';
+
 const namerResponseSchema = z.object({
   title: z.string().min(1),
   pr: z.number().int().positive().optional(),
   issue: z.number().int().positive().optional(),
+  branch: z.string().optional(),
 });
 
 export interface NamerContext {
@@ -70,12 +78,52 @@ export interface NamerContext {
   turnText?: string;
   /** Live refresh only: current `git diff --shortstat` line. */
   diffStat?: string;
+  /** Creation only (spec 2026-10-11-branch-naming-instructions): ask for a branch name too.
+   *  Explicit instructions win; otherwise `nameBranch` lets `generateRunName` take them from
+   *  the config it loads anyway. */
+  branchNaming?: string;
+  nameBranch?: boolean;
 }
 
 export interface NameResult {
   titleSummary: string;
   prNumber?: number;
   issueNumber?: number;
+  /** Sanitized task branch, present only when `branchNaming` was given and the answer was usable. */
+  branch?: string;
+}
+
+export const BRANCH_NAME_MAX = 80;
+
+/**
+ * Make a model-written branch name safe to splice into `git worktree add -b`: whitespace → `-`,
+ * anything outside `[A-Za-z0-9._/-]` dropped, the `git check-ref-format` traps (`..`, `@{`,
+ * `.lock`, leading `-`/`/`/`.`, trailing `/`/`.`) removed, runs collapsed, length capped.
+ * Answers undefined when nothing usable is left — the caller keeps `cez/<id8>`.
+ */
+export function sanitizeBranchName(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  let name = raw
+    .trim()
+    .replace(/^`+|`+$/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9._/-]/g, '')
+    .replace(/\.\.+/g, '.')
+    .replace(/@\{/g, '')
+    .replace(/-{2,}/g, '-')
+    .replace(/\/{2,}/g, '/')
+    .replace(/\.lock(?=\/|$)/g, '');
+  // Each path component: no leading `.`/`-`, no trailing `.`; empty components dropped.
+  name = name
+    .split('/')
+    .map((part) => part.replace(/^[.-]+/, '').replace(/[.-]+$/, ''))
+    .filter(Boolean)
+    .join('/');
+  const chars = [...name];
+  if (chars.length > BRANCH_NAME_MAX) {
+    name = chars.slice(0, BRANCH_NAME_MAX).join('').replace(/[./-]+$/, '');
+  }
+  return name && !name.startsWith('-') ? name : undefined;
 }
 
 /** The `[cez-namer]` marker lets the CEZ_DRY_RUN mock recognize a naming call. */
@@ -92,6 +140,7 @@ export function buildNamerPrompt(ctx: NamerContext): string {
   if (refs.length) lines.push('', `References found programmatically (advisory): ${refs.join(', ')}`);
   if (ctx.turnText) lines.push('', 'Latest progress (context only — do not quote it):', clip(ctx.turnText, 400));
   if (ctx.diffStat) lines.push('', `Change size so far: ${ctx.diffStat}`);
+  if (ctx.branchNaming) lines.push('', 'Branch naming instructions:', clip(ctx.branchNaming, 2000));
   return lines.join('\n');
 }
 
@@ -150,22 +199,26 @@ export function postValidateTitle(title: string, refNumber?: number): string {
  * the heuristic title. `namerModel` is a Claude alias, so it is passed only
  * when the namer runs on Claude (the `plannerModel` precedent).
  */
-export async function generateRunName(repoRoot: string, ctx: NamerContext): Promise<NameResult | null> {
+export async function generateRunName(repoRoot: string, ctx: NamerContext, execution?: { runner: RunnerId; model?: string; env: Record<string, string>; onUsageWindows?: AgentRunSpec['onUsageWindows'] }): Promise<NameResult | null> {
   try {
     const config = await loadConfig(repoRoot);
-    const runner = createRunner(config.defaultRunner);
-    const model = config.defaultRunner === 'claude' ? config.namerModel : undefined;
+    if (ctx.nameBranch && ctx.branchNaming === undefined && config.branchNaming) {
+      ctx = { ...ctx, branchNaming: config.branchNaming };
+    }
+    const runner = createRunner(execution?.runner ?? config.defaultRunner);
+    const model = execution ? execution.model : config.defaultRunner === 'claude' ? config.namerModel : undefined;
     // Name under the project's own agent account (spec 2026-07-29-agent-profiles) — naming is
     // a model call like any other, and billing it to the personal subscription for a work
     // project is the exact confusion accounts exist to remove.
-    const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
+    const { env: profileEnv } = execution ? { env: execution.env } : await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
     for (let attempt = 0; attempt < 2; attempt++) {
       const result = await runner.run({
-        systemPrompt: NAMER_SYSTEM_PROMPT,
+        systemPrompt: ctx.branchNaming ? NAMER_SYSTEM_PROMPT + NAMER_BRANCH_PROMPT : NAMER_SYSTEM_PROMPT,
         userPrompt: buildNamerPrompt(ctx),
         cwd: repoRoot,
         allowedTools: [],
         model,
+        onUsageWindows: execution?.onUsageWindows,
         timeoutMs: NAMER_TIMEOUT_MS,
         // Shadow the argv-capture hook: dry-run tests capture the AGENT's argv
         // through CEZ_MOCK_ARGS_FILE; the namer's bookkeeping call must not
@@ -198,5 +251,8 @@ export function composeNameResult(rawText: string, ctx: NamerContext): NameResul
   const refNumber = checked.prNumber ?? checked.issueNumber ?? titleRefNumber(refs);
   const titleSummary = postValidateTitle(parsed.title, refNumber);
   if (!titleSummary || titleSummary === String(refNumber ?? '')) return null;
-  return { titleSummary, ...checked };
+  // A branch is only ever asked for (and accepted) under instructions — a model that volunteers
+  // one unprompted is ignored, so the zero-config path can never gain a non-`cez/` branch.
+  const branch = ctx.branchNaming ? sanitizeBranchName(parsed.branch) : undefined;
+  return { titleSummary, ...checked, ...(branch ? { branch } : {}) };
 }

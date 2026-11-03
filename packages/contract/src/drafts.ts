@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { attachmentInputSchema } from './runs.ts';
+import { attachmentInputSchema, MAX_ATTACHMENTS_PER_MESSAGE } from './runs.ts';
 
 /**
  * Per-run, per-surface DRAFTS — the unsent text (and pasted screenshots) of every editable input
@@ -18,7 +18,7 @@ import { attachmentInputSchema } from './runs.ts';
 export const DRAFT_TEXT_MAX = 100_000;
 
 /** Attachments per surface — composer parity (`MAX_ATTACHMENTS`). */
-export const DRAFT_MAX_IMAGES = 4;
+export const DRAFT_MAX_IMAGES = MAX_ATTACHMENTS_PER_MESSAGE;
 
 /** Surfaces per run. A task has five editable inputs plus one editor per queued message; 16 is
  *  well past any real task and keeps one run's draft file bounded. */
@@ -31,9 +31,10 @@ export const DRAFT_MAX_SURFACES = 16;
  * unchecked value is a traversal. `message:<id>` is the one parameterized member — a task can have
  * several queued messages, each with its own inline editor. `diff-comments` is not a text input:
  * its `text` is the JSON list of line comments left on the Changes tab, held until the next
- * message carries them to the agent (the self-review flow).
+ * message carries them to the agent (the self-review flow). `design-picks` is the same kind of
+ * entry for the Preview tab's Design Mode: the JSON list of unsent element notes.
  */
-export const DRAFT_SURFACE_RE = /^(composer|review-notes|diff-comments|task-prompt|title|message:[A-Za-z0-9_-]{1,64})$/;
+export const DRAFT_SURFACE_RE = /^(composer|review-notes|diff-comments|design-picks|task-prompt|title|message:[A-Za-z0-9_-]{1,64})$/;
 
 export const draftSurfaceSchema = z
   .string()
@@ -89,7 +90,7 @@ export type SetRunDraftInput = z.input<typeof setRunDraftInputSchema>;
 
 /**
  * `POST /runs/:id/drafts/:surface/images` — one attachment, base64, on the same terms as a live
- * message's (`imageInputSchema`, ≤4 per surface, ~5 MB decoded each). `name` is the composer's
+ * message's (`imageInputSchema`, ≤`DRAFT_MAX_IMAGES` per surface, ~5 MB decoded each). `name` is the composer's
  * thumbnail label; an omitted one degrades to a generic label rather than failing an upload.
  */
 export const draftImageInputSchema = attachmentInputSchema.extend({

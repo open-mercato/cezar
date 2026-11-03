@@ -1,14 +1,22 @@
-import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
-import { fetchPackageDocument, registryPath } from './registry.ts';
+import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, runsFromCheckout, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
+import { fetchPackageDocument, RegistryCache, registryPath } from './registry.ts';
+import { SelfUpdateService } from './service.ts';
 import { restartArgs } from './restart.ts';
-import { classifyVersion, compareVersions, isNewer } from './semver.ts';
+import { runSelfUpdateCommand } from './cli.ts';
+import { classifyVersion, compareVersions, devVersion, isNewer } from './semver.ts';
 
 describe('semver', () => {
+  it('shows a checkout build as -dev of its release', () => {
+    expect(devVersion('0.15.2')).toBe('0.15.2-dev');
+    expect(devVersion('0.15.2-nightly.20261019.4')).toBe('0.15.2-dev');
+    expect(devVersion('0.15.2+cez-abc12345')).toBe('0.15.2-dev');
+  });
+
   it('orders releases numerically, not lexically', () => {
     expect(compareVersions('1.2.10', '1.2.9')).toBe(1);
     expect(compareVersions('0.11.1', '0.9.2')).toBe(1);
@@ -122,6 +130,23 @@ describe('managed layout', () => {
     expect(detectInstallKind(join(checkout, 'dist', 'index.js'), env)).toBe('checkout');
     expect(detectInstallKind(join(home, 'elsewhere', 'index.js'), env)).toBe('unknown');
   });
+
+  // A worktree linked into versions/ is `managed` by path, yet runs a checkout's code.
+  it('counts a checkout linked as a version as running from a checkout', () => {
+    const checkout = join(home, 'repo', 'packages', 'cezar');
+    mkdirSync(join(checkout, 'src'), { recursive: true });
+    mkdirSync(join(checkout, 'dist'), { recursive: true });
+    writeFileSync(join(checkout, 'package.json'), '{}');
+    writeFileSync(join(checkout, 'dist', 'index.js'), '');
+    const link = join(versionDir('0.15.2+cez-abc12345', env), 'node_modules', '@open-mercato', 'cezar');
+    mkdirSync(join(link, '..'), { recursive: true });
+    symlinkSync(checkout, link, 'dir');
+    const entry = join(link, 'dist', 'index.js');
+    expect(detectInstallKind(entry, env)).toBe('managed');
+    expect(runsFromCheckout(entry, env)).toBe(true);
+    fakeInstall('0.15.1', '0.15.1', 'registry');
+    expect(runsFromCheckout(versionEntry('0.15.1', env), env)).toBe(false);
+  });
 });
 
 describe('restart args', () => {
@@ -173,5 +198,119 @@ describe('activeId without a symlink', () => {
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe('update when idle', () => {
+  let home: string;
+  let env: NodeJS.ProcessEnv;
+  let idle: boolean;
+  let restart: ReturnType<typeof vi.fn<() => void>>;
+  let service: SelfUpdateService;
+
+  const fakeInstall = (id: string) => {
+    const entry = versionEntry(id, env);
+    mkdirSync(join(entry, '..'), { recursive: true });
+    writeFileSync(entry, '// entry\n');
+    writeManifest(id, { version: id, source: 'registry', installedAt: '2026-10-18T10:00:00Z' }, env);
+  };
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'cez-update-idle-'));
+    env = { ...process.env, CEZ_HOME: home };
+    fakeInstall('0.12.0');
+    fakeInstall('0.12.1');
+    activate('0.12.0', env);
+    idle = false;
+    restart = vi.fn<() => void>();
+    const offline = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
+    service = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.12.0',
+      entry: versionEntry('0.12.0', env),
+      restart,
+      runs: { idle: () => idle, activeRuns: () => (idle ? 0 : 1) },
+      idlePollMs: 10,
+      env,
+      registry: new RegistryCache('@open-mercato/cezar', offline),
+    });
+  });
+  afterEach(() => {
+    service.cancelScheduled();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('waits while tasks run, then installs and restarts once the workspace is idle', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect((await service.status()).scheduled?.target).toBe('0.12.1');
+    expect((await service.status()).job).toBeNull();
+    expect(activeId(env)).toBe('0.12.0');
+
+    idle = true;
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    expect(activeId(env)).toBe('0.12.1');
+    const status = await service.status();
+    expect(status.scheduled).toBeNull();
+    expect(status.job?.status).toBe('restarting');
+  });
+
+  it('applies at once when nothing is running', async () => {
+    idle = true;
+    service.scheduleWhenIdle('0.12.1');
+    expect((await service.status()).scheduled).toBeNull();
+    expect((await service.status()).job?.target).toBe('0.12.1');
+  });
+
+  it('never applies a cancelled schedule', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    service.cancelScheduled();
+    idle = true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const status = await service.status();
+    expect(status.scheduled).toBeNull();
+    expect(status.job).toBeNull();
+    expect(activeId(env)).toBe('0.12.0');
+  });
+
+  it('an explicit apply supersedes the schedule', async () => {
+    service.scheduleWhenIdle('0.12.1');
+    service.apply('0.12.1');
+    expect((await service.status()).scheduled).toBeNull();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+    idle = true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(restart).toHaveBeenCalledTimes(1);
+  });
+
+  // A checkout shows `0.12.0-dev`; `cezar update` must still compare the raw `0.12.0`.
+  it('cezar update from a checkout of the latest release is already up to date', async () => {
+    vi.stubEnv('CEZ_HOME', home);
+    activate('0.12.1', env);
+    const registry = (async () =>
+      new Response(JSON.stringify({ 'dist-tags': { latest: '0.12.0' }, versions: { '0.12.0': {} } }), { status: 200 })) as unknown as typeof fetch;
+    const checkout = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.12.0',
+      displayVersion: '0.12.0-dev',
+      entry: join(home, 'repo', 'dist', 'index.js'),
+      restart,
+      env: { ...env, CEZ_UPDATE_CHANNEL: 'stable' },
+      registry: new RegistryCache('@open-mercato/cezar', registry),
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      expect(await runSelfUpdateCommand('update', [], { service: checkout, modifyPath: false })).toBe(0);
+      expect(log.mock.calls.flat().join('\n')).toContain('already up to date');
+      expect(activeId(env)).toBe('0.12.1');
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('refuses up front when this install cannot update itself', () => {
+    const unmanaged = new SelfUpdateService({ pkgName: 'x', version: '0.12.0', entry: join(home, 'elsewhere.js'), restart, env });
+    expect(() => unmanaged.scheduleWhenIdle('0.12.1')).toThrow();
   });
 });

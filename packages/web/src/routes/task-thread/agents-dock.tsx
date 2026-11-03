@@ -1,5 +1,5 @@
 import { BotIcon, ChevronDownIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { ToolStatus } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
@@ -41,6 +41,22 @@ export function AgentsDock({
   onSelect?: (id: string) => void
 }) {
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? DEFAULT_OPEN)
+  const allSettled = agents.every((agent) => agent.status !== 'pending' && agent.status !== 'running')
+  const wasSettled = useRef(allSettled)
+  // Completion is a transition, not an initial-state rule: opening a historical run that is
+  // already settled must respect its remembered choice. Once an active fan-out settles, reclaim
+  // the transcript space, while the unchanged toggle still lets the reader reopen it manually.
+  useEffect(() => {
+    if (!wasSettled.current && allSettled) {
+      setOpen((value) => {
+        if (!value) return value
+        openByRun.set(runId, false)
+        return false
+      })
+    }
+    wasSettled.current = allSettled
+  }, [allSettled, runId])
+
   // No fan-out to show — the overwhelming majority of runs never mount this at all.
   if (agents.length === 0) return null
 
@@ -64,7 +80,7 @@ export function AgentsDock({
         type="button"
         onClick={toggle}
         aria-expanded={open}
-        className={cn('flex w-full items-center gap-2 px-3.5 text-left text-[13px]', open ? 'pt-2 pb-1.5' : 'py-2')}
+        className={cn('flex w-full items-center gap-2 px-3.5 text-left text-ui', open ? 'pt-2 pb-1.5' : 'py-2')}
       >
         <BotIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />
         <span className="shrink-0 font-semibold">Agents</span>
@@ -102,7 +118,7 @@ function AgentRow({ agent, onSelect }: { agent: SubagentSummary; onSelect?: (id:
       {agent.agentType !== undefined ? (
         <span
           data-slot="agent-type"
-          className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+          className="shrink-0 rounded-full bg-muted px-2 py-0.5 eyebrow text-muted-foreground"
         >
           {agent.agentType}
         </span>
@@ -117,7 +133,7 @@ function AgentRow({ agent, onSelect }: { agent: SubagentSummary; onSelect?: (id:
   )
 
   return (
-    <li data-slot="agent-item" data-status={agent.status} className="min-w-0 text-[13px]">
+    <li data-slot="agent-item" data-status={agent.status} className="min-w-0 text-ui">
       {onSelect ? (
         <button
           type="button"

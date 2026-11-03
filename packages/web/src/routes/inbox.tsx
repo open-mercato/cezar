@@ -17,6 +17,7 @@ import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
 import { isHttpUrl } from '@/lib/utils'
+import { trackMessageSent } from '@/lib/telemetry'
 
 /**
  * `/inbox` — the follow-up inbox rebuilt in React (R6 Step 1.2, spec §"Skills, Workflows,
@@ -83,7 +84,7 @@ export function InboxRoute() {
       {/* Desktop header — below `md` the shell's top bar already says "Inbox". */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Inbox</h1>
-        <p className="text-[13px] text-soft-foreground">
+        <p className="text-ui text-soft-foreground">
           {inboxOff
             ? 'Disabled for this server; per-task Notes still run.'
             : 'Follow-ups agents suggested when they finished a task.'}
@@ -201,6 +202,7 @@ function TodoCard({
     },
     onSuccess: (result) => {
       if (result === null) return
+      trackMessageSent('inbox')
       const { run } = result
       // The server rewrote todos.json (SSE will confirm); the invalidations just refuse to
       // wait for the file watcher's debounce.
@@ -368,7 +370,7 @@ function TodoCard({
               // stopped at the keystroke rather than by a 400 on Run (the Settings inputs cap the
               // same way).
               maxLength={20_000}
-              className="min-h-16 text-[13px]"
+              className="min-h-16 text-ui"
             />
             <div className="flex items-center gap-2">
               <PromptTemplateMenu templates={templates} onInsert={insertNotesTemplate} />

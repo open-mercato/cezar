@@ -1,0 +1,26 @@
+---
+title: "Link a template to a skill"
+description: "Selecting a skill can fill in the task description automatically."
+related:
+  links:
+    - guides/common-questions
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/instructions-section.tsx
+    line: 151
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Assign a template to a skill to avoid pasting the same instructions each time.
+
+## Where to find it
+
+Settings → project → Instructions → Prompt templates → skill assignment
+
+## How to use it
+
+1. Create a template.
+2. Assign it to a skill.
+3. Select that skill in an empty task form.
+
+> **Good to know**: Automatic filling works only before you enter your own text. Existing instructions are preserved.

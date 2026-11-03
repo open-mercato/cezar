@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -30,18 +31,26 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnError,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
   type CodexUiMapperState,
 } from './codex-ui-mapper.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { explainCodexModelError } from './agent-errors.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
+  /** Waits between `thread/resume` retries while another process holds the thread. */
+  resumeLockRetryMs?: readonly number[];
 }
+
+/** ~16s: outlasts a previous session's own EOF→TERM→KILL teardown (12s) before forking. */
+const RESUME_LOCK_RETRY_MS: readonly number[] = [250, 500, 1_000, 2_000, 4_000, 4_000, 4_000];
 
 /**
  * `AgentRunner` over `codex app-server` — the same JSONL transport the VS Code
@@ -58,16 +67,46 @@ export interface CodexRunnerOptions {
  * `spec.allowedTools` is ignored. `CEZ_CODEX_NETWORK=0` retains the previous
  * network-blocked `workspace-write` sandbox as an explicit restriction.
  */
+/**
+ * The `thread/start` / `thread/resume` overrides. Full access is the `auto` preset shared by all
+ * backends; besides avoiding prompts, it keeps container installs working when bubblewrap cannot
+ * create a UID map (#563). `CEZ_CODEX_NETWORK=0` remains the explicit sandbox opt-out, and under
+ * it the run's artifacts directory is added as a writable root, or a sandboxed run could not
+ * publish (spec 2026-10-22-html-artifacts-and-impact).
+ */
+export function codexThreadOverrides(
+  spec: Pick<AgentRunSpec, 'model' | 'cwd' | 'env'>,
+  mcpConfig: Record<string, unknown> | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const sandboxed = env.CEZ_CODEX_NETWORK === '0';
+  const artifacts = sandboxed ? spec.env?.CEZ_ARTIFACTS_DIR : undefined;
+  // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
+  // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
+  const config = artifacts
+    ? { ...mcpConfig, 'sandbox_workspace_write.writable_roots': [artifacts] }
+    : mcpConfig;
+  return {
+    model: spec.model,
+    cwd: spec.cwd,
+    sandbox: sandboxed ? 'workspace-write' : 'danger-full-access',
+    approvalPolicy: 'never',
+    config,
+  };
+}
+
 export class CodexAppServerRunner implements AgentRunner {
   readonly backend = 'codex' as const;
 
   private readonly bin: string;
   private readonly timeoutMs: number;
+  private readonly resumeLockRetryMs: readonly number[];
   private lastSession: CodexSession | null = null;
 
   constructor(opts: CodexRunnerOptions = {}) {
     this.bin = resolveCodexExecutable(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+    this.resumeLockRetryMs = opts.resumeLockRetryMs ?? RESUME_LOCK_RETRY_MS;
   }
 
   run(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void): Promise<AgentRunResult> {
@@ -83,7 +122,7 @@ export class CodexAppServerRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
-    const session = new CodexSession(this.bin, this.timeoutMs, spec, onEvent, opts);
+    const session = new CodexSession(this.bin, this.timeoutMs, this.resumeLockRetryMs, spec, onEvent, opts);
     this.lastSession = session;
     return session;
   }
@@ -152,6 +191,7 @@ class CodexSession implements AgentSession {
   constructor(
     private readonly bin: string,
     timeoutMs: number,
+    private readonly resumeLockRetryMs: readonly number[],
     private readonly spec: AgentRunSpec,
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
@@ -171,25 +211,21 @@ class CodexSession implements AgentSession {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-        this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+      this.child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!this.hasExited()) {
+          this.terminatedByCezar = true;
+          this.child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     // Handshake → thread → first turn. Kicked off concurrently with the read
     // loop below (which resolves the request() promises this awaits).
@@ -201,11 +237,15 @@ class CodexSession implements AgentSession {
         const readLoop = async () => {
           for await (const line of readNdjson(this.child.stdout)) {
             if (this.timedOut) break;
+            deadline.touch();
             let msg: CodexAppServerMessage;
             try {
               msg = JSON.parse(line) as CodexAppServerMessage;
             } catch {
               continue; // not JSON-RPC — skip
+            }
+            if (msg.method === 'account/rateLimits/updated') {
+              emitUsageWindows(spec.onUsageWindows, normalizeCodexUsageWindows(msg.params));
             }
             // A sub-agent child thread's turn lifecycle must reach neither channel (#600):
             // v1 would emit a bogus `turn-end`, and the v2 mapper — which carries no thread
@@ -230,7 +270,7 @@ class CodexSession implements AgentSession {
           this.end();
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
@@ -256,8 +296,7 @@ class CodexSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `codex app-server timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('codex app-server', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }
@@ -354,7 +393,7 @@ class CodexSession implements AgentSession {
         message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
       };
     }
-    return { type: 'error', message: `codex: turn failed: ${detail}` };
+    return { type: 'error', message: `codex: turn failed: ${explainCodexModelError(detail, this.spec.model)}` };
   }
 
   end(): void {
@@ -411,21 +450,9 @@ class CodexSession implements AgentSession {
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
 
-    const overrides = {
-      model: this.spec.model,
-      cwd: this.spec.cwd,
-      // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
-      // keeps container installs working when bubblewrap cannot create a UID map (#563).
-      // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
-      approvalPolicy: 'never',
-      // Private MCP servers (spec 2026-10-07-private-project-mcp) ride in as per-server dotted
-      // config overrides, so the user's own [mcp_servers] table is extended, never replaced.
-      config: this.privateMcpConfig(),
-    };
+    const overrides = codexThreadOverrides(this.spec, this.privateMcpConfig());
     if (this.spec.resume && this.spec.sessionId) {
-      await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
-      this.threadId = this.spec.sessionId;
+      this.threadId = await this.resumeThread(this.spec.sessionId, clean(overrides));
     } else {
       const res = await this.rpc.request('thread/start', clean(overrides));
       this.threadId = threadIdOf(res) ?? this.spec.sessionId;
@@ -445,6 +472,35 @@ class CodexSession implements AgentSession {
     await this.startOrSteerTurn(first);
   }
 
+  /**
+   * `thread/resume`, tolerating another live app-server that still holds the thread's writer
+   * lock — the previous session draining its turn after a Continue or a cezar restart. Wait
+   * for it to let go; if it never does, fork the stored thread (forking takes no writer lock)
+   * so the run keeps its history instead of failing on a lock it cannot break.
+   */
+  private async resumeThread(threadId: string, overrides: Record<string, unknown>): Promise<string> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.rpc.request('thread/resume', { threadId, ...overrides });
+        return threadId;
+      } catch (err) {
+        if (!isActiveWriterError(err) || !this.stdinOpen) throw err;
+        const delay = this.resumeLockRetryMs[attempt];
+        if (delay === undefined) break;
+        await new Promise((resolve) => setTimeout(resolve, delay).unref?.());
+        if (!this.stdinOpen) throw err;
+      }
+    }
+    const res = await this.rpc.request('thread/fork', { threadId, ...overrides });
+    const forkedId = threadIdOf(res);
+    if (!forkedId) throw new Error(`codex: thread ${threadId} is open in another Codex process and could not be forked`);
+    this.emit({
+      type: 'note',
+      message: `codex: thread ${threadId} is still open in another Codex process — continuing in a fork of it (${forkedId})`,
+    });
+    return forkedId;
+  }
+
   private async startOrSteerTurn(text: string): Promise<void> {
     if (!this.threadId) return;
     const input = [{ type: 'text', text, text_elements: [] }];
@@ -460,10 +516,22 @@ class CodexSession implements AgentSession {
     // with its default (no summary), so the reasoning thread stays empty even
     // though the mapper and UI can render it. The override persists for this
     // turn and every subsequent turn, so seeding it on turn/start is enough.
+    //
+    // `effort` rides the same request but does NOT depend on that persistence
+    // claim, which was written about `summary` alone. It needs no equivalent,
+    // because there is no turn this branch does not cover: `turn/steer` above
+    // injects into a turn that ALREADY started here with the effort applied
+    // (it is gated on an active turn id, so it is never a turn of its own), and
+    // every genuinely new turn comes back through this branch and re-sends
+    // `this.spec.reasoningEffort`, which is fixed for the session. So no turn
+    // can run at a different effort than the one selected for the session.
+    // Omitted when unset — absence is what preserves the App Server's native
+    // default, and the run record distinguishes "unset" from any chosen value.
     const res = await this.rpc.request('turn/start', {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }
@@ -587,14 +655,13 @@ class CodexSession implements AgentSession {
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
         // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
-        // boundary carries it: a `turn/failed` already emits an authoritative error, and
+        // boundary carries it: a failed turn already emits an authoritative error, and
         // stacking a "keep going" reason on top of it would be two verdicts for one turn.
-        const compacted = method === 'turn/completed' && this.compactionEndedTurn;
+        const turnError = codexTurnError(method, params);
+        const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
+        if (turnError !== undefined && !this.terminatedByCezar) {
+          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
@@ -672,7 +739,10 @@ function codexAskQuestions(value: unknown): AskQuestion[] | null {
   return parseAskRequest({ questions })?.questions ?? null;
 }
 
-function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
+/** Read the ask card's `Header: answer` lines back into Codex's per-question answers. Only a
+ *  multi-select answer is a comma list — a single-select one may be the user's own text, and
+ *  "Use X, but only for Y" is one answer, not two. */
+export function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
   const lines = text.split(/\r?\n/);
   const hasStructuredAnswer = questions.some((question) => lines.some((line) => line.startsWith(`${question.header}:`)));
   const answers: Record<string, { answers: string[] }> = {};
@@ -681,7 +751,12 @@ function userInputAnswers(questions: AskQuestion[], text: string): Record<string
     const matching = lines.find((line) => line.startsWith(prefix));
     const raw = matching?.slice(prefix.length).trim() ?? (!hasStructuredAnswer && index === 0 ? text.trim() : '');
     answers[question.id ?? String(index)] = {
-      answers: raw === '' ? [] : raw.split(',').map((answer) => answer.trim()).filter(Boolean),
+      answers:
+        raw === ''
+          ? []
+          : question.multiSelect === true
+            ? raw.split(',').map((answer) => answer.trim()).filter(Boolean)
+            : [raw],
     };
   }
   return answers;
@@ -730,6 +805,11 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === 'string' ? v : undefined;
+}
+
+/** Codex's per-thread writer lock is held by another live process (codex-rs `writer_lock.rs`). */
+function isActiveWriterError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes('already has an active writer');
 }
 
 function threadIdOf(res: Record<string, unknown>): string | undefined {

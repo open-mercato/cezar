@@ -15,6 +15,7 @@ const row = (id: string, status: 'waiting' | 'review' = 'waiting'): DashboardTas
   title: `Task ${id}`,
   status,
   createdAt: at,
+  lastActivityAt: at,
   archived: false,
   workflow: 'quick',
 })
@@ -42,6 +43,7 @@ function setup(options: {
   saveError?: boolean
   snapshot?: () => DashboardSnapshot
   tasks?: (url: string) => Response
+  overviewProjects?: string[]
 } = {}) {
   const calls: { url: string; body?: string }[] = []
   vi.stubGlobal(
@@ -84,7 +86,15 @@ function setup(options: {
               timedTasks: 0,
               medianCycleHours: null,
             },
-            projects: [],
+            projects: (options.overviewProjects ?? []).map((projectId) => ({
+              projectId,
+              running: 1,
+              needsYou: 0,
+              completed: 0,
+              failed: 0,
+              timedTasks: 0,
+              medianCycleHours: null,
+            })),
             page: { rows: [], total: 0, nextOffset: null },
           }),
         )
@@ -171,6 +181,11 @@ describe('dashboard decisions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.getByTestId('location').textContent).toBe('?view=operations')
+  })
+  it('links a project name to its Tasks overview, not the not-found /tasks (#1496)', async () => {
+    setup({ overviewProjects: ['shop'] })
+    const link = await screen.findByRole('link', { name: 'shop' })
+    expect(link.getAttribute('href')).toBe('/p/shop')
   })
   it('shows an API error rather than an empty queue', async () => {
     setup({ error: true })
