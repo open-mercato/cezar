@@ -5,7 +5,7 @@ import {
   GlobeIcon,
   MessageSquareTextIcon,
   TerminalIcon,
-  WorkflowIcon,
+  WaypointsIcon,
 } from 'lucide-react'
 import { createContext, useContext, type ComponentType, type ReactNode } from 'react'
 
@@ -37,7 +37,7 @@ export const VIEW_ICONS: Record<ViewId, ComponentType<{ className?: string }>> =
   files: CodeXmlIcon,
   browser: GlobeIcon,
   // The same icon the standalone graph route uses, so the tile and the surface agree.
-  graph: WorkflowIcon,
+  graph: WaypointsIcon,
   terminal: TerminalIcon,
 }
 
