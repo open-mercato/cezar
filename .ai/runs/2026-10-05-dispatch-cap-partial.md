@@ -45,3 +45,10 @@ Status: complete. Independent review approved at exact head `1178a161`; focused 
 - `npm run typecheck:server` — local checkout blocked by generated-contract/export drift and unrelated self-update/dashboard errors; clean final-head CI typecheck passed.
 - Final-head CI `37302641815` — passed: typecheck, unit, server/cockpit suites, build, packaged CLI E2E, release-package verification, and publish snapshot.
 - Final-head CodeQL `37302641731` — passed: JavaScript/TypeScript and Actions analysis.
+
+## Review follow-up (2026-11-03)
+
+Per review on #1272: a capped run no longer settles `failed` — Finish keeps its `done`/`review`
+meaning (#917, #1076) and only the parent's report reads `autoContinueCapReached` (`partial`). An
+accepted live user message also resets the nudge counter. The marker is declared on the contract.
+The PR now says `Refs #1192`: the issue's `retry_limit` acceptance stays open.
