@@ -33,4 +33,11 @@ describe('EditorDispatchRow', () => {
     fireEvent.click(screen.getByRole('switch', { name: 'Review child' }))
     expect(onChange).toHaveBeenLastCalledWith({ reviewChild: true })
   })
+
+  it('turns review child off together with Dispatch (#1742)', () => {
+    const onChange = vi.fn()
+    render(<EditorDispatchRow available enabled maxSubtasks={4} reviewChild onChange={onChange} />)
+    fireEvent.click(screen.getByRole('switch', { name: 'Dispatch' }))
+    expect(onChange).toHaveBeenLastCalledWith({ dispatch: false, reviewChild: false })
+  })
 })

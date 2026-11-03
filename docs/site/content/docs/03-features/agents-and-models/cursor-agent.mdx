@@ -1,0 +1,25 @@
+---
+title: "Cursor agent"
+description: "Run tasks through the local Cursor Agent CLI."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/cursor-agent-runner.ts
+    line: 146
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Cezar runs tasks through Cursor Agent CLI installed and signed in on your computer. Select Cursor when creating a task, then choose a model or auto.
+
+## Where to find it
+
+New task → runner → Cursor
+
+## How to use it
+
+1. Install the local agent CLI and sign in.
+2. Start Cezar and select Cursor.
+3. Choose a model or leave auto.
+
+> **Good to know**: Continue opens a fresh session. This backend does not report tokens or cost, so a zero in the header does not confirm a free run.

@@ -4,6 +4,8 @@ import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/ce
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
+  looksLikeQuestion,
+  projectDefaultSource,
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
@@ -12,6 +14,8 @@ import {
   modelCatalogStatus,
   modelConflictsWithRunner,
   pushRecentSource,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -65,7 +69,7 @@ describe('model option resolution', () => {
   })
 
   it('claude falls back to the tier aliases when there is no host catalog', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
     // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
@@ -100,7 +104,7 @@ describe('model option resolution', () => {
 
   it('an empty catalog is not an empty picker — the presets come back', () => {
     const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
-    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -160,11 +164,19 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
   })
 
+  it('accepts the vendor ids Copilot and Cursor host as their own', () => {
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5.4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false)
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
+  })
+
   it('exactly the runners with a host catalog discover their models', () => {
     // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
     // list is the single source both the route and the picker compile against — this asserts they
     // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity', 'kimi'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
@@ -189,6 +201,21 @@ describe('model option resolution', () => {
         stale: false,
       }).map((m) => m.id),
     ).toEqual([''])
+  })
+
+  it('gemini stays OUT of discovery: its presets plus free text, and no /models request', () => {
+    // Gemini CLI has no host catalog in cezar, so `GET /models?runner=gemini` would 400 and the
+    // picker offers `MODELS_BY_RUNNER.gemini` — the server's `KNOWN_PRESETS_BY_RUNNER.gemini` plus
+    // the implicit `auto` (#581; spec § API Contracts, same rule as pi and copilot).
+    expect(runnerDiscoversModels('gemini')).toBe(false)
+    expect(MODEL_DISCOVERY_RUNNERS).not.toContain('gemini')
+    expect(modelsForRunner('gemini').map((m) => m.id)).toEqual([
+      '',
+      'gemini-3.5-flash',
+      'gemini-3-flash-preview',
+      'gemini-3.1-flash-lite',
+      'gemini-2.5-pro',
+    ])
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {
@@ -257,6 +284,42 @@ describe('model option resolution', () => {
   })
 })
 
+describe('Codex reasoning effort option resolution', () => {
+  const catalog = {
+    runner: 'codex' as const,
+    models: [
+      {
+        id: 'gpt-future',
+        label: 'Future',
+        description: 'Future Codex model',
+        reasoningEfforts: [
+          { id: 'low', description: 'Faster' },
+          { id: 'high', description: 'More thorough' },
+        ],
+      },
+    ],
+    source: 'live' as const,
+    stale: false,
+  }
+
+  it('exposes levels only for the selected discovered Codex model', () => {
+    expect(reasoningEffortsForModel('codex', 'gpt-future', catalog).map((option) => option.id)).toEqual([
+      'low',
+      'high',
+    ])
+    expect(reasoningEffortsForModel('codex', '', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('claude', 'gpt-future', catalog)).toEqual([])
+    expect(reasoningEffortsForModel('codex', 'custom-id', catalog)).toEqual([])
+  })
+
+  it('keeps a valid pick and clears a stale or absent one back to the native default', () => {
+    expect(resolveReasoningEffort('high', 'codex', 'gpt-future', catalog)).toBe('high')
+    expect(resolveReasoningEffort('medium', 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort(null, 'codex', 'gpt-future', catalog)).toBe('')
+    expect(resolveReasoningEffort('high', 'claude', 'gpt-future', catalog)).toBe('')
+  })
+})
+
 describe('resolveSource (the draft pick, validated — no cold default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
@@ -309,6 +372,20 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
   })
 
+  it('newBranch rides only an in-place single run (spec 2026-10-19-repo-git-sync)', () => {
+    const base = { task: 't', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+    const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+      JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+    expect(wire({ worktree: false, newBranch: true, branch: ' feat/x ' })).toMatchObject({
+      worktree: false,
+      newBranch: true,
+      branch: 'feat/x',
+    })
+    expect(wire({ worktree: false, newBranch: true, branch: '' })).not.toHaveProperty('branch')
+    expect(wire({ worktree: true, newBranch: true, branch: 'feat/x' })).not.toHaveProperty('newBranch')
+    expect(wire({ worktree: false, newBranch: true, variants: 2 })).not.toHaveProperty('newBranch')
+  })
+
   it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
     const body = buildCreateRunBody({
       task: 'just do it',
@@ -358,6 +435,21 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     }
     expect(buildCreateRunBody(opts).model).toBeUndefined()
     expect(buildAutomationTask(opts).model).toBeUndefined()
+  })
+
+  it('sends a selected Codex effort but keeps the native default implicit', () => {
+    const base = {
+      task: 'reason carefully',
+      source: { source: 'workflow' as const, ref: 'quick-task' },
+      model: 'gpt-future',
+      runner: 'codex' as const,
+      defaultRunner: 'codex' as const,
+      variants: 1,
+      images: [],
+    }
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high' }).reasoningEffort).toBe('high')
+    expect(buildCreateRunBody({ ...base, reasoningEffort: '' }).reasoningEffort).toBeUndefined()
+    expect(buildCreateRunBody({ ...base, reasoningEffort: 'high', modelsLocked: true }).reasoningEffort).toBeUndefined()
   })
 
   it('omits runner when the chosen connected runner equals the server default', () => {
@@ -499,5 +591,45 @@ describe('buildAutomationTask', () => {
       variants: 2,
       autonomous: true,
     })
+  })
+})
+
+describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
+  const base = { task: 'x', source: null, model: '', runner: 'claude' as const, defaultRunner: 'claude' as const, images: [] }
+  const wire = (opts: Partial<Parameters<typeof buildCreateRunBody>[0]>) =>
+    JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, variants: 1, ...opts })))
+
+  it('sends an Ask task as readOnly, with no worktree or branch keys', () => {
+    expect(wire({ readOnly: true, worktree: false, newBranch: true })).toEqual({ task: 'x', workflow: 'quick-task', readOnly: true })
+    // Variants and dispatch always isolate, so they win over Ask.
+    expect(wire({ readOnly: true, variants: 2 })).not.toHaveProperty('readOnly')
+    expect(wire({ readOnly: true, dispatch: {} })).not.toHaveProperty('readOnly')
+  })
+
+  it('asks for a worktree explicitly only against an in-place project default', () => {
+    expect(wire({ worktree: true, inPlaceByDefault: true })).toMatchObject({ worktree: true })
+    expect(wire({ worktree: false, inPlaceByDefault: true })).toMatchObject({ worktree: false })
+    expect(wire({ worktree: true })).not.toHaveProperty('worktree')
+  })
+
+  it("preselects the project's default or Ask skill, only when it exists", () => {
+    const skills = [{ name: 'ingest' }, { name: 'ask' }] as Skill[]
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, skills)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
+    expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('keeps the configured skill when the catalog failed to load, instead of dropping to quick-task', () => {
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, null)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, null)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource(undefined, false, null)).toBeNull()
+  })
+
+  it('reads a trailing question mark as a question', () => {
+    expect(looksLikeQuestion("what's open with Daniel? ")).toBe(true)
+    expect(looksLikeQuestion('1on1 with Bjorn — I owe him the deck by Friday')).toBe(false)
   })
 })

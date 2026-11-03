@@ -1,0 +1,27 @@
+---
+title: "Start a new task after a quota reset"
+description: "Schedule a new task for the next confirmed reset of a selected Claude or Codex account."
+related:
+  links:
+    - guides/common-questions
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/automations/deferred-reset.ts
+    line: 28
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+After usage limit resets schedules a new task for the next confirmed quota reset of the selected Claude or Codex account. Before saving, use Check start time to verify the account and calculated time.
+
+## Where to find it
+
+New task → clock button → After usage limit resets
+
+## How to use it
+
+1. Select a supported Claude or Codex account and describe the task.
+2. Open the clock and choose After usage limit resets.
+3. Click Check start time and check the time and account.
+4. Click Schedule task.
+
+> **Good to know**: Claude needs reset observations from earlier Cezar tasks. Codex reads usage data without running the model. Without reliable data, this option is disabled. Scheduling does not reserve future quota or automatically resume an interrupted session.

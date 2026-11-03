@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { renameWithRetry } from '../fs-rename.ts';
 import { agentHomePaths } from '../paths.ts';
 import { ensureDataGitignore } from '../data-gitignore.ts';
 import { findConfigFile, type ConfigFileDef } from './catalog.ts';
@@ -127,7 +128,7 @@ export async function writeConfigFile(
     // file can't rename the same tmp path over each other and tear the bytes.
     const tmp = `${target}.cez-tmp-${process.pid}-${randomUUID()}`;
     await writeFile(tmp, content, def.private ? { encoding: 'utf8', mode: 0o600 } : 'utf8');
-    await rename(tmp, target);
+    await renameWithRetry(tmp, target);
     const written = await readFile(target, 'utf8');
     return { ok: true, read: { id, path, exists: true, content: written, version: hashBytes(written) } };
   } catch (err) {

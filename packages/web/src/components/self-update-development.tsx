@@ -8,6 +8,8 @@ import { Input } from '@/components/ui/input'
 import { shortAge } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { offerWhenIdle, WhenIdleButton } from './self-update-when-idle'
+
 /** The PR number a preview version was cut for (`0.13.0-pr1169.1234` → 1169), else null. */
 export function pullOfVersion(version: string): number | null {
   const match = /-pr(\d+)\./.exec(version)
@@ -25,10 +27,12 @@ type Tab = 'worktrees' | 'pulls'
 export function DevelopmentPanel({
   data,
   onApply,
+  onSchedule,
   applying,
 }: {
   data: SelfUpdateStatus
   onApply: (target: string) => void
+  onSchedule: (target: string) => void
   applying: boolean
 }) {
   const dev = useSelfUpdateDevelopment()
@@ -108,7 +112,7 @@ export function DevelopmentPanel({
                 setPicked(null)
               }}
               className={cn(
-                'rounded-[5px] px-3 py-1 text-[12.5px] font-semibold transition-colors',
+                'rounded-[5px] px-3 py-1 text-label font-semibold transition-colors',
                 tab === entry.value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
               )}
             >
@@ -127,19 +131,19 @@ export function DevelopmentPanel({
         value={query}
         onChange={(event) => setQuery(event.target.value)}
         placeholder={tab === 'worktrees' ? 'Filter by task, branch, commit or #PR' : 'Filter by #number, title, branch or author'}
-        className="h-8 text-[13px]"
+        className="h-8 text-ui"
       />
 
       {/* Status lines and the "show unbuilt" toggle sit beside the listbox, not in it: a listbox
           may only hold options. */}
       <div className="max-h-72 min-h-24 overflow-y-auto rounded-md border border-border">
         {dev.isPending ? (
-          <p className="px-3 py-3 text-[12.5px] text-muted-foreground">Looking for worktrees and pull requests…</p>
+          <p className="px-3 py-3 text-label text-muted-foreground">Looking for worktrees and pull requests…</p>
         ) : dev.error ? (
-          <p className="px-3 py-3 text-[12.5px] text-danger">{dev.error.message}</p>
+          <p className="px-3 py-3 text-label text-danger">{dev.error.message}</p>
         ) : tab === 'worktrees' ? (
           <>
-            {shownCheckouts.length === 0 ? <p className="px-3 py-3 text-[12.5px] text-muted-foreground">Nothing matches.</p> : null}
+            {shownCheckouts.length === 0 ? <p className="px-3 py-3 text-label text-muted-foreground">Nothing matches.</p> : null}
             <div role="listbox" aria-label="Worktrees">
               {shownCheckouts.map((checkout) => (
                 <CheckoutRow
@@ -154,9 +158,9 @@ export function DevelopmentPanel({
           </>
         ) : (
           <>
-            {pulls && !pulls.available ? <p className="px-3 py-2 text-[12px] text-muted-foreground">{pulls.reason}</p> : null}
+            {pulls && !pulls.available ? <p className="px-3 py-2 text-label text-muted-foreground">{pulls.reason}</p> : null}
             {pulls?.available && shownPulls.length === 0 ? (
-              <p className="px-3 py-3 text-[12.5px] text-muted-foreground">
+              <p className="px-3 py-3 text-label text-muted-foreground">
                 {pulls.items.length === 0
                   ? `No open pull requests on ${pulls.repo}.`
                   : needle
@@ -179,7 +183,7 @@ export function DevelopmentPanel({
               <button
                 type="button"
                 onClick={() => setShowUnbuilt((value) => !value)}
-                className="w-full border-t border-border px-3 py-2 text-left text-[12px] text-muted-foreground hover:text-foreground"
+                className="w-full border-t border-border px-3 py-2 text-left text-label text-muted-foreground hover:text-foreground"
               >
                 {showUnbuilt
                   ? `Hide the ${unbuilt} without a preview build`
@@ -191,7 +195,7 @@ export function DevelopmentPanel({
       </div>
 
       <div className="flex min-w-0 items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-[11.5px] text-muted-foreground" title={pickedCheckout?.worktree}>
+        <p className="min-w-0 flex-1 truncate text-meta text-muted-foreground" title={pickedCheckout?.worktree}>
           {pickedCheckout
             ? needsBuild
               ? `${pickedCheckout.built ? 'Built before its last commit' : 'Not built yet'} — runs npm run build in ${pickedCheckout.worktree} first (about a minute).`
@@ -202,6 +206,18 @@ export function DevelopmentPanel({
                 ? 'Linked, not copied: a worktree that is not built, or built before its last commit, is built before the switch.'
                 : 'Preview builds CI publishes for green same-repo pull requests.'}
         </p>
+        {!targetIsActive && offerWhenIdle(data, target) ? (
+          <WhenIdleButton
+            label="When idle"
+            doing={
+              pickedPull
+                ? `${pickedPull.installed ? 'switches to' : 'installs'} PR #${pickedPull.number}'s build`
+                : `${needsBuild ? 'builds and switches to' : 'switches to'} ${pickedCheckout!.branch}`
+            }
+            onClick={() => onSchedule(target)}
+            disabled={!data.canSelfUpdate || applying || jobBusy}
+          />
+        ) : null}
         <Button
           size="sm"
           variant="contrast"
@@ -268,7 +284,7 @@ function CheckoutRow({
   return (
     <Row selected={selected} disabled={!checkout.id} onSelect={onSelect} title={checkout.worktree}>
       <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{headline}</span>
+        <span className="min-w-0 flex-1 truncate text-ui font-medium">{headline}</span>
         {checkout.pr ? <Badge variant="outline">#{checkout.pr}</Badge> : null}
         {active ? <Badge variant="secondary">current</Badge> : null}
         {!checkout.built ? (
@@ -277,7 +293,7 @@ function CheckoutRow({
           <Badge variant="outline">needs rebuild</Badge>
         ) : null}
       </div>
-      <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground">
         <span className="shrink-0 font-mono">{checkout.branch}</span>
         {checkout.task ? <span className="shrink-0">· {checkout.task.status}</span> : null}
         {checkout.commit ? (
@@ -305,8 +321,8 @@ function PullRow({
   return (
     <Row selected={selected} disabled={!pull.version} onSelect={onSelect} title={pull.url}>
       <div className="flex min-w-0 items-center gap-2">
-        <span className="shrink-0 text-[13px] text-muted-foreground">#{pull.number}</span>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{pull.title}</span>
+        <span className="shrink-0 text-ui text-muted-foreground">#{pull.number}</span>
+        <span className="min-w-0 flex-1 truncate text-ui font-medium">{pull.title}</span>
         {pull.draft ? <Badge variant="outline">draft</Badge> : null}
         {active ? (
           <Badge variant="secondary">current</Badge>
@@ -316,7 +332,7 @@ function PullRow({
           <Badge variant="outline">installed</Badge>
         ) : null}
       </div>
-      <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-foreground">
+      <div className="flex min-w-0 items-center gap-1.5 text-meta text-muted-foreground">
         {pull.author ? <span className="shrink-0">{pull.author}</span> : null}
         <span className="min-w-0 truncate font-mono">· {pull.branch}</span>
         <span className="shrink-0">· updated {shortAge(pull.updatedAt)} ago</span>

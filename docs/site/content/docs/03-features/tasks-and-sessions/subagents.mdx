@@ -1,0 +1,27 @@
+---
+title: "Inspect subagent activity"
+description: "See the activity and history of agents launched within a session."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/task-thread.tsx
+    line: 463
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-20-grouped-subagent-display.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Agents panel appears when the session reports subagent activity.
+
+## Where to find it
+
+Task thread → Agents
+
+## How to use it
+
+1. Expand the Agents panel and select an agent.
+2. Read its activity and history.
+
+> **Good to know**: The panel shows activity reported by subagents. You cannot use it to launch separate tasks.

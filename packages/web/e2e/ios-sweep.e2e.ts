@@ -35,6 +35,9 @@ const IPHONE = { width: 390, height: 844 } // iPhone 14/15 CSS pixels
 
 /** The one entry point to navigation below `md` (see app-shell.tsx MobileTopBar). */
 const MENU_BUTTON = '[data-slot="mobile-top-bar"] button[aria-label="Open menu"]'
+/** Settings is chromeless (spec 2026-10-13-unified-settings): the app's top bar is not rendered
+ *  there, and the settings top bar's own hamburger opens the settings drawer instead. */
+const SETTINGS_MENU_BUTTON = '[data-slot="settings-mobile-bar"] button[aria-label="Open settings menu"]'
 
 let browser: AgentBrowser
 let baseUrl: string
@@ -115,8 +118,12 @@ function sweep(slug: string, path: string, ready: string): void {
 
   // The mobile chrome is reachable: the drawer trigger is there and visible — below `md` it is
   // the only way to the nav, so its absence strands the user on whatever view they deep-linked.
-  expect(browser.count(MENU_BUTTON)).toBe(1)
-  expect(browser.isVisible(MENU_BUTTON)).toBe(true)
+  // On a settings page that trigger is the settings drawer's hamburger; the app's is absent.
+  const chromeless = browser.count('[data-slot="app-shell"][data-chromeless]') === 1
+  const menuButton = chromeless ? SETTINGS_MENU_BUTTON : MENU_BUTTON
+  expect(browser.count(menuButton)).toBe(1)
+  expect(browser.isVisible(menuButton)).toBe(true)
+  if (chromeless) expect(browser.count(MENU_BUTTON)).toBe(0)
 
   // `<=`, not `===`: the document may be narrower than the viewport, never wider.
   const [scrollWidth, innerWidth] = browser.evaluate(

@@ -12,6 +12,10 @@ import type { RunManager } from '../workflows/run.ts';
 import { createApp, WorkspaceEventBus } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
+// Tracker credential isolation must not depend on installed agent CLI startup times.
+// Keep the real health/tracker routes and no-network assertions; backend probing has its own suite.
+vi.mock('../core/backend-detect.ts', () => ({ detectEnvironment: async () => [] }));
+
 describe('tracker API boundaries and isolation', () => {
   let root: string;
   let store: RunStore;

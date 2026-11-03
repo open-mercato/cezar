@@ -70,20 +70,16 @@ function HostUsageWidgetRow() {
   const sample = useHostUsage()
   const history = useHostHistory()
   const lastFrameAt = useHostLastFrameAt()
-  const [stale, setStale] = useState(false)
+  // The frame that went stale, not a boolean: a new frame un-stales by itself, so the effect
+  // never calls setState on a frame commit. A per-frame setState there left default-lane work
+  // behind every sync store commit and a burst of frames tripped React #185 (telemetry 21762d83).
+  const [staleFrameAt, setStaleFrameAt] = useState<number | undefined>(undefined)
+  const stale = lastFrameAt !== undefined && staleFrameAt === lastFrameAt
 
   useEffect(() => {
-    if (lastFrameAt === undefined) {
-      setStale(false)
-      return
-    }
-    const remaining = lastFrameAt + HOST_WIDGET_STALE_MS - Date.now()
-    if (remaining <= 0) {
-      setStale(true)
-      return
-    }
-    setStale(false)
-    const timer = setTimeout(() => setStale(true), remaining)
+    if (lastFrameAt === undefined) return
+    const remaining = Math.max(0, lastFrameAt + HOST_WIDGET_STALE_MS - Date.now())
+    const timer = setTimeout(() => setStaleFrameAt(lastFrameAt), remaining)
     return () => clearTimeout(timer)
   }, [lastFrameAt])
 
@@ -129,7 +125,7 @@ function HostUsageWidgetRow() {
         // to each other however wide `sampling…` renders. `leading-[14px]` is load-bearing: the
         // default `normal` line box for 11px text is ~13px, and pinning it keeps the row's height
         // a property of this file rather than of the font the browser happened to pick.
-        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-md border border-border px-2 py-1 text-[11px] leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-md border border-border px-2 py-1 text-meta leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
         stale ? 'opacity-70' : null,
       )}
     >

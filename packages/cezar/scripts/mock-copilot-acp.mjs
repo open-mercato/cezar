@@ -96,6 +96,10 @@ async function handle(frame) {
   }
 
   if (method === 'session/prompt') {
+    // The CLI quitting cleanly with a prompt unanswered (telemetry 2e3b122d).
+    if (process.env.CEZ_MOCK_COPILOT_EXIT_MID_TURN === '1') process.exit(0);
+    // A turn that never ends on its own: only stdin EOF (exit 0) or a signal stops it.
+    if (process.env.CEZ_MOCK_COPILOT_PROMPT_HANGS === '1') return;
     turn += 1;
     cancelled = false;
     const sessionId = params?.sessionId ?? SESSION_ID;

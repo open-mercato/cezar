@@ -112,6 +112,13 @@ export interface DiffProps {
   /** Soft-wrap long lines instead of horizontal scrolling. Default `false`. */
   wrap?: boolean
   /**
+   * Render Markdown files (`isMarkdownPath`) as formatted documents instead of patch rows.
+   * Only their new side is shown — the full text through `loadFileText` when wired, else what
+   * the patch carries. Other files keep `mode`. Relative images load through `imageSrc`.
+   * Default `false`. The fallback renderer ignores it (diffs only), as it ignores `split`.
+   */
+  preview?: boolean
+  /**
    * Expandable context needs file bytes the patch doesn't carry: given a path, resolve the
    * file's current (new-side) text — the Changes tab wires `/api/runs/:id/files` here (1.5).
    * Resolve `null` when unavailable (binary, deleted, too large); the gap stays collapsed.
@@ -125,6 +132,11 @@ export interface DiffProps {
    * files (repo view, commit diffs) need no change to keep working.
    */
   imageSrc?: (path: string) => string
+  /**
+   * Raw-bytes URL for an image's OLD side (the diff's base commit) — the picture of a deleted
+   * image and the "before" of a modified one. Absent ⇒ only the new side is previewed.
+   */
+  oldImageSrc?: (path: string) => string
   /**
    * "Open in default app" (#365, LOCAL MODE ONLY): given a path, hand it off to the OS's
    * default application. Absent ⇒ the action is hidden, not disabled — the doctrine every

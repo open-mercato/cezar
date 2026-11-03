@@ -16,6 +16,8 @@ import {
   hasActiveFilters,
   tagValuesOf,
   tasksExcludingFacet,
+  sortGlobalTasks,
+  sortTimestamp,
   GROUP_BY_OPTIONS,
   SEARCH_PARAMS,
   DEFAULT_URL_STATE,
@@ -25,6 +27,7 @@ import {
   toggleFacetValue,
   toggleGroupBy,
   truncatedProjectNames,
+  lastActivityAt,
   type GlobalTaskFilters,
   type GlobalTasksUrlState,
 } from './global-tasks'
@@ -57,6 +60,13 @@ function run(overrides: Partial<RunIndexEntry> & { id: string; projectId: string
     archived: false,
     workflow: 'quick-task',
     ...overrides,
+    // What the server would send for these times (no steps on a fixture row).
+    lastActivityAt:
+      overrides.lastActivityAt ??
+      overrides.finishedAt ??
+      overrides.startedAt ??
+      overrides.createdAt ??
+      '2026-07-14T10:00:00Z',
   }
 }
 
@@ -388,5 +398,44 @@ describe('URL state', () => {
 describe('truncatedProjectNames', () => {
   it('names the capped projects, falling back to the raw id', () => {
     expect(truncatedProjectNames(['api', 'gone'], PROJECTS)).toEqual(['API', 'gone'])
+  })
+})
+
+describe('sorting', () => {
+  // `old` was created first but finished last; `fresh` is the newest creation, still unfinished.
+  const sortable = toGlobalTasks(
+    [
+      run({ id: 'mid', projectId: 'api', createdAt: '2026-07-10T10:00:00Z', finishedAt: '2026-07-11T10:00:00Z' }),
+      run({ id: 'old', projectId: 'web', createdAt: '2026-07-01T10:00:00Z', finishedAt: '2026-07-20T10:00:00Z' }),
+      run({ id: 'fresh', projectId: 'infra', status: 'running', createdAt: '2026-07-15T10:00:00Z', startedAt: '2026-07-15T10:01:00Z' }),
+    ],
+    PROJECTS,
+  )
+  const ids = (list: { run: RunIndexEntry }[]) => list.map((task) => task.run.id)
+
+  it('recent orders by last activity — finish, else start, else creation', () => {
+    expect(ids(sortGlobalTasks(sortable, 'recent'))).toEqual(['old', 'fresh', 'mid'])
+  })
+
+  it('created orders by creation, newest first', () => {
+    expect(ids(sortGlobalTasks(sortable, 'created'))).toEqual(['fresh', 'mid', 'old'])
+  })
+
+  it('the time column prints the timestamp the rows are sorted by', () => {
+    const old = sortable[1]!.run
+    expect(sortTimestamp(old, 'recent')).toBe('2026-07-20T10:00:00Z')
+    expect(sortTimestamp(old, 'created')).toBe('2026-07-01T10:00:00Z')
+    expect(lastActivityAt(sortable[2]!.run)).toBe('2026-07-15T10:01:00Z')
+  })
+
+  it('defaults to recent, keeps a bare URL bare, and round-trips created', () => {
+    expect(DEFAULT_URL_STATE.sortBy).toBe('recent')
+    expect(urlStateToSearchParams(DEFAULT_URL_STATE).toString()).toBe('')
+    const created: GlobalTasksUrlState = { ...DEFAULT_URL_STATE, sortBy: 'created' }
+    const params = urlStateToSearchParams(created)
+    expect(params.get(SEARCH_PARAMS.sort)).toBe('created')
+    expect(urlStateFromSearchParams(params).sortBy).toBe('created')
+    // Unknown values degrade to the default rather than a blank page.
+    expect(urlStateFromSearchParams(new URLSearchParams('sort=nonsense')).sortBy).toBe('recent')
   })
 })

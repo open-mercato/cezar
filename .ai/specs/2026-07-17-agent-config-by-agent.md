@@ -12,7 +12,7 @@ belongs to that agent (MCP *and* other settings) in one per-agent pane. More age
 coming (`pi` — #387), and future agents may carry settings shapes today's three don't have,
 so the UI must be driven by a per-agent **descriptor**, not by hardcoded section layouts.
 
-Nothing in #404's decisions is reversed: raw editor, never re-serialize, verbatim per-file
+Nothing in #404's decisions is reversed (see #404's 2026-10-26 format-on-save amendment): raw editor, never re-serialize, verbatim per-file
 precedence, hosted-mode read-only, per-repo scope all stand. This amendment only changes the
 *grouping axis* of the UI and introduces the abstraction that keeps it stable as agents are
 added. The #404 research finding "MCP is not a file" (only Claude has a dedicated

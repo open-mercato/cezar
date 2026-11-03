@@ -25,6 +25,7 @@ type CheckState = {
 
 type CheckRunner = {
   runCheckStep(
+    runId: string,
     state: CheckState,
     step: { id: string; command: string },
     emit: (event: Record<string, unknown>) => void,
@@ -54,10 +55,13 @@ describe('runCheckStep shell boundary', () => {
     try {
       const state: CheckState = { cwd: root, cancelled: false, interrupt: () => undefined };
       const resultPromise = (manager as unknown as CheckRunner).runCheckStep(
+        'run-1',
         state,
         { id: 'verify', command: 'echo CEZ_CHECK_OK' },
         () => undefined,
       );
+      // The per-step env (check-step secrets) is resolved before the spawn.
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
       child.stdout.emit('data', Buffer.from('CEZ_CHECK_OK\n'));
       child.emit('close', 7);
       await expect(resultPromise).resolves.toEqual({ ok: false, output: 'CEZ_CHECK_OK', exitCode: 7 });
@@ -65,7 +69,7 @@ describe('runCheckStep shell boundary', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         String.raw`C:\Program Files\Git\bin\bash.exe`,
         ['-lc', 'echo CEZ_CHECK_OK'],
-        { cwd: root, env: process.env },
+        { cwd: root, env: expect.objectContaining({ PATH: process.env.PATH }) },
       );
     } finally {
       manager.dispose();
@@ -81,10 +85,12 @@ describe('runCheckStep shell boundary', () => {
     try {
       const state: CheckState = { cwd: root, cancelled: false, interrupt: () => undefined };
       const resultPromise = (manager as unknown as CheckRunner).runCheckStep(
+        'run-1',
         state,
         { id: 'verify', command: 'sleep 1' },
         () => undefined,
       );
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled());
       state.interrupt();
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
       child.emit('close', null);

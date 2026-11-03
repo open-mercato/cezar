@@ -30,6 +30,7 @@ const row = (id: string, extra: Partial<DashboardTaskRow> = {}): DashboardTaskRo
   status: 'done',
   createdAt: '2026-09-01T00:00:00Z',
   finishedAt: at,
+  lastActivityAt: at,
   ...extra,
 });
 it('uses finish dates for outcomes, excludes scheduled retries and preserves current attention', () => {

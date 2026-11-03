@@ -40,28 +40,58 @@ describe('RunnerModelCatalog', () => {
     ]);
   });
 
-  it('returns stale last-known-good data when a refresh fails', async () => {
+  it('serves a soft-expired healthy catalog and single-flights its background refresh', async () => {
     let now = 0;
+    let resolveDiscovery!: (value: ModelOption[]) => void;
     const discover = vi.fn()
       .mockResolvedValueOnce(models)
-      .mockRejectedValueOnce(new Error('token=/secret/path account@example.test'));
+      .mockImplementationOnce(() => new Promise<ModelOption[]>((resolve) => { resolveDiscovery = resolve; }));
     const catalog = new RunnerModelCatalog({
-      adapters: { codex: { discover } },
-      now: () => now,
-      ttlMs: 10,
+      adapters: { codex: { discover } }, now: () => now, ttlMs: 10, usableTtlMs: 100,
+    });
+
+    await catalog.get('codex');
+    now = 10;
+    await expect(Promise.all([catalog.get('codex'), catalog.get('codex'), catalog.get('codex')])).resolves.toEqual([
+      { runner: 'codex', models, source: 'cache', stale: false },
+      { runner: 'codex', models, source: 'cache', stale: false },
+      { runner: 'codex', models, source: 'cache', stale: false },
+    ]);
+    expect(discover).toHaveBeenCalledTimes(2);
+    resolveDiscovery(models);
+    await vi.waitFor(() => expect(discover).toHaveBeenCalledTimes(2));
+  });
+
+  it('waits at the usable boundary and preserves the last-success age after failure', async () => {
+    let now = 0;
+    let rejectDiscovery!: (error: Error) => void;
+    const discover = vi.fn()
+      .mockResolvedValueOnce(models)
+      .mockImplementationOnce(() => new Promise<ModelOption[]>((_, reject) => { rejectDiscovery = reject; }));
+    const catalog = new RunnerModelCatalog({
+      adapters: { codex: { discover } }, now: () => now, ttlMs: 10, usableTtlMs: 100,
     });
 
     await catalog.get('codex');
     now = 10;
     await expect(catalog.get('codex')).resolves.toEqual({
-      runner: 'codex',
-      models,
-      source: 'cache',
-      stale: true,
+      runner: 'codex', models, source: 'cache', stale: false,
+    });
+    now = 100;
+    const refresh = catalog.get('codex');
+    expect(discover).toHaveBeenCalledTimes(2);
+    rejectDiscovery(new Error('token=/secret/path account@example.test'));
+    await expect(refresh).resolves.toEqual({
+      runner: 'codex', models, source: 'cache', stale: true,
       reason: 'Codex model discovery is temporarily unavailable',
     });
-    await catalog.get('codex');
+    now = 109;
+    await expect(catalog.get('codex')).resolves.toMatchObject({ stale: true, models });
     expect(discover).toHaveBeenCalledTimes(2);
+    now = 110;
+    const retry = catalog.get('codex');
+    expect(discover).toHaveBeenCalledTimes(3);
+    await expect(retry).resolves.toMatchObject({ stale: true, models });
   });
 
   it('returns a sanitized unavailable result when no good value exists', async () => {
@@ -80,6 +110,22 @@ describe('RunnerModelCatalog', () => {
     expect(JSON.stringify(result)).not.toContain('/private');
     await catalog.get('codex');
     expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it('keeps an unavailable result on the short retry cooldown, not the usable window', async () => {
+    let now = 0;
+    const discover = vi.fn().mockRejectedValue(new Error('spawn /private/bin ENOENT'));
+    const catalog = new RunnerModelCatalog({
+      adapters: { codex: { discover } }, now: () => now, ttlMs: 10, usableTtlMs: 100,
+    });
+
+    await catalog.get('codex');
+    now = 9;
+    await catalog.get('codex');
+    expect(discover).toHaveBeenCalledOnce();
+    now = 10;
+    await catalog.get('codex');
+    expect(discover).toHaveBeenCalledTimes(2);
   });
 
   it('does not let one runner cache or in-flight request affect another', async () => {
