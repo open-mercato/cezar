@@ -6,6 +6,7 @@ import {
   bumpSkillUsage,
   filterSkills,
   fuzzyMatch,
+  groupSkillsByRepo,
   isProjectSkill,
   matchScore,
   multiWordFilter,
@@ -385,6 +386,23 @@ describe('#519: usage folds into query ranking and the / autocomplete order', ()
     expect(searchSkills(s2, 'om-fix', { 'om-auto-fix-issue': 999 }).map((s) => s.name)).toEqual([
       'om-fix',
       'om-auto-fix-issue',
+    ])
+  })
+})
+
+describe('groupSkillsByRepo', () => {
+  it('puts local skills first, then each team repo in first-seen order', () => {
+    const team = (repo: string) => ({ repo, ref: 'main', path: 'x', dir: false })
+    const groups = groupSkillsByRepo([
+      { name: 'a', source: 'team' as const, team: team('org/b') },
+      { name: 'b', source: 'ai' as const },
+      { name: 'c', source: 'team' as const, team: team('org/a') },
+      { name: 'd', source: 'team' as const, team: team('org/b') },
+    ])
+    expect(groups.map((g) => [g.key, g.skills.map((s) => s.name)])).toEqual([
+      ['', ['b']],
+      ['org/b', ['a', 'd']],
+      ['org/a', ['c']],
     ])
   })
 })

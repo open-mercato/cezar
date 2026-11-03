@@ -3,7 +3,7 @@ import { connect, type AddressInfo } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { DesignProxies, injectPicker, parseDesignTarget } from './design-proxy.ts';
+import { allowFramingBy, DesignProxies, injectPicker, parseDesignTarget } from './design-proxy.ts';
 import { PICKER_PATH, pickerScript } from './picker-script.ts';
 
 /**
@@ -64,6 +64,16 @@ describe('the Design Mode proxy', () => {
       }
       if (req.url === '/app.js') {
         res.writeHead(200, { 'content-type': 'application/javascript' }).end('console.log("<head>")');
+        return;
+      }
+      if (req.url === '/no-frame') {
+        res
+          .writeHead(200, {
+            'content-type': 'text/html',
+            'x-frame-options': 'SAMEORIGIN',
+            'content-security-policy': "default-src 'self'; frame-ancestors 'self'; script-src 'self'",
+          })
+          .end('<html><head></head></html>');
         return;
       }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><html><head><title>t</title></head><body><button id="go">Go</button></body></html>');
@@ -139,6 +149,15 @@ describe('the Design Mode proxy', () => {
     // A foreign origin reaches the app exactly as sent, so the app's CORS/CSRF rules still judge it.
     await get(`${origin}/api`, { origin: 'https://evil.example' });
     expect(seen.at(-1)!.headers.origin).toBe('https://evil.example');
+  });
+
+  it('lets the cockpit frame an app that forbids embedding, and loosens nothing else', async () => {
+    const origin = await open();
+    const page = await get(`${origin}/no-frame`);
+    expect(page.headers['x-frame-options']).toBeUndefined();
+    expect(page.headers['content-security-policy']).toBe(
+      `default-src 'self'; frame-ancestors 'self' ${COCKPIT}; script-src 'self'`,
+    );
   });
 
   it('keeps a redirect to the app inside the proxy and lets any other leave', async () => {
@@ -246,6 +265,32 @@ describe('parseDesignTarget', () => {
   it('reduces an address to its origin', () => {
     const parsed = parseDesignTarget('http://localhost:5173/deep/page?x=1#h');
     expect(parsed.ok && parsed.url.origin).toBe('http://localhost:5173');
+  });
+});
+
+describe('allowFramingBy', () => {
+  it("replaces 'none', keeps a policy without frame-ancestors, and rewrites every header", () => {
+    const headers: Record<string, string | string[]> = {
+      'content-security-policy': ["frame-ancestors 'none'", "default-src 'self'"],
+    };
+    allowFramingBy(headers, COCKPIT);
+    expect(headers['content-security-policy']).toEqual([`frame-ancestors ${COCKPIT}`, "default-src 'self'"]);
+  });
+
+  it('replaces an X-Frame-Options-only policy with one that still refuses every other parent', () => {
+    const sameOrigin: Record<string, string | string[]> = { 'x-frame-options': 'SAMEORIGIN' };
+    allowFramingBy(sameOrigin, COCKPIT);
+    expect(sameOrigin).toEqual({ 'content-security-policy': [`frame-ancestors 'self' ${COCKPIT}`] });
+
+    const deny: Record<string, string | string[]> = { 'x-frame-options': 'DENY', 'content-security-policy': "default-src 'self'" };
+    allowFramingBy(deny, COCKPIT);
+    expect(deny).toEqual({ 'content-security-policy': ["default-src 'self'", `frame-ancestors ${COCKPIT}`] });
+  });
+
+  it('leaves an app that sends no framing policy as it was', () => {
+    const headers: Record<string, string | string[]> = { 'content-security-policy': "default-src 'self'" };
+    allowFramingBy(headers, COCKPIT);
+    expect(headers).toEqual({ 'content-security-policy': "default-src 'self'" });
   });
 });
 

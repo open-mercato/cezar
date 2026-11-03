@@ -1,0 +1,25 @@
+---
+title: "Saved task layouts"
+description: "Save a panel layout and reuse it in other tasks."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-workspace/layout-cards.tsx
+    line: 49
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Layout menu saves the current set of views and their widths under a name. Saved layouts are available to other tasks. Splitting a view temporarily does not create a new template automatically.
+
+## Where to find it
+
+Task → Layout
+
+## How to use it
+
+1. Arrange the views and adjust their widths.
+2. Open Layout and save the current layout with a name.
+3. Select the saved layout in another task.
+
+> **Good to know**: Available views depend on the task and host capabilities.

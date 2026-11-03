@@ -1,0 +1,25 @@
+---
+title: "Models available on your machine"
+description: "Choose models read from local CLIs rather than a fixed release list."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/runner-model-catalog.ts
+    line: 57
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The model list uses data read from local agent CLIs. Select an installed agent, open the list, and choose a model. auto leaves the choice to the CLI.
+
+## Where to find it
+
+New task → model selector
+
+## How to use it
+
+1. Select an installed agent.
+2. Open the model list.
+3. Choose a model or auto to leave the choice to the CLI.
+
+> **Good to know**: If the CLI lookup fails, the list uses cached data or fallback entries. The pi agent has no local model catalog.

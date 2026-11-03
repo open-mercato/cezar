@@ -16,7 +16,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentEvent } from './agent-runner.ts';
 import type { UiEvent, UiItem } from './ui-events.ts';
-import { codexSessionStarted, createCodexUiState, mapCodexNotification } from './codex-ui-mapper.ts';
+import { codexSessionStarted, codexTurnError, createCodexUiState, mapCodexNotification } from './codex-ui-mapper.ts';
 import { CodexAppServerRunner } from './codex-app-server-runner.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1137,5 +1137,24 @@ describe('codex reasoning text survives replay (#528)', () => {
       },
     ]);
     expect(reasoningAt(events, 'item.completed', 'item_rsn_2')).toMatchObject({ text: 'Next' });
+  });
+});
+
+// Spec 2026-10-24 item 9 (36b68a95): codex forwards the Responses API's error body verbatim.
+describe('codexTurnError reads a JSON error envelope', () => {
+  it('shows the status, type and message of the vendor error', () => {
+    const message = JSON.stringify({
+      type: 'error',
+      status: 400,
+      error: { type: 'invalid_request_error', message: "The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account." },
+    });
+    expect(codexTurnError('turn/completed', { turn: { status: 'failed', error: { message } } }))
+      .toBe("400 invalid_request_error: The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account.");
+  });
+
+  it('leaves plain text and non-error JSON alone', () => {
+    expect(codexTurnError('turn/failed', { error: { message: 'stream disconnected' } })).toBe('stream disconnected');
+    expect(codexTurnError('turn/failed', { error: { message: 'bad tool input {"path":"a"}' } })).toBe('bad tool input {"path":"a"}');
+    expect(codexTurnError('turn/failed', {})).toBe('codex turn failed');
   });
 });

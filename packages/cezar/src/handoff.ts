@@ -146,11 +146,45 @@ export function seedHandoffFile(dataDir: string, run: HandoffSeed): string {
   return file;
 }
 
+/** `- <ISO ts> — <note>`: the one Progress-log line shape, written by cez's heartbeat and by an
+ *  agent's `cez handoff log`. A multi-line note is folded onto one line so it cannot break the
+ *  section structure. */
+export function progressLine(note: string, now: Date = new Date()): string {
+  return `- ${now.toISOString()} — ${note.trim().replace(/\s*\n\s*/g, ' ')}\n`;
+}
+
 /**
- * Cez's own heartbeat (the janitor pattern): insert `- <ISO ts> — <note>`
- * right under the `## Progress log` header (newest at the top), so the file
- * stays current even when the agent forgets to write. Missing header →
- * append at the end of the file; missing file → no-op.
+ * Insert `line` right under the `## Progress log` header (newest at the top). An empty log keeps
+ * one blank line before the next section's header. Missing header → append at the end.
+ */
+export function insertProgressLine(text: string, line: string): string {
+  const marker = '## Progress log\n';
+  const idx = text.indexOf(marker);
+  if (idx < 0) return `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}${line}`;
+  const rest = text.slice(idx + marker.length).replace(/^\n+/, '');
+  return `${text.slice(0, idx + marker.length)}\n${line}${rest.startsWith('## ') ? '\n' : ''}${rest}`;
+}
+
+/**
+ * Replace the body of `## Resume notes` (up to the next `## ` header, or the end of the file) with
+ * `notes`; empty notes clear it. Missing header → the section is appended.
+ */
+export function replaceResumeNotes(text: string, notes: string): string {
+  const body = notes.trim();
+  const section = `## Resume notes\n${body ? `\n${body}\n` : ''}`;
+  const header = /^## Resume notes[ \t]*$/m.exec(text);
+  if (!header) {
+    const sep = text === '' ? '' : text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
+    return `${text}${sep}${section}`;
+  }
+  const after = text.slice(header.index + header[0].length);
+  const next = /\n## /.exec(after);
+  return `${text.slice(0, header.index)}${section}${next ? `\n${after.slice(next.index + 1)}` : ''}`;
+}
+
+/**
+ * Cez's own heartbeat (the janitor pattern): insert a progress line under `## Progress log`, so
+ * the file stays current even when the agent forgets to write. Missing file → no-op.
  */
 export function appendHandoffHeartbeat(dataDir: string, runId: string, note: string): void {
   const file = handoffPath(dataDir, runId);
@@ -160,15 +194,8 @@ export function appendHandoffHeartbeat(dataDir: string, runId: string, note: str
   } catch {
     return; // not seeded — nothing to heartbeat
   }
-  const line = `- ${new Date().toISOString()} — ${note}\n`;
-  const marker = '## Progress log\n';
-  const idx = text.indexOf(marker);
-  const next =
-    idx >= 0
-      ? `${text.slice(0, idx + marker.length)}\n${line}${text.slice(idx + marker.length).replace(/^\n+/, '')}`
-      : `${text}${text.endsWith('\n') || text === '' ? '' : '\n'}${line}`;
   try {
-    writeFileSync(file, boundProgressLog(next), 'utf8');
+    writeFileSync(file, boundProgressLog(insertProgressLine(text, progressLine(note))), 'utf8');
   } catch {
     // best effort
   }
@@ -242,6 +269,7 @@ CEZ_HANDOFF_FILE (env) is the absolute path to this task's rolling handoff file.
 1. At the start of work, read it — "Resume notes" left by a previous session is your starting context.
 2. After every meaningful milestone (passing tests, a commit, a PR, a scope decision), append one terse timestamped line under "## Progress log", newest at the top.
 3. Before finishing or pausing, update "## Resume notes" with what's done, what's next and any blockers. Leave it empty only when the task is truly complete.
+Use the commands, never a hand-written script: node "$CEZ_BIN" handoff log "<terse line>" inserts the timestamped line under "## Progress log"; node "$CEZ_BIN" handoff resume "<notes>" (or the notes on stdin, for several lines) replaces "## Resume notes", and handoff resume "" clears it. Only if CEZ_BIN is unset, edit the file directly.
 
 Task completion marker: when the task's goal is fully achieved and you have no question for the user, end your final message with a line containing exactly CEZ:DONE — cez then closes the session and marks the task finished. If you are waiting on the user (a question, a decision, missing input), just end your message normally; the session stays open for their reply. Never emit CEZ:DONE while anything is unfinished or unverified.
 
@@ -250,14 +278,14 @@ Still-working marker: if you end a turn while still working on your OWN downstre
     Dispatched 3 sub-agents to investigate the failing migration; I'll continue as soon as they report.
     CEZ:MONITORING
 
-Use CEZ:MONITORING only for that in-progress case; use CEZ:DONE when the goal is done; end plainly (no marker) only when you are genuinely waiting on the user. Never combine CEZ:MONITORING with CEZ:DONE.
+Use CEZ:MONITORING only for that in-progress case; use CEZ:DONE when the goal is done; end plainly (no marker) only when you are genuinely waiting on the user. Never combine CEZ:MONITORING with CEZ:DONE. A park is bounded, not indefinite: with an automatic re-check cadence configured cez wakes you on that cadence and, after the configured number of re-checks with no progress, hands the task to the user unless a dispatched child is still in flight; with no cadence configured it does the same after four times the configured waiting-session idle timeout (60 minutes by default, also the fallback when idle timeout is disabled), unless a dispatched child is still in flight. An unanswered hand-off ends the run as failed with a Continue button when the configured idle timeout closes the session; with idle timeout disabled it raises attention and rests at waiting — so end each re-check turn with CEZ:MONITORING again while the downstream work is still pending.
 
-Structured question marker: when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults — and it comes down to a few concrete choices, end your turn with a single line CEZ:ASK <json> instead of asking in prose. cez renders it as clickable option chips in the cockpit so the user can answer in one tap. The <json> is ONE object on ONE line, the last thing in your message: {"questions":[{"header":"≤12-char label","question":"a clear question ending in ?","multiSelect":false,"options":[{"label":"short choice","description":"what it means / the trade-off"}]}]} — use only those keys (plus an optional non-empty "id" up to 64 characters), with 1–20 questions, 2–10 options per question, unique question text and option labels, header 1–12 characters, question 1–400, option label 1–60, and description at most 280. The JSON must be syntactically valid — every brace and bracket closed, no trailing commas; re-read the line before you send it, because a payload cez cannot parse is shown to the user as raw JSON instead of chips. The user can always type a free-form reply, so never add an "Other" option. Several decisions that are genuinely all the user's ride ONE card — do not drop any to fit a count, and do not split them across turns. Prefer sensible defaults over asking; use CEZ:ASK only when the choice is truly the user's. Never combine CEZ:ASK with CEZ:DONE or CEZ:MONITORING.
+Structured question marker: when you are blocked on a decision that is genuinely the user's to make — one you cannot resolve from the request, the code, or sensible defaults — and it comes down to a few concrete choices, end your turn with a single line CEZ:ASK <json> instead of asking in prose. cez renders it as clickable option chips in the cockpit so the user can answer in one tap. The <json> is ONE object on ONE line, the last thing in your message: {"questions":[{"header":"≤12-char label","question":"a clear question ending in ?","multiSelect":false,"options":[{"label":"short choice","description":"what it means / the trade-off"}]}]} — use only those keys (plus an optional non-empty "id" up to 64 characters), with 1–20 questions, 2–10 options per question, unique question text and option labels, header 1–12 characters, question 1–400, option label 1–60, and description at most 280. The JSON must be syntactically valid — every brace and bracket closed, no trailing commas; re-read the line before you send it, because a payload cez cannot parse is shown to the user as raw JSON instead of chips. The card itself gives every question an "Other…" field for the user's own answer and a "Need more info" choice, so never add either as an option yourself. An answer that is not one of your labels is the user's own: act on it. An answer asking for more information means the user cannot decide yet: explain what that question hinges on — the context, the trade-offs, what each option would change — then ask it again with CEZ:ASK; never guess an answer for it. Several decisions that are genuinely all the user's ride ONE card — do not drop any to fit a count, and do not split them across turns. Prefer sensible defaults over asking; use CEZ:ASK only when the choice is truly the user's. Never combine CEZ:ASK with CEZ:DONE or CEZ:MONITORING.
 
 Task reference markers: as soon as you know which GitHub pull request or issue this task is ABOUT (it was named in the task, or you just opened it), declare it by emitting, on its own line in your message text: CEZ:PR=<number> and/or CEZ:ISSUE=<number>. Re-emit with the new number if the subject changes (e.g. you open a PR later in the task). Declare only the task's own subject — never a PR/issue you merely mention, list, or compare against. You may also emit CEZ:TITLE=<terse gerund phrase, max 40 chars, e.g. "implementing comment threads"> once the work has a clearer shape than its current title; cez uses these instead of guessing from the transcript. Put markers in plain message text, never inside a code fence, and above any CEZ:DONE / CEZ:MONITORING line — those two always come last.
 
 ## Pasted attachments
-User-attached screenshots and files (PDF, text, archives — any type) are saved as real files; their absolute paths are listed in the message that carries them. Read a file from its path when you need its contents, and use the path when a task needs the file itself (saving, uploading, attaching to issues/PRs). An image also rides along inline, but that copy is for viewing only; a non-image attachment exists ONLY as the file at that path.`;
+User-attached screenshots and files (PDF, text, archives — any type) are saved as real files; their absolute paths are listed in the message that carries them. Read a file from its path when you need its contents, and use the path when a task needs the file itself (saving, uploading, attaching to issues/PRs). An image also rides along inline, but that copy is for viewing only and does not survive later workflow steps, some backends or a compacted context, while the file on disk always does; a non-image attachment exists ONLY as the file at that path. Read the file whenever the user refers to a screenshot you cannot see inline, and never tell the user their attachment did not reach you without opening its path first.`;
 
 export const FOLLOWUP_INSTRUCTIONS = `## Follow-ups (cezar)
 

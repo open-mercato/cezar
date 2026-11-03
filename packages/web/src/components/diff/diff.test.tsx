@@ -274,13 +274,51 @@ describe('Diff facade — image previews (#365)', () => {
     expect(onOpenInApp).toHaveBeenCalledWith('assets/logo.png')
   })
 
-  it('never renders a preview for a deleted image — only the new side is ever servable', async () => {
+  it('never renders a preview for a deleted image without oldImageSrc', async () => {
     const imageSrc = vi.fn((path: string) => `/raw/${path}`)
     await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} />, 'assets/gone.png')
 
     expect(document.querySelector('[data-slot="diff-image-preview"]')).toBeNull()
     expect(imageSrc).not.toHaveBeenCalled()
     expect(screen.getByText(/only the new side can be previewed/)).not.toBeNull()
+  })
+
+  it('previews a deleted image from its old side when oldImageSrc is wired', async () => {
+    const imageSrc = vi.fn((path: string) => `/raw/${path}`)
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    const sides = document.querySelectorAll('[data-slot="diff-image-side"]')
+    expect(sides).toHaveLength(1)
+    expect(sides[0]?.getAttribute('data-side')).toBe('old')
+    expect(sides[0]?.querySelector('img')?.getAttribute('src')).toBe('/old/assets/gone.png')
+    expect(sides[0]?.querySelector('figcaption')).toBeNull()
+    expect(imageSrc).not.toHaveBeenCalled()
+  })
+
+  it('shows before | after for a modified image, and the new side alone for an added one', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    const { rerender } = await renderDiff(
+      <Diff files={[IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />,
+      'assets/logo.png',
+    )
+    const srcs = [...document.querySelectorAll('[data-slot="diff-image-side"] img')].map((img) => img.getAttribute('src'))
+    expect(srcs).toEqual(['/old/assets/logo.png', '/raw/assets/logo.png'])
+
+    rerender(<Diff files={[{ ...IMAGE, status: 'added' }]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />)
+    expect(document.querySelectorAll('[data-slot="diff-image-side"]')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="diff-image-preview"] img')?.getAttribute('src')).toBe('/raw/assets/logo.png')
+  })
+
+  it('a side the server refuses shows a note instead of a broken image', async () => {
+    const imageSrc = (path: string) => `/raw/${path}`
+    const oldImageSrc = (path: string) => `/old/${path}`
+    await renderDiff(<Diff files={[DELETED_IMAGE]} imageSrc={imageSrc} oldImageSrc={oldImageSrc} />, 'assets/gone.png')
+
+    fireEvent.error(document.querySelector('[data-slot="diff-image-side"] img')!)
+    expect(document.querySelector('[data-slot="diff-image-side"] img')).toBeNull()
+    expect(screen.getByText(/can’t be previewed/)).not.toBeNull()
   })
 })
 

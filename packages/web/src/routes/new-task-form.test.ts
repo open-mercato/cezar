@@ -67,7 +67,7 @@ describe('model option resolution', () => {
   })
 
   it('claude falls back to the tier aliases when there is no host catalog', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
     // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
     expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
   })
@@ -102,7 +102,7 @@ describe('model option resolution', () => {
 
   it('an empty catalog is not an empty picker — the presets come back', () => {
     const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
-    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -162,11 +162,19 @@ describe('model option resolution', () => {
     expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
   })
 
+  it('accepts the vendor ids Copilot and Cursor host as their own', () => {
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5.4', 'copilot')).toBe(false)
+    expect(modelConflictsWithRunner('gpt-5', 'cursor')).toBe(false)
+    // Still a mismatch on a single-vendor runner.
+    expect(modelConflictsWithRunner('claude-sonnet-4', 'codex')).toBe(true)
+  })
+
   it('exactly the runners with a host catalog discover their models', () => {
     // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
     // list is the single source both the route and the picker compile against — this asserts they
     // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'antigravity'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
@@ -543,6 +551,13 @@ describe('trunk-based projects (spec 2026-10-20-trunk-based-projects)', () => {
     expect(projectDefaultSource(config, true, skills)).toEqual({ source: 'skill', ref: 'ask' })
     expect(projectDefaultSource({ defaultSkill: 'gone' }, false, skills)).toBeNull()
     expect(projectDefaultSource(undefined, false, skills)).toBeNull()
+  })
+
+  it('keeps the configured skill when the catalog failed to load, instead of dropping to quick-task', () => {
+    const config = { defaultSkill: 'ingest', askSkill: 'ask' }
+    expect(projectDefaultSource(config, false, null)).toEqual({ source: 'skill', ref: 'ingest' })
+    expect(projectDefaultSource(config, true, null)).toEqual({ source: 'skill', ref: 'ask' })
+    expect(projectDefaultSource(undefined, false, null)).toBeNull()
   })
 
   it('reads a trailing question mark as a question', () => {

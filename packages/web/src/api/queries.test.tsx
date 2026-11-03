@@ -1,13 +1,13 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { Component, type ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from './client'
 import { createQueryClient } from './query-client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { ProjectScopeContext } from './project-scope-context'
-import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
+import type { GithubRefStatusData, HealthResponse } from '@open-mercato/cezar-api-client'
 import {
   refStatusRecheckAfter,
   useReferenceProjectId,
@@ -18,6 +18,8 @@ import {
   useRetryProviderAuth,
   useHealth,
   useHealthSubscription,
+  healthRecheckInterval,
+  FORGE_RECHECK_MS,
   useRunnerModels,
   useMarkRunSeen,
   useMarkRunUnseen,
@@ -30,9 +32,11 @@ import {
   useRuns,
   useSkills,
   useSkillsUpdate,
+  useReferenceStatuses,
   useStarCount,
   STAR_COUNT_REFRESH_MS,
   workspaceQueryKeys,
+  __clearRememberedStatusesForTests,
 } from './queries'
 
 const fetchMock = vi.fn<typeof fetch>()
@@ -618,6 +622,89 @@ describe('useSkillsUpdate', () => {
     client.setQueryData(key, { ...result.current.data!, status: 'available' })
     expect((interval as (current: typeof query) => number | false)(query)).toBe(false)
   })
+
+  it('keeps asking while no check has completed, then stands down at the cap', async () => {
+    fetchMock.mockImplementation(async () => json({
+      status: 'idle',
+      available: false,
+      autoUpdateEnabled: false,
+      inherited: false,
+      checkedAt: null,
+      updatedAt: null,
+      scopes: [],
+      needsUpgradeNotes: false,
+    }))
+    const client = createQueryClient()
+    const key = workspaceQueryKeys.skillsUpdate('boot')
+    const { result } = renderHook(() => useSkillsUpdate('boot'), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await waitFor(() => expect(result.current.data?.status).toBe('idle'))
+
+    const query = client.getQueryCache().find({ queryKey: key })
+    const interval = query?.observers[0]?.options.refetchInterval as (current: unknown) => number | false
+    const idle = result.current.data!
+    const at = (dataUpdateCount: number, data = idle) => interval({ state: { data, dataUpdateCount } })
+
+    // One idle read is not enough: the check the first GET started can still be queued behind
+    // another project's on the server, and `idle` only means it has not finished.
+    expect(at(2)).toBe(60_000)
+    // Bounded: once idle has been answered this often, the poll stands down and the reconnect /
+    // tab-return reconcile owns the update.
+    expect(at(6)).toBe(false)
+
+    expect(at(7, { ...idle, status: 'checking' })).toBe(60_000)
+    expect(at(7, { ...idle, status: 'current' })).toBe(false)
+  })
+})
+
+describe('useReferenceStatuses', () => {
+  it('remembers nothing from a render React throws away', async () => {
+    __clearRememberedStatusesForTests()
+    fetchMock.mockImplementation(async () => json({ available: true, prs: { 7: 'draft' }, issues: {}, recheckAfterMs: null }))
+    const ref = { projectId: 'p1', kind: 'PR' as const, number: 7 }
+    function Discarded() {
+      const lookup = useReferenceStatuses([ref])
+      if (lookup(ref).state === 'ready') throw new Error('discarded render')
+      return null
+    }
+    class Boundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+      override state = { failed: false }
+      static getDerivedStateFromError() {
+        return { failed: true }
+      }
+      override render() {
+        return this.state.failed ? <p>failed</p> : this.props.children
+      }
+    }
+    const Wrapper = wrapper()
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    render(
+      <Wrapper>
+        <Boundary>
+          <Discarded />
+        </Boundary>
+      </Wrapper>,
+    )
+    await screen.findByText('failed')
+    quiet.mockRestore()
+
+    const { result } = renderHook(() => useReferenceStatuses([ref], false), { wrapper: wrapper() })
+    expect(result.current(ref)).not.toHaveProperty('status')
+  })
+
+  it('remembers a committed answer for the next surface that has none yet', async () => {
+    __clearRememberedStatusesForTests()
+    fetchMock.mockImplementation(async () => json({ available: true, prs: { 8: 'draft' }, issues: {}, recheckAfterMs: null }))
+    const ref = { projectId: 'p1', kind: 'PR' as const, number: 8 }
+    const first = renderHook(() => useReferenceStatuses([ref]), { wrapper: wrapper() })
+    await waitFor(() => expect(first.result.current(ref).state).toBe('ready'))
+
+    const { result } = renderHook(() => useReferenceStatuses([ref], false), { wrapper: wrapper() })
+    expect(result.current(ref)).toMatchObject({ status: 'draft' })
+  })
 })
 
 describe('useHealth', () => {
@@ -655,6 +742,49 @@ describe('useHealth', () => {
     // The subscription lives once at the root (useHealthSubscription), NOT per useHealth reader,
     // so mounting a reader must open no socket and flap no subscribe/unsubscribe frame.
     expect(FakeHealthSocket.instances).toHaveLength(0)
+  })
+
+  // #1412: a remote cockpit has no health push, so an unresolved forge probe is re-read on a timer.
+  it.each([
+    ['local cockpit, cold forge', true, { kind: 'github' }, false],
+    ['remote, no forge remote', false, null, false],
+    ['remote, cold forge', false, { kind: 'github' }, FORGE_RECHECK_MS],
+    ['remote, failed forge', false, { kind: 'github', available: false, reason: 'x' }, FORGE_RECHECK_MS],
+    ['remote, working forge', false, { kind: 'github', available: true }, false],
+  ] as const)('healthRecheckInterval: %s', (_label, localHandoff, forge, expected) => {
+    const health = { ...HEALTH, forge, capabilities: { ...HEALTH.capabilities, localHandoff } } as unknown as HealthResponse
+    expect(healthRecheckInterval(health)).toBe(expected)
+  })
+
+  it('healthRecheckInterval never polls without an explicit remote answer', () => {
+    expect(healthRecheckInterval(undefined)).toBe(false)
+    expect(healthRecheckInterval({ forge: { kind: 'github' } } as unknown as HealthResponse)).toBe(false)
+  })
+
+  it('re-reads health on a remote cockpit until the forge probe answers, then stops', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const remote = { ...HEALTH, capabilities: { ...HEALTH.capabilities, localHandoff: false } }
+      let probed = false
+      fetchMock.mockImplementation(async () => {
+        const forge = probed ? { kind: 'github', available: true } : { kind: 'github' }
+        probed = true
+        return json({ ...remote, forge })
+      })
+      const { result } = renderHook(() => useHealth(), { wrapper: wrapper() })
+
+      await waitFor(() => expect(result.current.data?.forge).toEqual({ kind: 'github' }))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await act(() => vi.advanceTimersByTimeAsync(FORGE_RECHECK_MS))
+      await waitFor(() => expect(result.current.data?.forge).toEqual({ kind: 'github', available: true }))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+
+      await act(() => vi.advanceTimersByTimeAsync(FORGE_RECHECK_MS * 3))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // #369 moved server-side: the branch-switched-in-a-terminal case is now the `health` topic on

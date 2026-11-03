@@ -1,0 +1,25 @@
+---
+title: "Ask the agent to resolve PR conflicts"
+description: "Run Resolve conflicts for the conflicting branch of a linked pull request."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/lib/git-actions.ts
+    line: 219
+    commit: 2e16d70356585c58fffdd418fce880c9466880cd
+---
+Resolve conflicts sends the task agent an instruction to resolve conflicts on the linked PR branch. If the interface first suggests Commit and push or Push, publish the local changes. Then start conflict resolution and review the result.
+
+## Where to find it
+
+Task with a PR → Resolve conflicts
+
+## How to use it
+
+1. Open the task linked to the conflicting PR.
+2. Publish pending local changes first if the interface offers Commit and push or Push.
+3. When Resolve conflicts is available, run it and review the agent's resolution.
+
+> **Good to know**: This action sends an instruction to the task agent. Step availability and order depend on branch state. The button does not guarantee a correct conflict resolution.

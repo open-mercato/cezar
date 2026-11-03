@@ -107,6 +107,21 @@ describe('repo sync — the main checkout against a local bare origin', () => {
     expect(g(repo, 'log', '-1', '--format=%s').trim()).toBe('my work');
   });
 
+  // telemetry 9202a06a: git's raw `error:` line (or a push's `To <remote>`) reached the toast.
+  it('says what to do when a push is rejected or a pull would overwrite local changes', async () => {
+    commit(peer, 'a.txt', 'teammate edit');
+    g(peer, 'push', '-q');
+    commit(repo, 'b.txt', 'my work');
+    expect(await pushRepo(repo)).toEqual({ ok: false, error: 'the remote has commits this branch does not — pull first' });
+
+    g(repo, 'reset', '-q', '--hard', 'HEAD~1');
+    writeFileSync(join(repo, 'a.txt'), 'uncommitted\n');
+    expect(await pullRepo(repo)).toEqual({
+      ok: false,
+      error: 'uncommitted changes would be overwritten — commit or stash them first',
+    });
+  });
+
   it('push publishes a branch with no upstream, which status lists as all-outgoing first', async () => {
     g(repo, 'checkout', '-q', '-b', 'feat/x');
     commit(repo, 'f.txt', 'feature');

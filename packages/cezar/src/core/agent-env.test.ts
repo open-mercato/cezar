@@ -371,3 +371,17 @@ it.each(['claude', 'codex', 'opencode'] as const)('does not forward tracker cred
   expect(env.JIRA_API_TOKEN).toBeUndefined();
   expect(env.LINEAR_API_KEY).toBeUndefined();
 });
+
+it.each(['0', '1', 'true', 'yes'])('drops inherited tracker capabilities but admits an explicitly issued launch grant (FULL=%s)', full => {
+  const source = { CEZ_AGENT_ENV_FULL: full, PATH: '/usr/bin', NORMAL_HOST_SETTING: 'preserved-in-full', CEZ_TRACKER_CAPABILITY: 'parent-grant', cez_tracker_capability: 'mixed-case-parent', CEZ_API_URL: 'http://127.0.0.1:3456' };
+  const unbound = buildChildEnv({ backend: 'codex', source });
+  expect(unbound.CEZ_TRACKER_CAPABILITY).toBeUndefined();
+  expect(unbound.cez_tracker_capability).toBeUndefined();
+  expect(unbound.CEZ_API_URL).toBe(source.CEZ_API_URL);
+  expect(unbound.PATH).toBe(source.PATH);
+  if (full !== '0') expect(unbound.NORMAL_HOST_SETTING).toBe(source.NORMAL_HOST_SETTING);
+  const bound = buildChildEnv({ backend: 'codex', source, extraEnv: { CEZ_TRACKER_CAPABILITY: 'new-launch-grant' } });
+  expect(bound.CEZ_TRACKER_CAPABILITY).toBe('new-launch-grant');
+  expect(bound.cez_tracker_capability).toBeUndefined();
+  expect(source.CEZ_TRACKER_CAPABILITY).toBe('parent-grant');
+});

@@ -27,6 +27,7 @@ import type {
   startImpactResponseSchema,
   artifactsBySubjectResponseSchema,
   projectAssetsResponseSchema,
+  startNowResponseSchema,
 } from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
@@ -60,6 +61,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type RunCreate201 = InferResponseType<Runs['$post'], 201>;
   type RunArchive200 = InferResponseType<Run['archive']['$post'], 200>;
   type RunPin200 = InferResponseType<Run['pin']['$post'], 200>;
+  type RunPromote200 = InferResponseType<Run['promote']['$post'], 200>;
   type RunRead200 = InferResponseType<Run['read']['$post'], 200>;
   type RunUnread200 = InferResponseType<Run['unread']['$post'], 200>;
   type RunPatch200 = InferResponseType<Run['$patch'], 200>;
@@ -69,6 +71,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type QueuedPatch200 = InferResponseType<Run['queued-messages'][':msgId']['$patch'], 200>;
   type QueuedDelete200 = InferResponseType<Run['queued-messages'][':msgId']['$delete'], 200>;
   type Finish200 = InferResponseType<Run['finish']['$post'], 200>;
+  type StartNow200 = InferResponseType<Run['start-now']['$post'], 200>;
   type Land200 = InferResponseType<Run['land']['$post'], 200>;
   type Continue200 = InferResponseType<Run['continue']['$post'], 200>;
   type OpenInCli200 = InferResponseType<Run['open-in-cli']['$post'], 200>;
@@ -93,6 +96,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     // the pin (#935) answers the record too — pinned here is what stops it drifting into a
     // bespoke `{pinned: true}` payload the moment someone finds that shorter to write
     Assert<Exact<z.infer<typeof runRecordSchema>, RunPin200>>,
+    // "Run First" answers the record the same way
+    Assert<Exact<z.infer<typeof runRecordSchema>, RunPromote200>>,
     Assert<Exact<z.infer<typeof runRecordSchema>, RunPatch200>>,
     // the read receipt and its inverse (#unread-done-items, #775) — both answer the record, and
     // pinning them here is what stops either drifting into a bespoke payload
@@ -110,6 +115,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof archiveFinishedResponseSchema>, ArchiveFinished200>>,
     Assert<Exact<z.infer<typeof cancelResponseSchema>, Cancel200>>,
     Assert<Exact<z.infer<typeof finishResponseSchema>, Finish200>>,
+    Assert<Exact<z.infer<typeof startNowResponseSchema>, StartNow200>>,
     Assert<Exact<z.infer<typeof landResponseSchema>, Land200>>,
     Assert<Exact<z.infer<typeof continueResponseSchema>, Continue200>>,
     Assert<Exact<z.infer<typeof deleteRunResponseSchema>, DeleteRun200>>,

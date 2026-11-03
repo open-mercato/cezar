@@ -308,19 +308,34 @@ export const TELEMETRY_EVENTS = [
   'skill_missing_in_session', 'session_resume_fallback', 'task_failed', 'skills_update_apply_dropped',
   'attachments_sent', 'attachments_restaged', 'palette_opened', 'task_command_run', 'task_shortcut_used',
   'task_switched', 'palette_mode_used', 'palette_dismissed', 'shortcut_rebound',
+  'schedule_menu_opened', 'start_option_picked', 'task_scheduled',
+  'task_origin', 'workflow_used', 'skill_used', 'variants_started', 'dispatch_tree_started',
+  'automation_created', 'automation_toggled', 'automation_deleted', 'automation_fired',
+  'workflow_saved', 'pr_opened', 'review_decided', 'design_mode_enabled', 'feature_inventory',
 ] as const;
 
-/** Once per UTC day while telemetry is on: `cezar_run`. Without consent: nothing at all. */
+/** The daily `feature_inventory` rows (feature-telemetry.ts), registered by the server boot so
+ *  this module stays free of the workspace readers. */
+let inventory: (() => Promise<Array<{ label: string; value: number }>>) | undefined;
+export function registerDailyInventory(collect: typeof inventory): void {
+  inventory = collect;
+}
+
+/** Once per UTC day while telemetry is on: `cezar_run`, then one `feature_inventory` per configured
+ *  feature. Without consent: nothing at all. */
 export async function sendDailyPing(): Promise<void> {
   if (!(await stillGranted())) return;
   const today = new Date().toISOString().slice(0, 10);
   if ((await loadWorkspaceConfig()).lastActiveOn === today) return;
   const base = { service: SERVICE, version, platform: platform(), runtime: telemetryRuntime() };
-  const ok = await post('/track/cezar_run', { ...base, indexKey: await cezarId() });
+  const indexKey = await cezarId();
+  const ok = await post('/track/cezar_run', { ...base, indexKey });
   if (ok) {
     await mergeWriteWorkspaceConfig((config) => {
       config.lastActiveOn = today;
     }).catch(() => undefined);
+    const rows = await inventory?.().catch(() => []) ?? [];
+    for (const row of rows) void post('/track/feature_inventory', { ...base, label: row.label, value: row.value, indexKey });
   }
 }
 
@@ -354,9 +369,11 @@ function safeCwd(): string {
  *  become `<repo>`, the temp dir `<tmp>`, the home directory `~` — longest first, so a repo under
  *  home is `<repo>`, not `~/code/<name>`. */
 export function scrub(text: string): string {
+  // The desktop sidecar runs from home: a home cwd is not a repo, so `~` must win there.
+  const cwd = safeCwd();
   const pairs: Array<[string, string]> = [
     ...projectRoots.map((root): [string, string] => [root, '<repo>']),
-    [safeCwd(), '<repo>'],
+    [cwd === homedir() ? '' : cwd, '<repo>'],
     [tmpdir(), '<tmp>'],
     [homedir(), '~'],
   ];

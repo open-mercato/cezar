@@ -14,7 +14,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findPackGaps } from '../dist/pack-check.js';
+import { findPackGaps, firstPackReport } from '../dist/pack-check.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -27,9 +27,7 @@ const stdout = npmExecpath
   ? execFileSync(process.execPath, [npmExecpath, ...packArgs], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   : execFileSync(npmCli, packArgs, { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, shell: process.platform === 'win32' });
 
-/** @type {{ files?: { path: string }[] }[]} */
-const reports = JSON.parse(stdout);
-const files = (reports[0]?.files ?? []).map((f) => f.path);
+const files = (firstPackReport(JSON.parse(stdout))?.files ?? []).map((f) => f.path);
 if (files.length === 0) {
   console.error('check:pack: `npm pack --dry-run --json` reported no files — refusing to publish an empty package');
   process.exit(1);

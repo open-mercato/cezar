@@ -1,4 +1,4 @@
-import { fstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { fstatSync, mkdirSync, mkdtempSync, promises as fsPromises, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +50,7 @@ import {
   loadWorkspaceConfig,
   mergeWriteWorkspaceConfig,
   workspaceConfigBackupPath,
+  WorkspaceConfigUnreadableError,
   type WorkspaceConfig,
 } from './config.ts';
 
@@ -501,6 +502,89 @@ describe('workspace config', () => {
 
       expect((await loadWorkspaceConfig()).projects).toEqual([]);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('is corrupt'));
+    });
+
+    describe('a config that exists but cannot be read (Windows EBUSY/EPERM)', () => {
+      const realReadFile = fsPromises.readFile;
+      const lockConfigReads = (code: string) =>
+        vi.spyOn(fsPromises, 'readFile').mockImplementation(((path: unknown, ...rest: unknown[]) => {
+          if (String(path).includes('config.json')) {
+            return Promise.reject(Object.assign(new Error(`${code}: resource busy or locked`), { code }));
+          }
+          return (realReadFile as (...args: unknown[]) => Promise<unknown>)(path, ...rest);
+        }) as typeof fsPromises.readFile);
+
+      it('a merge-write refuses instead of writing defaults over the config AND its snapshot', async () => {
+        await registerOne();
+        const before = readFileSync(workspaceConfigPath(), 'utf8');
+        const backupBefore = readFileSync(workspaceConfigBackupPath(), 'utf8');
+        lockConfigReads('EBUSY');
+
+        await expect(
+          mergeWriteWorkspaceConfig((config) => {
+            config.lastActiveOn = '2026-10-23';
+          }),
+        ).rejects.toBeInstanceOf(WorkspaceConfigUnreadableError);
+        vi.restoreAllMocks();
+
+        expect(readFileSync(workspaceConfigPath(), 'utf8')).toBe(before);
+        expect(readFileSync(workspaceConfigBackupPath(), 'utf8')).toBe(backupBefore);
+      });
+
+      it('a merge-write over an unreadable config restores from a readable snapshot, keeping the projects', async () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        await registerOne();
+        vi.spyOn(fsPromises, 'readFile').mockImplementation(((path: unknown, ...rest: unknown[]) => {
+          if (String(path) === workspaceConfigPath()) {
+            return Promise.reject(Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }));
+          }
+          return (realReadFile as (...args: unknown[]) => Promise<unknown>)(path, ...rest);
+        }) as typeof fsPromises.readFile);
+
+        const written = await mergeWriteWorkspaceConfig((config) => {
+          config.lastActiveOn = '2026-10-23';
+        });
+        expect(written.projects.map((p) => p.id)).toEqual(['shop']);
+      });
+
+      it('a plain read still never throws: it degrades to the defaults with a warning', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        await registerOne();
+        lockConfigReads('EACCES');
+
+        expect((await loadWorkspaceConfig()).projects).toEqual([]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('is unreadable (EACCES)'));
+      });
+
+      it('names the snapshot when a corrupt config encounters an unreadable snapshot', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        writeFileSync(workspaceConfigPath(), '{ corrupt json', 'utf8');
+        vi.spyOn(fsPromises, 'readFile').mockImplementation(((path: unknown, ...rest: unknown[]) => {
+          if (String(path) === workspaceConfigBackupPath()) {
+            return Promise.reject(Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }));
+          }
+          return (realReadFile as (...args: unknown[]) => Promise<unknown>)(path, ...rest);
+        }) as typeof fsPromises.readFile);
+
+        expect((await loadWorkspaceConfig()).projects).toEqual([]);
+        expect(warn).toHaveBeenCalledWith(
+          `[cez] workspace config ${workspaceConfigBackupPath()} is unreadable (EBUSY) — using defaults for now`,
+        );
+
+        await expect(
+          mergeWriteWorkspaceConfig((config) => {
+            config.lastActiveOn = '2026-10-23';
+          }),
+        ).rejects.toThrow(`[cez] cannot read ${workspaceConfigBackupPath()} (EBUSY) — refusing to overwrite it`);
+      });
+
+      it('a fresh home (nothing to read) still writes the zero-config defaults', async () => {
+        const written = await mergeWriteWorkspaceConfig((config) => {
+          config.lastActiveOn = '2026-10-23';
+        });
+        expect(written.projects).toEqual([]);
+        expect(JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')).lastActiveOn).toBe('2026-10-23');
+      });
     });
   });
 });

@@ -12,6 +12,7 @@ import {
   type AddProjectDialog,
   type MessageSurface,
   type SkillsUpdateDropOutcome,
+  type StartOption,
   type TelemetryErrorInput,
 } from '@open-mercato/cezar-api-client'
 
@@ -54,6 +55,26 @@ function send(path: string, body: unknown): void {
  *  the send succeeded, never before — a failed send is not a sent message. */
 export function trackMessageSent(surface: Exclude<MessageSurface, 'cli'>): void {
   send('/api/v1/telemetry/event', { event: 'message_sent', label: surface })
+}
+
+/** Design Mode was switched on in a task's Preview (switching it off is not counted). */
+export function trackDesignModeEnabled(how: 'button' | 'shortcut'): void {
+  send('/api/v1/telemetry/event', { event: 'design_mode_enabled', label: how })
+}
+
+/** The new-task start-time menu (the arrow beside Send) was opened. */
+export function trackScheduleMenuOpened(): void {
+  send('/api/v1/telemetry/event', { event: 'schedule_menu_opened', label: 'new_task' })
+}
+
+/** The user picked a start option in that menu. */
+export function trackStartOptionPicked(option: StartOption): void {
+  send('/api/v1/telemetry/event', { event: 'start_option_picked', label: option })
+}
+
+/** A task was scheduled from the composer — after the server accepted it. */
+export function trackTaskScheduled(kind: 'at' | 'usage_reset'): void {
+  send('/api/v1/telemetry/event', { event: 'task_scheduled', label: kind })
 }
 
 /** A review comment added on the Changes tab's diff, after it was accepted (a duplicate the
@@ -297,6 +318,25 @@ export function isBenignError(message: string): boolean {
   return BENIGN_MESSAGES.some((re) => re.test(message))
 }
 
+/** A `window.error` cezar's code cannot have thrown, matched on signatures only: the browser's
+ *  masked "Script error." of a cross-origin script (the bundle is same-origin, e3f14c69), a wallet
+ *  extension's injected `window.ethereum` (62a6f399), and React losing a DOM node that page
+ *  translation replaced (f09eb833, 07d1d922, 1ee275a9) — only while the page IS translated. */
+export function isForeignError(
+  event: { message?: string; filename?: string; error?: unknown },
+  root: Element = document.documentElement,
+): boolean {
+  const message = event.message ?? ''
+  if (message === 'Script error.' && !event.filename && !event.error) return true
+  // The thrown error's own words where there is one; the event's message adds an engine prefix.
+  const text = event.error instanceof Error ? `${event.error.name}: ${event.error.message}` : message
+  if (/\bwindow\.ethereum\b/.test(text)) return true
+  return (
+    /\btranslated-(ltr|rtl)\b/.test(root.className) &&
+    /NotFoundError: (Failed to execute '(removeChild|insertBefore)' on 'Node'|Node\.(removeChild|insertBefore):)/.test(text)
+  )
+}
+
 /** An asset URL as the bundle file alone (`index-<hash>.js`) — never the origin or a query. */
 function assetFile(url: string | undefined): string | null {
   if (!url) return null
@@ -526,7 +566,7 @@ export function Telemetry() {
     if (handlersInstalled) return
     handlersInstalled = true
     window.addEventListener('error', (e) => {
-      if (isBenignError(e.message ?? '')) return
+      if (isBenignError(e.message ?? '') || isForeignError(e)) return
       // Where the browser says it came from — the only location a stackless error has.
       reportClientError(e.error ?? e.message, 'window.error', {
         context: {

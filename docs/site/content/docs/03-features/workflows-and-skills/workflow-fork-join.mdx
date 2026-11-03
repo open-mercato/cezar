@@ -1,0 +1,25 @@
+---
+title: "Parallel Fork / Join branches"
+description: "Run two to four agents and combine their results."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/graph.ts
+    line: 115
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Fork splits work between two to four agents. Connect their branches to one Join node, which waits for all results or the first success.
+
+## Where to find it
+
+Workflows → Add node → Fork / Join
+
+## How to use it
+
+1. Add Fork and set the number of branches.
+2. Connect each branch to an agent, then connect the agents to one Join.
+3. In Join, choose whether to wait for all results or the first success.
+
+> **Good to know**: Each agent works in a separate worktree. In any mode, the first success cancels the remaining branches.

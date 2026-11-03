@@ -1,0 +1,25 @@
+---
+title: "Switch agents when continuing"
+description: "Choose the agent and model that will continue a closed session."
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-thread/follow-up-engine.tsx
+    line: 41
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The continuation field includes agent, model, and account selectors. It keeps the task settings by default, but you can change them when reopening the session.
+
+## Where to find it
+
+Task with a closed session → Chat → Continue
+
+## How to use it
+
+1. Open a task that can be continued.
+2. Select an agent, account, or model beside the message field.
+3. Write the next instruction and send it.
+
+> **Good to know**: You can switch backends when continuing, but not during an active turn. Model locking and provider availability may restrict the choice.

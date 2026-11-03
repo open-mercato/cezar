@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { GITHUB_REPO_NAME_PATTERN, type GithubOwner, type GithubOwnersResponse } from '@open-mercato/cezar-contract';
@@ -63,7 +64,7 @@ export const spawnCommandRunner: CommandRunner = (cmd, args, opts) =>
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: COMMAND_TIMEOUT_MS,
       // Non-interactive on purpose: a prompt nobody can see would pin the request.
-      env: { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
+      env: { ...ghEnv(), GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0' },
     });
     const tail: string[] = [];
     let stdout = '';

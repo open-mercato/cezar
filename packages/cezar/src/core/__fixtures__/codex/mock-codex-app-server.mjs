@@ -202,6 +202,14 @@ rl.on('line', (line) => {
       return;
     }
     // Current app-servers report a failure as `turn/completed` + status `failed` (run 903d6df4).
+    if (turnText.includes('mock:chatgpt-model')) {
+      // The Responses API body Codex forwards verbatim for an API-only model (1350055f).
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: 'turn_mock_1', status: 'failed', error: { message: JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account." } }) } },
+      } });
+      return;
+    }
     if (turnText.includes('mock:turn-completed-failed')) {
       emit({ method: 'turn/completed', params: {
         threadId: 'th_mock_1',

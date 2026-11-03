@@ -67,6 +67,7 @@ const RUN: ApiRun = {
 
 const health = (terminal: boolean): HealthResponse => ({
   version: '0.0.0-test',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -84,6 +85,7 @@ const health = (terminal: boolean): HealthResponse => ({
     followups: false,
     singleProject: false,
     automations: false,
+    webhooks: false,
     dispatch: false,
   },
 })

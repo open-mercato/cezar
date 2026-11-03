@@ -348,6 +348,8 @@ describe('the review gate on the thread', () => {
       expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
         text: 'Review feedback:\nuse the available provider',
         runner: 'codex',
+        // The delivery seam's key: a re-post of these notes cannot reopen the session twice.
+        idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     )
   })

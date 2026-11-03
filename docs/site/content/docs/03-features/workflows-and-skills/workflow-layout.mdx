@@ -1,0 +1,25 @@
+---
+title: "Automatic graph layout"
+description: "Arrange node positions with one action."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/workflow-graph/workflow-graph.tsx
+    line: 732
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Tidy up arranges the nodes in the graph. Save the workflow to keep the new layout.
+
+## Where to find it
+
+Workflows → editor → Tidy up
+
+## How to use it
+
+1. Open the graph.
+2. Click Tidy up.
+3. Save the workflow to retain the layout.
+
+> **Good to know**: Connections and workflow logic stay unchanged.

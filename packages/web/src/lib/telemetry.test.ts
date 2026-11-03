@@ -7,6 +7,7 @@ import {
   clientSurface,
   errorToastReport,
   isBenignError,
+  isForeignError,
   isCanonicalRoute,
   routeShape,
   scrubToastMessage,
@@ -60,6 +61,34 @@ describe('isBenignError', () => {
   })
 })
 
+describe('isForeignError', () => {
+  const plain = document.createElement('html')
+  const translated = document.createElement('html')
+  translated.className = 'translated-ltr'
+  const removeChild = Object.assign(
+    new Error("Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node."),
+    { name: 'NotFoundError' },
+  )
+
+  it('drops a cross-origin "Script error." and a wallet extension, by signature only (e3f14c69, 62a6f399)', () => {
+    expect(isForeignError({ message: 'Script error.', filename: '' }, plain)).toBe(true)
+    expect(isForeignError({
+      message: "TypeError: undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')",
+      error: new TypeError("undefined is not an object (evaluating 'window.ethereum.selectedAddress = undefined')"),
+    }, plain)).toBe(true)
+    // A "Script error." that names our own bundle, or carries an error, is ours.
+    expect(isForeignError({ message: 'Script error.', filename: 'http://127.0.0.1:4321/assets/index-abc.js' }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Script error.', error: new Error('Script error.') }, plain)).toBe(false)
+    expect(isForeignError({ message: "TypeError: undefined is not an object (evaluating 'run.ethereumish')" }, plain)).toBe(false)
+  })
+
+  it('drops React losing a node only while the page is machine-translated (f09eb833, 07d1d922)', () => {
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, translated)).toBe(true)
+    expect(isForeignError({ message: `Uncaught NotFoundError: ${removeChild.message}`, error: removeChild }, plain)).toBe(false)
+    expect(isForeignError({ message: 'Uncaught TypeError: x is undefined', error: new TypeError('x is undefined') }, translated)).toBe(false)
+  })
+})
+
 describe('clientSurface', () => {
   it('reads the desktop shell stamp', () => {
     expect(clientSurface()).toBe('browser')
@@ -77,6 +106,14 @@ describe('telemetry event relay contract', () => {
     expect(telemetryEventInputSchema.safeParse({ event: 'anything_else', label: 'new_task' }).success).toBe(false)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'multi_line' }).success).toBe(true)
     expect(telemetryEventInputSchema.safeParse({ event: 'diff_comment_added', label: 'new_task' }).success).toBe(false)
+  })
+
+  it('carries scheduling events with closed option labels only', () => {
+    expect(telemetryEventInputSchema.safeParse({ event: 'schedule_menu_opened', label: 'new_task' }).success).toBe(true)
+    for (const label of ['now', 'at', 'usage_reset']) expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'usage_reset' }).success).toBe(true)
+    expect(telemetryEventInputSchema.safeParse({ event: 'task_scheduled', label: 'now' }).success).toBe(false)
+    expect(telemetryEventInputSchema.safeParse({ event: 'start_option_picked', label: '2099-01-01 09:00' }).success).toBe(false)
   })
 })
 

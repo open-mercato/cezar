@@ -36,7 +36,9 @@ describe('PiRunner whole-block v1 text', () => {
 
   function peer(frames: unknown[], hold = false): PiRunner {
     const bin = join(cwd, 'pi-peer.mjs');
-    writeFileSync(bin, `#!${process.execPath}
+    // `env node`, like the other peer tests: an absolute execPath with a space (e.g. under
+    // `Application Support`) is split by the kernel's shebang parser and fails with ENOENT.
+    writeFileSync(bin, `#!/usr/bin/env node
 import readline from 'node:readline';
 for await (const line of readline.createInterface({ input: process.stdin })) {
   if (JSON.parse(line).type !== 'prompt') continue;

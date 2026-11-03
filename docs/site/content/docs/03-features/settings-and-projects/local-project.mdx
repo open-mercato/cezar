@@ -1,0 +1,25 @@
+---
+title: "Add a project from disk"
+description: "Open an existing local repository in Cezar."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/add-project-dialog.tsx
+    line: 85
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Select a folder in the directory browser. Cezar also accepts folders without Git, but runs at most one task at a time in them.
+
+## Where to find it
+
+Add project → Open local folder
+
+## How to use it
+
+1. Browse to the project directory and select the folder.
+2. Open the selected folder in Cezar.
+
+> **Good to know**: You can browse only within the configured root directory. Single-project mode prevents you from adding projects.

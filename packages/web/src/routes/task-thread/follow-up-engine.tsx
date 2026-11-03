@@ -32,9 +32,10 @@ export interface ContinueAction {
    * Reopen the session, starting it on this prompt. An empty draft is the legacy one-click
    * Continue: the engine opens with its own "Continue.". REJECTS with the server's message
    * rather than toasting itself, so the composer can restore the draft it optimistically
-   * cleared — nothing the user typed is lost to a 409.
+   * cleared — nothing the user typed is lost to a 409. A retry passes the first attempt's
+   * `idempotencyKey`, so a Continue that already landed is not continued twice.
    */
-  continueWith: (text: string, images: AttachmentEntry[]) => Promise<ContinueResponse>
+  continueWith: (text: string, images: AttachmentEntry[], idempotencyKey?: string) => Promise<ContinueResponse>
 }
 
 /**
@@ -100,7 +101,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     : null
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: AttachmentEntry[] }) => {
+    mutationFn: ({ text, images, idempotencyKey }: { text: string; images: AttachmentEntry[]; idempotencyKey?: string }) => {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }
@@ -118,6 +119,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // account it is on — and the reopened session still resumes, which an explicit switch
         // deliberately does not (a session id lives inside ONE account's config dir).
         agentProfile: account ?? undefined,
+        idempotencyKey,
       })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
@@ -166,6 +168,6 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         />
       </div>
     ),
-    continueWith: (text, images) => mutation.mutateAsync({ text, images }),
+    continueWith: (text, images, idempotencyKey) => mutation.mutateAsync({ text, images, idempotencyKey }),
   }
 }

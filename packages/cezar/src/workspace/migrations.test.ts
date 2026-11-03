@@ -7,7 +7,7 @@ import { defaultWorkspaceConfig, loadWorkspaceConfig } from './config.ts';
 import { runMigrations, WORKSPACE_MIGRATIONS, type WorkspaceMigration } from './migrations.ts';
 
 /**
- * Workspace migration framework + migration 001 under test (spec
+ * Workspace migration framework + workspace migrations under test (spec
  * 2026-07-20-multi-project-workspace, step 1.4): idempotent re-runs, additive
  * imports that never overwrite globally-set keys, per-step `schemaVersion`
  * persistence, and the non-blocking degradation rule (an unwritable home logs
@@ -43,11 +43,11 @@ describe('workspace migrations', () => {
   const rawGlobalUiState = () =>
     JSON.parse(readFileSync(workspaceUiStatePath(), 'utf8')) as Record<string, unknown>;
 
-  it('fresh home: creates config.json with defaults and schemaVersion 1', async () => {
+  it('fresh home: creates config.json with defaults and schemaVersion 2', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await runMigrations({ bootRepoRoot: null });
     const config = await loadWorkspaceConfig();
-    expect(config).toEqual({ ...defaultWorkspaceConfig(), schemaVersion: 1 });
+    expect(config).toEqual({ ...defaultWorkspaceConfig(), schemaVersion: 2 });
     expect(statSync(workspaceConfigPath()).mode & 0o777).toBe(0o600);
     // nothing to import → the global ui-state file is not created
     expect(existsSync(workspaceUiStatePath())).toBe(false);
@@ -67,7 +67,7 @@ describe('workspace migrations', () => {
     await runMigrations({ bootRepoRoot: repoRoot });
 
     const config = await loadWorkspaceConfig();
-    expect(config.schemaVersion).toBe(1);
+    expect(config.schemaVersion).toBe(2);
     expect(config.resources.maxParallel).toBe(5);
     expect(config.resources.memoryLimitMb).toBe(1024);
     expect(rawGlobalUiState()).toEqual({
@@ -119,7 +119,7 @@ describe('workspace migrations', () => {
     await runMigrations({ bootRepoRoot: repoRoot });
 
     const config = await loadWorkspaceConfig();
-    expect(config.schemaVersion).toBe(1);
+    expect(config.schemaVersion).toBe(2);
     expect(config.resources.maxParallel).toBe(5);
     expect(rawGlobalUiState().appearance).toEqual({ accent: 'violet' });
   });
@@ -129,6 +129,40 @@ describe('workspace migrations', () => {
     const run = vi.fn(async () => {});
     await runMigrations({ bootRepoRoot: null }, [{ to: 1, id: '001-spy', run }]);
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('removes the legacy default width while preserving the rest of workspace ui-state', async () => {
+    writeFileSync(workspaceConfigPath(), JSON.stringify({ schemaVersion: 1 }), 'utf8');
+    writeFileSync(
+      workspaceUiStatePath(),
+      JSON.stringify({
+        appearance: { accent: 'violet', density: 'compact', width: 'narrow' },
+        notifications: { enabled: true },
+        futurePreference: { kept: true },
+      }),
+      'utf8',
+    );
+
+    await runMigrations({ bootRepoRoot: null });
+
+    expect(rawGlobalConfig().schemaVersion).toBe(2);
+    expect(rawGlobalUiState()).toEqual({
+      appearance: { accent: 'violet', density: 'compact' },
+      notifications: { enabled: true },
+      futurePreference: { kept: true },
+    });
+  });
+
+  it('leaves an explicit wide value and an appearance without width untouched', async () => {
+    writeFileSync(workspaceConfigPath(), JSON.stringify({ schemaVersion: 1 }), 'utf8');
+    writeFileSync(workspaceUiStatePath(), JSON.stringify({ appearance: { width: 'wide' } }), 'utf8');
+    await runMigrations({ bootRepoRoot: null });
+    expect(rawGlobalUiState()).toEqual({ appearance: { width: 'wide' } });
+
+    writeFileSync(workspaceConfigPath(), JSON.stringify({ schemaVersion: 1 }), 'utf8');
+    writeFileSync(workspaceUiStatePath(), JSON.stringify({ appearance: { accent: 'lime' } }), 'utf8');
+    await runMigrations({ bootRepoRoot: null });
+    expect(rawGlobalUiState()).toEqual({ appearance: { accent: 'lime' } });
   });
 
   it('out-of-range repo values are not imported (defaults kept)', async () => {
@@ -185,11 +219,9 @@ describe('workspace migrations', () => {
     expect(existsSync(workspaceConfigPath())).toBe(false);
   });
 
-  it('stays at schemaVersion 1 — a purely additive key needs no migration', () => {
-    // Agent profiles (spec 2026-07-29) added `agentProfiles` and `projects[].agentProfile`, both
-    // optional with an absent value that means exactly today's behaviour. There is nothing to
-    // move, so there is nothing to migrate; this pins that so a no-op migration is not added
-    // reflexively the next time a key lands here.
-    expect(WORKSPACE_MIGRATIONS.map((m) => m.to)).toEqual([1]);
+  it('includes the numbered migration for the changed default', () => {
+    // Agent profiles (spec 2026-07-29) remain additive and need no migration. The reading-width
+    // default is structural, so it is covered by migration 002.
+    expect(WORKSPACE_MIGRATIONS.map((m) => m.to)).toEqual([1, 2]);
   });
 });

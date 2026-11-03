@@ -141,6 +141,9 @@ function spawnOpencode(
     cwd,
     env: buildChildEnv({ backend: 'opencode' }),
   });
+  // Closing a pipe the child already dropped reports EPIPE as an async 'error' (acfb01e4's
+  // crash class); the 'close' handler owns settlement.
+  child.stdin.on('error', () => {});
   // Nothing is ever written to it, and an open stdin is what makes a CLI that expects a TTY
   // sit and wait instead of printing its list.
   child.stdin.end();

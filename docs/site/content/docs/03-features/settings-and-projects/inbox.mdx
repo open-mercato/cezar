@@ -1,0 +1,29 @@
+---
+title: "Turn an agent suggestion into a task"
+description: "Find the agent's suggestions for further work in Inbox."
+version: opt-in
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/inbox.tsx
+    line: 149
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/007-handoff-file-todos.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Inbox collects follow-up actions and notes left by agents. Turn a suggested action into a new task by choosing an agent and model and adding instructions. Informational notes can be acknowledged and removed.
+
+## Where to find it
+
+Inbox
+
+## How to use it
+
+1. Set `CEZ_FOLLOWUPS=1` and restart Cezar.
+2. Open Inbox after a task that left a suggested follow-up.
+3. Select an agent and model, optionally use Add instructions, then choose Run. Remove an unwanted item with Dismiss.
+
+> **Good to know**: Inbox is not a manual manager for your own TODO list. Its entries come from a file maintained by agents. Notes for an individual task work independently.

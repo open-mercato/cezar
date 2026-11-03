@@ -133,6 +133,11 @@ export interface DiffProps {
    */
   imageSrc?: (path: string) => string
   /**
+   * Raw-bytes URL for an image's OLD side (the diff's base commit) — the picture of a deleted
+   * image and the "before" of a modified one. Absent ⇒ only the new side is previewed.
+   */
+  oldImageSrc?: (path: string) => string
+  /**
    * "Open in default app" (#365, LOCAL MODE ONLY): given a path, hand it off to the OS's
    * default application. Absent ⇒ the action is hidden, not disabled — the doctrine every
    * other local-machine affordance in the cockpit follows (`git-actions.ts`).

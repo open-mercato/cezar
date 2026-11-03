@@ -98,6 +98,30 @@ describe('GitHub automation API', () => {
     expect(second.baselineAt).toBe(first.baselineAt);
   });
 
+  it('pulls an enabled poll\'s next check in when an edit shortens its interval, but not past a backoff (#1736)', async () => {
+    const slow = { ...input, intervalSeconds: 3600, enabled: true };
+    const draft = ((await (await apiRequest(app(), '/api/v1/automations', json(slow))).json()) as any).automation;
+    // Already enabled before the edit, so the edit is not an Enable that re-arms from scratch.
+    const created = ((await (await apiRequest(app(), `/api/v1/automations/${draft.id}`, json({ ...slow, expectedRevision: draft.revision }, 'PUT'))).json()) as any).automation;
+    expect(created.enabled).toBe(true);
+    const nextCheck = async () => Date.parse(((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state.nextCheckAt);
+    const automations = AutomationStore.open(join(root, '.ai/cezar'));
+    // As a completed poll leaves it: the next check one old interval out.
+    automations.setState(created.id, (state) => ({ ...state, nextCheckAt: new Date(Date.now() + 3_600_000).toISOString() }));
+    expect(await nextCheck()).toBeGreaterThan(Date.now() + 3_000_000);
+
+    const shortened = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, filters: { ...slow.filters, anyLabels: ['v2'] }, expectedRevision: created.revision }, 'PUT'));
+    expect(shortened.status).toBe(200);
+    expect(await nextCheck()).toBeLessThanOrEqual(Date.now() + 60_000);
+
+    const backoffUntil = new Date(Date.now() + 1_800_000).toISOString();
+    automations.setState(created.id, (state) => ({ ...state, nextCheckAt: backoffUntil, backoffUntil }));
+    const renamed = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...slow, intervalSeconds: 60, name: 'Renamed', expectedRevision: created.revision + 1 }, 'PUT'));
+    expect(renamed.status).toBe(200);
+    expect(((await renamed.json()) as any).automation.revision).toBe(created.revision + 2);
+    expect(await nextCheck()).toBe(Date.parse(backoffUntil));
+  });
+
   it('refuses an unknown agent account on create and on update, like POST /runs does', async () => {
     const withAccount = { ...input, task: { ...input.task, agentProfile: 'nope' } };
     const created = await apiRequest(app(), '/api/v1/automations', json(withAccount));
@@ -283,6 +307,30 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect(switched.status).toBe(409);
   });
 
+  it('arms a one-time schedule at its instant and refuses to enable one that has passed (#771)', async () => {
+    const server = app();
+    const future = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+    const once = (date?: string) => ({ ...schedule, schedule: { type: 'once', hour: 23, minute: 0, ...(date ? { date } : {}) } });
+
+    const undated = await apiRequest(server, '/api/v1/automations', json(once()));
+    expect(undated.status).toBe(400);
+    expect(((await undated.json()) as any).error).toContain('needs a date');
+    const pastEnabled = await apiRequest(server, '/api/v1/automations', json({ ...once('2020-01-01'), enable: true }));
+    expect(pastEnabled.status).toBe(400);
+    expect(((await pastEnabled.json()) as any).error).toContain('not in the future');
+
+    // Saved paused, a past one is a draft: accepted, but it cannot be enabled until its date moves.
+    const draft = ((await (await apiRequest(server, '/api/v1/automations', json(once('2020-01-01')))).json()) as any).automation;
+    expect((await apiRequest(server, `/api/v1/automations/${draft.id}/enable`, { method: 'POST' })).status).toBe(409);
+    const moved = await apiRequest(server, `/api/v1/automations/${draft.id}`, json({ ...once(future), enabled: true, expectedRevision: draft.revision }, 'PUT'));
+    expect(moved.status).toBe(200);
+
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...once(future), enable: true }))).json()) as any).automation;
+    expect(created).toMatchObject({ enabled: true, schedule: { type: 'once', date: future, hour: 23, minute: 0 } });
+    const state = ((await (await apiRequest(server, `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(Date.parse(state.nextRunAt)).toBeGreaterThan(Date.now() + 28 * 86_400_000);
+  });
+
   it('clears the next occurrence when the schedule changes, so the timer recomputes', async () => {
     const server = app();
     const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, enable: true }))).json()) as any).automation;
@@ -316,6 +364,16 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
     expect((await apiRequest(server, `/api/v1/automations/${created.id}/check`, json({ mode: 'preview' }))).status).toBe(409);
     const pollDef = ((await (await apiRequest(server, '/api/v1/automations', json(poll))).json()) as any).automation;
     expect((await apiRequest(server, `/api/v1/automations/${pollDef.id}/run`, { method: 'POST' })).status).toBe(409);
+  });
+
+  // telemetry 411fac74: the 409 named only "see the execution log", never why the launch failed.
+  it('says why a by-hand schedule launch failed', async () => {
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json({ ...schedule, task: { ...schedule.task, workflow: 'no-such-workflow' } }))).json()) as any).automation;
+    const ran = await apiRequest(server, `/api/v1/automations/${created.id}/run`, { method: 'POST' });
+    expect(ran.status).toBe(409);
+    const { error } = (await ran.json()) as { error: string };
+    expect(error).toMatch(/^the launch failed: .*no-such-workflow/);
   });
 
   it('lists the other registered projects\' automations as templates', async () => {

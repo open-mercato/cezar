@@ -29,7 +29,7 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // Tier aliases only. The dated ids that used to sit here (`claude-opus-4-8` and friends) came
   // off the picker when Claude gained host discovery (#784) — a guard that names a specific
   // vendor release goes stale the same way the picker did, and this list mirrors the picker.
-  claude: ['opus', 'sonnet', 'haiku'],
+  claude: ['fable', 'opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [],
   // Cursor models are discovered from the CLI / Settings — no hard-coded presets
@@ -51,7 +51,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // from GitHub at run time, and the ids it routes are other vendors' own (`gpt-5.4`,
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
+  // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
+  antigravity: [],
 };
 
 /**
@@ -65,6 +67,14 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<RunnerId, RegExp>> = {
   claude: /^claude[-.]/,
   codex: /^gpt[-.]/,
 };
+
+/** Runners whose own bare catalog ids ARE other vendors' ids — Copilot routes `claude-sonnet-4`
+ *  and `gpt-5.4`, Cursor `gpt-5` — so a vendor shape is no evidence of a mis-pairing there. Not
+ *  junie (opaque `v1:…` ids) nor opencode/pi (`provider/model` only). */
+const VENDOR_ID_HOSTING_RUNNERS: readonly RunnerId[] = ['copilot', 'cursor'];
+
+const hasVendorIdShape = (model: string): boolean =>
+  Object.values(NATIVE_MODEL_ID_PREFIX).some((prefix) => prefix.test(model));
 
 /**
  * True when the `provider/` prefix on `model` names a provider cezar knows that this
@@ -86,13 +96,31 @@ function namesAnotherKnownProvider(model: string, runner: RunnerId): boolean {
   return (KNOWN_PROVIDERS as readonly string[]).includes(explicit.provider);
 }
 
+/** Runners whose `--model` takes only names from their own catalog, which no other runner accepts
+ *  either (`agy models` answers account-specific slugs like `gemini-3.8-flash-high`, each with a
+ *  display label; `--model` takes the slug). */
+const PRIVATE_MODEL_NAMESPACE: ReadonlySet<RunnerId> = new Set(['antigravity']);
+
+/** Whether a model pinned while the run was on `from` may stay pinned on `to` with no explicit
+ *  model — on a real switch only a pin native to `to` survives (8e1173b1), and never one across a
+ *  private namespace, whose names are never another runner's to interpret. */
+export function pinSurvivesRunnerSwitch(model: string, from: RunnerId, to: RunnerId): boolean {
+  if (from === to) return !modelConflictsWithRunner(model, to);
+  if (PRIVATE_MODEL_NAMESPACE.has(from) || PRIVATE_MODEL_NAMESPACE.has(to)) return false;
+  return modelNativeToRunner(model, to);
+}
+
 /** True when `model` is recognizably another runner's — a preset of a runner OTHER than `runner`,
  *  its vendor's bare id shape, or a provider prefix this runner is known not to serve — and not
  *  also one of `runner`'s own. `''`/unknown/custom ids never conflict. */
 export function modelConflictsWithRunner(model: string, runner: RunnerId): boolean {
   if (!model) return false;
+  if (runner === 'antigravity') return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
   if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
+  // Checked before the preset lists: `gpt-5.1-codex` is codex's preset AND a Copilot id. Tier
+  // aliases (`opus`) carry no vendor shape and still conflict.
+  if (VENDOR_ID_HOSTING_RUNNERS.includes(runner) && hasVendorIdShape(model)) return false;
   // Both structural halves of the guard need no vendor model knowledge, so — unlike the preset
   // lists — they keep holding for models that do not exist yet. That is what lets OpenCode's
   // entry above be empty (#794) and Claude's shrink to tier aliases (#784) without either
@@ -106,4 +134,25 @@ export function modelConflictsWithRunner(model: string, runner: RunnerId): boole
       ([other, prefix]) => other !== runner && prefix.test(model),
     )
   );
+}
+
+/**
+ * True when `model` provably belongs to `runner`: one of its presets, its vendor's bare id shape,
+ * a `provider/model` naming its own default provider, or a bare id on a runner that has one.
+ * Stricter than {@link modelConflictsWithRunner} on purpose: it judges a pin INHERITED across a
+ * runner switch, which nobody picked for the target — Claude's open gateway support otherwise
+ * lets OpenCode's `openai/gpt-5.1` through to `claude --model` (telemetry 8e1173b1). Spanning
+ * runners (OpenCode, pi) only take `provider/model`, so a bare pin is never theirs. Another
+ * vendor's bare id is not provably Copilot's or Cursor's either (their spellings differ:
+ * `claude-sonnet-4.5` vs `claude-sonnet-4-5`), so an inherited one is dropped there too.
+ */
+export function modelNativeToRunner(model: string, runner: RunnerId): boolean {
+  if (!model || modelConflictsWithRunner(model, runner)) return false;
+  if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return true;
+  if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return true;
+  if (hasVendorIdShape(model)) return false;
+  const defaultProvider = BACKEND_MODEL_MAP[runner]?.defaultProvider;
+  const explicit = parseModelIdentity(model);
+  if (explicit) return defaultProvider === undefined || explicit.provider === defaultProvider;
+  return defaultProvider !== undefined && !model.includes('/');
 }

@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeCodexUsageWindows } from './usage-windows.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -36,11 +37,13 @@ import {
   type CodexUiMapping,
   type CodexUiMapperState,
 } from './codex-ui-mapper.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
+import { explainCodexModelError } from './agent-errors.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
   /** Waits between `thread/resume` retries while another process holds the thread. */
   resumeLockRetryMs?: readonly number[];
@@ -208,25 +211,21 @@ class CodexSession implements AgentSession {
     this.child.stderr.setEncoding('utf8');
     this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        this.timedOut = true;
-        this.interrupt();
-        this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      this.timedOut = true;
+      this.interrupt();
+      this.child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!this.hasExited()) {
+          this.terminatedByCezar = true;
+          this.child.kill('SIGKILL');
+        }
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     // Handshake → thread → first turn. Kicked off concurrently with the read
     // loop below (which resolves the request() promises this awaits).
@@ -238,11 +237,15 @@ class CodexSession implements AgentSession {
         const readLoop = async () => {
           for await (const line of readNdjson(this.child.stdout)) {
             if (this.timedOut) break;
+            deadline.touch();
             let msg: CodexAppServerMessage;
             try {
               msg = JSON.parse(line) as CodexAppServerMessage;
             } catch {
               continue; // not JSON-RPC — skip
+            }
+            if (msg.method === 'account/rateLimits/updated') {
+              emitUsageWindows(spec.onUsageWindows, normalizeCodexUsageWindows(msg.params));
             }
             // A sub-agent child thread's turn lifecycle must reach neither channel (#600):
             // v1 would emit a bogus `turn-end`, and the v2 mapper — which carries no thread
@@ -267,7 +270,7 @@ class CodexSession implements AgentSession {
           this.end();
         }
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
@@ -293,8 +296,7 @@ class CodexSession implements AgentSession {
       };
 
       if (this.timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        this.emit({ type: 'error', message: `codex app-server timed out after ${mins}m and was killed` });
+        this.emit({ type: 'error', message: inactivityTimeoutMessage('codex app-server', limitMs, deadline.expiredBy) });
         this.emit({ type: 'done' });
         return base;
       }
@@ -391,7 +393,7 @@ class CodexSession implements AgentSession {
         message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
       };
     }
-    return { type: 'error', message: `codex: turn failed: ${detail}` };
+    return { type: 'error', message: `codex: turn failed: ${explainCodexModelError(detail, this.spec.model)}` };
   }
 
   end(): void {
@@ -647,7 +649,7 @@ class CodexSession implements AgentSession {
         const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
         if (turnError !== undefined && !this.terminatedByCezar) {
-          this.emit({ type: 'error', message: turnError });
+          this.emit({ type: 'error', message: explainCodexModelError(turnError, this.spec.model) });
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
@@ -725,7 +727,10 @@ function codexAskQuestions(value: unknown): AskQuestion[] | null {
   return parseAskRequest({ questions })?.questions ?? null;
 }
 
-function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
+/** Read the ask card's `Header: answer` lines back into Codex's per-question answers. Only a
+ *  multi-select answer is a comma list — a single-select one may be the user's own text, and
+ *  "Use X, but only for Y" is one answer, not two. */
+export function userInputAnswers(questions: AskQuestion[], text: string): Record<string, { answers: string[] }> {
   const lines = text.split(/\r?\n/);
   const hasStructuredAnswer = questions.some((question) => lines.some((line) => line.startsWith(`${question.header}:`)));
   const answers: Record<string, { answers: string[] }> = {};
@@ -734,7 +739,12 @@ function userInputAnswers(questions: AskQuestion[], text: string): Record<string
     const matching = lines.find((line) => line.startsWith(prefix));
     const raw = matching?.slice(prefix.length).trim() ?? (!hasStructuredAnswer && index === 0 ? text.trim() : '');
     answers[question.id ?? String(index)] = {
-      answers: raw === '' ? [] : raw.split(',').map((answer) => answer.trim()).filter(Boolean),
+      answers:
+        raw === ''
+          ? []
+          : question.multiSelect === true
+            ? raw.split(',').map((answer) => answer.trim()).filter(Boolean)
+            : [raw],
     };
   }
   return answers;

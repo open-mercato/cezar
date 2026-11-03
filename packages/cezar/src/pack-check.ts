@@ -16,6 +16,18 @@ export const IMPACT_PACK_FILES = [
   'skills/change-impact/references/visual-contract.md',
   'skills/change-impact/references/public-api.md',
 ] as const;
+/** One package's entry in `npm pack --json` output. */
+export interface PackReport {
+  filename?: string;
+  files?: { path: string }[];
+}
+
+/** The first package report from `npm pack --json`, whatever npm's shape: an
+ *  array up to npm 11, an object keyed by package name from npm 12. */
+export function firstPackReport(packJson: unknown): PackReport | undefined {
+  if (!packJson || typeof packJson !== 'object') return undefined;
+  return (Array.isArray(packJson) ? packJson : Object.values(packJson))[0] as PackReport | undefined;
+}
 
 /** Human-readable problems with a would-be tarball; empty array = publishable.
  *

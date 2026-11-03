@@ -34,6 +34,8 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     agentProfile?: string;
   };
   let captured: { id: string; opts: ContinueOpts } | undefined;
+  let calls: number;
+  let refuse: string | undefined;
   let home: string;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedHome = process.env.CEZ_HOME;
@@ -47,6 +49,8 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
+    calls = 0;
+    refuse = undefined;
     runId = store.createRun({
       title: 't',
       workflow: 'quick-task',
@@ -55,6 +59,8 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     }).id;
     const manager = {
       continueRun: (id: string, opts: ContinueOpts = {}) => {
+        calls += 1;
+        if (refuse) return { ok: false, error: refuse };
         captured = { id, opts };
         return { ok: true };
       },
@@ -129,6 +135,33 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(captured?.opts.model).toBeUndefined();
   });
 
+  /** A Continue taken behind the run's teardown (continueOnDrop) adds no step yet, so the
+   *  cockpit's re-post of a Continue that got no answer is told apart only by its key. */
+  it('continues a re-posted Continue once — a repeated idempotency key answers its first response', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e20';
+    const [first, retry] = await Promise.all([post({ text: 'once', idempotencyKey }), post({ text: 'once', idempotencyKey })]);
+    expect(await first.json()).toEqual({ continued: true });
+    expect(retry.status).toBe(200);
+    expect(await retry.json()).toEqual({ continued: true });
+    expect(calls).toBe(1);
+    expect((await post({ text: 'other', idempotencyKey: '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e21' })).status).toBe(200);
+    expect(calls).toBe(2);
+  });
+
+  it('a refused Continue key is judged afresh on retry', async () => {
+    const idempotencyKey = '0190f5d6-1c2b-7a3d-8e4f-5a6b7c8d9e22';
+    refuse = 'run is still active';
+    expect((await post({ idempotencyKey })).status).toBe(409);
+    refuse = undefined;
+    expect(await (await post({ idempotencyKey })).json()).toEqual({ continued: true });
+    expect(calls).toBe(2);
+  });
+
+  it('rejects an idempotency key that is not a uuid', async () => {
+    expect((await post({ idempotencyKey: 'nope' })).status).toBe(400);
+    expect(calls).toBe(0);
+  });
+
   /** The follow-up composer is a full composer, so a screenshot pasted into it has to reach the
    *  reopened session — as content blocks, the same shape `POST /messages` hands the engine. */
   it('converts pasted images into content blocks for the manager', async () => {
@@ -180,6 +213,14 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe(ATTACHMENT_IMAGES_TOO_LARGE);
     expect(captured).toBeUndefined();
+  });
+
+  /** #1735: an over-limit body used to answer a bare "Payload Too Large" the cockpit could not explain. */
+  it('answers an over-limit body with a JSON 413 naming the limit', async () => {
+    const res = await post({ text: 'x', pad: 'A'.repeat(33 * 1024 * 1024) });
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(((await res.json()) as { error: string }).error).toContain('32 MiB');
   });
 
   it('refuses a reference to an upload that is gone, with the wording the composer matches', async () => {
