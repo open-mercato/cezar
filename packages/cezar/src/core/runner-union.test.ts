@@ -25,6 +25,7 @@ const SOURCE_ROOTS = ['packages/contract/src', 'packages/api-client/src', 'packa
 const ALLOWED_LITERAL_SITES = new Set([
   'packages/contract/src/health.ts',
   'packages/contract/src/workspace.ts', // modelDiscoveryRunnerSchema: the host-catalog subset
+  'packages/contract/src/agent-setup.ts', // agentSetupProviderSchema: the runners the first-run page can install
   'packages/api-client/src/protocol/ui-events.ts',
   'packages/cezar/src/core/ui-events.ts',
   'packages/cezar/src/agent-config/catalog.ts', // project.agents: the AGENTS.md readers subset
