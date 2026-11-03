@@ -18,13 +18,17 @@ export function SubtaskToggle({
   expanded,
   onToggle,
   className,
+  wordClassName,
 }: {
   /** `subtaskLabel(childCount)` — the caller only renders the handle when it is non-null. */
   label: string
   expanded: boolean
   onToggle: () => void
   className?: string
+  /** On the word after the count, so a narrow row can keep just the count (#979). */
+  wordClassName?: string
 }) {
+  const [count, ...word] = label.split(' ')
   return (
     <button
       type="button"
@@ -33,7 +37,7 @@ export function SubtaskToggle({
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${label}`}
       onClick={onToggle}
       className={cn(
-        'inline-flex shrink-0 items-center gap-0.5 rounded-full bg-muted py-px pr-1.5 pl-1 text-[10.5px] font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
+        'inline-flex shrink-0 items-center gap-0.5 rounded-full bg-muted py-px pr-1.5 pl-1 text-micro font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
         className,
       )}
     >
@@ -41,7 +45,8 @@ export function SubtaskToggle({
         className={cn('size-3 transition-transform', expanded && 'rotate-90')}
         aria-hidden="true"
       />
-      {label}
+      {count}
+      <span className={wordClassName}>{` ${word.join(' ')}`}</span>
     </button>
   )
 }

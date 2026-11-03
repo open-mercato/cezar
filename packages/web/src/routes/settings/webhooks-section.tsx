@@ -155,11 +155,11 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   if (unsupportedPlatform || !enabled) return <div data-slot="webhooks-settings" className={chassis}>
     <section className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
       <div><h2 className="text-sm font-semibold">{unsupportedPlatform ? 'Webhooks aren’t available on this platform' : 'Webhooks are off'}</h2>
-        <p className="mt-1 text-[13px] text-muted-foreground">{unsupportedPlatform
+        <p className="mt-1 text-ui text-muted-foreground">{unsupportedPlatform
           ? 'Delivery needs an OS-verified process identity to keep a single sender. Linux, macOS and Windows provide one; this platform does not.'
           : 'Send task updates to Slack, Discord or your own endpoint when a task needs you, is ready for review or finishes.'}</p></div>
-      {!unsupportedPlatform && <p className="text-[13px]">Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on.</p>}
-      <a className="w-fit text-[13px] underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
+      {!unsupportedPlatform && <p className="text-ui">Start cezar with <code>CEZ_WEBHOOKS=1</code>, then reload this page. If someone else runs this server, ask them to turn webhooks on.</p>}
+      <a className="w-fit text-ui underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
     </section>
   </div>
   const receivers = list.data?.receivers ?? []
@@ -168,7 +168,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
   const latestEdit = form && form !== 'new' ? receivers.find(row => row.id === form.id) : undefined
   const historyCount = list.data?.historyCount ?? 0
-  const reconciliation = stale && <div className="flex flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-[13px]" role="alert">
+  const reconciliation = stale && <div className="flex flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-ui" role="alert">
     <p>This receiver changed in the meantime, so nothing was applied. Review its latest state and confirm again.</p>
     {form && form !== 'new' ? <>
       <p>Your draft is kept. Saving it replaces the latest settings below; a blank URL keeps the current destination.</p>
@@ -183,7 +183,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     <section className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0 flex-1">
         <h2 className="text-sm font-semibold">Receivers</h2>
-        <p className="text-[13px] text-muted-foreground">Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
+        <p className="text-ui text-muted-foreground">Each receiver gets the task updates you choose while cezar is running. New receivers stay Inactive until you test and activate them. <a className="underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a></p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
@@ -192,7 +192,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     </section>
     {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm [overflow-wrap:anywhere]">
       <p><span className="font-medium">{activityLabel(notice.action)}</span>{notice.receiverName ? ` — ${notice.receiverName}` : ''}<span className="text-muted-foreground">{notice.destination ? ` · ${notice.destination}` : ''} · {webhookTime(notice.at)}{notice.source ? ` · via ${sourceLabels[notice.source]}` : ''}</span></p>
-      <p className="text-[13px] text-muted-foreground">Any local process, including agents, can change receivers and read signing keys. If this wasn’t you, review it.</p>
+      <p className="text-ui text-muted-foreground">Any local process, including agents, can change receivers and read signing keys. If this wasn’t you, review it.</p>
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => mutation.mutate(() => webhookApi.acknowledge(projectId, list.data!.changeSequence))}>Mark as reviewed</Button>
         {notice.receiverId && <Button size="sm" variant="ghost" onClick={() => navigateReceiver(notice.receiverId, 'activity')}>View activity</Button>}
@@ -204,9 +204,9 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {validEndpoint && requestedTab === 'settings' && !list.isPending && !list.error && !receivers.some(row => row.id === endpoint) && <div role="alert" className="flex flex-wrap items-center gap-2 text-sm"><span>This receiver’s settings are unavailable — it may have been deleted.</span><Button size="sm" variant="outline" onClick={() => navigateReceiver(endpoint, 'deliveries')}>View its history</Button></div>}
     {validEndpoint && validTab && requestedTab !== 'settings' && !current && <p role="status" className="text-sm text-muted-foreground">{resolution.error ? 'This receiver’s history is unavailable or no longer kept.' : 'Loading history…'}</p>}
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
-    {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-[13px]">{list.data.webhookHealth.reason}</p>}
+    {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
     {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-[13px] text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
+    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
     {receivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
@@ -216,11 +216,11 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       return <article key={row.id} className="flex min-w-0 flex-col gap-3 rounded-lg border border-border bg-card p-4">
         <div className="min-w-0">
           <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold [overflow-wrap:anywhere]">{row.name}<Pill dot={endpointHealthTone[row.state]}>{receiverStateLabels[row.state]}</Pill>{!custom && <Pill>{formatLabels[row.format]}</Pill>}</h3>
-          <p className="mt-1 break-words text-[13px] text-muted-foreground">{summary}</p>
-          {row.consecutiveFailures > 0 && <p className="mt-1 text-[13px] text-warning">{plural(row.consecutiveFailures, 'failed attempt', 'failed attempts')} in a row.{row.pendingCount > 0 ? row.nextProbeAt ? ` Next retry ${webhookTime(row.nextProbeAt)}.` : '' : ' Nothing is queued, so nothing will be retried until the next event.'}</p>}
-          {row.state === 'paused' && <p className="mt-1 text-[13px] text-muted-foreground">{row.pauseReason === 'project_removal' ? 'Paused when this project was removed from the workspace.' : 'Paused.'} New events aren’t queued.</p>}
-          {row.activationBlocked && <p className="mt-1 text-[13px] text-warning">Send a passing test of these settings before activating.</p>}
-          {custom && row.retiredKeyExpiresAt && <p className="mt-1 text-[13px] text-muted-foreground">The previous signing key stops working {webhookTime(row.retiredKeyExpiresAt)}.</p>}
+          <p className="mt-1 break-words text-ui text-muted-foreground">{summary}</p>
+          {row.consecutiveFailures > 0 && <p className="mt-1 text-ui text-warning">{plural(row.consecutiveFailures, 'failed attempt', 'failed attempts')} in a row.{row.pendingCount > 0 ? row.nextProbeAt ? ` Next retry ${webhookTime(row.nextProbeAt)}.` : '' : ' Nothing is queued, so nothing will be retried until the next event.'}</p>}
+          {row.state === 'paused' && <p className="mt-1 text-ui text-muted-foreground">{row.pauseReason === 'project_removal' ? 'Paused when this project was removed from the workspace.' : 'Paused.'} New events aren’t queued.</p>}
+          {row.activationBlocked && <p className="mt-1 text-ui text-warning">Send a passing test of these settings before activating.</p>}
+          {custom && row.retiredKeyExpiresAt && <p className="mt-1 text-ui text-muted-foreground">The previous signing key stops working {webhookTime(row.retiredKeyExpiresAt)}.</p>}
         </div>
         {pendingTest && pendingTest.viewKey === location.key && pendingTest.receiverId === row.id && <WebhookTestFeedback key={pendingTest.deliveryId} projectId={projectId} test={pendingTest} openHistory={id => navigateReceiver(id)} />}
         <div className="flex flex-wrap items-center gap-2">
@@ -248,7 +248,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       {deleted && <>
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
         {history.data?.pages.flatMap(page => page.items).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
-        {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-[13px] text-muted-foreground">No deleted receivers are kept.</p>}
+        {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
         {history.hasNextPage && <div><Button size="sm" variant="outline" disabled={history.isFetchingNextPage} onClick={() => void history.fetchNextPage()}>Load older</Button></div>}
       </>}
     </section>}
@@ -262,7 +262,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       {confirmation?.local && <label className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-0.5" checked={localConsent} onChange={event => setLocalConsent(event.target.checked)} />I allow delivery to this computer or private network.</label>}
       {reconciliation}{error && <p role="alert" className="text-sm text-danger">{error}</p>}
       <DialogFooter><Button variant="outline" disabled={mutation.isPending} onClick={() => setConfirmation(undefined)}>Cancel</Button><Button className={confirmation?.deletesReceiver ? 'bg-danger text-danger-foreground hover:brightness-[0.96]' : undefined} disabled={mutation.isPending || stale || !!confirmation?.standard && !standardConsent || !!confirmation?.local && !localConsent} onClick={() => confirmation && mutation.mutate(confirmation.run)}>{mutation.isPending ? 'Working…' : confirmation?.deletesReceiver ? 'Delete' : 'Confirm'}</Button></DialogFooter></DialogContent></Dialog>
-    <Dialog open={!!secret} onOpenChange={open => { if (!open) setSecret(undefined) }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, secretFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>Save your signing key</DialogTitle><DialogDescription>Copy it into your receiver now — it is shown only once. If you lose it, use Rotate key to get a new one (or Revoke old keys while a rotation is still overlapping).</DialogDescription></DialogHeader><code tabIndex={0} className="block select-text break-all rounded-md bg-muted p-3 font-mono text-sm">{secret}</code>{copyMessage && <p role="status" className="text-[13px] text-muted-foreground">{copyMessage}</p>}<DialogFooter><Button variant="outline" onClick={async () => { try { if (!secret || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(secret); setCopyMessage('Key copied. Store it in your receiver.'); } catch { setCopyMessage('Couldn’t copy — select the key and copy it manually before closing.'); } }}>Copy key</Button><Button onClick={() => setSecret(undefined)}>I’ve saved the key</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={!!secret} onOpenChange={open => { if (!open) setSecret(undefined) }}><DialogContent onCloseAutoFocus={event => restoreFocus(event, secretFocusTarget.current)} className="max-h-[90dvh] overflow-y-auto"><DialogHeader><DialogTitle>Save your signing key</DialogTitle><DialogDescription>Copy it into your receiver now — it is shown only once. If you lose it, use Rotate key to get a new one (or Revoke old keys while a rotation is still overlapping).</DialogDescription></DialogHeader><code tabIndex={0} className="block select-text break-all rounded-md bg-muted p-3 font-mono text-sm">{secret}</code>{copyMessage && <p role="status" className="text-ui text-muted-foreground">{copyMessage}</p>}<DialogFooter><Button variant="outline" onClick={async () => { try { if (!secret || !navigator.clipboard?.writeText) throw new Error('Clipboard unavailable'); await navigator.clipboard.writeText(secret); setCopyMessage('Key copied. Store it in your receiver.'); } catch { setCopyMessage('Couldn’t copy — select the key and copy it manually before closing.'); } }}>Copy key</Button><Button onClick={() => setSecret(undefined)}>I’ve saved the key</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={!!current} onOpenChange={open => { if (!open) navigateReceiver() }}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl [overflow-wrap:anywhere]" onCloseAutoFocus={event => {
       const trigger = historyFocusTarget.current
       if (trigger?.isConnected) { event.preventDefault(); trigger.focus() }
@@ -279,7 +279,7 @@ function ActivationSummary({ receiver, projectId }: { receiver: WebhookReceiver;
     ? ['task.attention_required', 'task.review_ready', 'task.finished', 'task.failed', 'task.cancelled'] as const
     : ['task.attention_required', 'task.review_ready', 'task.finished', 'task.failed'] as const
   const term = 'text-muted-foreground'
-  return <div className="flex min-w-0 flex-col gap-2 text-[13px]">
+  return <div className="flex min-w-0 flex-col gap-2 text-ui">
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 rounded-md border border-border bg-card p-3 [overflow-wrap:anywhere]">
       <dt className={term}>Receiver</dt><dd>{receiver.name}</dd>
       <dt className={term}>Destination</dt><dd>{receiver.format === 'cezar.json.v1' ? 'Custom receiver (signed cezar JSON)' : `${formatLabels[receiver.format]} channel`}</dd>

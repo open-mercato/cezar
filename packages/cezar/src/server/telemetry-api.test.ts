@@ -130,7 +130,7 @@ describe('telemetry routes', () => {
     expect(track).toHaveBeenCalledWith('task_shortcut_used', { label: 'tab', value: 12 }, { sid: undefined })
     expect((await post('/api/v1/telemetry/event', { event: 'task_command_run', label: 'git:push' })).status).toBe(204)
     expect(track).toHaveBeenCalledWith('task_command_run', { label: 'git:push' }, { sid: undefined })
-    for (const [event, label] of [['task_switched', 'cycle'], ['palette_mode_used', 'pr_number'], ['palette_dismissed', 'files'], ['shortcut_rebound', 'pin']]) {
+    for (const [event, label] of [['task_switched', 'cycle'], ['task_switched', 'arrow'], ['palette_mode_used', 'pr_number'], ['palette_dismissed', 'files'], ['shortcut_rebound', 'pin']]) {
       expect((await post('/api/v1/telemetry/event', { event, label })).status).toBe(204)
     }
     vi.mocked(track).mockClear()

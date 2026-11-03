@@ -32,7 +32,7 @@ export function DashboardAutomations() {
           <CalendarClock className="ml-2 size-3.5 text-soft-foreground" aria-hidden="true" />
         </h2>
         {!gate.off && query.data && (
-          <span className="font-mono text-[11px] text-soft-foreground">
+          <span className="font-mono text-meta text-soft-foreground">
             {rows.length} enabled{failed ? ' · partial' : ''}
           </span>
         )}

@@ -32,7 +32,7 @@ describe('Segmented', () => {
     const group = screen.getByRole('group', { name: 'View' })
     expect(group.className).toContain('p-[3px]')
     expect(group.querySelector('button')?.className).toContain('h-7')
-    expect(group.querySelector('button')?.className).toContain('text-[12.5px]')
+    expect(group.querySelector('button')?.className).toContain('text-label')
   })
 
   it('reports a pick and ignores a re-click of the pressed option', () => {

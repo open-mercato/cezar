@@ -29,14 +29,14 @@ export function ReceiverHistory({ projectId, receiver, operation, tab: selectedT
   const zone = deliveries.data?.pages[0]?.timezone
   const time = (value: string) => webhookTime(value, zone)
   return <section className="flex min-w-0 flex-col gap-3">
-    {receiver.kind === 'history' && <p className="rounded-md border border-border bg-muted p-3 text-[13px] text-muted-foreground">Deleted {webhookTime(receiver.deletedAt)} — read-only. Its settings and signing keys are gone; history is kept for up to 30 days.</p>}
+    {receiver.kind === 'history' && <p className="rounded-md border border-border bg-muted p-3 text-ui text-muted-foreground">Deleted {webhookTime(receiver.deletedAt)} — read-only. Its settings and signing keys are gone; history is kept for up to 30 days.</p>}
     <Tabs value={tab} onValueChange={value => setTab(value as typeof tab)}>
     <TabsList aria-label="Receiver history"><TabsTrigger value="deliveries">Deliveries</TabsTrigger><TabsTrigger value="activity">Activity</TabsTrigger></TabsList>
     <TabsContent value="activity" className="flex flex-col gap-2">
-      <p className="text-[13px] text-muted-foreground">Times in {webhookTimeZone(activity.data?.timezone).label}.</p>
+      <p className="text-ui text-muted-foreground">Times in {webhookTimeZone(activity.data?.timezone).label}.</p>
       {activity.isPending && <p className="text-sm text-muted-foreground">Loading activity…</p>}{activity.error && <p role="alert" className="text-sm text-danger">{activity.error.message}</p>}
-      {activity.data?.items.map(row => <div key={row.id} className="rounded-md border border-border p-3 text-sm"><p><span className="font-medium">{activityLabel(row.action)}</span> <span className="text-muted-foreground">· {webhookTime(row.at, activity.data?.timezone)} · via {sourceLabels[row.source]}{row.revision !== undefined && ` · revision ${row.revision}`}</span></p>{row.fields.length > 0 && <p className="text-[13px] text-muted-foreground">Changed: {row.fields.join(', ')}</p>}{row.detail && <p className="text-[13px] text-muted-foreground">{row.detail}</p>}</div>)}
-      {activity.data?.items.length === 0 && <p className="text-sm text-muted-foreground">No activity in the retained history.</p>}{activity.data?.hasMore && <p className="text-[13px] text-muted-foreground">Showing the latest 100 actions.</p>}
+      {activity.data?.items.map(row => <div key={row.id} className="rounded-md border border-border p-3 text-sm"><p><span className="font-medium">{activityLabel(row.action)}</span> <span className="text-muted-foreground">· {webhookTime(row.at, activity.data?.timezone)} · via {sourceLabels[row.source]}{row.revision !== undefined && ` · revision ${row.revision}`}</span></p>{row.fields.length > 0 && <p className="text-ui text-muted-foreground">Changed: {row.fields.join(', ')}</p>}{row.detail && <p className="text-ui text-muted-foreground">{row.detail}</p>}</div>)}
+      {activity.data?.items.length === 0 && <p className="text-sm text-muted-foreground">No activity in the retained history.</p>}{activity.data?.hasMore && <p className="text-ui text-muted-foreground">Showing the latest 100 actions.</p>}
     </TabsContent><TabsContent value="deliveries" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-end gap-2">
         <form className="flex min-w-0 flex-1 items-end gap-2" onSubmit={event => { event.preventDefault(); setTaskId(search.trim()) }}><label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium">Task ID<Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Optional — show one task’s deliveries" /></label><Button type="submit" variant="outline">Find</Button></form>
@@ -45,12 +45,12 @@ export function ReceiverHistory({ projectId, receiver, operation, tab: selectedT
           <SelectContent><SelectItem value="all">All results</SelectItem>{statuses.map(value => <SelectItem key={value} value={value}>{deliveryStatusLabels[value]}</SelectItem>)}</SelectContent>
         </Select></div>
       </div>
-      <p className="text-[13px] text-muted-foreground">Showing {rows.length ? `1–${rows.length}` : '0'} of {deliveries.data?.pages[0]?.total ?? 0}{taskId ? ` for task ${taskId}` : ''}. The result filter applies to loaded entries. Times in {webhookTimeZone(zone).label}.</p>
+      <p className="text-ui text-muted-foreground">Showing {rows.length ? `1–${rows.length}` : '0'} of {deliveries.data?.pages[0]?.total ?? 0}{taskId ? ` for task ${taskId}` : ''}. The result filter applies to loaded entries. Times in {webhookTimeZone(zone).label}.</p>
       {deliveries.isPending && <p className="text-sm text-muted-foreground">Loading deliveries…</p>}{deliveries.error && <p role="alert" className="text-sm text-danger">{deliveries.error.message}</p>}
       {!deliveries.isPending && visible.length === 0 && <p className="text-sm text-muted-foreground">No deliveries match.</p>}
       {visible.map(row => <article key={row.deliveryId} className="min-w-0 rounded-md border border-border p-3 text-sm">
-        <button className="w-full min-w-0 text-left" type="button" aria-expanded={expanded === row.deliveryId} onClick={() => setExpanded(current => current === row.deliveryId ? undefined : row.deliveryId)}><span className="font-medium">{eventLabels[row.eventType]}</span> · <span className={statusTone[row.status]}>{deliveryStatusLabels[row.status]}</span><span className="block text-[13px] text-muted-foreground">{time(row.createdAt)} · {plural(row.attempts, 'attempt', 'attempts')}{row.taskId ? ` · task ${row.taskId.slice(0, 8)}` : ''}</span></button>
-        {expanded === row.deliveryId && <div className="mt-3 flex flex-col gap-2 break-words border-t border-border pt-3 text-[13px]">
+        <button className="w-full min-w-0 text-left" type="button" aria-expanded={expanded === row.deliveryId} onClick={() => setExpanded(current => current === row.deliveryId ? undefined : row.deliveryId)}><span className="font-medium">{eventLabels[row.eventType]}</span> · <span className={statusTone[row.status]}>{deliveryStatusLabels[row.status]}</span><span className="block text-ui text-muted-foreground">{time(row.createdAt)} · {plural(row.attempts, 'attempt', 'attempts')}{row.taskId ? ` · task ${row.taskId.slice(0, 8)}` : ''}</span></button>
+        {expanded === row.deliveryId && <div className="mt-3 flex flex-col gap-2 break-words border-t border-border pt-3 text-ui">
           <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 [overflow-wrap:anywhere]">
             {row.reason && <><dt className="text-muted-foreground">Reason</dt><dd>{reasonLabel(row.reason)}</dd></>}
             {row.httpStatus && <><dt className="text-muted-foreground">HTTP status</dt><dd>{row.httpStatus}</dd></>}

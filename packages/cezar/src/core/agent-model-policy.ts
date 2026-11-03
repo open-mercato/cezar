@@ -39,4 +39,4 @@ export function agentModelsLocked(
 }
 
 export const AGENT_MODELS_LOCKED_ERROR =
-  'agent models are locked — configure the model in the native coding-agent settings';
+  'agent models are locked — configure the model and reasoning settings in the native coding-agent settings';
