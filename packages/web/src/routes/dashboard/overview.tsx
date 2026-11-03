@@ -19,7 +19,7 @@ import {
 } from '@/components/ui/sheet'
 import { useProjects } from '@/api/queries'
 import { shortAge } from '@/lib/format'
-import { deriveAttention } from '@/lib/attention'
+import { deriveAttention, isNeedsYouStatus } from '@/lib/attention'
 import { StatusDot } from '@/components/status-dot'
 import { Coverage } from './rows'
 import { ExportRows } from './export-rows'
@@ -182,7 +182,7 @@ export function Overview({
                   Inspect completed tasks
                 </Button>
               </p>
-              <p className="font-mono text-[11px] text-soft-foreground">
+              <p className="font-mono text-meta text-soft-foreground">
                 <time dateTime={data.asOf} title={new Date(data.asOf).toLocaleString()}>
                   Updated {shortAge(data.asOf)} ago
                 </time>
@@ -246,7 +246,7 @@ export function Overview({
                   (label) => (
                     <th
                       key={label}
-                      className={`whitespace-nowrap px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.1em] text-soft-foreground ${label === 'Project' ? '' : 'text-right'}`}
+                      className={`whitespace-nowrap px-3 py-2 eyebrow text-soft-foreground ${label === 'Project' ? '' : 'text-right'}`}
                     >
                       {label}
                     </th>
@@ -264,7 +264,7 @@ export function Overview({
                     <td className="px-3 py-2">
                       <Link
                         className="font-medium hover:underline"
-                        to={`/p/${encodeURIComponent(project.projectId)}/tasks`}
+                        to={`/p/${encodeURIComponent(project.projectId)}`}
                       >
                         {projectName(project.projectId)}
                       </Link>
@@ -455,7 +455,7 @@ function OutcomeTask({
   const removed = truth === null
   const obsolete = current && (row.archived || (group === 'running'
     ? row.status !== 'running'
-    : !['waiting', 'review'].includes(row.status)))
+    : !isNeedsYouStatus(row)))
   const inactive = removed || obsolete
   const attention = deriveAttention(row)
   const label = current && removed

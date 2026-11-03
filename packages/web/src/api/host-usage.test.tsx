@@ -444,6 +444,33 @@ describe('createHostUsageStore', () => {
     expect(store.get().history).toHaveLength(0)
   })
 
+  it('folds frames into the state while the tab is hidden and notifies once on return (telemetry 21762d83)', () => {
+    let visibility: DocumentVisibilityState = 'hidden'
+    const spy = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility)
+    try {
+      const store = createHostUsageStore()
+      const listener = vi.fn()
+      store.subscribe(listener)
+      for (let index = 0; index < 5; index++) {
+        store.push(point(new Date(Date.UTC(2026, 8, 20, 0, 0, index * 2)).toISOString()), 1_000 + index, 'root')
+      }
+      // Every sample is kept - the ring is complete on return - but nothing re-rendered.
+      expect(store.get().history).toHaveLength(5)
+      expect(listener).not.toHaveBeenCalled()
+
+      visibility = 'visible'
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(listener).toHaveBeenCalledTimes(1)
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(listener).toHaveBeenCalledTimes(1) // the one-shot listener is gone
+
+      store.push(point('2026-09-20T00:00:10.000Z'), 2_000, 'root')
+      expect(listener).toHaveBeenCalledTimes(2) // visible frames notify immediately again
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('records a refused topic until a fresh mount, and a late frame never clears it', () => {
     const store = createHostUsageStore()
     expect(store.get().topicUnavailable).toBeUndefined()

@@ -38,3 +38,12 @@ terminal behavior for genuine fallback failures. Full CI passed at the exact fin
 The classifier and runner fallback are implemented and independently reviewed; all configured CI gates pass at the exact final head.
 
 PR: #1281
+
+## Rebase onto main's resume fallback (2026-11-03)
+
+`main` landed #1435, an in-session `ResumeFallback` for Claude that retries inside the same
+`ActiveRun`, which is the design review asked for. This PR now drops its own recursive
+`runContinuation` retry (it deadlocked on the repo-root lease and could resolve a different step's
+tool policy). Instead it widens that guard to Codex and OpenCode: a backend-aware
+`isMissingSessionError`, `takeFallback(err)` for Codex's event-less rejection, and an OpenCode 1.x
+reopen whose only "gone" answer is a 404 on `GET /session/:id`.

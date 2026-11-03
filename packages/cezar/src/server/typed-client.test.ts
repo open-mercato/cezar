@@ -136,7 +136,7 @@ describe('createCezarClient<AppType>', () => {
     // Phase 3 converted all 77 registrations, so the typed client is no longer a proof of
     // concept over three families — these are a project family and a workspace family that
     // were loose statements until then.
-    const runs = await client.api.v1.runs.$get();
+    const runs = await client.api.v1.runs.$get({ query: {} });
     expect(runs.status).toBe(200);
     expectTypeOf(await runs.json()).not.toBeAny();
 

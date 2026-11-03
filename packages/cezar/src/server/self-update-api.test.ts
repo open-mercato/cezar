@@ -137,6 +137,23 @@ describe('the self-update API', () => {
     expect(error).toMatch(/could not tell how it was installed|npx|npm -g|git checkout/);
   });
 
+  it('runs the same hosted guard before scheduling an update for when idle', async () => {
+    process.env.CEZ_REMOTE = '1';
+    const res = await apiRequest(app, '/api/v1/workspace/self-update/apply', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ version: '0.11.1', whenIdle: true }),
+    });
+    expect(res.status).toBe(409);
+    expect(await errorOf(res)).toContain('is not newer than the running');
+  });
+
+  it('cancels a scheduled update, answering the status', async () => {
+    const res = await apiRequest(app, '/api/v1/workspace/self-update/scheduled', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { scheduled: unknown }).scheduled).toBeNull();
+  });
+
   it('never applies the forward-only rule to a local cockpit', async () => {
     for (const target of ['0.11.1', RUNNING, '0.13.0-nightly.20260901.3']) {
       const res = await apply(target);

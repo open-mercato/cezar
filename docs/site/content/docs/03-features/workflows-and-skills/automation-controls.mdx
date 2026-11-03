@@ -1,0 +1,25 @@
+---
+title: "Run or pause an automation"
+description: "Run a rule now or stop future automatic runs."
+related:
+  links:
+    - architecture/workflows
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/automations/row-actions.tsx
+    line: 56
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Each row has Run now and Pause or Enable. Manually running a scheduled rule does not shift its next scheduled time.
+
+## Where to find it
+
+Automations → selected rule
+
+## How to use it
+
+1. Choose Run now to trigger the rule manually.
+2. Open the resulting task from the result or log.
+3. Use Pause to stop future automatic runs.
+
+> **Good to know**: Pause does not cancel a task that is already running. Stop that task through its own actions.

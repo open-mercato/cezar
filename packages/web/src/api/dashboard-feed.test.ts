@@ -75,6 +75,7 @@ it('reconciles fresh task results after a missed event without overwriting in-fl
           archived: false,
           title: 'Task',
           createdAt: '2026-09-25T00:00:00Z',
+          lastActivityAt: '2026-09-25T00:00:00Z',
           workflow: 'quick',
         },
       },

@@ -154,6 +154,27 @@ describe('createSocketHub', () => {
     beta.ws.close();
   });
 
+  it('serializes a publish once, however many sockets receive it', async () => {
+    const { state, publisher } = makeTopic();
+    const { url } = await boot(publisher);
+    const clients = await Promise.all([connect(url), connect(url), connect(url)]);
+    for (const client of clients) client.send({ type: 'subscribe', topic: 'ticker' });
+    for (const client of clients) await client.next();
+
+    let serialized = 0;
+    state.publish?.({
+      toJSON: () => {
+        serialized += 1;
+        return { n: 7 };
+      },
+    });
+    for (const client of clients) {
+      expect(await client.next()).toEqual({ type: 'event', topic: 'ticker', data: { n: 7 } });
+    }
+    expect(serialized).toBe(1);
+    for (const client of clients) client.ws.close();
+  });
+
   it('stops the publisher when the last subscriber unsubscribes', async () => {
     const { state, publisher } = makeTopic();
     const { url } = await boot(publisher);

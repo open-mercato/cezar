@@ -1,5 +1,5 @@
 import { runMigrations } from './migrations.ts';
-import { registerProject, shouldAutoRegisterProject } from './projects.ts';
+import { registerProject, shouldAutoRegisterProject, shouldRegisterProject } from './projects.ts';
 
 /**
  * Boot-time workspace bookkeeping (spec 2026-07-20-multi-project-workspace,
@@ -21,16 +21,30 @@ import { registerProject, shouldAutoRegisterProject } from './projects.ts';
  * unavailable; the server then derives a fallback on its own and lists the
  * boot folder as an unregistered project.
  *
- * Its own module rather than a private function in `src/index.ts`: this is the
- * one place that decides whether starting cezar somewhere writes to the user's
- * registry, and `src/index.ts` runs `main()` on import, so a test could not
- * reach it there. Every boot path (`serve`, `run`, and the single-project
- * `projects list`) goes through this function.
+ * Its own module rather than a private function in `src/index.ts`, which runs
+ * `main()` on import and cannot be tested as a helper. Headless run and the
+ * single-project `projects list` use this seed-once path; serve uses the
+ * explicit add/open helper below.
  */
 export async function initWorkspace(repoRoot: string): Promise<string | undefined> {
   try {
     await runMigrations({ bootRepoRoot: repoRoot });
     if (await shouldAutoRegisterProject(repoRoot)) return (await registerProject(repoRoot)).id;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[cez] workspace registry unavailable (${message}) — continuing without it`);
+  }
+  return undefined;
+}
+
+/**
+ * Serve is an explicit add/open gesture: unlike headless and registry-only boot paths it registers
+ * every eligible launch root, even when the workspace already contains other projects.
+ */
+export async function initServeWorkspace(repoRoot: string): Promise<string | undefined> {
+  try {
+    await runMigrations({ bootRepoRoot: repoRoot });
+    if (await shouldRegisterProject(repoRoot)) return (await registerProject(repoRoot)).id;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`[cez] workspace registry unavailable (${message}) — continuing without it`);

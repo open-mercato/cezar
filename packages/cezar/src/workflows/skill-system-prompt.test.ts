@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
-import { expandRegistrySlashSkill, expandRegistrySlashSkillText, skillSystemPrompt } from './run.ts';
+import { expandRegistrySlashSkill, expandRegistrySlashSkillText, isUnknownSkillFailure, skillSystemPrompt } from './run.ts';
 
 describe('skillSystemPrompt — installed-path hint for worktree agents', () => {
   const base = { name: 'om-code-review', description: 'Review a diff.', body: 'Do the review.' };
@@ -103,5 +103,20 @@ describe('expandRegistrySlashSkill — live chat delivery', () => {
     it('returns the text unchanged against an empty registry (the #811 failure mode)', () => {
       expect(expandRegistrySlashSkillText('/om-code-review PR 42', [])).toBe('/om-code-review PR 42');
     });
+  });
+});
+
+describe('isUnknownSkillFailure — the skill_missing_in_session signal', () => {
+  const tool = (name: string, status: 'failed' | 'completed', error: string) =>
+    ({ type: 'item.completed', item: { kind: 'tool', id: 't1', name, toolKind: 'other', title: name, status, error } }) as const;
+
+  it("matches Claude's Skill tool refusing an uninstalled skill", () => {
+    expect(isUnknownSkillFailure(tool('Skill', 'failed', '<tool_use_error>Unknown skill: om-auto-review-pr</tool_use_error>'))).toBe(true);
+  });
+
+  it('ignores the phrase from any other tool, and a Skill call that succeeded', () => {
+    expect(isUnknownSkillFailure(tool('Bash', 'failed', 'expected "Unknown skill: x"'))).toBe(false);
+    expect(isUnknownSkillFailure(tool('Skill', 'completed', 'Unknown skill: x'))).toBe(false);
+    expect(isUnknownSkillFailure(tool('Skill', 'failed', 'permission denied'))).toBe(false);
   });
 });

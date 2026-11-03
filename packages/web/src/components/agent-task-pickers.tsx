@@ -41,7 +41,7 @@ export function WorkflowPicker({
           type="button"
           data-slot={`${slotPrefix}-workflow-trigger`}
           aria-label="Choose a workflow"
-          className={cn(chipClass, value && 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
+          className={cn(chipClass, value && 'border-foreground/60 font-mono text-meta font-semibold text-foreground')}
         >
           <WorkflowIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
           <span className="max-w-44 truncate">{value ?? 'workflow'}</span>

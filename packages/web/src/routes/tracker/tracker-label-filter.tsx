@@ -21,7 +21,7 @@ export function TrackerLabelFilter({ options, selected, onChange }: {
           {selected.length ? <CommandItem onSelect={() => onChange([])}>Clear filters</CommandItem> : null}
           {labels.filter(label => label.toLowerCase().includes(custom.toLowerCase())).map(label => <CommandItem key={label} value={label} disabled={!selected.includes(label) && selected.length >= 20} onSelect={() => toggle(label)}><span className="min-w-0 flex-1 truncate">{label}</span>{selected.includes(label) ? <CheckIcon className="size-3.5 text-primary" /> : null}</CommandItem>)}
           {custom && !labels.includes(custom) ? <CommandItem disabled={selected.length >= 20} onSelect={() => { toggle(custom); setQuery('') }}>Use label “{custom}”</CommandItem> : null}
-          <p className="px-3 py-2 text-[11px] text-soft-foreground">Suggestions come from loaded issues. Type any exact label to filter.</p>
+          <p className="px-3 py-2 text-meta text-soft-foreground">Suggestions come from loaded issues. Type any exact label to filter.</p>
         </CommandList>
       </Command>
     </PopoverContent>

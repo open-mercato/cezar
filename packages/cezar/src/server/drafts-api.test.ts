@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DRAFT_MAX_IMAGES,
   draftSurfaceSchema,
   setRunDraftInputSchema,
   type DraftEntry,
@@ -28,7 +29,7 @@ import { apiRequest } from './loopback-request.testkit.ts';
  *  `packages/contract` is not a vitest project, so its schemas are exercised from here. */
 describe('contract/drafts.ts schemas', () => {
   it('accepts the surface vocabulary and refuses anything else', () => {
-    for (const ok of ['composer', 'review-notes', 'task-prompt', 'title', 'message:abc_1-2']) {
+    for (const ok of ['composer', 'review-notes', 'diff-comments', 'task-prompt', 'title', 'message:abc_1-2']) {
       expect(draftSurfaceSchema.safeParse(ok).success).toBe(true);
     }
     for (const bad of ['../x', 'message:../x', 'composer/../..', 'Composer', '', 'message:']) {
@@ -42,7 +43,8 @@ describe('contract/drafts.ts schemas', () => {
 
   it('rejects over-cap text and over-cap image counts', () => {
     expect(setRunDraftInputSchema.safeParse({ text: 'x'.repeat(100_001) }).success).toBe(false);
-    expect(setRunDraftInputSchema.safeParse({ images: ['a', 'b', 'c', 'd', 'e'] }).success).toBe(false);
+    const ids = Array.from({ length: DRAFT_MAX_IMAGES + 1 }, (_, i) => `id${i}`);
+    expect(setRunDraftInputSchema.safeParse({ images: ids }).success).toBe(false);
     expect(setRunDraftInputSchema.safeParse({ images: ['../x'] }).success).toBe(false);
   });
 });
@@ -98,12 +100,13 @@ describe('/api/v1/runs/:id/drafts', () => {
   });
 
   it('accepts every surface in the vocabulary, including a per-message one', async () => {
-    for (const surface of ['composer', 'review-notes', 'task-prompt', 'title', 'message:abc-123']) {
+    for (const surface of ['composer', 'review-notes', 'diff-comments', 'task-prompt', 'title', 'message:abc-123']) {
       expect((await put(surface, { text: `draft for ${surface}` })).status).toBe(200);
     }
     const listed = (await (await drafts()).json()) as RunDraftsResponse;
     expect(Object.keys(listed.surfaces).sort()).toEqual([
       'composer',
+      'diff-comments',
       'message:abc-123',
       'review-notes',
       'task-prompt',
@@ -198,12 +201,12 @@ describe('/api/v1/runs/:id/drafts', () => {
 
     it('re-validates the per-surface cap, so a non-cockpit client cannot exceed it', async () => {
       const ids: string[] = [];
-      for (let i = 0; i < 4; i += 1) ids.push(((await (await upload()).json()) as DraftImage).id);
-      await put('composer', { text: 'four', images: ids });
+      for (let i = 0; i < DRAFT_MAX_IMAGES; i += 1) ids.push(((await (await upload()).json()) as DraftImage).id);
+      await put('composer', { text: 'full', images: ids });
 
-      const fifth = await upload();
-      expect(fifth.status).toBe(400);
-      expect((await fifth.json() as { error: string }).error).toContain('4 images');
+      const extra = await upload();
+      expect(extra.status).toBe(400);
+      expect((await extra.json() as { error: string }).error).toContain(`${DRAFT_MAX_IMAGES} images`);
     });
 
     it('rejects a traversal-shaped image id at the param validator', async () => {

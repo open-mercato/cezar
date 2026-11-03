@@ -1,0 +1,27 @@
+---
+title: "Hide task columns you do not need"
+description: "Collapse optional table columns and restore them from their headers."
+related:
+  links:
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/tasks-overview.tsx
+    line: 1475
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Specification"
+    path: .ai/specs/2026-07-30-foldable-task-table-columns.md
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The information needed to identify each task stays visible when you hide extra columns.
+
+## Where to find it
+
+Tasks → column headers
+
+## How to use it
+
+1. Click the header of an optional column.
+2. Click it again to restore the column.
+
+> **Good to know**: Cezar remembers the selection across projects in the shared workspace. In a new workspace, the Branch column starts collapsed.

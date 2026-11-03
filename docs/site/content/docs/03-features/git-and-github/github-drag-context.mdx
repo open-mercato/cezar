@@ -1,0 +1,25 @@
+---
+title: "Drag an issue into a prompt"
+description: "Insert issue or PR context by dragging its row."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/github/github.tsx
+    line: 821
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Drag an issue or PR row from the list into the message field. Cezar inserts its context into the text, which you can supplement with instructions before sending.
+
+## Where to find it
+
+GitHub → issue / PR row → message field
+
+## How to use it
+
+1. Grab an item in the list.
+2. Drag it into the composer text field.
+3. Add your instructions before sending.
+
+> **Good to know**: Dragging inserts text. It does not start a task.

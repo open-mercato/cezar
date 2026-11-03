@@ -57,7 +57,7 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
           <PaletteTab active={tab === 'mine'} onClick={() => setTab('mine')}>From your other projects</PaletteTab>
         </div>
         <span className="ml-auto min-w-0 overflow-hidden pb-2 text-xs text-ellipsis whitespace-nowrap text-soft-foreground">
-          {tab === 'builtin' ? 'Ship with cezar' : 'Registered in ~/.cezar/config.json'}
+          {tab === 'builtin' ? 'Built-in' : 'Registered in ~/.cezar/config.json'}
         </span>
       </div>
       {tab === 'mine' && others.isPending ? (
@@ -74,14 +74,14 @@ export function TemplatePalette({ onPick }: { onPick: (template: TemplatePick) =
               data-slot="template-card"
               className="flex flex-col gap-1.5 rounded-[10px] border border-border bg-card-2 px-3 py-2.5"
             >
-              <div className="flex items-center gap-2 text-[13px] font-semibold">
+              <div className="flex items-center gap-2 text-ui font-semibold">
                 {item.kind === 'github'
                   ? <GithubIcon aria-hidden="true" className="size-[13px] shrink-0 text-soft-foreground" />
                   : <Clock3Icon aria-hidden="true" className="size-[13px] shrink-0 text-soft-foreground" />}
                 <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">{item.name}</span>
                 {item.project ? <BranchChip className="ml-auto">{item.project}</BranchChip> : null}
               </div>
-              <div className="font-mono text-[11.5px] text-muted-foreground">{item.when}</div>
+              <div className="font-mono text-meta text-muted-foreground">{item.when}</div>
               <div className="line-clamp-2 text-xs leading-[1.45] text-soft-foreground">{item.prompt}</div>
               <Button
                 variant="outline"
@@ -109,7 +109,7 @@ function PaletteTab({ active, onClick, children }: { active: boolean; onClick: (
       aria-selected={active}
       onClick={onClick}
       className={cn(
-        '-mb-px flex h-8 items-center rounded-t-md border-b-2 px-3 text-[13px] font-medium',
+        '-mb-px flex h-8 items-center rounded-t-md border-b-2 px-3 text-ui font-medium',
         active
           ? 'border-foreground font-semibold text-foreground'
           : 'border-transparent text-muted-foreground hover:bg-muted hover:text-foreground',

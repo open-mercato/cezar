@@ -114,7 +114,7 @@ describe('host telemetry across the md breakpoint', () => {
     // The whole row is the way in: clicking it lands on the card it summarizes.
     browser.click(WIDGET)
     browser.waitForFunction(`document.querySelector('${CARD}') !== null`)
-    expect(browser.url()).toContain('/settings/resources')
+    expect(browser.url()).toContain('/settings/global/resources')
   })
 
   it('unmounts the glance below md while the card stays live, and still opens the drawer', () => {

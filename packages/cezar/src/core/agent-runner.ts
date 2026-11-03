@@ -16,18 +16,22 @@
  *                 `junie --acp=true`), JSON-RPC 2.0 (JSONL) over stdin/stdout.
  */
 
+import { runnerSchema, type Runner } from '@open-mercato/cezar-contract';
+import type { UsageWindowsObservation } from '@open-mercato/cezar-contract';
 import type { UiEvent } from './ui-events.ts';
+import type { PrivateMcpServer } from './private-mcp.ts';
 
 /**
- * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
- * truth for the set. Every runtime enumeration derives from this tuple (zod schemas, the
- * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
- * the literals, so adding runner #7 is a one-line change here and typecheck finds the rest.
+ * The user-selectable runners (what config/GUI expose), in display order. The set is written down
+ * ONCE — the contract's `runnerSchema` in `packages/contract/src/health.ts` — and re-exported here
+ * so every runtime enumeration (zod schemas, the server-install "at least one agent CLI" gate, the
+ * CLI-handoff registry) derives from the one tuple rather than repeating the literals: adding a
+ * runner is a one-line change there, and typecheck plus `runner-union.test.ts` find the rest.
  */
-export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+export const RUNNER_IDS = runnerSchema.options;
 
 /** The user-selectable runners (what config/GUI expose). */
-export type RunnerId = (typeof RUNNER_IDS)[number];
+export type RunnerId = Runner;
 
 /** `claude-cli` is the legacy id kept so old run records still parse. */
 export type AgentBackend = RunnerId | 'claude-cli';
@@ -38,6 +42,8 @@ export function isRunnerId(value: string): value is RunnerId {
 }
 
 export interface AgentRunSpec {
+  /** Optional account usage metadata from ordinary activity. Bind to the resolved step account. */
+  onUsageWindows?: (observation: UsageWindowsObservation) => void;
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;
   userPrompt: string;
@@ -58,8 +64,16 @@ export interface AgentRunSpec {
   /** Extra env vars for the agent process (merged over `process.env`) —
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
+  /** The project's private MCP servers (`.ai/cezar/mcp.local.json`), injected at launch through
+   *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
+  mcpServers?: PrivateMcpServer[];
   model?: string;
-  /** Wall-clock kill switch for the run (ms). */
+  /**
+   * Codex App Server reasoning effort for this turn. Omitted preserves the
+   * native agent default; backends other than Codex reject an explicit value.
+   */
+  reasoningEffort?: string;
+  /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**
    * Stable session id (UUID) so the user can take over interactively later:
@@ -83,6 +97,18 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
 }
 
+export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
+
+/** Keep the backend-specific setting from being silently ignored at the runner seam. */
+export function assertReasoningEffortSupported(
+  backend: AgentBackend,
+  reasoningEffort: string | undefined,
+): void {
+  if (reasoningEffort && backend !== 'codex') {
+    throw new Error(REASONING_EFFORT_UNSUPPORTED_ERROR);
+  }
+}
+
 /**
  * True for the `128 + signal` exit codes an agent CLI reports when it handles
  * a stop signal itself instead of dying from it (SIGINT/SIGKILL/SIGTERM).
@@ -95,25 +121,6 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
  */
 export function isSignalTerminationExit(exitCode: number | null): boolean {
   return exitCode === 130 || exitCode === 137 || exitCode === 143;
-}
-
-/** True only for provider responses that explicitly say the requested session is gone. */
-export function isMissingSessionError(message: string, backend: AgentBackend): boolean {
-  // Credential/configuration failures often mention a session or thread token but do not mean
-  // that the provider-side conversation was deleted. Only the explicit resource-not-found
-  // patterns below may trigger a fresh-session retry.
-  if (/(?:session\s+token|auth(?:entication)?|config(?:uration)?)/i.test(message)) return false;
-  if (backend === 'opencode') return /\b(?:404|not found)\b/i.test(message) && /session/i.test(message);
-  if (backend === 'codex') {
-    return /\b(?:thread|session)\b.*\b(?:not found|does not exist|no such|missing)\b/i.test(message)
-      || /\bno rollout found for thread\b/i.test(message);
-  }
-  if (backend === 'claude' || backend === 'claude-cli') {
-    return /\b(?:session|conversation)\b.*\b(?:not found|does not exist|no such|missing)\b/i.test(message)
-      || /\b(?:not found|does not exist|no such)\b.*\b(?:session|conversation)\b/i.test(message)
-      || /\bno conversation found\b/i.test(message);
-  }
-  return false;
 }
 
 /** The slice of `ChildProcess` a termination tracker needs — keeps the helper

@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cezar — schedule a task</title>
+<style>
+:root{color-scheme:dark;--bg:#111113;--card:#19191c;--raised:#222226;--line:#34343b;--text:#f1f1f3;--muted:#a4a4b0;--accent:#c4b5fd;--accent-bg:#302443;--warn:#fcd34d;--warn-bg:#3a3114;--error:#fca5a5;--error-bg:#3b1d22;--shadow:0 18px 50px #0007}
+html.light{color-scheme:light;--bg:#f7f7f9;--card:#fff;--raised:#f0f0f4;--line:#d7d7e0;--text:#202026;--muted:#636370;--accent:#6542a6;--accent-bg:#eee7fa;--warn:#8a5a00;--warn-bg:#fdf3d7;--error:#b42336;--error-bg:#fbe6e9;--shadow:0 18px 50px #2020261c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;background:var(--raised);border:1px solid var(--line);border-radius:8px;padding:7px 12px;min-height:36px}
+button:hover{border-color:var(--accent)}button:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select{background:var(--card);border:1px solid var(--line);border-radius:7px;padding:7px 9px;min-height:36px;max-width:100%}
+input[type=radio]{min-height:auto;accent-color:var(--accent);margin:0}
+input[type=radio]:disabled+span{opacity:.5}
+a{color:var(--accent)}
+.sr{position:absolute;left:-9999px}
+.shell{max-width:1180px;margin:auto;padding:24px 28px 64px}
+.top{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--line);padding-bottom:16px}
+.logo{font-size:20px;font-weight:750;letter-spacing:-1px}
+.tag{font-size:11px;letter-spacing:.1em;color:var(--accent);background:var(--accent-bg);border-radius:5px;padding:4px 8px}
+.top button{margin-left:auto}
+.intro{max-width:800px;margin:28px 0 22px}
+h1{font-size:28px;letter-spacing:-.5px;line-height:1.2;margin:8px 0 10px}
+h2{font-size:16px;margin:0 0 12px}h3{font-size:13px;margin:0 0 6px}
+.muted{color:var(--muted)}.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:22px;align-items:start}
+.app{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:22px;min-width:0}
+.crumb{font-size:12px;color:var(--muted);margin-bottom:22px}
+.composer{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:12px 12px 10px}
+.composer textarea{display:block;width:100%;min-height:88px;resize:vertical;border:0;outline:0;background:transparent}
+.state{display:flex;gap:8px;align-items:flex-start;font-size:12px;border-radius:7px;padding:7px 10px;margin:6px 0 8px}
+.state[hidden]{display:none}
+.state.info{background:var(--accent-bg)}
+.state.hold{background:var(--warn-bg)}.state.hold .ico{color:var(--warn)}
+.state.err{background:var(--error-bg);color:var(--error)}
+.ico{flex:none;width:16px;text-align:center;font-weight:700}
+.footer{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.pill{font-size:12px;border-radius:999px;padding:5px 11px;min-height:30px;background:var(--card)}
+.pill[aria-expanded=true]{border-color:var(--accent)}
+.pill select{border:0;background:transparent;padding:0;min-height:auto;font-size:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;margin-left:auto}
+.seg button{border:0;border-radius:0;font-size:12px;min-height:30px;padding:5px 11px;background:transparent}
+.seg button[aria-pressed=true]{background:var(--accent-bg);color:var(--accent);font-weight:600}
+.send{width:auto;height:36px;min-height:36px;border-radius:999px;padding:0 12px;background:var(--accent);color:var(--bg);border-color:transparent;font-weight:700}
+.toast{position:fixed;right:20px;bottom:20px;max-width:380px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px 14px;font-size:13px}
+.toast[hidden]{display:none}
+.pop{position:absolute;z-index:10;width:min(380px,calc(100vw - 24px));background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px}
+.pop[hidden]{display:none}
+.pop h2{font-size:13px;margin:0 0 8px}
+.opt{display:flex;align-items:center;gap:9px;min-height:36px;font-weight:550;cursor:pointer}
+.panel{margin:2px 0 8px 24px;display:grid;gap:8px}
+.panel[hidden]{display:none}
+.panel .row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.panel label{display:grid;gap:3px;font-size:11px;color:var(--muted)}
+.help{font-size:11px;color:var(--muted);margin:0}
+.ferr{font-size:11px;color:var(--error);margin:0}.ferr:empty{display:none}
+.acct{font-size:12px;font-weight:600}
+.win{display:grid;grid-template-columns:118px 1fr;gap:2px 10px;align-items:center;font-size:11px}
+.win .name{color:var(--muted)}
+.bar{height:6px;border-radius:3px;background:var(--raised);overflow:hidden;grid-column:2}
+.bar i{display:block;height:100%;background:var(--accent)}
+.bar i.full{background:var(--warn)}
+.ready{font-size:12px;margin:0}
+.skel{height:10px;border-radius:4px;background:var(--raised);animation:p 1.2s infinite alternate}
+@keyframes p{to{opacity:.4}}
+.retry{font-size:11px;min-height:28px;padding:3px 9px;justify-self:start}
+.section{margin-top:26px}
+.list{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.rowi{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:10px 12px;border:0;border-top:1px solid var(--line);background:var(--bg);width:100%;text-align:left;border-radius:0;min-height:44px}
+.rowi:first-child{border-top:0}
+.rowi[aria-current=true]{background:var(--accent-bg)}
+.note{font-size:12px;color:var(--muted);white-space:nowrap}
+.note.hold{color:var(--warn)}.note.sched{color:var(--accent)}
+.thread{border:1px solid var(--line);border-radius:10px;margin-top:12px;padding:26px 16px;text-align:center;background:var(--bg)}
+.thread .t1{font-size:13px;font-weight:600;margin:6px 0 2px}.thread .t2{font-size:12px;color:var(--muted);margin:0 0 14px}
+.thread .acts{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.dot.hold{background:var(--warn)}
+.side{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
+.side .scen{display:grid;gap:6px;margin-top:10px}
+.side .scen button{text-align:left;font-size:12px}
+.side label{display:block;margin-top:14px;font-size:12px}
+.side select{width:100%;margin-top:4px}
+.side p{font-size:12px}
+.boards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:14px}
+.board{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:16px;font-size:12px}
+.board p{color:var(--muted);margin:0}
+code{font-size:11px;color:var(--accent)}
+@media(max-width:940px){.layout{grid-template-columns:1fr}.boards{grid-template-columns:1fr}}
+@media(max-width:520px){.shell{padding:14px 12px 40px}.app{padding:14px 10px}.seg{margin-left:0}.rowi{flex-direction:column;align-items:flex-start}.panel{margin-left:0}.win{grid-template-columns:1fr}.bar{grid-column:1}}
+</style>
+</head>
+<body>
+<div class="shell">
+<header class="top"><span class="logo">cezar</span><span class="tag">PROPOSED UI · MOCKUP</span><button id="theme" type="button">Light theme</button></header>
+
+<div class="intro">
+<span class="eyebrow">Schedule from the task composer</span>
+<h1>Submit now. Start when you choose.</h1>
+<p class="muted">Choose a date or the next usage reset without leaving Tasks. This demo stores nothing and runs no agents. Example clock: <strong>Oct 7, 2026, 16:00, Europe/Warsaw (server time zone)</strong>. A start time does not reserve future allowance.</p>
+</div>
+
+<div class="layout">
+<main class="app" id="app">
+<div class="crumb">cezar / my-shop / New task</div>
+<div class="composer" data-slot="composer">
+<label for="prompt" class="sr">Describe a task for the agent</label>
+<textarea id="prompt" placeholder="Describe a task for the agent — / for skills…">Fix login form validation and add tests for an empty e-mail.</textarea>
+<div id="state" class="state" role="status" aria-live="polite" hidden><span class="ico" id="state-ico" aria-hidden="true"></span><span id="state-text"></span></div>
+<div class="footer">
+<span class="pill">Skill: quick-task ▾</span>
+<span class="pill"><select id="account" aria-label="Agent account">
+<option value="claude-personal">Claude · Personal</option>
+<option value="codex-work">Codex · Work</option>
+</select></span>
+<span class="pill">Model: auto ▾</span>
+<button id="start-pill" class="pill" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="pop" aria-label="Start time: Now">◷ Now ▾</button>
+<span class="seg" role="group" aria-label="Mode"><button type="button" id="mode-start" aria-pressed="true">Start</button><button type="button" id="mode-plan" aria-pressed="false">Plan first</button></span>
+<button id="send" class="send" type="button" aria-label="Start task" title="Start task">▶</button>
+</div>
+</div>
+
+<section class="section" aria-labelledby="tasks-h">
+<h2 id="tasks-h">Scheduled</h2>
+<div class="list" id="scheduled-list"></div>
+<h2 style="margin-top:20px">Queue</h2>
+<div class="list" id="list"></div>
+<div class="thread" id="thread" aria-live="polite"></div>
+</section>
+</main>
+
+<aside class="side">
+<span class="eyebrow">Demo controls</span>
+<h2 style="margin-top:6px">Scenarios</h2>
+<div class="scen">
+<button type="button" data-scenario="reset">01 · After reset (82% used)</button>
+<button type="button" data-scenario="weekly">02 · Weekly limit exhausted</button>
+<button type="button" data-scenario="over">03 · Expired reset window</button>
+<button type="button" data-scenario="none">04 · No account data</button>
+<button type="button" data-scenario="codex">05 · Codex: one 7-day window (10% used)</button>
+<button type="button" data-scenario="picked">06 · Date and time</button>
+<button type="button" data-scenario="held">07 · Now with an account hold</button>
+<button type="button" data-scenario="past">08 · Past date</button>
+</div>
+<label for="claude-data">Claude · Personal usage data</label>
+<select id="claude-data">
+<option value="fresh">5 h: 82% · reset 18:00; weekly: 40%</option>
+<option value="held">5 h: exhausted · reset 18:00</option>
+<option value="weekly">Weekly: exhausted · reset Mon 09:00</option>
+<option value="over">Last window ended at 13:00</option>
+<option value="none">No data from previous tasks</option>
+</select>
+<label for="codex-data">Codex · Work read result</label>
+<select id="codex-data">
+<option value="ok">Success (after 0.6 s)</option>
+<option value="error">Read error</option>
+</select>
+<p class="muted">Claude: data from previous account activity (<code>rate_limit_event</code>). Codex: metadata read on request (<code>account/rateLimits/read</code>), without a model turn.</p>
+</aside>
+</div>
+
+<section class="section">
+<span class="eyebrow">Additional states</span>
+<div class="boards">
+<article class="board"><h3>Attachments / linked todo</h3><p>Later starts are unavailable for tasks with attachments or a linked todo. Start now, or remove the attachment.</p></article>
+<article class="board"><h3>Later starts disabled</h3><p>Later starts are turned off on this cockpit. Now remains available.</p></article>
+<article class="board"><h3>Already starting</h3><p>This task has already started. Open the created task to manage it. Cancellation was not applied.</p></article>
+<article class="board"><h3>Reset moved (composer)</h3><p>The reset time changed to 19:00. Schedule for 19:01?</p><code>409 → review the refreshed preview</code></article>
+<article class="board"><h3>Multi-account workflow</h3><p>This workflow uses more than one account. Pick a time instead.</p><code>Reset option unavailable</code></article>
+<article class="board"><h3>Account removed (thread)</h3><p>The selected account was removed. Cancel this scheduled task and submit it again with the intended settings.</p><code>No fallback to another account</code></article>
+</div>
+</section>
+<p style="margin-top:22px;font-size:12px"><a href="../../2026-10-07-deferred-task-start.md">Issue description →</a></p>
+</div>
+
+<div id="pop" class="pop" role="dialog" aria-label="Start" hidden>
+<h2 id="pop-title">Start</h2>
+<div role="radiogroup" aria-labelledby="pop-title">
+<label class="opt"><input type="radio" name="when" value="now" checked><span>Now</span></label>
+<label class="opt"><input type="radio" name="when" value="at"><span>Pick date &amp; time</span></label>
+<div class="panel" id="at-panel" hidden>
+<div class="row">
+<label>Date<input id="date" type="date" value="2026-10-08" min="2026-10-07" max="2026-10-24" aria-describedby="ferr tz"></label>
+<label>Time<input id="time" type="time" value="09:30" aria-describedby="ferr tz"></label>
+</div>
+<p class="help" id="tz">Europe/Warsaw (server time zone, UTC+02:00)</p>
+<p class="ferr" id="ferr"></p>
+</div>
+<label class="opt"><input type="radio" name="when" value="reset" aria-describedby="reset-panel"><span>After usage limit resets</span></label>
+<div class="panel" id="reset-panel" aria-live="polite" hidden></div>
+</div>
+<p class="help" id="plan-help" hidden>The plan is written now. The time applies when you start the approved plan.</p>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const NOW = Date.parse('2026-10-07T16:00:00+02:00');
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const radios = [...document.querySelectorAll('input[name=when]')];
+const NAMES = { 'claude-personal': 'Claude · Personal', 'codex-work': 'Codex · Work' };
+
+let draft = { kind: 'now', date: '2026-10-08', time: '09:30' };
+let planFirst = false;
+let editing = null;
+let anchor = $('start-pill');
+let selected = null;
+let nextId = 7;
+let toastTimer = null;
+let codexState = 'idle';           // idle | checking | done
+let codexTimer = null;
+
+const tasks = [
+  { id: 5, title: 'Old cleanup', account: 'claude-personal', kind: 'at', date: '2026-10-05', time: '07:00', status: 'missed' },
+  { id: 6, title: 'Prepare release notes', account: 'codex-work', kind: 'at', date: '2026-10-07', time: '15:00', status: 'failed' },
+  { id: 1, title: 'Refactor auth middleware', account: 'codex-work', kind: 'now' },
+  { id: 2, title: 'Add checkout e2e tests', account: 'claude-personal', kind: 'now' },
+  { id: 3, title: 'Update dependency report', account: 'codex-work', kind: 'at', date: '2026-10-08', time: '07:00' },
+  { id: 4, title: 'Write release notes draft', account: 'claude-personal', kind: 'reset', date: '2026-10-07', time: '18:01', window: 'Session limit (5 h)' },
+];
+
+// ---- time helpers ------------------------------------------------------------
+const instant = (s) => Date.parse(`${s.date}T${s.time}:00+02:00`);
+const inRange = (s) => /^2026-10-(0[1-9]|1[0-9]|2[0-4])$/.test(s.date) && /^\d\d:\d\d$/.test(s.time);
+function startAfter(s) {
+  const d = new Date(Math.ceil((instant(s) + 30000) / 60000) * 60000 + 2 * 3600000);
+  return { date: d.toISOString().slice(0, 10), time: d.toISOString().slice(11, 16) };
+}
+function wd(s) { return new Date(`${s.date}T00:00:00Z`); }
+function longLabel(s) { const d = wd(s); return `${DAYS[d.getUTCDay()]}, ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}, ${s.time}`; }
+function shortLabel(s) {
+  if (s.date === '2026-10-07') return `Today ${s.time}`;
+  if (s.date === '2026-10-08') return `Tomorrow ${s.time}`;
+  return `${DAYS[wd(s).getUTCDay()]} ${s.time}`;
+}
+function whenLabel(s) { return s.date === '2026-10-07' ? s.time : shortLabel(s); }       // "18:00" | "Mon 09:00"
+function resetPhrase(s) { return s.date === '2026-10-07' ? `today ${s.time}` : longLabel(s); }
+function atPhrase(s) { return s.date === '2026-10-07' ? `at ${s.time}` : `on ${longLabel(s)}`; }   // "resets at 18:00" | "resets on Mon, Oct 12, 09:00"
+
+// ---- usage-limit data (what the server would answer) -----------------------
+function usage(account) {
+  if (account === 'codex-work') {
+    if (codexState !== 'done') return { state: 'checking' };
+    if ($('codex-data').value === 'error') return { state: 'error' };
+    return { state: 'ok', source: 'Checked just now.', windows: [
+      { name: 'Primary limit (7 days)', used: 10, reset: { date: '2026-10-14', time: '14:02' } },
+    ], ready: { date: '2026-10-14', time: '14:02' }, blocking: null };
+  }
+  const v = $('claude-data').value;
+  const src = 'Updated 12 min ago from your last task on this account.';
+  const fiveH = (used) => ({ name: 'Session limit (5 h)', used, reset: { date: '2026-10-07', time: '18:00' } });
+  const week = (used) => ({ name: 'Weekly limit', used, reset: { date: '2026-10-12', time: '09:00' } });
+  if (v === 'fresh') return { state: 'ok', source: src, windows: [fiveH(82), week(40)], ready: fiveH().reset, blocking: null };
+  if (v === 'held') return { state: 'ok', source: src, windows: [fiveH(100), week(46)], ready: fiveH().reset, blocking: 'session' };
+  if (v === 'weekly') return { state: 'ok', source: src, windows: [fiveH(30), week(100)], ready: week().reset, blocking: 'weekly' };
+  if (v === 'over') return { state: 'over', ended: '13:00' };
+  return { state: 'none' };
+}
+function holdFor(account) {                       // the existing account hold, shown for Now
+  const u = usage(account);
+  return u.state === 'ok' && u.blocking ? u.ready : null;
+}
+function ensureCodex() {
+  if (codexState !== 'idle') return;
+  codexState = 'checking';
+  clearTimeout(codexTimer);
+  codexTimer = setTimeout(() => {
+    codexState = 'done';
+    if (draft.kind === 'reset') fillReset(draft, $('account').value);
+    syncPop(); refresh();
+  }, 600);
+}
+/** Pins a reset-mode selection to the reset the account data names right now. */
+function fillReset(s, account) {
+  const u = usage(account);
+  if (u.state !== 'ok') return;
+  Object.assign(s, startAfter(u.ready));
+  s.window = u.blocking === 'weekly' ? 'Weekly limit' : u.windows[0].name;
+}
+
+// ---- composer --------------------------------------------------------------
+function draftError() {
+  if (draft.kind === 'at') {
+    if (!inRange(draft)) return 'This mockup covers Oct 7–24, 2026. Pick a date in that range.';
+    if (instant(draft) <= NOW) return 'That time has already passed. Pick a later time.';
+  }
+  return '';
+}
+function resetReady(account) { const u = usage(account); return u.state === 'ok' ? startAfter(u.ready) : null; }
+
+function renderComposer() {
+  const account = $('account').value;
+  const err = draftError();
+  const ready = draft.kind === 'reset' ? resetReady(account) : null;
+  const pill = $('start-pill');
+  let label = 'Now', aria = 'Now';
+  if (draft.kind === 'at') { label = shortLabel(draft); aria = longLabel(draft); }
+  if (draft.kind === 'reset') { label = ready ? `After reset · ${whenLabel(ready)}` : 'After reset'; aria = ready ? `after the usage limit resets, ${longLabel(ready)}` : 'after the usage limit resets'; }
+  pill.textContent = `◷ ${label} ▾`;
+  pill.setAttribute('aria-label', `Start time: ${aria}`);
+  const sendLabel = planFirst ? 'Plan task' : draft.kind === 'now' ? 'Start task' : 'Schedule task';
+  $('send').textContent = `${sendLabel} →`; $('send').setAttribute('aria-label', sendLabel); $('send').title = sendLabel;
+  $('send').disabled = !!err || (draft.kind === 'reset' && !ready);
+
+  let cls = null, ico = '', text = '';
+  const hold = holdFor(account);
+  if (err) { cls = 'err'; ico = '!'; text = err; }
+  else if (draft.kind === 'reset' && !ready) { cls = 'err'; ico = '!'; text = 'The reset time for this account isn’t available. Open the start options to see why.'; }
+  else if (draft.kind === 'reset') { cls = 'info'; ico = '◷'; text = `Starts ${atPhrase(ready)} or later, after ${NAMES[account]}’s usage limit reset. Allowance is not reserved.`; }
+  else if (draft.kind === 'at' && hold && instant(hold) > instant(draft)) { cls = 'hold'; ico = '‖'; text = `Starts no earlier than ${longLabel(draft)}, and not before ${NAMES[account]} resets ${atPhrase(hold)}.`; }
+  else if (draft.kind === 'at') { cls = 'info'; ico = '◷'; text = `Starts no earlier than ${longLabel(draft)} (Europe/Warsaw).`; }
+  else if (hold) { cls = 'hold'; ico = '‖'; text = `${NAMES[account]} hit its usage limit. New tasks wait until it resets ${atPhrase(hold)}.`; }
+  $('state').hidden = !cls;
+  $('state').className = `state ${cls ?? ''}`;
+  $('state-ico').textContent = ico;
+  $('state-text').textContent = text;
+}
+
+// ---- list + thread ---------------------------------------------------------
+const deferred = (t) => t.kind !== 'now';
+const future = (t) => (t.kind === 'at' || t.kind === 'reset') && instant(t) > NOW;
+function taskNote(t) {
+  if (t.status === 'missed') return { cls: 'hold', text: `Missed · ${shortLabel(t)}` };
+  if (t.status === 'failed') return { cls: 'hold', text: 'Couldn’t start · temporary launch error' };
+  if (t.kind === 'reset' && future(t)) return { cls: 'sched', text: `After limit reset · ${whenLabel(t)}` };
+  if (future(t)) return { cls: 'sched', text: `Scheduled · ${shortLabel(t)}` };
+  const hold = holdFor(t.account);
+  if (hold) return { cls: 'hold', text: `Waiting for usage limit reset · ${whenLabel(hold)}` };
+  const pos = tasks.filter((x) => !deferred(x) && !holdFor(x.account)).indexOf(t) + 1;
+  return { cls: '', text: `#${pos} in queue` };
+}
+function renderList() {
+  for (const [id, items] of [['scheduled-list', tasks.filter(deferred)], ['list', tasks.filter((t) => !deferred(t))]]) $(id).replaceChildren(...items.map((t) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'rowi'; b.setAttribute('aria-current', String(selected === t.id));
+    const title = document.createElement('span'); title.textContent = t.title;
+    const n = taskNote(t); const note = document.createElement('span'); note.className = `note ${n.cls}`; note.textContent = n.text;
+    b.append(title, note);
+    b.onclick = () => { selected = t.id; renderList(); renderThread(); };
+    return b;
+  }));
+}
+function btn(text, onClick) { const b = document.createElement('button'); b.type = 'button'; b.textContent = text; b.onclick = onClick; return b; }
+function renderThread() {
+  const box = $('thread'); box.replaceChildren();
+  const t = tasks.find((x) => x.id === selected);
+  if (!t) { const p = document.createElement('p'); p.className = 't2'; p.style.margin = '0'; p.textContent = 'Select a scheduled task to see its details.'; box.append(p); return; }
+  const hold = holdFor(t.account);
+  const dot = document.createElement('span'); dot.className = `dot${!future(t) && hold ? ' hold' : ''}`;
+  const t1 = document.createElement('p'); t1.className = 't1';
+  const t2 = document.createElement('p'); t2.className = 't2';
+  if (t.status === 'missed') { t1.textContent = `Missed · ${longLabel(t)}`; t2.textContent = 'More than 24 hours late. Nothing started. Run now or choose another time.'; }
+  else if (t.status === 'failed') { t1.textContent = 'Couldn’t start'; t2.textContent = 'Temporary launch error. No run was created. You can retry this scheduled task.'; }
+  else if (t.kind === 'reset' && future(t)) { t1.textContent = `◷ Starts after the usage limit resets · ${resetPhrase(t)}`; t2.textContent = `${NAMES[t.account]} · ${t.window} · server must stay running; this tab may be closed`; }
+  else if (future(t)) { t1.textContent = `◷ Scheduled for ${longLabel(t)}`; t2.textContent = 'Europe/Warsaw · server must stay running; this tab may be closed'; }
+  else if (hold) { t1.textContent = `Waiting for usage limit reset · ${resetPhrase(hold)}`; t2.textContent = `${NAMES[t.account]} · starts automatically after the reset`; }
+  else { t1.textContent = `Waiting for a free agent slot — ${taskNote(t).text}`; t2.textContent = 'quick-task · starts automatically when a slot frees up'; }
+  const acts = document.createElement('div'); acts.className = 'acts';
+  if (deferred(t)) {
+    acts.append(btn(t.status === 'failed' ? 'Retry' : 'Run now', () => { t.kind = 'now'; delete t.status; toast('Start consumed once. The created task is in the queue.'); refresh(); }));
+    const change = btn('Change time', () => openPop(change, t)); acts.append(change);
+  }
+  acts.append(btn('Cancel task', () => { tasks.splice(tasks.indexOf(t), 1); selected = null; toast('Task cancelled.'); refresh(); }));
+  const detail = el('p', 't2', `${NAMES[t.account]} · quick-task · model: auto · standard questions and review gates`);
+  const prompt = el('p', 't2', t.title);
+  box.append(dot, t1, t2, detail, prompt, acts);
+}
+function toast(msg) {
+  const el = $('toast'); el.textContent = msg; el.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 4000);
+}
+
+// ---- popover ---------------------------------------------------------------
+function target() { return editing ? tasks.find((t) => t.id === editing) : draft; }
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function renderResetPanel(account) {
+  const p = $('reset-panel'); p.replaceChildren();
+  p.append(el('div', 'acct', NAMES[account]));
+  const u = usage(account);
+  if (u.state === 'checking') { p.append(el('p', 'help', 'Checking usage limits…'), el('div', 'skel'), el('div', 'skel')); return; }
+  if (u.state === 'error') {
+    const r = el('button', 'retry', 'Retry'); r.type = 'button';
+    r.onclick = () => { $('codex-data').value = 'ok'; codexState = 'idle'; ensureCodex(); syncPop(); };
+    p.append(el('p', 'ferr', 'Couldn’t check usage limits.'), r); return;
+  }
+  if (u.state === 'over') { p.append(el('p', 'help', `The last known reset was at ${u.ended}. No upcoming reset is known. Start now or pick a time.`)); return; }
+  if (u.state === 'none') { p.append(el('p', 'help', 'Cezar learns this account’s limits from its tasks. Pick a date and time instead.')); return; }
+  for (const w of u.windows) {
+    const row = el('div', 'win');
+    row.append(el('span', 'name', w.name), el('span', '', `${w.used >= 100 ? 'Used up' : `${w.used}% used`} · resets ${resetPhrase(w.reset)}`));
+    const bar = el('div', 'bar'); bar.setAttribute('aria-hidden', 'true');
+    const fill = el('i', w.used >= 80 ? 'full' : ''); fill.style.width = `${Math.min(100, w.used)}%`; bar.append(fill);
+    row.append(el('span', ''), bar);
+    p.append(row);
+  }
+  if (u.blocking === 'weekly') p.append(el('p', 'ready', `Weekly limit is used up. The task starts after it resets on ${longLabel(startAfter(u.ready))}.`));
+  else p.append(el('p', 'ready', `Starts at ${u.ready.date === '2026-10-07' ? startAfter(u.ready).time : longLabel(startAfter(u.ready))} or later, when an agent slot is free.`));
+  p.append(el('p', 'help', u.source), el('p', 'help', 'Europe/Warsaw (server time zone). This time does not reserve allowance.'));
+}
+function resetUnavailable(account) { const s = usage(account).state; return s === 'over' || s === 'none'; }
+function syncPop() {
+  if ($('pop').hidden) return;
+  const s = target();
+  const account = editing ? s.account : $('account').value;
+  if (account === 'codex-work') ensureCodex();
+  radios.forEach((r) => { r.checked = r.value === s.kind; });
+  radios.find((r) => r.value === 'reset').disabled = resetUnavailable(account) && s.kind !== 'reset';
+  $('date').value = s.kind === 'at' ? s.date : (s.date && s.kind !== 'reset' ? s.date : '2026-10-08');
+  $('time').value = s.kind === 'at' ? s.time : (s.time && s.kind !== 'reset' ? s.time : '09:30');
+  $('at-panel').hidden = s.kind !== 'at';
+  $('reset-panel').hidden = s.kind !== 'reset' && !resetUnavailable(account);
+  renderResetPanel(account);
+  $('plan-help').hidden = !(planFirst && !editing);
+  $('pop-title').textContent = editing ? 'Change time' : 'Start';
+  $('pop').setAttribute('aria-label', editing ? 'Change time' : 'Start');
+  const bad = s.kind === 'at' && (!inRange(s) || instant(s) <= NOW);
+  $('ferr').textContent = bad ? 'That time has already passed. Pick a later time.' : '';
+}
+function openPop(trigger, task) {
+  editing = task ? task.id : null; anchor = trigger;
+  const r = trigger.getBoundingClientRect(); const pop = $('pop'); pop.hidden = false;
+  const w = pop.offsetWidth || 380;
+  pop.style.top = `${window.scrollY + r.bottom + 6}px`;
+  pop.style.left = `${Math.max(12, Math.min(window.scrollX + r.left, window.scrollX + document.documentElement.clientWidth - w - 12))}px`;
+  trigger.setAttribute('aria-expanded', 'true');
+  syncPop();
+  radios.find((x) => x.checked).focus();
+}
+function closePop() {
+  const pop = $('pop'); if (pop.hidden) return;
+  pop.hidden = true; anchor.setAttribute('aria-expanded', 'false');
+  if (editing) {
+    const t = tasks.find((x) => x.id === editing);
+    if (t && t._prev && ((t.kind === 'at' && (!inRange(t) || instant(t) <= NOW)) || (t.kind === 'reset' && !resetReady(t.account)))) Object.assign(t, t._prev);
+    if (t) { if (t._prev && ((t.kind === 'at' && inRange(t) && instant(t) > NOW) || t.kind === 'now')) delete t.status; delete t._prev; toast(t.kind === 'at' ? `Start time changed to ${longLabel(t)}.` : t.kind === 'reset' ? `The task now starts after the usage limit resets (${whenLabel(t)}).` : 'Start time removed.'); }
+    editing = null; refresh();
+  }
+  (anchor.isConnected ? anchor : $('start-pill')).focus();
+}
+function applyPop() {
+  const s = target();
+  if (editing && !s._prev) s._prev = { kind: s.kind, date: s.date, time: s.time, window: s.window, status: s.status };
+  s.kind = radios.find((r) => r.checked).value;
+  if (s.kind === 'at') { s.date = $('date').value; s.time = $('time').value; }
+  if (s.kind === 'reset') fillReset(s, editing ? s.account : $('account').value);
+  syncPop();
+  if (!editing) renderComposer();
+}
+radios.forEach((r) => r.addEventListener('change', applyPop));
+$('date').addEventListener('input', applyPop);
+$('time').addEventListener('input', applyPop);
+$('start-pill').addEventListener('click', () => { if (!$('pop').hidden) closePop(); else openPop($('start-pill'), null); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('pop').hidden) { e.preventDefault(); closePop(); } });
+document.addEventListener('mousedown', (e) => { const pop = $('pop'); if (!pop.hidden && !pop.contains(e.target) && e.target !== anchor) closePop(); });
+
+// ---- composer actions ------------------------------------------------------
+function dataChanged() {
+  if (draft.kind === 'reset') fillReset(draft, $('account').value);
+  syncPop(); refresh();
+}
+$('account').addEventListener('change', () => { codexState = 'idle'; dataChanged(); });
+$('claude-data').addEventListener('change', dataChanged);
+$('codex-data').addEventListener('change', () => { codexState = 'idle'; dataChanged(); });
+function setPlan(on) {
+  planFirst = on;
+  $('mode-start').setAttribute('aria-pressed', String(!on)); $('mode-plan').setAttribute('aria-pressed', String(on));
+  renderComposer();
+}
+$('mode-start').onclick = () => setPlan(false);
+$('mode-plan').onclick = () => setPlan(true);
+$('send').onclick = () => {
+  const text = $('prompt').value.trim();
+  if (!text) { $('prompt').focus(); return; }
+  if ($('send').disabled) return;
+  if (planFirst) { toast('Mockup: the plan would be written now. The time stays on the composer until you start the approved plan.'); return; }
+  const account = $('account').value;
+  const task = { id: nextId++, title: text, account, kind: draft.kind, date: draft.date, time: draft.time, window: draft.window };
+  tasks.unshift(task); selected = task.id;
+  const hold = holdFor(account);
+  toast(task.kind === 'at' ? `Task scheduled for ${longLabel(task)}.`
+    : task.kind === 'reset' ? `Task scheduled for after the usage limit resets (${whenLabel(task)}).`
+    : hold ? `Task queued. It starts after ${NAMES[account]} resets ${atPhrase(hold)}.` : 'Task started.');
+  draft = { kind: 'now', date: '2026-10-08', time: '09:30' };
+  refresh();
+};
+function refresh() { renderComposer(); renderList(); renderThread(); }
+
+// ---- scenarios -------------------------------------------------------------
+document.querySelectorAll('[data-scenario]').forEach((b) => b.addEventListener('click', () => {
+  const s = b.dataset.scenario;
+  $('account').value = s === 'codex' ? 'codex-work' : 'claude-personal';
+  $('claude-data').value = { weekly: 'weekly', over: 'over', none: 'none', held: 'held' }[s] ?? 'fresh';
+  $('codex-data').value = 'ok'; codexState = 'idle';
+  setPlan(false);
+  draft = { kind: 'now', date: '2026-10-08', time: '09:30' };
+  if (['reset', 'weekly', 'codex'].includes(s)) { draft.kind = 'reset'; fillReset(draft, $('account').value); }
+  if (s === 'picked') draft = { kind: 'at', date: '2026-10-08', time: '09:30' };
+  if (s === 'past') draft = { kind: 'at', date: '2026-10-07', time: '15:30' };
+  refresh();
+  if (s !== 'held') openPop($('start-pill'), null);
+}));
+$('theme').onclick = () => { const light = document.documentElement.classList.toggle('light'); $('theme').textContent = light ? 'Dark theme' : 'Light theme'; };
+refresh();
+</script>
+</body>
+</html>

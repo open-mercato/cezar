@@ -1,0 +1,120 @@
+name: Release publish
+
+# Publishes a release tag to npm (docs/publishing.md § Release lines). Started by the tag the
+# Release workflow creates, and runs AT that tag: npm provenance attests the workflow's own
+# commit, so publishing anywhere else would attest code the packages don't contain. To finish a
+# release that failed half-way, use "Re-run jobs" on its run — it rebuilds the same commit.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: # run from a v* tag (the "Use workflow from" picker)
+
+permissions:
+  contents: read
+  id-token: write # npm provenance attestation
+
+# One publish at a time across every line: two lines racing could move `latest` out of order.
+concurrency:
+  group: release-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: startsWith(github.ref, 'refs/tags/v')
+    # Required reviewers and a `v*` deployment tag rule live on this environment.
+    environment: production
+
+    steps:
+      # No `ref:` — the tagged commit is the one provenance attests (release-workflows.test.ts).
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+
+      - name: Mint the release token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Verify the tag
+        id: verify
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: node scripts/release-line.mts verify
+
+      - name: Build application
+        if: steps.verify.outputs.released != 'true'
+        run: npm run build
+
+      # Public releases report telemetry under the real service; every other build uses the
+      # development id hard-coded in packages/cezar/src/telemetry.ts.
+      - name: Stamp telemetry service
+        if: steps.verify.outputs.released != 'true'
+        env:
+          CEZ_TELEMETRY_SERVICE: ${{ secrets.CEZ_TELEMETRY_SERVICE }}
+        run: node packages/cezar/scripts/stamp-telemetry-service.mjs
+
+      - name: Publish to npm
+        if: steps.verify.outputs.released != 'true'
+        id: release
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          DIST_TAG: ${{ steps.verify.outputs.distTag }}
+        run: node scripts/release.mts existing --dist-tag "$DIST_TAG" --reconcile-tag
+
+      - name: Mint a fresh release token
+        if: steps.release.outputs.published == 'true'
+        id: app-token-announce
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Changelog PR, then the GitHub Release
+        if: steps.release.outputs.published == 'true'
+        id: announce
+        env:
+          GH_TOKEN: ${{ steps.app-token-announce.outputs.token }}
+          VERSION: ${{ steps.verify.outputs.version }}
+          SHA: ${{ steps.verify.outputs.sha }}
+          DIST_TAG: ${{ steps.verify.outputs.distTag }}
+        run: node scripts/release-line.mts announce --version "$VERSION" --sha "$SHA" --dist-tag "$DIST_TAG"
+
+      - name: Write workflow summary
+        if: always() && steps.verify.outputs.version != ''
+        env:
+          VERSION: ${{ steps.verify.outputs.version }}
+          DIST_TAG: ${{ steps.verify.outputs.distTag }}
+          RELEASED: ${{ steps.verify.outputs.released }}
+          PUBLISHED: ${{ steps.release.outputs.published }}
+          RUN_ALIAS_NAME: ${{ steps.release.outputs.runAliasName }}
+          CHANGELOG_PR: ${{ steps.announce.outputs.changelogPr }}
+        run: |
+          {
+            echo "## 📦 Publish ${GITHUB_REF_NAME}"
+            echo ""
+            if [ "$RELEASED" = "true" ]; then
+              echo "Already released — nothing to do."
+            elif [ "$PUBLISHED" = "true" ]; then
+              echo "Published \`${RUN_ALIAS_NAME}@${VERSION}\` under \`${DIST_TAG}\`."
+              [ -n "$CHANGELOG_PR" ] && echo "" && echo "Changelog entry carried to main: ${CHANGELOG_PR}"
+            else
+              echo "⚠️ Not published (\`NPM_TOKEN\` missing → dry run, or a step failed). Fix it, then **Re-run jobs** on this run."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,25 @@
+---
+title: "Branch names from task instructions"
+description: "Describe how Cezar should name branches for new tasks."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/settings/instructions-section.tsx
+    line: 115
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Branch naming accepts an instruction for generating names. Cezar uses it with the task's first prompt to generate a branch name, then creates the worktree.
+
+## Where to find it
+
+Settings → project → Instructions → Branch naming
+
+## How to use it
+
+1. Enter your convention, such as a prefix and how to shorten the topic.
+2. Save the setting.
+3. Start a new task and check its branch name.
+
+> **Good to know**: Clearing the field restores default naming. It does not rename existing branches.

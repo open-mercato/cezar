@@ -21,6 +21,13 @@ let requests: Array<{ method: string; url: string; body?: unknown }> = []
 
 function serve(uiState: Record<string, unknown> = {}) {
   requests = []
+  let workspaceConfig = {
+    branding: { name: 'cezar', logoUrl: null as string | null },
+    browseRoot: '~/', projectsDir: '~/cezar/projects', skillsAutoUpdate: null, effectiveSkillsAutoUpdate: true,
+    composerDefaults: { autonomous: null, worktree: null, inheritedAutonomous: 'source-dependent', inheritedWorktree: true },
+    resources: { maxParallel: 2, maxMonitoringSessions: 2, idleTimeoutMinutes: 15, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 },
+    agentDefaults: {},
+  }
   const json = (payload: unknown) =>
     new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } })
   vi.stubGlobal(
@@ -28,11 +35,19 @@ function serve(uiState: Record<string, unknown> = {}) {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
-      const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
+      const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as unknown) : init?.body
       requests.push({ method, url, body })
       if (url === '/api/v1/workspace/ui-state' && method === 'GET') return json(uiState)
       if (url === '/api/v1/workspace/ui-state' && method === 'PUT')
         return json({ ...uiState, ...(body as Record<string, unknown>) })
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(workspaceConfig)
+      if (url === '/api/v1/workspace/config' && method === 'PUT') {
+        const patch = body as { branding?: Partial<typeof workspaceConfig.branding> }
+        workspaceConfig = { ...workspaceConfig, branding: { ...workspaceConfig.branding, ...patch.branding } }
+        return json(workspaceConfig)
+      }
+      if (url === '/api/v1/workspace/branding-logo' && method === 'POST') return json({ logoUrl: '/api/v1/workspace/branding-logo?v=abc123' })
+      if (url === '/api/v1/workspace/branding-logo' && method === 'DELETE') return json({ logoUrl: null })
       return new Promise<never>(() => {})
     }),
   )
@@ -78,6 +93,20 @@ afterEach(() => {
 })
 
 describe('Settings → Appearance: project order', () => {
+  it('previews a selected logo and uploads only after Save logo', async () => {
+    serve()
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:logo-preview', revokeObjectURL: vi.fn() }))
+    renderSection(['cezar'])
+    const file = new File(['sample-image'], 'brand.png', { type: 'image/png' })
+    expect(screen.getByRole('button', { name: 'Choose logo' })).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Upload logo'), { target: { files: [file] } })
+    expect(await screen.findByAltText('Logo preview')).toBeTruthy()
+    expect(screen.getByText('brand.png')).toBeTruthy()
+    expect(requests.some((request) => request.url === '/api/v1/workspace/branding-logo' && request.method === 'POST')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: 'Save logo' }))
+    await waitFor(() => expect(requests.some((request) => request.url === '/api/v1/workspace/branding-logo' && request.method === 'POST')).toBe(true))
+  })
+
   it('offers the reset once an order has been stored', async () => {
     serve({ sidebar: { collapsed: { cezar: true }, projectOrder: ['shop', 'cezar'] } })
     renderSection(['cezar', 'shop'])
