@@ -545,7 +545,7 @@ export async function putTelemetryConsent(input: SetTelemetryConsentInput): Prom
   return unwrap(await cez.api.v1.telemetry.consent.$put({ json: input }), '/telemetry/consent')
 }
 
-/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor`, `pi`, `junie` — #794, #784, #893).
+/** Host-local catalog for one discovery runner (`MODEL_DISCOVERY_RUNNERS` — #794, #784, #893).
  *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
