@@ -2,6 +2,7 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:ch
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  assertReasoningEffortSupported,
   isSignalTerminationExit,
   prependSystemPrompt,
   trackChildExit,
@@ -80,6 +81,7 @@ export class GeminiAcpRunner implements AgentRunner {
   }
 
   startSession(spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void, opts: SessionOptions = {}): AgentSession {
+    assertReasoningEffortSupported('gemini', spec.reasoningEffort);
     const session = new GeminiAcpSession(this.bin, this.backend, spec, spec.timeoutMs ?? this.timeoutMs, onEvent, opts);
     this.lastSession = session;
     return session;
