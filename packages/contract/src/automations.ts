@@ -1,3 +1,4 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredStartStateSchema, deferredCreationRecordSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
@@ -6,7 +7,7 @@ import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureS
 // redeclared — the same one-way direction `./runs.ts` takes towards `./workflows.ts`.
 import { createRunInputBaseSchema, runStatusSchema } from './runs.ts';
 import { DISPATCH_MAX_SUBTASKS, dispatchKindSchema, dispatchIntentSchema } from './dispatch.ts';
-import { automationScheduleSchema } from './automation-schedule.ts';
+import { automationScheduleSchema, automationSchedulesSchema } from './automation-schedule.ts';
 
 /**
  * The AUTOMATIONS family of `/api/v1` (#694) — the per-project GitHub triggers, their runtime
@@ -44,6 +45,7 @@ export const automationEventSchema = z.enum([
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 
 export const trackerTriggerSchema = z.object({
+  access: trackerAccessSchema.optional(),
   events: z.array(trackerAutomationEventSchema).min(1).max(4),
   targetStatusIds: z.array(z.string().min(1)).max(100).optional(),
   changedLabelIds: z.array(z.string().min(1)).max(100).optional(),
@@ -124,7 +126,7 @@ export type AutomationDispatch = z.infer<typeof automationDispatchSchema>;
  *    stores and answers it plainly, so it stays optional.
  */
 export const automationTaskSchema = createRunInputBaseSchema
-  .omit({ task: true, images: true, todoId: true, systemPrompt: true })
+  .omit({ task: true, images: true, todoId: true, systemPrompt: true, sourceUrl: true })
   .extend({
     /** The prompt template. `{{github.number}}`, `{{github.title}}`, `{{github.url}}` and
      *  `{{github.labels}}` are substituted per match; GitHub content is appended as untrusted
@@ -160,6 +162,7 @@ export const automationDefinitionSchema = z.object({
   /** `schedule` kind: always present. `github` kind: absent. */
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   // Composer-deferred tasks retain the full run dispatch intent. Keep this response-only:
   // ordinary automation inputs and templates still expose only their own dispatch settings.
   task: automationTaskSchema.extend({
@@ -408,6 +411,7 @@ export const automationTemplateSchema = z.object({
   kind: z.enum(['github', 'schedule']),
   trackerTrigger: trackerTriggerSchema.optional(),
   schedule: automationScheduleSchema.optional(),
+  schedules: automationSchedulesSchema.optional(),
   events: z.array(automationEventSchema).optional(),
   intervalSeconds: z.number().optional(),
   /** `github` kind only. A copy without them would launch for every item. */
@@ -418,6 +422,7 @@ export const automationTemplateSchema = z.object({
     steps: automationTaskSchema.shape.steps,
     runner: z.string().optional(),
     model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
     autonomous: z.boolean().optional(),
     dispatch: automationDispatchSchema.optional(),
     checkout: automationTaskSchema.shape.checkout,

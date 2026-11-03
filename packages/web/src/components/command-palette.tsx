@@ -234,7 +234,7 @@ export function TaskColumnsHeading({ label }: { label: string }) {
   return (
     <span className="flex items-center gap-2">
       <span className="min-w-0 flex-1">{label}</span>
-      <span aria-hidden="true" className="flex shrink-0 gap-1 text-[11px] font-normal">
+      <span aria-hidden="true" className="flex shrink-0 gap-1 text-meta font-normal">
         <span className={cn(DATE_COLUMN, "after:content-['Updated']")} />
         <span className={cn(DATE_COLUMN, "after:content-['Created']")} />
       </span>
@@ -655,7 +655,7 @@ export const TaskItem = React.memo(function TaskItem({
             projectId={task.projectId}
             reference={chip}
             compact
-            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+            className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-micro"
           />
         </span>
       ) : null}

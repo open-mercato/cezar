@@ -1,10 +1,29 @@
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 
 /** The cockpit's canonical runner order, exported so a surface that renders one row per
  *  provider derives it instead of keeping a fifth hand-written copy — the copy in
  *  `accounts-section.tsx` silently dropped Copilot when #582 added it, and nothing in the
- *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. */
-export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
+ *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong.
+ *  Spelled as a `Record<Runner, number>` rather than a list: the record is exhaustive by type,
+ *  so a runner joining the contract tuple fails the typecheck here instead of silently falling
+ *  out of the cockpit — and the server answers one status row per runner, so a runner missing
+ *  from the parser below would fail every real `/api/v1/providers/status` response. */
+const RUNNER_DISPLAY_ORDER: Record<Runner, number> = {
+  claude: 0,
+  codex: 1,
+  junie: 2,
+  opencode: 3,
+  cursor: 4,
+  pi: 5,
+  copilot: 6,
+  antigravity: 7,
+  gemini: 8,
+  kimi: 9,
+}
+export const RUNNER_ORDER: readonly Runner[] = [...RUNNER_IDS].sort(
+  (a, b) => RUNNER_DISPLAY_ORDER[a] - RUNNER_DISPLAY_ORDER[b],
+)
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -153,20 +172,23 @@ function sameProviderStatusRow(left: ProviderStatus, right: ProviderStatus): boo
     && left.authFailureId === right.authFailureId
 }
 
+/**
+ * Providers whose auth cannot be verified offline, so an `unknown` probe is inconclusive rather
+ * than signed out and the run itself surfaces a real rejection. Junie has no read-only status
+ * command; Antigravity's (`agy models`) calls Google's API, so a network blip reads as unknown —
+ * treating that as unusable silently moved a task's Continue onto claude. Mirrors the server gate.
+ */
+const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<Runner> = new Set(['junie', 'antigravity'])
+
+/** Whether an enabled provider row may run: connected, or unverifiable (see above). */
+export function providerRowRunnable(row: Pick<ProviderStatus, 'provider' | 'status'>): boolean {
+  return row.status === 'connected' || (row.status === 'unknown' && RUNNABLE_WHEN_UNVERIFIED.has(row.provider))
+}
+
 export function usableRunners(status: ProviderStatusResponse | undefined): Runner[] {
   const rows = completeProviderRows(status)
   if (rows === null) return []
-  const usable = new Set(
-    rows
-      .filter((row) => row.enabled && (
-        row.status === 'connected'
-        // Junie has no read-only auth-status command. Its probe can confirm the CLI is installed,
-        // but must report auth as unknown rather than guess; allow selection and let ACP surface
-        // any required authentication at run time.
-        || (row.provider === 'junie' && row.status === 'unknown')
-      ))
-      .map((row) => row.provider),
-  )
+  const usable = new Set(rows.filter((row) => row.enabled && providerRowRunnable(row)).map((row) => row.provider))
   return RUNNER_ORDER.filter((runner) => usable.has(runner))
 }
 
