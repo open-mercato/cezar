@@ -52,7 +52,7 @@ export const projectListEntrySchema = z.object({
    *  workspace `resources.maxParallel`; a number pins this project. */
   maxParallel: z.number().optional(),
   /** Set ONLY on the synthetic entry for the folder this server was started in when that folder
-   *  is not in the registry — the ordinary state since boot registration became seed-once. The
+   *  is not in the registry — possible for guarded roots, registry failures and non-serve hosts. The
    *  server serves it like any project (it owns the boot context), so the cockpit must be able to
    *  reach it; but it is not persisted, so the rows that edit the registry (Remove, Max parallel)
    *  do not apply and Settings offers "Add project" instead. Never present on a registry entry. */
@@ -84,6 +84,12 @@ export const projectsResponseSchema = z.object({
   projectsDir: z.string(),
 });
 export type ProjectsResponse = z.infer<typeof projectsResponseSchema>;
+
+/** `POST /api/v1/projects` request. Shared with the CLI singleton handoff. */
+export const registerProjectInputSchema = z.object({
+  root: z.string().trim().min(1).max(4096),
+});
+export type RegisterProjectInput = z.infer<typeof registerProjectInputSchema>;
 
 /**
  * `POST /api/v1/projects` (multi-project spec, step 4.2) — what the folder-browser dialog gets

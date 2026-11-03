@@ -132,6 +132,18 @@ export function createTrackerService(env: NodeJS.ProcessEnv = process.env, fetch
       };
       return {
         association, listIssues: read, searchItems: read,
+        ...(driver.context ? { context: async (id: string) => {
+          await assertCurrent();
+          const result = await driver.context!(id);
+          await assertCurrent();
+          return result;
+        } } : {}),
+        ...(driver.act ? { act: async (id: string, action: Parameters<NonNullable<TrackerDriver['act']>>[1], beforeWrite?: () => Promise<void>) => {
+          await assertCurrent();
+          await driver.act!(id, action, async () => { await assertCurrent(); await beforeWrite?.(); });
+          // An in-flight write cannot be rolled back. A changed binding leaves outcome unknown.
+          await assertCurrent();
+        } } : {}),
         ...(driver.automationOptions ? { automationOptions: async (query?: { search?: string; cursor?: string }) => {
           await assertCurrent();
           const result = await driver.automationOptions!(query);

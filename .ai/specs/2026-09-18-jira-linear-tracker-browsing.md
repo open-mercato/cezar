@@ -677,3 +677,17 @@ re-accepted. With a read-only home or an unavailable key a valid legacy record s
 unmigrated; ciphertext never falls back to plaintext. Both formats keep the 32 KiB bound. Older
 binaries cannot read migrated records. User-facing steps: docs/issue-trackers.md § Credential
 migration.
+
+## 📝 Update (2026-10-27): mediated agent access
+
+Replaces the event-automation credential forwarding exception: no agent environment receives
+Jira/Linear credentials. At launch and continuation the server writes the bound issue's context to
+`.ai/cezar/runs/<run>.tracker-context.json`; the agent refreshes it and performs writes through
+`cez tracker` → `GET`/`POST /api/v1/tracker/task`, authorized by a per-execution
+`CEZ_TRACKER_CAPABILITY` bound to one run, project and issue. Writes (comment, status transition)
+are the only vendor writes cezar performs, each opt-in per automation through
+`trackerTrigger.access.writes`, granted only in the cockpit editor, and idempotent by operation
+ID. Inherited capabilities are stripped from agent and check environments and redacted from
+transcripts. Definitions without `access` need review before they poll again. User-facing
+behavior: docs/issue-trackers.md § Tracker automation access. This is a capability boundary, not
+isolation from same-user processes.
