@@ -54,6 +54,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
   antigravity: [],
+  // Kimi's models are discovered from its config.toml (`kimi-model-catalog.ts`), so nothing is
+  // hard-coded here.
+  kimi: [],
 };
 
 /**

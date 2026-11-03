@@ -109,6 +109,7 @@ const configSchema = z.object({
       pi: z.string().trim().min(1).max(200).optional(),
       copilot: z.string().trim().min(1).max(200).optional(),
       antigravity: z.string().trim().min(1).max(200).optional(),
+      kimi: z.string().trim().min(1).max(200).optional(),
     })
     .optional()
     .catch(undefined),

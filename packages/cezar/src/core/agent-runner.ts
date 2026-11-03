@@ -26,7 +26,7 @@ import type { PrivateMcpServer } from './private-mcp.ts';
  * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
  * the literals, so adding runner #7 is a one-line change here and typecheck finds the rest.
  */
-export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity'] as const;
+export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'antigravity', 'kimi'] as const;
 
 /** The user-selectable runners (what config/GUI expose). */
 export type RunnerId = (typeof RUNNER_IDS)[number];
@@ -66,6 +66,11 @@ export interface AgentRunSpec {
    *  each backend's own channel — never written into `cwd` (spec 2026-10-07-private-project-mcp). */
   mcpServers?: PrivateMcpServer[];
   model?: string;
+  /**
+   * Codex App Server reasoning effort for this turn. Omitted preserves the
+   * native agent default; backends other than Codex reject an explicit value.
+   */
+  reasoningEffort?: string;
   /** Inactivity kill switch for the run (ms): no output for this long stops it; 0 disables. */
   timeoutMs?: number;
   /**
@@ -88,6 +93,18 @@ export interface AgentRunSpec {
  */
 export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt: string): string {
   return systemPrompt ? `${systemPrompt}\n\n---\n\n${userPrompt}` : userPrompt;
+}
+
+export const REASONING_EFFORT_UNSUPPORTED_ERROR = 'reasoning effort is only supported by the Codex runner';
+
+/** Keep the backend-specific setting from being silently ignored at the runner seam. */
+export function assertReasoningEffortSupported(
+  backend: AgentBackend,
+  reasoningEffort: string | undefined,
+): void {
+  if (reasoningEffort && backend !== 'codex') {
+    throw new Error(REASONING_EFFORT_UNSUPPORTED_ERROR);
+  }
 }
 
 /**

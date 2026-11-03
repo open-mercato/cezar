@@ -22,6 +22,11 @@ vi.mock('./cursor-bin.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./cursor-bin.ts')>(),
   resolveCursorAgentBin: () => process.env.CEZ_CURSOR_AGENT_BIN || 'agent',
 }));
+// Same reason for Kimi: `kimi-runner.test.ts` covers the real resolver.
+vi.mock('./kimi-runner.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./kimi-runner.ts')>(),
+  resolveKimiExecutable: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_KIMI_BIN || 'kimi',
+}));
 vi.mock('./junie-auth-probe.ts', () => ({
   probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
 }));
@@ -83,6 +88,11 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  kimi: {
+    stdout: 'kimi type=kimi models=1\n',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
@@ -96,6 +106,7 @@ const originalEnv = {
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
   CEZ_CURSOR_AGENT_BIN: process.env.CEZ_CURSOR_AGENT_BIN,
+  CEZ_KIMI_BIN: process.env.CEZ_KIMI_BIN,
 };
 
 beforeEach(() => {
@@ -109,6 +120,7 @@ beforeEach(() => {
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
   delete process.env.CEZ_CURSOR_AGENT_BIN;
+  delete process.env.CEZ_KIMI_BIN;
 });
 
 afterEach(() => {
@@ -131,6 +143,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
   if (executable === 'agy') return connectedResults.antigravity!;
+  if (executable.includes('kimi')) return connectedResults.kimi!;
   return connectedResults.pi!;
 }
 
@@ -997,6 +1010,7 @@ describe('ProviderAuthService', () => {
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
         { provider: 'antigravity' },
+        { provider: 'kimi' },
       ],
     });
   });
@@ -1022,6 +1036,7 @@ describe('ProviderAuthService', () => {
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp', '--no-auto-update'], timeoutMs: 10_000 },
       { executable: 'agy', args: ['models'], timeoutMs: 10_000 },
+      { executable: 'kimi', args: ['provider', 'list'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1552,6 +1567,7 @@ describe('ProviderAuthService', () => {
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
         { provider: 'antigravity', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1666,6 +1682,7 @@ describe('ProviderAuthService', () => {
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
         { provider: 'antigravity', status: 'connected' },
+        { provider: 'kimi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
