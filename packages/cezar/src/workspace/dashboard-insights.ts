@@ -52,7 +52,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
   const ran = [...new Set(run.steps.flatMap((s) => (s.backend ? [s.backend] : [])))];
   const backend = ran.length > 1 ? 'mixed' : (ran[0] ?? run.runner ?? 'unknown');
   const costUsd = projectCostTask(projectId, run).costUsd;
-  const automationId = run.automation?.automationId ?? run.automationTrigger?.automationId;
+  const automationId = run.deferredBinding ? undefined : run.automation?.automationId ?? run.automationTrigger?.automationId;
   const model =
     backend === 'mixed'
       ? undefined

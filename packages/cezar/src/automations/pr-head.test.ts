@@ -88,6 +88,13 @@ describe('resolvePrHead (spec 2026-10-06-agentic-e2e-checks Phase 3)', () => {
     expect((await run('git', ['branch', '--list'], { cwd: repo.root })).stdout.trim()).toBe('* main');
   });
 
+  it('reads the pull request from the enterprise host of the matching remote', async () => {
+    await run('git', ['remote', 'add', 'origin', `https://company.ghe.com/${REPO}.git`], { cwd: repo.root });
+    const { runner, calls } = fakeGithub(pull(repo.head), { fetchSha: repo.head });
+    expect(await resolve(runner)).toMatchObject({ kind: 'ok' });
+    expect(calls).toContainEqual(['gh', 'api', '--hostname', 'company.ghe.com', `repos/${REPO}/pulls/42`]);
+  });
+
   it('skips a closed pull request', async () => {
     const { runner, calls } = fakeGithub(pull(repo.head, { state: 'closed' }));
     expect(await resolve(runner)).toEqual({ kind: 'skipped', reason: 'pr-not-open' });

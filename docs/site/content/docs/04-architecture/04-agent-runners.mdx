@@ -1,0 +1,90 @@
+---
+title: "Runners and subtasks"
+description: "How Cezar connects to seven agent tools, how their permissions differ, and how to delegate work through dispatch."
+sources:
+  - label: "Current runner IDs"
+    path: packages/cezar/src/core/agent-runner.ts
+    line: 28
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Adapter factory"
+    path: packages/cezar/src/core/runner-factory.ts
+    line: 17
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Sandbox and approvalPolicy"
+    path: packages/cezar/src/core/codex-app-server-runner.ts
+    line: 429
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Copilot command arguments"
+    path: packages/cezar/src/core/copilot-acp-runner.ts
+    line: 109
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Dispatch input contract"
+    path: packages/contract/src/dispatch.ts
+    line: 140
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Task command syntax"
+    path: packages/cezar/src/dispatch/task-cli.ts
+    line: 27
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Subtask budget and completion"
+    path: packages/cezar/src/dispatch/engine.ts
+    line: 50
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## What the shared interface provides
+
+`AgentRunner` creates a session and an event stream from `AgentRunSpec`. `AgentSession` lets you read the result, send a message, end the session, or interrupt it. The adapter translates provider responses, so the engine does not need to know their format. It supplies both the historical `AgentEvent` format and the normalized `UiEvent` channel used by the interface.
+
+RUNNER_IDS and the adapter factory contain the seven backends listed below. This list follows the code at the referenced commit. reference.md still describes five backends and omits Copilot from its table. Each backend also requires its CLI to be installed and signed in on the Cezar machine.
+
+| runner | Transport / execution |
+| --- | --- |
+| claude | Claude CLI, JSON stream, and native `allowedTools` support. |
+| codex | codex app-server, JSON-RPC over stdio. |
+| opencode | opencode serve, local HTTP and SSE. |
+| cursor | agent in print / stream-json mode; Continue starts a new session. |
+| pi | pi --mode rpc, JSONL, and tool list mapping. |
+| junie | Junie ACP over stdio. |
+| copilot | copilot --acp --allow-all-tools --no-auto-update. |
+
+## Permissions depend on the adapter
+
+Codex starts sessions with sandbox: danger-full-access and `approvalPolicy`: never by default. Setting `CEZ_CODEX_NETWORK=0` changes the sandbox to workspace-write and disables network access. This option applies only to the Codex runner.
+
+Claude passes `allowedTools`. If the list includes Bash and `bashAllowlist` is unset, shell commands are unrestricted. Junie and OpenCode approve permission requests automatically. Copilot starts with --allow-all-tools and automatically handles the remaining ACP permission requests too. Assess the permissions of each backend separately.
+
+pi maps tools to its own list. It cannot map command prefix rules, so it disables Bash when `bashAllowlist` is set. Cursor in print mode does not report complete token and cost data. A displayed zero may therefore mean missing data, not free execution.
+
+## How to delegate work to a subtask
+
+Dispatch creates a subtask with its own session, checkout, and report. The parent supplies the goal in objective. It can also specify scope, success_criteria, and required_evidence. A subtask does not automatically inherit all of its parent's reasoning, so these fields should describe enough context to do the work independently.
+
+The review kind evaluates specific work. Set review_of to its branch or run. This ties the report to a particular change rather than a general request to check everything. A report can include a verdict, evidence, errors, side effects, and suggestions.
+
+## An example from inside a task
+
+Replace the example path src/orders with an existing module, and send the report only after verification. The engine sets `CEZ_API_URL`, `CEZ_PROJECT_ID`, and `CEZ_TASK_ID` for the CLI. Without a cockpit address, the command exits with code 2; it does not assume localhost:4321. Headless mode without a server does not provide the same dispatch channel.
+
+```bash
+cez task create "Review input validation in the orders API" \
+  --kind review \
+  --scope "src/orders" \
+  --budget 2 \
+  --success "Confirmed bugs, or an explanation of why no issues were found" \
+  --evidence "File paths, line numbers, and verification commands"
+
+cez task list
+
+# In the subtask session, after completing its work:
+cez task report --status done \
+  --result "Validation reviewed; no confirmed bugs" \
+  --evidence "Enter the files you actually checked and the results"
+```
+
+## Subtask limits and result reporting
+
+Dispatch is enabled by default. Set `CEZ_DISPATCH=0` to disable it. One parent can have up to four active subtasks at a time, counting queued, running, and waiting. The workspace `maxParallel` limit also applies, so four active subtasks do not necessarily execute at once.
+
+A subtask reserves budget from its parent's pool. Cezar calculates the available amount from the parent's cost and the subtask reservations. After a subtask finishes, unused budget can return to the pool only if its recorded cost is positive. A missing cost or an initial zero does not release the whole reservation. If the parent has no limit, the algorithm treats its budget as unlimited.
+
+The done, review, failed, and cancelled statuses trigger a report to the parent. review means the subtask has finished its work, but does not automatically merge changes. If the subtask sends no report, the engine builds a result from its state and notes. Cancellation also reports a blocker, so the parent does not wait for a process that is no longer running.

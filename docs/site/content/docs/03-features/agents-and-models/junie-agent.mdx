@@ -1,0 +1,26 @@
+---
+title: "JetBrains Junie agent"
+description: "Run tasks through the local Junie CLI and ACP protocol."
+version: experimental
+related:
+  links:
+    - architecture/agent-runners
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/core/junie-runner.ts
+    line: 73
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+The Junie runner connects Cezar to the local JetBrains Junie CLI through ACP. Install the CLI, sign in, then select Junie in the task form.
+
+## Where to find it
+
+New task → runner → Junie
+
+## How to use it
+
+1. Install Junie CLI and sign in.
+2. Select Junie when creating a task.
+3. Start the task and follow the session.
+
+> **Good to know**: Junie support is experimental. The runner automatically approves permissions and does not enforce `allowedTools`.

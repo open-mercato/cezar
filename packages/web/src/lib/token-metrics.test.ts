@@ -11,6 +11,7 @@ const health = (
 ): { capabilities?: Partial<HealthResponse['capabilities']> } => ({
   capabilities: {
     localHandoff: true,
+    terminal: false,
     followups: false,
     singleProject: false,
     ...capabilities,

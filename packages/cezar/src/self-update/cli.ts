@@ -101,7 +101,7 @@ async function updateCommand(opts: SelfUpdateCliOptions): Promise<number> {
   }
   const active = status.installed.find((entry) => entry.active);
   console.log(`\n  cezar update — channel ${channel}, running ${status.version}${active ? ` (${active.id})` : ''}, target ${target}\n`);
-  if (!opts.version && compareVersions(target, status.version) <= 0 && active?.source !== 'local') {
+  if (!opts.version && compareVersions(target, service.runningVersion) <= 0 && active?.source !== 'local') {
     console.log('  ✓ already up to date\n');
     return 0;
   }

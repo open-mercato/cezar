@@ -240,6 +240,13 @@ it with a CLI spawn would learn nothing), and escape a **runtime auth latch** (`
 keeps forcing the row disconnected until the user acknowledges that exact incident, so a re-probe
 cannot talk cezar out of a rejection it actually observed).
 
+The gate judges the account the action runs on (#1428), so its refusal must too: a signed-out
+NAMED account answers `<Agent> account "<label>" is not signed in…` rather than the provider-level
+"credentials are unavailable", which pointed at a Providers card showing the default login
+connected (telemetry ac53a6ef, 0.15.2). The /new composer runs the same check before Start
+(`useSelectedAccountCheck`): only a probe's answer blocks, never the listing's peeked status, and
+it re-probes before refusing.
+
 And the **peeks ignore the window entirely**: they answer with the last thing known, however old.
 That distinction was found by measuring, not by reasoning: applying the window to peeks made the
 whole cache expire in five seconds on any machine where a single provider is logged out — which is

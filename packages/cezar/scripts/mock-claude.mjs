@@ -9,6 +9,11 @@ import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// The cosmetic pauses between events exist for the demo cockpit; CEZ_MOCK_PACE scales them
+// (0 = none, the vitest default). `mock:slow`/`mock:pause` are test contracts and never scale.
+const paceEnv = Number(process.env.CEZ_MOCK_PACE);
+const PACE = process.env.CEZ_MOCK_PACE && paceEnv >= 0 ? paceEnv : 1;
+const pace = (ms) => sleep(ms * PACE);
 const write = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 
 // `--include-partial-messages` → every text/thinking block of an assistant
@@ -55,6 +60,19 @@ if (process.env.CEZ_MOCK_ARGS_FILE) {
   }
 }
 
+// Testability hook: CEZ_MOCK_MISSING_SESSIONS=<id,id|*> makes `--resume <id>` fail the way the
+// real CLI does once it has pruned that transcript (cleanupPeriodDays).
+const resumeAt = process.argv.indexOf('--resume');
+const resumedId = resumeAt >= 0 ? process.argv[resumeAt + 1] : undefined;
+const missingSessions = (process.env.CEZ_MOCK_MISSING_SESSIONS ?? '').split(',').filter(Boolean);
+if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resumedId))) {
+  // Flushed before exiting: a pipe write is asynchronous on macOS, and exit would drop it.
+  const result = { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: resumedId };
+  await new Promise((resolve) => process.stdout.write(`${JSON.stringify(result)}\n`, resolve));
+  await new Promise((resolve) => process.stderr.write(`No conversation found with session ID: ${resumedId}\n`, resolve));
+  process.exit(1);
+}
+
 emit({ type: 'system', subtype: 'init' });
 
 let turn = 0;
@@ -67,6 +85,13 @@ let turn = 0;
 // rather than time out.
 let autonomousArmed = false;
 let askRepeat = false;
+let monitoringSticky = false;
+let askRewordClean = false;
+let askRewordMonitoring = false;
+let askRepeatClean = false;
+// `mock:ask-reword` → the same blocker on every turn, worded differently each time. This models
+// an agent trying another workaround after each nudge instead of repeating the exact question.
+let askReword = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -120,9 +145,44 @@ function writeHandoffAndTodo() {
   }
 }
 
+// Spec 2026-10-22-html-artifacts: publish a self-contained page into CEZ_ARTIFACTS_DIR, so a
+// dry run (and the e2e suite) sees the whole artifacts path work.
+const DEMO_ARTIFACT_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Dry-run demo report</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:2rem;color:#1a1a1a;background:#fafafa}
+@media (prefers-color-scheme:dark){body{color:#eee;background:#151515}}h1{font-size:1.4rem}</style>
+</head><body><h1>Dry-run demo report</h1>
+<p>The mock agent wrote this page into its artifacts directory.</p>
+<p id="clock"></p><script>document.getElementById('clock').textContent = 'Rendered at ' + new Date().toLocaleTimeString();</script>
+</body></html>
+`;
+function writeDemoArtifact() {
+  try {
+    const dir = process.env.CEZ_ARTIFACTS_DIR;
+    if (dir) writeFileSync(`${dir}/demo.html`, DEMO_ARTIFACT_HTML, 'utf8');
+  } catch {
+    // best effort — a missing directory just means no demo page
+  }
+}
+
+// Spec 2026-10-22 (Assess Impact): the bundled demo model, left for the server's backstop to
+// render into impact.html — the mock never runs `cez impact render` itself.
+function writeDemoReview() {
+  const dir = process.env.CEZ_ARTIFACTS_DIR;
+  if (!dir) return;
+  for (const rel of ['../src/impact/demo-review.json', '../dist/impact/demo-review.json']) {
+    try {
+      writeFileSync(`${dir}/review.json`, readFileSync(new URL(rel, import.meta.url), 'utf8'), 'utf8');
+      return;
+    } catch {
+      // not in this layout (src only in a checkout, dist only once built/installed)
+    }
+  }
+}
+
 async function respond(userText, imageCount) {
   turn += 1;
-  await sleep(250);
+  await pace(250);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
@@ -133,12 +193,22 @@ async function respond(userText, imageCount) {
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
+  // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
+  // CEZ:MONITORING: the watcher whose downstream work never finishes.
+  if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
+  if (userText.includes('mock:ask-reword')) askReword = true;
+  if (userText.includes('mock:ask-reword-clean')) askRewordClean = true;
+  if (userText.includes('mock:ask-reword-monitoring')) askRewordMonitoring = true;
+  if (userText.includes('mock:ask-repeat-clean')) askRepeatClean = true;
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
-  const doneMarker =
-    userText.includes('mock:done') ||
-    userText.includes('## Tree inbox') ||
-    (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
+  // `mock:done-refs` → CEZ:DONE with a task-reference line AFTER it, the order an agent that
+  // declares its PR last really emits.
+  const doneMarker = userText.includes('mock:done-refs')
+    ? '\n\nCEZ:DONE\nCEZ:PR=4243'
+    : userText.includes('mock:done') ||
+        userText.includes('## Tree inbox') ||
+        (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
@@ -147,7 +217,7 @@ async function respond(userText, imageCount) {
   // (#933): the handoff contract asks for those "as soon as you know", so an agent that opens
   // its PR in the same turn it parks on its sub-agents emits exactly this shape. It used to
   // bury the marker and park the run as `waiting` ("needs you").
-  const monitoringMarker = userText.includes('mock:monitoring')
+  const monitoringMarker = (monitoringSticky || userText.includes('mock:monitoring') || (askRewordMonitoring && turn === 2))
     ? userText.includes('mock:monitoring-refs')
       ? '\n\nCEZ:MONITORING\nCEZ:PR=4242\nCEZ:TITLE=waiting on dispatched sub-agents'
       : '\n\nCEZ:MONITORING'
@@ -164,6 +234,11 @@ async function respond(userText, imageCount) {
   // `mock:ask-truncated` → a complete payload one closing brace short (#936):
   // the closer repair should still produce one card, note the recovery, and
   // strip the raw marker (which ends on `]`, not `}`).
+  // `mock:ask-refs` → the same valid marker, but with task-reference marker lines AFTER it
+  // (#997, the ASK twin of `mock:monitoring-refs`): the handoff contract asks for those "as
+  // soon as you know" and names only DONE/MONITORING as coming last, so an agent that declares
+  // its issue in the turn it asks emits exactly this shape. It used to bury the marker — no
+  // card, and in a dispatched task an inbox message could answer the Guard instead of the human.
   // `mock:ask-many` → six distinct questions, one of them with six options:
   // over the old 4/4 caps, which refused the whole payload and showed the user
   // raw JSON. It must now render as exactly one card, and a dispatched child
@@ -201,7 +276,23 @@ async function respond(userText, imageCount) {
               },
             ],
           })
-      : userText.includes('mock:ask') || askRepeat
+      : (askRewordClean && turn === 2) || (askRewordMonitoring && turn === 2) || (askRepeatClean && turn === 2)
+        ? ''
+      : askReword || askRewordClean || askRewordMonitoring
+        ? '\n\nCEZ:ASK ' +
+          JSON.stringify({
+            questions: [
+              {
+                header: 'Blocked',
+                question: `The cockpit refused "cez task create" (attempt ${turn}) — how should I proceed?`,
+                options: [
+                  { label: 'Grant the capability', description: 'Enable dispatch for this run' },
+                  { label: 'Do it inline', description: 'Skip dispatch and work serially' },
+                ],
+              },
+            ],
+          })
+      : userText.includes('mock:ask') || askRepeat || askRepeatClean
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
           questions: [
@@ -214,7 +305,8 @@ async function respond(userText, imageCount) {
               ],
             },
           ],
-        })
+        }) +
+        (userText.includes('mock:ask-refs') ? '\nCEZ:ISSUE=997\nCEZ:TITLE=asking before declaring' : '')
       : '';
   // `mock:verdict=<name>` → the reply ends with `CEZ:VERDICT <name>`, a graph agent node's
   // branch choice (spec 2026-09-30-workflow-node-editor). cezar's one-shot verdict nudge carries
@@ -249,6 +341,26 @@ async function respond(userText, imageCount) {
       subtype: 'success',
       is_error: true,
       result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
+  // `mock:overloaded` / `mock:credit` → a transient provider failure (76aa46a9) and an account
+  // state one (7d0a1d6d), in the same `is_error` result envelope (core/agent-failure-class.ts).
+  const accountOrProviderError = userText.includes('mock:overloaded')
+    ? 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.'
+    : userText.includes('mock:oauthrace')
+      ? 'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute.'
+    : userText.includes('mock:credit') ? 'Credit balance is too low'
+    : userText.includes('mock:enospc') ? 'ENOSPC: no space left on device, write' : undefined;
+  if (accountOrProviderError) {
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result: accountOrProviderError,
       usage: { input_tokens: 0, output_tokens: 0 },
       total_cost_usd: 0,
     });
@@ -305,7 +417,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: { role: 'assistant', content: [{ type: 'text', text: md }], usage: { input_tokens: 100, output_tokens: 200 } },
     });
-    await sleep(100);
+    await pace(100);
     emit({ type: 'result', subtype: 'success', result: md, usage: { input_tokens: 100, output_tokens: 200 }, total_cost_usd: 0.001 });
     return;
   }
@@ -360,7 +472,7 @@ async function respond(userText, imageCount) {
         },
         parent_tool_use_id: null,
       });
-      await sleep(200);
+      await pace(200);
     }
 
     // Children, interleaved across agents so the activity lines visibly race.
@@ -385,14 +497,14 @@ async function respond(userText, imageCount) {
             },
             parent_tool_use_id: agent.id,
           });
-          await sleep(250);
+          await pace(250);
           emit({
             type: 'user',
             message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: step.id, content: step.result }] },
             parent_tool_use_id: agent.id,
           });
         }
-        await sleep(250);
+        await pace(250);
       }
     }
 
@@ -403,7 +515,7 @@ async function respond(userText, imageCount) {
         message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: agent.id, content: agent.result }] },
         parent_tool_use_id: null,
       });
-      await sleep(200);
+      await pace(200);
     }
 
     const summary = 'Both sub-agents reported back: the redirect drops the cookie in src/middleware.ts:12, and the store layer is clean. (dry-run mock)';
@@ -412,7 +524,7 @@ async function respond(userText, imageCount) {
       message: { role: 'assistant', content: [{ type: 'text', text: summary }], usage: { input_tokens: 400, output_tokens: 60 } },
       parent_tool_use_id: null,
     });
-    await sleep(150);
+    await pace(150);
     emit({
       type: 'result',
       subtype: 'success',
@@ -428,9 +540,13 @@ async function respond(userText, imageCount) {
   // dry-run tests can assert the full apply pipeline.
   if (userText.includes('[cez-namer]')) {
     const numbered = /(?:^|\D)(\d{1,7})(?:\D|$)/.exec(userText);
+    // Branch naming instructions (spec 2026-10-11-branch-naming-instructions): a canned branch
+    // so dry-run tests can assert the fork used it. Only when the prompt carried instructions.
+    const named = userText.includes('Branch naming instructions:');
     const name = JSON.stringify({
       title: 'implementing cr fixes',
       ...(numbered ? { pr: Number(numbered[1]) } : {}),
+      ...(named ? { branch: 'feature/implementing cr fixes' } : {}),
     });
     emit({
       type: 'assistant',
@@ -440,7 +556,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 200, output_tokens: 30 },
       },
     });
-    await sleep(50);
+    await pace(50);
     emit({
       type: 'result',
       subtype: 'success',
@@ -473,7 +589,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 500, output_tokens: 120 },
       },
     });
-    await sleep(100);
+    await pace(100);
     emit({
       type: 'result',
       subtype: 'success',
@@ -485,17 +601,21 @@ async function respond(userText, imageCount) {
   }
 
   if (turn === 1) {
+    // An assess-impact step changes nothing in the worktree; it leaves only a review model.
+    const assessing = userText.includes('cez impact render');
     // Leave a visible trace in the cwd (the task worktree under spec 006) so
     // the Diff view has something real to show in dry runs. Exactly one line
     // per spawned session: tests read this file back as a per-step trace, so
     // a multi-line prompt must not become multiple lines here.
     try {
       const head = userText.replace(/\s+/g, ' ').trim().slice(0, 400);
-      appendFileSync('notes.md', `mock notes — ${new Date().toISOString()}: ${head}\n`);
+      if (!assessing) appendFileSync('notes.md', `mock notes — ${new Date().toISOString()}: ${head}\n`);
     } catch {
       // read-only cwd — the mock still works, just without a diff
     }
     writeHandoffAndTodo();
+    writeDemoArtifact();
+    if (assessing) writeDemoReview();
     emit({
       type: 'assistant',
       message: {
@@ -504,7 +624,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 850, output_tokens: 40 },
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'assistant',
       message: {
@@ -513,7 +633,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 120, output_tokens: 55 },
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'user',
       message: {
@@ -521,7 +641,7 @@ async function respond(userText, imageCount) {
         content: [{ type: 'tool_result', tool_use_id: `toolu_mock_${turn}`, content: ' M src/example.ts' }],
       },
     });
-    await sleep(200);
+    await pace(200);
     // Agent screenshot in a tool result — exercises the image pipeline
     // (persist to <id>-images/, serve via /api/runs/:id/images/, zoomable
     // card + lightbox in the transcript).
@@ -533,7 +653,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 80, output_tokens: 30 },
       },
     });
-    await sleep(200);
+    await pace(200);
     emit({
       type: 'user',
       message: {
@@ -550,7 +670,7 @@ async function respond(userText, imageCount) {
         ],
       },
     });
-    await sleep(300);
+    await pace(300);
     emit({
       type: 'assistant',
       message: {
@@ -559,7 +679,7 @@ async function respond(userText, imageCount) {
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
-    await sleep(150);
+    await pace(150);
     emit({
       type: 'result',
       subtype: 'success',
@@ -579,7 +699,7 @@ async function respond(userText, imageCount) {
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });
-  await sleep(150);
+  await pace(150);
   emit({
     type: 'result',
     subtype: 'success',

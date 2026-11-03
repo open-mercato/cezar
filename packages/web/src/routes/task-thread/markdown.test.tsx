@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -43,6 +47,34 @@ describe('Markdown', () => {
       )
     })
 
+    it.each(['temp/report.txt', './temp/report.txt', '../report.txt', 'README.md', '~/report.txt'])('explains relative file link %s without a blocked badge or navigation', (destination) => {
+      const { container } = render(<Markdown>{`[Open **report**](${destination})`}</Markdown>)
+      expect(container.textContent).toBe('Open report')
+      expect(container.querySelector('a, button')).toBeNull()
+      expect(container.querySelector('[data-local-only-link]')?.getAttribute('title')).toContain(destination)
+      expect(container.querySelector('[data-streamdown="strong"]')).not.toBeNull()
+    })
+
+    it('leaves document previews with a custom URL resolver in control', () => {
+      const transform = vi.fn(() => '/p/project/tasks/123')
+      const { container } = render(<Markdown variant="document" urlTransform={transform}>{'[report](./report.md)'}</Markdown>)
+      expect(transform).toHaveBeenCalled()
+      expect(container.querySelector('a')?.getAttribute('href')).toBe('/p/project/tasks/123')
+      expect(container.querySelector('[data-local-only-link]')).toBeNull()
+    })
+
+    it('keeps unsafe protocols blocked', () => {
+      const { container } = render(<Markdown>{'[bad](javascript:alert%281%29) [bad](data:text/html,evil)'}</Markdown>)
+      expect(container.querySelector('a, button')).toBeNull()
+      expect(container.querySelector('[data-local-only-link]')).toBeNull()
+    })
+
+    it('keeps local link explanations out of compact inline previews', () => {
+      const { container } = render(<Markdown inline>{'[report](temp/report.txt)'}</Markdown>)
+      expect(container.textContent).toBe('report')
+      expect(container.querySelector('a, button, [data-local-only-link]')).toBeNull()
+    })
+
     it('keeps supported cockpit-relative destinations behind the safety dialog', () => {
       const openMock = vi.spyOn(window, 'open').mockImplementation(() => null)
       const { container } = render(<Markdown>{'[task](/p/project/tasks/123)'}</Markdown>)
@@ -81,6 +113,26 @@ describe('Markdown', () => {
       { timeout: 10_000 },
     )
   }, 15_000)
+
+  it('keeps a multi-line fence on separate lines with line numbers off', async () => {
+    // Streamdown marks line spans `block` only when line numbers are on; the stylesheet must.
+    const css = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../styles/index.css'), 'utf8')
+    const rule = css.match(/\.thread-markdown \[data-streamdown='code-block-body'\] code > span \{[^}]*\}/)
+    expect(rule).not.toBeNull()
+    const style = document.createElement('style')
+    style.textContent = rule?.[0] ?? ''
+    document.head.append(style)
+    try {
+      render(<Markdown>{'```bash\ngit checkout main\ngit pull\n```'}</Markdown>)
+      await waitFor(() => {
+        const lines = [...document.querySelectorAll('[data-streamdown="code-block-body"] code > span')]
+        expect(lines.map((l) => l.textContent)).toEqual(['git checkout main', 'git pull'])
+        for (const line of lines) expect(getComputedStyle(line).display).toBe('block')
+      })
+    } finally {
+      style.remove()
+    }
+  })
 
   it('renders an unknown fence language as plaintext — no crash, chip kept honest', async () => {
     render(<Markdown>{'```wat-lang\nsome opaque output\n```'}</Markdown>)

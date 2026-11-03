@@ -109,6 +109,20 @@ const RULES: Rule[] = [
     pattern: /\b(?:(?:h|min-h|max-h)-screen|100vh)\b/g,
     applies: styleSources,
   },
+  {
+    name: 'no-arbitrary-type-sizes',
+    why: 'text sizes come from the scale in src/styles/index.css (text-micro/meta/label/ui/body/lead, plus text-xs/sm/base…) — a text-[12.5px] is a seventh step nobody else uses (typography audit 2026-10-30); anything under 10px is drawing, not type, and stays free',
+    pattern: /\btext-\[(?:[1-9]\d(?:\.\d+)?)px\]/g,
+    applies: styleSources,
+    allowed: (rel) => rel === 'src/styles/index.css',
+  },
+  {
+    name: 'no-ad-hoc-eyebrow',
+    why: 'small capitals over a section, column or card are the `eyebrow` utility (one size, weight and tracking), not a hand-rolled uppercase + tracking pair',
+    // `uppercase` and a `tracking-*` in the same class string, either order.
+    pattern: /\btracking-(?:\[[^\]]+\]|wide|wider|widest)\b[^"'`\n]*\buppercase\b|\buppercase\b[^"'`\n]*\btracking-(?:\[[^\]]+\]|wide|wider|widest)\b/g,
+    applies: styleSources,
+  },
 ]
 
 /**

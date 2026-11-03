@@ -1,0 +1,25 @@
+---
+title: "Ask: questions about the repository"
+description: "Ask about code without creating a branch or worktree."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/new-task.tsx
+    line: 850
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Choose Ask to ask the agent about code without creating a branch or worktree. It is available for projects working in the checkout. In trunk-based mode, a question ending in ? can enable Ask automatically.
+
+## Where to find it
+
+New task → Ask (in-place or trunk-based projects)
+
+## How to use it
+
+1. In a project working in the checkout, choose Ask.
+2. Write a question about the repository.
+3. Send it to the agent. In trunk-based mode, a question ending in ? can enable Ask automatically.
+
+> **Good to know**: Cezar requests read-only work. Claude enforces the tool restriction; other runners may treat it only as an instruction.

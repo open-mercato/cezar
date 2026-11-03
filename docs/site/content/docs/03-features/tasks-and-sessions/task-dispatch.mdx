@@ -1,0 +1,25 @@
+---
+title: "Delegate subtasks with Dispatch"
+description: "Let an agent split work into separate Cezar tasks."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/components/dispatch-toggle.tsx
+    line: 100
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+With Dispatch enabled, an agent can divide work into separate Cezar tasks. Describe the expected result and division of work in your instruction. Created subtasks appear beneath their parent.
+
+## Where to find it
+
+New task → Dispatch
+
+## How to use it
+
+1. Enable Dispatch when creating a task.
+2. Describe the expected result and division of work.
+3. Follow subtasks beneath the parent task.
+
+> **Good to know**: Dispatch is available by default. `CEZ_DISPATCH=0` disables it on the server. Subtasks have separate sessions and worktrees.

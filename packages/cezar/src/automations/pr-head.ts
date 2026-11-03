@@ -1,6 +1,9 @@
 import { execFile } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { z } from 'zod';
 import { collectSecretValues, redactSecrets } from '../core/secret-redaction.ts';
+import { parseRemote, resolveTaskRemotes } from '../git-remotes.ts';
+import { GITHUB_COM, isSafeHostname } from '../github-hosts.ts';
 
 /**
  * Pull-request head checkouts for automations (spec 2026-10-06-agentic-e2e-checks Phase 3).
@@ -27,13 +30,15 @@ export interface PrHead {
   ref: string;
   /** The PR's web page, for the run's PR reference. */
   url: string;
+  /** The PR's title, when the API sent one (Assess Impact's task text). */
+  title?: string;
   untrusted: boolean;
 }
 
 export type PrHeadResolution =
   | { kind: 'ok'; head: PrHead; note?: string }
   | { kind: 'skipped'; reason: 'pr-not-open' | 'fork-head' }
-  | { kind: 'failed'; reason: string };
+  | { kind: 'failed'; reason: string; notFound?: true };
 
 export interface CommandResult {
   ok: boolean;
@@ -44,6 +49,7 @@ export type CommandRunner = (command: 'gh' | 'git', args: string[], cwd: string)
 
 const pullSchema = z.object({
   state: z.string(),
+  title: z.string().optional(),
   html_url: z.string().url(),
   head: z.object({
     sha: z.string().regex(/^[0-9a-f]{40}$/),
@@ -63,7 +69,7 @@ export function prHeadRef(number: number): string {
 
 export const runCommand: CommandRunner = (command, args, cwd) =>
   new Promise((resolve) => {
-    execFile(command, args, { cwd, maxBuffer: 4 * 1024 * 1024, timeout: 120_000 }, (error, stdout, stderr) => {
+    execFile(command, args, { cwd, maxBuffer: 4 * 1024 * 1024, timeout: 120_000, env: ghEnv() }, (error, stdout, stderr) => {
       resolve({ ok: !error, stdout: String(stdout), stderr: String(stderr || (error ? error.message : '')) });
     });
   });
@@ -72,6 +78,18 @@ export const runCommand: CommandRunner = (command, args, cwd) =>
 function unavailable(what: string, stderr: string): PrHeadResolution {
   const detail = redactSecrets(stderr.trim(), collectSecretValues()).slice(0, 1_000);
   return { kind: 'failed', reason: `pr-head-unavailable: ${what}${detail ? ` — ${detail}` : ''}` };
+}
+
+/** The remote whose URL is `repo`, else the base remote, else `origin` (the old default); with the
+ *  host of the URL it matched (undefined when it fell back), which `gh api` needs on Enterprise. */
+async function remoteForRepo(exec: CommandRunner, root: string, repo: string): Promise<{ name: string; host?: string }> {
+  const remotes = await resolveTaskRemotes((args) => exec('git', args, root));
+  for (const name of remotes.names) {
+    const url = await exec('git', ['remote', 'get-url', name], root);
+    const parsed = url.ok ? parseRemote(url.stdout.trim()) : null;
+    if (parsed && `${parsed.owner}/${parsed.repo}`.toLowerCase() === repo.toLowerCase()) return { name, host: parsed.host };
+  }
+  return { name: remotes.base ?? 'origin' };
 }
 
 export async function resolvePrHead(options: {
@@ -101,13 +119,19 @@ export async function resolvePrHead(options: {
       kind: 'ok',
       head: {
         number, repo, headRepo: repo, headRef: `fixture-pr-${number}`, headSha: sha, baseRef: 'main', ref,
-        url: `https://github.com/${repo}/pull/${number}`, untrusted: false,
+        url: `https://github.com/${repo}/pull/${number}`, title: 'Dry-run pull request', untrusted: false,
       },
     };
   }
 
-  const api = await exec('gh', ['api', `repos/${repo}/pulls/${number}`], root);
-  if (!api.ok) return unavailable('could not read the pull request', api.stderr);
+  const remote = await remoteForRepo(exec, root, repo);
+  const hostArgs = remote.host && isSafeHostname(remote.host) && remote.host !== GITHUB_COM ? ['--hostname', remote.host] : [];
+  const api = await exec('gh', ['api', ...hostArgs, `repos/${repo}/pulls/${number}`], root);
+  if (!api.ok) {
+    const failed = unavailable('could not read the pull request', api.stderr);
+    // `gh api` says `HTTP 404` for a number the repository does not have.
+    return /\bHTTP 404\b/.test(api.stderr) && failed.kind === 'failed' ? { ...failed, notFound: true } : failed;
+  }
   let parsed: z.infer<typeof pullSchema>;
   try {
     parsed = pullSchema.parse(JSON.parse(api.stdout));
@@ -119,7 +143,8 @@ export async function resolvePrHead(options: {
   const untrusted = headRepo.toLowerCase() !== repo.toLowerCase();
   if (untrusted && !options.allowForkHeads) return { kind: 'skipped', reason: 'fork-head' };
 
-  const fetched = await exec('git', ['fetch', '--no-tags', 'origin', `+refs/pull/${number}/head:${ref}`], root);
+  // `refs/pull/N/head` lives on the PR's repo, not necessarily `origin` (#1383).
+  const fetched = await exec('git', ['fetch', '--no-tags', remote.name, `+refs/pull/${number}/head:${ref}`], root);
   if (!fetched.ok) return unavailable(`could not fetch refs/pull/${number}/head`, fetched.stderr);
   const resolved = await exec('git', ['rev-parse', '--verify', `${ref}^{commit}`], root);
   if (!resolved.ok) return unavailable(`could not resolve ${ref}`, resolved.stderr);
@@ -129,7 +154,7 @@ export async function resolvePrHead(options: {
     kind: 'ok',
     head: {
       number, repo, headRepo, headRef: parsed.head.ref, headSha, baseRef: parsed.base.ref, ref,
-      url: parsed.html_url, untrusted,
+      url: parsed.html_url, ...(parsed.title ? { title: parsed.title } : {}), untrusted,
     },
     // The PR moved between the API read and the fetch: test what was fetched, and say so.
     ...(headSha !== parsed.head.sha

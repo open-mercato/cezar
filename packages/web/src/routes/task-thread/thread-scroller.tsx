@@ -351,7 +351,17 @@ export function useThreadScroll(
       }
       else markDown()
     }
+    // After a click on prose the focus is <body>, so the key never passes through the scroller
+    // (#1800). It is thread intent only if the last pointerdown landed in THIS scroller — body
+    // keys scroll whichever region was clicked last, which may be another column.
+    let pointerInScroller = false
+    const onWindowPointerDown = (event: PointerEvent) => {
+      pointerInScroller = event.target instanceof Node && scroller.contains(event.target)
+    }
     const onKey = (event: KeyboardEvent) => {
+      const target = event.target
+      const onBody = target === document.body || target === document.documentElement
+      if (!(target instanceof Node && scroller.contains(target)) && !(onBody && pointerInScroller)) return
       if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
         unstick()
         if (!event.repeat && isNearHistoryStart(scroller)) loadOlder()
@@ -434,7 +444,8 @@ export function useThreadScroll(
     window.addEventListener('touchcancel', onTouchEnd, { passive: true })
     scroller.addEventListener('pointerdown', onPointerDown, { passive: true })
     window.addEventListener('pointerup', onPointerUp, { passive: true })
-    scroller.addEventListener('keydown', onKey)
+    window.addEventListener('pointerdown', onWindowPointerDown, { capture: true, passive: true })
+    window.addEventListener('keydown', onKey)
 
     // Content growth (streamed items, replay, virtua's total-size updates) re-applies the
     // stick or the pending restore. jsdom has no ResizeObserver; the hook degrades to
@@ -482,7 +493,8 @@ export function useThreadScroll(
       window.removeEventListener('touchcancel', onTouchEnd)
       scroller.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('pointerup', onPointerUp)
-      scroller.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerdown', onWindowPointerDown, { capture: true })
+      window.removeEventListener('keydown', onKey)
       observer?.disconnect()
     }
   }, [viewKey, contentEl, loadOlder, setOffset, toBottom])
