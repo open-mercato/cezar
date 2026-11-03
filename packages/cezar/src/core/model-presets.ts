@@ -54,6 +54,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // Antigravity lists nothing: its slugs come from `agy models` for the signed-in account.
   copilot: [],
   antigravity: [],
+  // The ids Gemini CLI 0.60 lists in its ACP `session/new` answer (`models.availableModels`), minus
+  // its own `auto` (cezar's implicit `''`) — the composer's `MODELS_BY_RUNNER.gemini`.
+  gemini: ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-pro'],
   // Kimi's models are discovered from its config.toml (`kimi-model-catalog.ts`), so nothing is
   // hard-coded here.
   kimi: [],
@@ -69,6 +72,7 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
 const NATIVE_MODEL_ID_PREFIX: Partial<Record<RunnerId, RegExp>> = {
   claude: /^claude[-.]/,
   codex: /^gpt[-.]/,
+  gemini: /^gemini[-.]/,
 };
 
 /** Runners whose own bare catalog ids ARE other vendors' ids — Copilot routes `claude-sonnet-4`

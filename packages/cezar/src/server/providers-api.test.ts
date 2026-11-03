@@ -9,6 +9,7 @@ import {
   type ProviderId,
   type RunProviderCommand,
 } from '../core/provider-auth.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { RunManager } from '../workflows/run.ts';
@@ -61,6 +62,8 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
   // `agy models` lists the signed-in account's models (live agy 1.4.0 output).
   antigravity: 'Fetching available models...\ngemini-3.8-flash-high\tGemini 3.8 Flash (High)',
+  // `gemini --version`; connected-ness comes from the credentials it can see (gemini-credentials.ts).
+  gemini: '0.60.0',
   kimi: 'kimi-code  type=oauth  models=3  source=default',
 };
 
@@ -79,6 +82,7 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
   junie: 'Junie version: 26.9.22 (3419.7)',
   copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
   antigravity: 'Please sign in',
+  gemini: '0.60.0',
   kimi: 'No providers configured.',
 };
 
@@ -86,6 +90,7 @@ const providerForExecutable = (executable: string): ProviderId => {
   const name = basename(executable);
   if (name === 'claude' || name === 'codex' || name === 'opencode' || name === 'pi' || name === 'junie' || name === 'copilot' || name === 'kimi') return name as ProviderId;
   if (name === 'agy') return 'antigravity';
+  if (name === 'gemini') return 'gemini';
   // `resolveCursorAgentBin` prefers `cursor-agent` (on PATH or `~/.local/bin`) when the host has
   // Cursor installed (#1503), so match it too or the suite fails only on such machines.
   if (name === 'agent' || name === 'cursor-agent') return 'cursor';
@@ -112,6 +117,7 @@ describe('workspace provider API', () => {
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedRemote = process.env.CEZ_REMOTE;
+  const savedGeminiKey = process.env.GEMINI_API_KEY;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cez-providers-api-'));
@@ -119,6 +125,9 @@ describe('workspace provider API', () => {
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
     delete process.env.CEZ_DRY_RUN;
     delete process.env.CEZ_REMOTE;
+    // Gemini's connected-ness is an environment read, not a probe output: give it a key so the
+    // stubbed "every provider connected" host really is one.
+    process.env.GEMINI_API_KEY = 'AIza-test-key';
   });
 
   afterEach(() => {
@@ -130,6 +139,8 @@ describe('workspace provider API', () => {
     else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedRemote === undefined) delete process.env.CEZ_REMOTE;
     else process.env.CEZ_REMOTE = savedRemote;
+    if (savedGeminiKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = savedGeminiKey;
   });
 
   const service = (
@@ -221,6 +232,7 @@ describe('workspace provider API', () => {
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
         { provider: 'antigravity', status: 'connected', enabled: true },
+        { provider: 'gemini', status: 'connected', enabled: true },
         { provider: 'kimi', status: 'connected', enabled: true },
       ],
     });
@@ -246,6 +258,7 @@ describe('workspace provider API', () => {
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
         { provider: 'antigravity', status: 'connected', enabled: true },
+        { provider: 'gemini', status: 'connected', enabled: true },
         { provider: 'kimi', status: 'connected', enabled: true },
       ],
     });
@@ -839,7 +852,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, junie, copilot, or antigravity' });
+    expect(await response.json()).toEqual({ error: `provider must be one of ${RUNNER_IDS.join(', ')}` });
   });
 
   it('never places request-controlled text in the opened command', async () => {

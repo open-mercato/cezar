@@ -11,6 +11,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
   antigravity: 'Antigravity',
+  gemini: 'Gemini CLI',
   kimi: 'Kimi Code',
 }
 

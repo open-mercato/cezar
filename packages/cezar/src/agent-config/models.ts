@@ -7,6 +7,7 @@ import { copilotModelSettingsStrategy } from './model-settings/copilot.ts';
 import { kimiModelSettingsStrategy } from './model-settings/kimi.ts';
 import { cursorModelSettingsStrategy } from './model-settings/cursor.ts';
 import { opencodeModelSettingsStrategy } from './model-settings/opencode.ts';
+import { geminiModelSettingsStrategy } from './model-settings/gemini.ts';
 import { piModelSettingsStrategy } from './model-settings/pi.ts';
 import type { AgentModelSettings, AgentModelSettingsStrategy } from './model-settings/types.ts';
 
@@ -27,6 +28,7 @@ const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = 
   junie: junieModelSettingsStrategy,
   copilot: copilotModelSettingsStrategy,
   antigravity: antigravityModelSettingsStrategy,
+  gemini: geminiModelSettingsStrategy,
   kimi: kimiModelSettingsStrategy,
 };
 
