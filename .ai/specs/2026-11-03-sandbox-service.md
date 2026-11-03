@@ -29,14 +29,14 @@ The worktree on the host stays the source of truth, so review, diff and landing 
 
 ## Resolved assumptions (autonomous defaults)
 
-Rows marked **user** came from the requester on 2026-11-03 and are decided. Every other row is an autonomous default written by `om-auto-write-spec`, and each one is reversible. Rows marked ⚠ block the merge until the owner confirms them.
+Rows marked **user** came from the requester on 2026-11-03 and are decided. Rows marked **owner** were confirmed by the owner on 2026-11-03 in answer to the merge-gate questions. Every other row is an autonomous default written by `om-auto-write-spec`, and each one is reversible. No row is still waiting for confirmation.
 
 | # | Question | Applied answer | Why |
 |---|---|---|---|
-| Q1 | Should the whole agent run inside the sandbox, or stay on the host with its tools proxied in? | **The whole agent CLI runs inside the sandbox.** cezar keeps parsing the agent's stdout on the host. | Both providers' own agent recipes do exactly this (microsandbox `docs/how-to/agents/claude-code.mdx`; Daytona's Claude Code guide). Proxying tools would need a shim for each of the 10 runners. ⚠ NEEDS HUMAN CONFIRMATION |
-| Q2 | How do agent credentials reach the sandbox? | **Per agent account, a *sandbox credential*: an API key, a token, or (opt-in) a login done inside the sandbox and kept on a provider-side auth volume. See "Coding agents in a sandbox".** The key or token is injected per run. Where the provider supports it, the injection is host-scoped: microsandbox `secretEnv`, Daytona `secrets`. Over SSH the key is piped on stdin. A host agent home (`~/.claude`, `~/.codex`) is **never** mounted or copied. | Mounting a home would hand the machine every session, history and OAuth refresh token. ⚠ NEEDS HUMAN CONFIRMATION |
-| Q3 | Should the feature be on by default, or behind a `CEZ_*` opt-in flag? | **The surface is available by default, but nothing boots, connects or bills until the user acts.** Detection is a local `PATH`/`/dev/kvm` probe. Daytona and SSH hosts are contacted only after an account is added. A sandbox starts only for a task where one was picked. `CEZ_SANDBOXES=0` hides everything. | Same shape as dispatch and automations: the per-task pick is the opt-in. AGENTS.md § Zero config still requires an owner-ratified exception. ⚠ NEEDS HUMAN CONFIRMATION |
-| Q4 | One spec or several? | **One spec, delivered in phases.** | Every provider answers the same question, "where does this task execute". Each one is a class behind one seam. |
+| Q1 | Should the whole agent run inside the sandbox, or stay on the host with its tools proxied in? | **The whole agent CLI runs inside the sandbox.** cezar keeps parsing the agent's stdout on the host. | Both providers' own agent recipes do exactly this (microsandbox `docs/how-to/agents/claude-code.mdx`; Daytona's Claude Code guide). Proxying tools would need a shim for each of the 10 runners. **owner**: confirmed. |
+| Q2 | How do agent credentials reach the sandbox? | **The run's agent account login folder is copied into the sandbox** (e.g. `~/.claude-klaudiusz` → the guest's `CLAUDE_CONFIG_DIR`), together with any login the vendor keeps outside it, such as the macOS Keychain entry. It is copied, never mounted. Refreshed credentials are copied back to the host, and the copy is deleted with the sandbox. See "Coding agents in a sandbox". | **owner**: chose "copy the login folder" over per-account sandbox credentials. Trade-off accepted: the sandbox holds the account's full login, settings and history while it lives. |
+| Q3 | Should the feature be on by default, or behind a `CEZ_*` opt-in flag? | **Off by default. `CEZ_SANDBOXES=1` turns it on.** Without the flag there is no Settings section, no composer pill, no `cez sandbox` and no `/sandboxes` view, the routes answer 404, and nothing is probed. | **owner**: chose opt-in. This matches AGENTS.md § Zero config (features that widen exposure or cost are opt-in behind a `CEZ_*` flag), so no exception is needed. |
+| Q4 | One spec or several? | **One spec, with one implementation PR per phase.** | **owner**: confirmed after the scope review suggested five specs (see Review notes). |
 | Q5 | Are sandbox types per workspace or per project? | **Per workspace** (`~/.cezar/sandboxes.json`), plus a per-project **default type**. | Mirrors agent accounts. |
 | Q6 | How long does a sandbox live? (Full state table under Architecture → Lifecycle.) | **One sandbox per run.** It is created at run start and **stopped** when the run parks or reaches review. Continue restarts it. It is **deleted** when the run lands or is archived, or when its worktree is pruned. | Continue keeps the installed toolchain, and a stopped sandbox costs almost nothing. |
 | Q7 | Should Terminal and Preview work inside a sandbox? | **Yes, for every provider, including SSH.** | **user** (2026-11-03): "add sandbox terminal support in terminal tab and preview also all integrated", "same way with terminal and preview supported". |
@@ -44,7 +44,7 @@ Rows marked **user** came from the requester on 2026-11-03 and are decided. Ever
 | Q9 | Should cezar check for microsandbox and explain how to install it? | **Yes.** Detection gives the exact reason, with OS-specific install steps and a **Run in a terminal tab** action. | **user**: "check if microsandbox is installed, if not let user know how to make it given different OS". |
 | Q10 | Should SSH be a provider? | **Yes, with two modes per host:** microsandbox microVMs on the host, or a plain SSH session with no isolation. | **user**: "run microsandbox over SSH … configure SSH server as a sandbox provider", "also run tasks in SSH session". |
 | Q11 | Can a task's agent start sandboxes itself? | **Yes, through `cez sandbox`** (see "Sandboxes launched from inside a task"). | **user**: "a way to start sandboxes (using configured providers) from inside the task too — not only for the coding but for doing some particular tasks as well". |
-| Q14 | Agent software and authorization inside sandboxes? | Per-runner **agent descriptors** (install, pinned version, snapshot, offline install), plus per-agent-account **sandbox credentials** (API key, token, or opt-in in-sandbox login) with a preflight check. | **user**: "remember about authorization and software management in case we're using sandbox for coding agent". |
+| Q14 | Agent software and authorization inside sandboxes? | Per-runner **agent descriptors** (install, pinned version, snapshot, offline install), plus the **login-folder copy** described under \"Coding agents in a sandbox\", with a preflight check. | **user**: "remember about authorization and software management in case we're using sandbox for coding agent". |
 | Q13 | Should a task always get a new sandbox, or can it reuse one? | **Either.** The composer offers **New from a type** (the default) or **Reuse an existing sandbox**: a paused one, a kept one, or one with no task attached. A **Sandboxes** management view lists every sandbox and can pause, resume and delete it. | **user**: "start the sandboxes on new sandbox or reuse existing one (which could be paused) … a sandbox management view where we can delete the sandboxes". |
 | Q12 | What limits apply to sandboxes the agent starts itself? | **At most 3 at once per run.** The agent can use only the types marked *agents may launch*. That flag defaults to **on only for local microsandbox types**. It defaults to **off** for anything remote or billed: SSH microVMs, SSH shells and Daytona. Helpers receive **no agent credentials**, only the type's own env and secrets. The agent never sees account keys and cannot create types. | These are the smallest defaults that still allow a local three-OS test matrix. Starting machines on someone's remote box needs a human's tick, and an unattended helper never holds a model key (review finding). A billed provider needs a human's explicit tick, the same reasoning as the `budget` carve-out in dispatch. All of it is reversible per type. |
 
@@ -107,7 +107,7 @@ The relay exists because microsandbox publishes ports only at create time (`port
 ### Market check
 
 - Both providers' agent recipes run the agent CLI inside the VM and stream its output. That is the model adopted here.
-- Both use host-scoped secret substitution, so we use it wherever it exists.
+- Both offer host-scoped secret substitution (microsandbox `secretEnv`, Daytona `secrets`). This spec uses it for **workspace secrets and Daytona API keys**. Agent logins follow the owner's decision Q2 instead: the login folder is copied in.
 - Running agents on remote dev boxes over SSH is the established pattern behind VS Code Remote-SSH and the devcontainer CLI, and ControlMaster-based forwarding is what they rely on too.
 
 ### Preview: built on #1877
@@ -143,8 +143,8 @@ When the *agent itself* runs in a sandbox (Q1), two things have to be right on e
 | `versionCmd` | `claude --version` |
 | `requires` | `node>=20`, `git`, `ripgrep` (bundled) |
 | `guestHome` | `/root/.claude`, set through `CLAUDE_CONFIG_DIR` so it never collides between instances |
-| `authModes` | `api-key`, `token`, `login` (see below) |
-| `authEnv` | `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` |
+| `login` | the login layout to copy, its credential files for write-back, and `copyExclude` (see below) |
+| `authEnv` | `ANTHROPIC_API_KEY`, passed through when the account sets it |
 | `endpoints` | `api.anthropic.com`, used for the *Agent API only* network mode |
 
 - **Version pinning.** The guest runs **the same version the host detected** (`backend-detect.ts`). The host stays the one place a user upgrades an agent.
@@ -156,24 +156,35 @@ When the *agent itself* runs in a sandbox (Q1), two things have to be right on e
   - The management view shows each instance's agent versions.
   - A version mismatch on reuse is a warning, never a silent run on the old version.
 
-**Authorization.** A sandbox never sees the host agent home. Each **agent account** (`~/.cezar/agent-accounts.json`, including the discovered default) gains a **sandbox credential**, used whenever a run on that account executes in a sandbox. There are three modes, chosen per agent account:
+**Authorization (owner decision Q2): copy the login folder.** When a run executes in a sandbox, cezar copies **the run's agent account login folder** into the guest, and the agent signs in exactly as it does on the host. "The run's agent account" is the one resolved by `selectProfile` (`workspace/agent-profiles.ts`): the discovered default or a second account such as `Klaudiusz`. Nothing is mounted: the guest gets a **copy**, so the agent can never write into the host's folder directly.
 
-| Mode | What the user does | What the sandbox receives | Where it is stored |
+Each runner's agent descriptor says what makes up its login:
+
+| Runner | Copied from (host, per agent account) | Into (guest) | Notes |
 |---|---|---|---|
-| **API key** | Pastes a key (e.g. a scoped Anthropic Console key or an OpenAI project key) | The key, through the strongest injection the provider has (below) | `sealManaged('agent-sandbox', <accountId>)` on the host, never in a file the agent can read |
-| **Token** | Runs the vendor's token command once (`claude setup-token`). cezar offers **Run in a terminal tab** on the host and captures the token from the field the user pastes it into | A long-lived token (`CLAUDE_CODE_OAUTH_TOKEN`), so subscription users are covered without a home dir | Sealed, the same as an API key |
-| **Login inside the sandbox** (opt-in per agent account, off by default) | Clicks **Log in inside sandbox**. A ⬡ terminal opens in the instance and runs the agent's own login flow (device code or browser URL) | The agent's own credential files, written by the agent itself into `guestHome` | On a per (sandbox account × agent account) **auth volume** that lives with the provider (a microsandbox volume, a remote dir on an SSH host, a Daytona volume), is mounted only into instances of that pairing, and is deleted from the management view |
+| claude | the account's `CLAUDE_CONFIG_DIR` (default `~/.claude`), plus `~/.claude.json` when it is a sibling | `guestHome`, with `CLAUDE_CONFIG_DIR` set to it | **macOS keeps Claude Code's login in the Keychain, not in the folder** (to be verified per version in step 22b). cezar reads that Keychain item on the host and writes it into the guest as the Linux credentials file, so the copy actually signs in. |
+| codex | the account's `CODEX_HOME` (default `~/.codex`, holds `auth.json`) | `guestHome`, with `CODEX_HOME` set | a plain file |
+| opencode | its config dir **and** the credentials database (`~/.local/share/opencode/opencode.db`, or `OPENCODE_DB`) | the same paths in the guest | there is no single home variable (spec `2026-07-29-agent-profiles`, "Verified vendor facts") |
+| others | declared per descriptor, from `core/agent-profiles.ts` | — | a runner without a known login layout falls back to its API-key env var, and preflight says so |
 
-**Injection, strongest first:**
-- **microsandbox `secretEnv`**: host-scoped substitution. The real value never enters the VM and is only swapped in on requests to the descriptor's `endpoints`.
-- **Daytona `secrets`**: host-scoped placeholders, used where the org supports them; otherwise env.
-- **SSH**: the value is piped on the exec's **stdin** to a small launcher that `exec`s the agent with it in its environment. It is never on a command line, never in a file, and never in `ps` output on the remote host.
+**What is copied, and what is not:**
+- **Copied:** login and credential files, settings, `CLAUDE.md`/memory, plugins, and the vendor's MCP config.
+- **Not copied, to keep the copy small (not for secrecy):** session transcripts and project history (`projects/`, `sessions/`, `history.jsonl` and the like), plus caches and logs. Each descriptor lists them under `copyExclude`. The run still starts fresh sessions inside the sandbox.
+- **Generated on top of the copy:** permission mode, `allowedTools`/`bashAllowlist`, model, effort, and the run's MCP servers (rule 3) are written over the copied settings for the run. The copy supplies the *login*; the run supplies the *policy*.
+- An API-key variable the account already passes on the host (e.g. `ANTHROPIC_API_KEY` in the account's env) passes through the same way.
 
-**Rules that apply to every mode:**
-- The credential reaches **only the agent process**. Check steps, terminals and helpers (Q12) never get it, and the audit log records env *keys* only.
-- **Revocation** deletes the sealed value or the auth volume. Running sessions keep what they were started with until their next turn, and the next spawn fails with "No sandbox credential for ‘Klaudiusz’ — add one in Agent accounts".
-- **Preflight**: the composer checks the selected agent account × sandbox type pair *before* starting. A missing credential, an agent version that can't install, or *Agent API only* without a known endpoint each shows a warning on the sandbox pill, with a link to the fix. The task is never started just to fail at bootstrap.
-- `login` mode puts a long-lived credential on someone else's disk (SSH host, Daytona volume). It is therefore off by default, shows that warning when enabled, and is **refused for `ssh shell` types**, which have no isolation from other users of that host.
+**Refresh write-back.** OAuth logins rotate their refresh tokens, so a refresh *inside* the sandbox can invalidate the host's copy.
+- At each turn end and at stop, cezar compares the guest's credential file with the host's.
+- If the guest's is **newer**, cezar writes it back into the host account (the file, or the macOS Keychain item), atomically.
+- It copies back **only** the descriptor's credential files, never settings or anything else.
+- The rule is last-writer-wins on the token's own expiry timestamp. Write-back is logged in the audit log, as a fact, without the values.
+
+**Rules:**
+- **Who gets the login.** The copy lives in `guestHome`, which is readable by the agent process. Check steps, terminals and helper sandboxes (Q12) run as the same guest user, so they *can* read it. That is part of the accepted trade-off. Helpers launched with `cez sandbox up` get **no** copy: they are separate machines that the agent drives.
+- **Removal.** The copy is deleted with the sandbox. A paused or kept instance (Q13, rule 8) keeps it until removal. The management view marks those instances "holds the login for Klaudiusz".
+- **Remote copies are visible and need a one-time confirmation.** On an SSH host the copy lands on that machine's disk (`~/cez-tasks/<id8>/.agent-home`, mode 0700). On Daytona it lands in the cloud VM. The **first** run that would copy an account's login to a given SSH host or Daytona account asks once: "Copy Klaudiusz's Claude login to build-box?". The answer is remembered per (agent account × sandbox account) in `sandboxes.json` and can be revoked in Settings → Sandboxes. Local microVMs never ask.
+- **SSH shell types** have no isolation, so other users of that host may be able to read the copy. The confirmation says so explicitly, and the type shows "login copied to a shared host".
+- **Preflight** checks, before start, that the account's login exists and is readable, including the Keychain item on macOS. It also checks that the agent version can be installed, and that *Agent API only* has a known endpoint. A failed check shows a warning on the sandbox pill with the fix ("Klaudiusz is not signed in: open a terminal and run `claude` once"). The task is never started just to fail at bootstrap.
 
 ### Sandbox management: new or reused, and one place to see them all
 
@@ -246,7 +257,7 @@ cez sandbox ls | logs <name> | down <name> | down --all
 
 **Rules**
 
-- **Only configured types** can be launched, and only those flagged *agents may launch* (Q12). The agent never sees account credentials, and every provider call is made by the cockpit.
+- **Only configured types** can be launched, and only those flagged *agents may launch* (Q12). The agent never sees *sandbox-provider* credentials (SSH keys, Daytona API keys), and every provider call is made by the cockpit.
 - **The sandbox belongs to the run.** It is listed in a **Sandboxes in this task** panel and as a header chip. It follows the run's lifecycle (Q6): stopped while the run parks, removed when it lands or is archived, and removed by `down`. The boot sweep collects orphans.
 - **A cap of 3 per run, counted at once.** A fourth `up` is refused (exit 1) with the reason, the same way dispatch refuses a fifth child.
 - **`--copy-worktree` vs `--mount-worktree`.** `--copy-worktree` is a snapshot copy: the helper's edits never reach the task's branch, which is the default and the safe choice. `--mount-worktree` gives live read-write access and is local microsandbox only.
@@ -376,7 +387,7 @@ Caches hold only downloaded packages, never build output, so sharing them betwee
 | **Preview** | The #1877 preview record (`cez preview open --port N`, spec `2026-10-31-task-preview-apps`) gains `origin: 'sandbox'` (see "Preview: built on #1877"). The Preview frames `http://127.0.0.1:<hostPort>` and rewrites `Host` to `localhost:<guestPort>` upstream, because dev servers check it. WebSocket upgrades are passed through for HMR. Design Mode mirrors the loopback port unchanged. | existing, extended |
 | Port proxy | `sandbox/port-proxy.ts`: a loopback-only listener per forwarded port. It closes when idle, when the run stops, and when the preview record goes. | **new** |
 | Agent bootstrap | `sandbox/bootstrap.ts` installs git, Node if missing, the relay, and the run's agent CLI **pinned to the host-detected version** (`backend-detect.ts`). It then snapshots the image (`msb snap`, Daytona `createSnapshot`), keyed by `(type, runner, version)`. On SSH-session hosts it installs into `~/.cache/cez-remote/`. | **new** |
-| Capability | `capabilities().sandboxes` in `server/capabilities.ts` and `/api/v1/health`. It is off under `CEZ_SANDBOXES=0` and on a hosted cockpit. | **new flag** |
+| Capability | `capabilities().sandboxes` in `server/capabilities.ts` and `/api/v1/health`. It is **on only under `CEZ_SANDBOXES=1`** (Q3), and always off on a hosted cockpit. | **new flag** |
 
 **Runner coverage in v1**
 
@@ -480,9 +491,8 @@ The schemas live in `packages/contract/src/sandboxes.ts`. Routes are workspace-l
 | `POST …/instances/:id/pause` · `…/resume` · `DELETE …/instances/:id` | Lifecycle actions. Deleting an attached instance needs `{ confirm: true }` and parks the owner run. |
 | `POST …/instances/bulk-delete` | `{ ids } \| { pausedOlderThanDays } \| { orphans: true }` → `{ deleted, failed: [{ id, error }] }` |
 | `POST /api/v1/p/:projectId/runs` (sandbox field) | `sandbox` also accepts `{ reuse: <instanceId> }`. A 409 explains why reuse is refused. |
-| `PUT` / `DELETE /api/v1/workspace/agent-profiles/:id/sandbox-credential` | `{ mode: 'api-key'\|'token', value }` or `{ mode: 'login', allow: true }` → `{ mode, last4?, updatedAt }`. The value is never returned. Same local-only 409 gate as agent accounts. |
-| `POST /api/v1/p/:projectId/sandboxes/preflight` | `{ runner, agentProfile?, sandbox }` → `{ ok, issues: [{ code: 'no-credential'\|'agent-install'\|'endpoint-unknown'\|'reuse-busy'\|'resources', message, fix? }] }`. Read-only and cheap; the composer calls it on change. |
-| `POST …/instances/:id/login` | Opens a ⬡ terminal running the agent's login flow against the pairing's auth volume (`login` mode only). |
+| `PUT` / `DELETE /api/v1/workspace/sandboxes/login-consent` | `{ agentProfile, sandboxAccount }` records or revokes the one-time "copy this login to that remote" confirmation. Same local-only 409 gate. |
+| `POST /api/v1/p/:projectId/sandboxes/preflight` | `{ runner, agentProfile?, sandbox }` → `{ ok, issues: [{ code: 'not-signed-in'\|'needs-consent'\|'agent-install'\|'endpoint-unknown'\|'reuse-busy'\|'resources', message, fix? }] }`. Read-only and cheap; the composer calls it on change. |
 | Terminal create (existing) | Adds `target?: 'sandbox' \| 'host'`. The default is `sandbox` when the run has one. |
 
 Every new route goes into the BACKWARD_COMPATIBILITY.md §2 inventory, and the contract-parity tests cover both directions. `.env.example` and `docs/reference.md` gain `CEZ_SANDBOXES`.
@@ -560,12 +570,10 @@ Every new route goes into the BACKWARD_COMPATIBILITY.md §2 inventory, and the c
     - Per row: owner task, resources, disk and "has" (services, agent versions), with **Shell**, **Pause**/**Resume**, **Attach to new task…** and **Delete**.
     - Bulk delete, and delete paused sandboxes older than N days.
     - ![Sandboxes view](assets/sandbox-service/mockup-11-sandboxes-view.png)
-12. **Agent accounts → Sandbox credential.**
-    - The software line shows the pinned version and snapshot state.
-    - Pick a mode: API key, Token (with **Run "claude setup-token" in a terminal tab**), or the opt-in login inside the sandbox.
-    - It explains how the credential is passed in.
+12. **Agent accounts → In sandboxes.**
+    - Each account shows what a sandbox gets: the folder that will be copied, what is excluded, the macOS Keychain note, the refresh write-back, and which remotes are allowed to receive the copy (with **Revoke**).
     - The composer's preflight line (item 6) reads from this.
-    - ![Sandbox credential](assets/sandbox-service/mockup-12-agent-sandbox-auth.png)
+    - ![Agent account in sandboxes](assets/sandbox-service/mockup-12-agent-sandbox-auth.png)
 13. **Resource queue and cost.**
     - A ×3-variant task is queued with the exact RAM reason, and the variants start together (rules 2 and 10).
     - A Daytona task shows the model cost plus the estimated sandbox cost against its dispatch budget (rule 7).
@@ -595,7 +603,7 @@ Item 9 (Preview) is the #1877 agent-tab list with sandbox badges.
 | Daytona key revoked (401) | The account pill shows "Key rejected". A run fails at `creating` with a one-line error, and the worktree is kept. |
 | Requested resources exceed what the host or org allows | Provisioning fails before the agent starts. The provider's message is shown, trimmed. The run ends `failed` with **Retry on this computer**. |
 | The image has no Node or npm for the agent CLI | The bootstrap installs a static Node into `/opt/cez-node`. If that fails, the error names the image and suggests `node:24-bookworm`. |
-| The agent has a subscription login (OAuth) and no API key | Use **Token** mode (`claude setup-token`) or the opt-in **Login inside the sandbox** mode. Until one is set up, preflight shows "claude · Klaudiusz has no sandbox credential" on the pill, with a link. Host home dirs are never mounted (Q2). |
+| The agent has a subscription login (OAuth) and no API key | It works: the login folder is copied (and, for Claude on macOS, the Keychain item is exported), so subscription logins sign in as they do on the host. |
 | The dev server binds `0.0.0.0` or `127.0.0.1` | Both work, because the relay connects to `127.0.0.1` inside the guest. |
 | The dev server rejects an unknown `Host` | The proxy sends `Host: localhost:<guestPort>`, so Vite and Next accept it. |
 | An HMR websocket | The proxy passes the upgrade through. Covered by a test. |
@@ -616,7 +624,8 @@ Item 9 (Preview) is the #1877 agent-tab list with sandbox badges.
 | Two tasks try to reuse the same instance at once | Attaching is a compare-and-set on the instance record: the second gets a 409 ("now attached to ‘Fix flaky…’"), and the composer falls back to the picker. |
 | The provider deleted an instance behind cezar's back | The next listing marks it `removed`, with a "deleted outside cezar" note. Its owner's Continue goes to `failed` → **Retry**. |
 | The host upgraded the agent CLI since the snapshot was built | The next run rebuilds the snapshot (the feed says so, and it takes about a minute once). A reused instance upgrades in place. A failed install fails the run at `creating` with the installer's last lines. |
-| The sandbox credential expired or was revoked mid-task | The agent's auth error is surfaced as is. The run parks with "Sandbox credential for ‘Klaudiusz’ was rejected — update it in Agent accounts". Continue retries with the new value. |
+| The host's login was refreshed or replaced while a sandbox was running | Write-back is last-writer-wins on the token's expiry: an older guest token never overwrites a newer host token. If the guest's token is rejected, the run parks with "Klaudiusz's login was rejected inside the sandbox — sign in on this computer, then Continue", and Continue copies the fresh login. |
+| A refresh inside the sandbox invalidated the host's token | Write-back at turn end copies the rotated token home before the host next needs it. If cezar crashed before writing back, the host agent asks the user to sign in again once, and the audit log shows the missed write-back. |
 | A type is deleted while a run uses it | Running runs keep their snapshot. A project selection that pointed at it falls back to "This computer" with a toast. |
 
 ## 📝 Risks & Impact Review
@@ -629,8 +638,8 @@ Item 9 (Preview) is the #1877 agent-tab list with sandbox badges.
 **Security**
 
 - Writes are local-cockpit only.
-- Keys are sealed, and host-scoped secret substitution is used where it exists.
-- No agent home is ever mounted.
+- Provider API keys are sealed, and workspace secrets use host-scoped substitution where it exists.
+- **Agent logins are copied into the sandbox (owner decision Q2).** This is the largest accepted risk: a compromised guest holds a working login for that agent account until the sandbox is removed. Mitigations: the copy is never mounted; only credential files are written back; helpers get no copy; remote copies need a one-time confirmation per destination; and the copy is deleted with the sandbox. For untrusted code, the docs recommend running under a **separate agent account** (a second login, spec `2026-07-29-agent-profiles`) that is used only for sandboxes.
 - SSH host keys are pinned on first use with explicit confirmation, and runs use `BatchMode`.
 - The port proxy and reverse tunnel bind **loopback only**.
 - SSH sessions are **not isolation**: the badge says so, and the docs must say it plainly.
@@ -640,7 +649,7 @@ Item 9 (Preview) is the #1877 agent-tab list with sandbox badges.
 - Daytona bills by usage. Mitigations: the `billed` tag, auto-stop on park, delete on land or archive, and the sweep.
 - Spend is not shown in v1; no balance API has been verified.
 
-**Rollback.** `CEZ_SANDBOXES=0` hides the surface. Existing records keep a read-only chip.
+**Rollback.** Unsetting `CEZ_SANDBOXES` hides the surface. Existing records keep a read-only chip, and existing instances stay with the provider until the flag is set again or the user removes them with the provider's own tools (`msb rm`). The docs page says so.
 
 **Dependencies**
 
@@ -709,8 +718,8 @@ The requester's ordering (2026-11-03): **the first phases deliver local microsan
 21. Services: compose and script, readiness probes, the prompt preamble, and service logs on failure. SSH shell runs compose on the host with project isolation.
 22. `WorkspaceSemaphore` sandbox reservations: local plus per-SSH-account totals, queue reasons, the #347 resume exemption, and N-variant group admission. Each path is unit-tested.
 22a. Agent descriptors (`sandbox/agents/*.ts`) for the Phase 2 runners: install, version, guest home, auth env and endpoints. Also host-side package caching for offline install, snapshot keys with lazy rebuild on a version change, and in-place upgrade on reuse.
-22b. Sandbox credentials on agent accounts: contract fields, `sealManaged('agent-sandbox', id)`, the API key and token modes with a **Run in a terminal tab** helper, injection per provider capability (`secretEnv` / stdin launcher), and a preflight route plus a pill warning. Tests: the credential never appears in check steps, terminal or helper env, or the audit log; revocation fails the next spawn with the human message.
-22c. The opt-in in-sandbox **login** mode: per-pairing auth volumes, the **Log in inside sandbox** terminal action, refusal for SSH shells, and deletion from the management view.
+22b. Login-folder copy per descriptor: the layout and `copyExclude`; the macOS Keychain export for Claude (verify the item name and format per vendor version, with a test that pins the absent-Keychain case); per-run policy generated on top of the copy; refresh write-back (credential files only, last-writer-wins on expiry, atomic, audited); deletion with the sandbox. Tests: write-back never copies settings; an older guest token never overwrites a newer host token; helpers never get a copy.
+22c. Remote-copy consent per (agent account × sandbox account): the confirmation dialog, `login-consent` routes, the SSH-shell warning, revoke in Settings, and the preflight issues `not-signed-in`/`needs-consent`.
 23. No-push policy with the host git identity copied in; personal agent config and registry skills copied in; MCP classification with feed lines for dropped servers. The empty-registry and absent-file cases are pinned.
 24. Cache volumes (microsandbox volumes, an SSH cache dir), with Settings sizes and **Clear**.
 25. The audit NDJSON, the Logs filter, and the `ensureDataGitignore` entry (`data-gitignore.test.ts`).
@@ -757,10 +766,7 @@ The requester's ordering (2026-11-03): **the first phases deliver local microsan
 
 ## 🔍 Review notes
 
-- **Scope (reviewer finding, kept open for the owner).** A fresh-context scope review recommended splitting this into five specs: the foundation with local microsandbox, SSH, Daytona, `cez sandbox` helpers, and runner/orchestration coverage. Their risk classes differ.
-  - **This draft keeps one document**, because the requester asked for one integrated design. All five share one seam (`SandboxExec`, `openPort`, `reverse`, lifecycle) that would otherwise be specified five times.
-  - **Each phase ships as its own implementation PR** with its own review.
-  - If the owner prefers separate specs, the phases split cleanly along those lines without redesign.
+- **Scope (decided).** A fresh-context scope review recommended splitting this into five specs. The owner chose **one spec, one implementation PR per phase** (Q4, 2026-11-03).
 
 - **Scope cohesion:** one capability, choosing where a task executes. The providers and the Terminal/Preview integration all go through one seam (`SandboxExec`, `openPort`, `reverse`), so splitting them would duplicate that seam's design across specs.
 - **Canonical mechanisms reused:**
