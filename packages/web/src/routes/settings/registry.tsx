@@ -124,7 +124,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'integrations',
     title: 'External integrations',
-    description: 'Third-party tools cezar installs and wires into this project — test frameworks first.',
+    description: 'Connect Telegram and other third-party tools to this project.',
     icon: BlocksIcon,
     component: IntegrationsSection,
     scope: 'project',

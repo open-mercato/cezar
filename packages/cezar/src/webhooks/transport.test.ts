@@ -111,3 +111,44 @@ describe('chat transport', () => {
     expect(transport.redactWebhookDiagnostics({ kind: 'http', status: 404, providerCode: 10015, response: 'discard' }, [], true)).toEqual({ kind: 'http', status: 404, providerCode: 10015 });
   });
 });
+
+describe('Telegram transport', () => {
+  const token = `123456789:${'T'.repeat(35)}`;
+  const telegram = `https://api.telegram.org/bot${token}/sendMessage`;
+  const json = (value: unknown, statusCode: number, headers: Record<string, string> = { 'content-type': 'application/json' }) => ({ statusCode, headers,
+    body: Object.assign((async function* () { yield Buffer.from(JSON.stringify(value)); })(), { once: () => undefined, destroy: () => undefined }) });
+  const send = () => transport.sendWebhook({ ...input(), url: telegram, format: 'telegram.v1' }, { lookup });
+  it('posts to the stored URL unsigned and discards the echoed message', async () => {
+    wire.request.mockResolvedValue(json({ ok: true, result: { text: 'private task text' } }, 200));
+    const result = await send();
+    expect(String(wire.request.mock.calls[0]![0])).toBe(telegram);
+    expect(Object.keys(wire.request.mock.calls[0]![1].headers).some(key => key.startsWith('webhook-'))).toBe(false);
+    expect(result).toEqual({ kind: 'http', status: 200, contentType: 'application/json' });
+  });
+  it.each([
+    [403, 'Forbidden: bot was blocked by the user'], [400, 'Bad Request: chat not found'], [401, 'Unauthorized'],
+  ])('flags %i "%s" as gone with closed diagnostics', async (status, description) => {
+    wire.request.mockResolvedValue(json({ ok: false, error_code: status, description, extra: token }, status));
+    const result = await send();
+    expect(result).toMatchObject({ status, providerGone: true, response: JSON.stringify({ error_code: status, description }) });
+  });
+  it('keeps the new chat ID after a group upgrade', async () => {
+    wire.request.mockResolvedValue(json({ ok: false, error_code: 400, description: 'Bad Request: group chat was upgraded to a supergroup chat', parameters: { migrate_to_chat_id: -1009876543210 } }, 400));
+    expect(await send()).toMatchObject({ providerGone: true, response: expect.stringContaining('"migrate_to_chat_id":-1009876543210') });
+  });
+  it('reads the 429 delay from the body when no header is sent', async () => {
+    wire.request.mockResolvedValue(json({ ok: false, error_code: 429, description: 'Too Many Requests: retry after 7', parameters: { retry_after: 7 } }, 429));
+    expect(await send()).toMatchObject({ status: 429, retryAfter: '7', response: '{"error_code":429,"description":"Too Many Requests","retry_after":7}' });
+    wire.request.mockResolvedValue(json({ ok: false, error_code: 429, parameters: { retry_after: 7 } }, 429, { 'retry-after': '30' }));
+    expect(await send()).toMatchObject({ retryAfter: '30' });
+  });
+  it('drops unknown descriptions that could echo request text', async () => {
+    wire.request.mockResolvedValue(json({ ok: false, error_code: 400, description: `Bad Request: something about ${token}` }, 400));
+    const result = await send();
+    expect(result).not.toHaveProperty('providerGone');
+    expect(JSON.stringify(result)).not.toContain('T'.repeat(35));
+  });
+  it('keeps the gone flag through late diagnostic redaction', () => {
+    expect(transport.redactWebhookDiagnostics({ kind: 'http', status: 403, providerGone: true, response: 'discard' }, [], true)).toEqual({ kind: 'http', status: 403, providerGone: true });
+  });
+});

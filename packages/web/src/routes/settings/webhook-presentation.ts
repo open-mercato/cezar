@@ -11,7 +11,7 @@ export const receiverStateLabels: Record<WebhookReceiverState, string> = {
 }
 
 export const formatLabels: Record<WebhookReceiver['format'], string> = {
-  'cezar.json.v1': 'Custom receiver', 'slack.v1': 'Slack', 'discord.v1': 'Discord',
+  'cezar.json.v1': 'Custom receiver', 'slack.v1': 'Slack', 'discord.v1': 'Discord', 'telegram.v1': 'Telegram',
 }
 
 export const profileLabels: Record<WebhookReceiver['profile'], string> = { minimal: 'Minimal', standard: 'Standard' }
@@ -39,6 +39,7 @@ const reasonLabels: Record<string, string> = {
   timeout: 'Receiver did not respond within 10 seconds', connection_failed: 'Could not connect to the receiver',
   transport_failed: 'Network error', delivery_failed: 'Delivery failed', outcome_unknown: 'Result unknown — it may have arrived',
   rate_limited: 'Rate limited', expired: 'Retry window ended', aborted: 'Stopped', owner_restarted: 'cezar restarted during delivery',
+  telegram_token_unavailable: 'Telegram token unavailable — use Add a chat with the bot’s current token',
   payload_invalid: 'Message could not be built', integrity_reset: 'Webhook data was reset', retained_capacity: 'History storage is full',
   newer_continuation: 'A newer update replaced it', operation_superseded: 'A newer action replaced it',
   failure_schedule_changed: 'Automatic resume changed', denied_address: 'Address is never allowed',

@@ -153,18 +153,22 @@ export class AdmissionRepository {
   }
 
   /** One owner mutation queue must serialize admission, claims, updates and retention. */
-  async admit(source: WebhookSource, receivers: readonly PrivateReceiver[]): Promise<Admission | undefined> {
+  /** `excerpt` runs at most once, and only when a selected receiver consented to one. */
+  async admit(source: WebhookSource, receivers: readonly PrivateReceiver[], excerpt?: () => Promise<string | undefined>): Promise<Admission | undefined> {
     const existing = this.records.get(source.id); if (existing) return structuredClone(existing);
     const now = this.deps.now(), expires = Date.parse(source.occurredAt) + 72 * 3600000;
     const targets = expires <= now ? [] : receivers.filter(receiver =>
       ['active', 'suspended'].includes(receiver.state) && receiver.activation?.installationId === source.installationId &&
       source.sequence > receiver.activation.sequence && selected(receiver, source.type, source.snapshot));
+    const wantsExcerpt = (receiver: PrivateReceiver) => receiver.includeAgentExcerpt === true && receiver.profile === 'standard'
+      && source.type === 'task.attention_required' && !source.snapshot.attentionRequest;
+    const agentExcerpt = excerpt && targets.some(wantsExcerpt) ? await excerpt().catch(() => undefined) : undefined;
     const deliveries: DeliveryRecord[] = targets.map(receiver => ({
       id: randomUUID(), receiverId: receiver.id, deliveryRevision: receiver.deliveryRevision, admittedRevision: receiver.revision,
-      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url), createdAt: new Date(now).toISOString(),
+      format: receiver.format, profile: receiver.profile, eventType: source.type, destination: maskDestination(receiver.url, receiver.telegramChatId), createdAt: new Date(now).toISOString(),
       notBefore: new Date(Date.parse(source.occurredAt) + (source.type === 'task.failed' ? 30 : ['task.attention_required', 'task.review_ready'].includes(source.type) ? receiver.graceSeconds : 0) * 1000).toISOString(),
       expiresAt: new Date(expires).toISOString(), status: 'pending', attempts: 0,
-      ...(source.type === 'task.failed' ? {} : { body: renderPayload(source, receiver.profile, this.deps.secrets?.() ?? [], undefined, this.deps.repository) }),
+      ...(source.type === 'task.failed' ? {} : { body: renderPayload(source, receiver.profile, this.deps.secrets?.() ?? [], undefined, this.deps.repository, wantsExcerpt(receiver) ? agentExcerpt : undefined) }),
     }));
     let admission: Admission = { version: 1, id: source.id, createdAt: new Date(now).toISOString(), source, sourceSequence: source.sequence, deliveries, control: !deliveries.length,
       ...(!deliveries.length ? { decision: expires <= now ? 'expired' as const : 'empty' as const } : {}) };

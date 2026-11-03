@@ -40,5 +40,6 @@ export * from './workspace-layouts.ts';
 export * from './deferred-start-state.ts';
 export * from './deferred-start.ts';
 export * from './usage-windows.ts';
-
+export * from './telegram.ts';
+export * from './telegram-tasks.ts';
 export * from './tracker-operations.ts';

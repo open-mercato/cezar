@@ -2,7 +2,7 @@
 
 Webhooks send task notifications from a running cezar server to your own receiver, Slack or Discord.
 Your receiver can process these events in an automation workflow. They do not start tasks or accept answers.
-Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL.
+Choose **Custom receiver** for signed cezar JSON, **Slack channel** for an Incoming Webhook, or **Discord channel** for a channel Webhook URL. Telegram is configured separately from Settings → **External integrations** through **Connect Telegram**; it is not a Webhooks receiver.
 
 ## Supported server platforms
 
@@ -78,6 +78,19 @@ without quotes may contain spaces, so redaction conservatively omits the rest of
 quoted paths and HTTP(S) links preserve surrounding context. This is a syntax-based safeguard,
 not general data-loss prevention: encoded or otherwise disguised sensitive text can escape it.
 Already frozen delivery bodies are not rewritten, preserving retry and Replay byte identity.
+
+**Agent message excerpt (opt-in, Standard only).** A receiver with Standard content can also tick
+**Include an excerpt of the agent's last message** (`includeAgentExcerpt: true`; absent means off).
+When the agent parks with prose rather than a structured question (`data.reason: "turn_end"`),
+`task.attention_required` then carries `data.agentExcerpt`: the end of the agent's last message in
+that turn, at most 600 characters (a leading `…` marks a cut), with `CEZ:` marker lines removed. It is
+read once, at admission, from the tail of the run's own event history; the same secret and path
+redaction as above applies, plus the run's own registered secrets. Missing or unreadable history
+means no excerpt, never a failed delivery. Structured questions already carry their text and never
+get an excerpt. Slack, Discord and Telegram show it as an **Agent** line. Turning consent on or off
+is a configuration change: the receiver returns to Inactive — except on a Telegram receiver, where
+message options (content, excerpt, events, delay, scope, name) keep it active and its task control bound. Without consent every format's body
+is byte-identical to before; `schemaVersion` stays 1 and the field is optional.
 Known secrets are redacted before title/error length limits. When an oversized title or error
 contains an HTTP(S) URL, its retained excerpt ends before the first such URL. This can omit
 additional context, but avoids retaining a partial destination that later secret redaction
@@ -164,11 +177,13 @@ payload that has expired. Scheduled failure bytes are never rewritten as manual 
 - **Suspended:** ten consecutive transient failures caused automatic backoff. Eligible work is probed
   after fifteen minutes. A successful Test also recovers the receiver and can release queued work;
   the cockpit discloses that before sending the test.
-- **Disabled:** a 410 response disabled delivery. Repair the destination and pass a test before activation.
+- **Disabled:** the destination reported itself gone (HTTP 410, or a chat service's own "gone" response).
+  Repair the destination and pass a new test before activation; a test from before it was disabled no longer counts.
 
 A permanent Test failure, including a destination-policy rejection, blocks activation of that configuration until a successful test or a
 relevant configuration edit. Changing delivery settings returns the receiver to Inactive and
-cancels pending work; renaming preserves activation. Confirmations show pending/in-flight counts.
+cancels pending work; renaming preserves activation, and so does editing a Telegram receiver's message
+options (only its chat, token or format need a new test). Confirmations show pending/in-flight counts.
 Pause, Edit and Delete cannot undo a request already received by the destination.
 
 Receiver definitions and deleted-receiver identities share a 1 MiB budget. Additional bounded
@@ -241,18 +256,108 @@ privacy rules as Slack. Mentions are disabled, including `@everyone` and role/us
 task text. A deleted webhook (404/code 10015) or invalid token (401/code 50027) disables an active
 receiver; only a fixed vocabulary of Discord diagnostics is retained.
 
-Both services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
+All chat services use the shared queue, Retry-After/backoff, 72-hour delivery expiry and history.
 Retained delivery storage keeps the canonical cezar event; history exposes metadata only.
 The provider-specific message is rendered when sending. Changing destination type resets the receiver to Inactive. To switch back to a custom
 receiver, rotate its signing key and copy it before testing/activating.
-Treat each chat webhook URL as a password: anyone who has it can post. It is masked in the cockpit
+Treat each chat webhook URL and bot token as a password: anyone who has it can post. It is masked in the cockpit
 and redacted from diagnostics. Chat deliveries carry no cezar signature headers and chat receivers
 have no key reveal/rotation. Standard sends potentially sensitive content into the external workspace.
-These are one-way notifications: no answers, approvals, message updates or task threads.
+Slack and Discord deliveries are one-way notifications. Telegram task control (below) can answer and
+start tasks; per-tool Allow/Deny is not supported in any chat service.
+
+## Telegram notifications (configured in External integrations)
+
+Create a bot with [@BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token) and
+copy its token. In Settings → **External integrations** → **Telegram**, choose **Connect Telegram**
+(**Add a chat** once a bot is connected) and paste the token. The wizard creates a one-time setup
+link: **Private chat with the bot** (`?start=`) or **Add to a group** (`?startgroup=`). The chat in
+which that link's `/start` arrives is the chat Cezar connects; nobody copies a chat ID, and channels
+are not supported. Notifications need only `CEZ_WEBHOOKS=1`. The token is saved in the project
+secret store and never shown again; **Add a chat** asks for it once more.
+
+Messages use Telegram's HTML formatting, escaped, with link previews off, bounded to Telegram's 4096-character
+limit, counted on the escaped HTML (trailing questions are dropped first). Statuses are shown in words
+(`Status: Waiting for your answer (was running)`). Minimal/Standard follow the same privacy rules as
+Slack. A revoked token (401), a bot blocked by the user or removed from the chat (403) and an unknown
+chat disable an active receiver. When a group is upgraded to a supergroup, the receiver is disabled
+and the Telegram tab marks the chat suspended — remove that chat and connect the group again with
+**Add a chat**. A 429 waits for the delay Telegram returns. Only error codes and a
+fixed set of Telegram error descriptions are retained. Telegram receivers are managed only in the
+Telegram tab (**Send test**, **Pause**/**Resume**, **Options**, **Remove**); Settings → **Webhooks**
+does not list them. Changing a Telegram chat's options (content, excerpt, events, delay, scope, name) keeps it active.
+
+The bot token is more than a posting credential: anyone who has it controls the bot. Use a bot
+dedicated to cezar.
+
+Telegram tokens are saved in cezar's **project secret store**, under
+`~/.cezar/secrets/<projectId>.json` (or the configured `CEZ_HOME`), encrypted with AES-256-GCM.
+Only the `cezar` audience is granted: these tokens are not injected into check steps or agent
+environments. `endpoints.json` keeps the chat ID, a secret reference and a token fingerprint;
+its Telegram URL contains only `https://api.telegram.org`, without the token. Slack, Discord
+and custom receiver credentials keep their existing storage.
+
+The encryption key uses the OS keychain when available; otherwise it is a private `0600`
+file at `~/.cezar/secrets/.key`. Copying that fallback key together with the encrypted files
+allows decryption. The store is not a boundary against other processes running as your OS user.
+
+A Telegram receiver whose secret reference is missing or unreadable is reported as credentials
+unavailable and its sends are blocked locally; other receiver formats continue working. Restore the secret
+store and restart, or use **Add a chat** with the bot's current token: it replaces the stored
+token and keeps the chat's options and approved people.
+
+To rotate a token, revoke it in @BotFather, then use **Add a chat** with the new token for each
+chat: it replaces the stored token on that chat's receiver, which keeps its options and approved
+people. Do not remove the chat first — that deletes them. Changing or deleting
+its generated `WEBHOOK_TELEGRAM_…` secret directly blocks sending; it cannot silently redirect
+queued deliveries to another bot. Missing/unreadable tokens fail locally without a Telegram
+request. Deleting the receiver or changing its token/type removes the old secret after saving
+the configuration. A crash or unavailable store can leave an unused encrypted entry. Dry-run
+receivers use separate `WEBHOOK_TELEGRAM_DRY_…` entries and never overwrite live credentials.
+
+### Telegram task control
+
+Telegram can also answer questions and start tasks, not only notify. This is optional and
+needs `CEZ_WEBHOOKS=1` and `CEZ_CHAT_INBOUND=1`; it uses the same guided wizard in
+Settings → **External integrations** → **Telegram** for private and group chats. An approved
+person can answer tasks, use `/tasks`, `/status [id]` and `/reply`, and type follow-ups to the
+current task; **Start tasks** (`/task` with preview and **Confirm**, private chats only),
+**Cancel tasks** and **Continue tasks** are separate opt-in permissions. Telegram commands can
+start paid shell work, so approve only people you trust. The final message of a task started
+from Telegram, and its plain-text question, carry the agent's reply to the requester; `/status`
+never carries agent text.
+
+The user guide, [Reply to tasks from Telegram](../../../docs/site/content/docs/03-features/settings-and-projects/telegram-replies.mdx),
+is canonical for setup steps, commands and permissions; this file covers delivery and availability.
+
+### Shared Telegram sending budget
+
+With `CEZ_CHAT_INBOUND=1`, every Telegram bot cezar has loaded — including one whose
+chats only get notifications — shares its sending budget between replies and
+notifications, including outbound-only receivers with the same verified token.
+The limits are one message per second per chat and ten per second per bot, with
+one sendMessage request outstanding at a time. Ready chats rotate; retries keep
+the head of their own chat. Telegram 429 responses pause both streams. Existing
+project limits remain additional, and waiting does not claim a delivery or hold
+a scheduler slot. Callback acknowledgements have their own bounded path and
+method cooldown. Reception restarts preserve the controller's cooldown; an
+entire process restart rebuilds the in-memory budget. Without `CEZ_CHAT_INBOUND=1`, and
+for other formats, the existing delivery path applies.
+
+### Telegram inbound availability
+
+The Telegram inbound status endpoint is safe to call when the feature is disabled or the
+cockpit is hosted remotely: it returns `available: false` and a stable `reason`. Receivers,
+bots and grants are withheld only when notifications are unavailable (hosted, `CEZ_WEBHOOKS`
+off); with `CEZ_WEBHOOKS=1` alone they are listed and task control is reported unavailable.
+
+Setup status (`GET …/telegram/setup/:id`) remains readable after its five-minute TTL as
+`status: "expired"`; an unknown setup id is a 404. At most three setup links are active per project, and an
+attempt beyond that bound returns `409` with `code: "pairing_limit"`.
 
 ## Operation and boundaries
 
-Private state lives below each project's `.ai/cezar/webhooks/`, with owner-only permissions on POSIX
+Receiver configuration, queue and history live below each project's `.ai/cezar/webhooks/` (Telegram tokens use the project secret store described above), with owner-only permissions on POSIX
 (Windows does not apply filesystem modes) and verified git exclusion. One verified owner process sends for each project; another instance reports
 unavailability instead of competing. Unsupported owner-identity platforms fail this optional service
 closed. The owner verifies process start and boot identity through `/proc`
@@ -300,16 +405,19 @@ repository documentation assets, not runtime imports or components of the npm se
 
 ## Manual browser regression suites
 
-Two additional fixture-based suites are **manual-only** and are not included in the
+Four additional fixture-based suites are **manual-only** and are not included in the
 standard Vitest or CI gate. From the repository root, after installing dependencies
 and building the application, run:
 
 ```sh
 npx --no-install e2e run --config packages/web/e2e/chat-webhooks.config.ts
 npx --no-install e2e run --config packages/web/e2e/webhooks-review.config.ts
+npx --no-install e2e run --config packages/web/e2e/telegram-inbound.config.ts
+npx --no-install e2e run --config packages/web/e2e/telegram-inbound-group.config.ts
 ```
 
 The chat suite covers native receiver setup; the review suite covers delayed UI
 actions and delivery controls. Both use fictional credentials and a server forced
 to `CEZ_DRY_RUN=1`. They require the e2e browser runtime and do not verify live
-Slack or Discord delivery.
+Slack or Discord delivery. The two Telegram suites walk the guided wizard for a private
+chat and for a group against a simulated Telegram API.

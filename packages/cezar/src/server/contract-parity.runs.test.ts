@@ -48,6 +48,8 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : 'route-is-wider') : 'schema-is-wider';
   type Exact<Schema, Route> = Mutual<Schema, Route>;
   type Assert<T extends true> = T;
+  /** Mutual assignability ignores an optional key one side lacks (telegramSource did); compare key sets too. */
+  type SameKeys<Schema, Route> = Mutual<keyof Schema, keyof Route>;
 
   type Runs = typeof client.api.v1.runs;
   type Run = Runs[':id'];
@@ -85,6 +87,10 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof apiRunSchema>[], RunsList200[number][]>>,
     Assert<Exact<z.infer<typeof apiRunSchema>, RunGet200>>,
     Assert<Exact<z.infer<typeof runRecordSchema>, RunArchive200>>,
+    Assert<SameKeys<z.infer<typeof apiRunSchema>, RunsList200[number]>>,
+    Assert<SameKeys<z.infer<typeof apiRunSchema>, RunGet200>>,
+    Assert<SameKeys<z.infer<typeof runRecordSchema>, RunArchive200>>,
+    Assert<Exact<NonNullable<z.infer<typeof apiRunSchema>['telegramSource']>, NonNullable<RunGet200['telegramSource']>>>,
     // the pin (#935) answers the record too — pinned here is what stops it drifting into a
     // bespoke `{pinned: true}` payload the moment someone finds that shorter to write
     Assert<Exact<z.infer<typeof runRecordSchema>, RunPin200>>,

@@ -211,6 +211,11 @@ describe('the section registry', () => {
     expect(visibleSettingsSections('global', { singleProject: false }).map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
     expect(visibleSettingsSections('global').map((s) => s.id)).toEqual(GLOBAL_SECTIONS)
   })
+
+  it('keeps Telegram out of the generic webhook destinations', () => {
+    expect(SETTINGS_SECTIONS.find((s) => s.id === 'webhooks')?.description).toMatch(/Slack, Discord/)
+    expect(SETTINGS_SECTIONS.find((s) => s.id === 'webhooks')?.description).not.toContain('Telegram')
+  })
 })
 
 describe('the settings shell', () => {

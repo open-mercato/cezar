@@ -41,7 +41,8 @@ export function canonicalGithubLink(input: string | undefined, repository: strin
     return `https://github.com/${repository}/${kind}/${Number(match[3])}`;
   } catch { return; }
 }
-export function renderPayload(source: WebhookSource, profile: WebhookProfile, secrets: readonly string[], disposition?: FailureDisposition, repository?: string): string {
+/** `agentExcerpt` is already redacted and bounded (excerpt.ts); only a consenting Standard receiver passes one. */
+export function renderPayload(source: WebhookSource, profile: WebhookProfile, secrets: readonly string[], disposition?: FailureDisposition, repository?: string, agentExcerpt?: string): string {
   source = prepareSource(source, secrets);
   const task = source.snapshot;
   const title = (profile === 'standard' || task.titleOrigin === 'user') ? task.title : undefined;
@@ -61,6 +62,7 @@ export function renderPayload(source: WebhookSource, profile: WebhookProfile, se
     case 'task.attention_required': data = {
       episodeId: source.episodeId, since: source.occurredAt, reason: task.attentionRequest ? 'question' : 'turn_end',
       ...(task.attentionRequest ? { requestId: task.attentionRequest.requestId, ...(profile === 'standard' ? { questions: task.attentionRequest.questions } : {}) } : {}),
+      ...(profile === 'standard' && !task.attentionRequest && agentExcerpt ? { agentExcerpt } : {}),
     }; break;
     case 'task.review_ready': data = { episodeId: source.episodeId, since: source.occurredAt }; break;
     case 'task.finished': data = { resolution: task.completionReason ?? 'unknown', finishedAt: task.finishedAt ?? source.occurredAt, ...(task.startedAt ? { startedAt: task.startedAt } : {}),

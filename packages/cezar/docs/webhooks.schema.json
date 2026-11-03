@@ -198,6 +198,10 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "multiSelect": {
+                    "type": "boolean",
+                    "const": true
                   }
                 },
                 "required": [
@@ -205,6 +209,11 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "agentExcerpt": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 600
             }
           },
           "required": [

@@ -1,18 +1,22 @@
+import type { ConversationDependencies } from '../telegram/conversation.ts';
 import { listServerInstances } from '../server-install/state.ts';
 import { hostedTaskLink } from './links.ts';
 import { existsSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { WebhookService, webhooksEnabled } from './service.ts';
+import { WebhookService, webhooksEnabled, type WebhookServiceOptions } from './service.ts';
 import { WebhookScheduler } from './scheduler.ts';
 import { WebhookStateError } from './endpoints.ts';
 import type { ProjectContext } from '../server/project-context.ts';
 import { getRepoInfo } from '../server/git.ts';
 import { parseRemote } from '../server/forge/index.ts';
+export interface TelegramInteractions { context(projectId: string, root: string): ReturnType<ConversationDependencies['context']>; deliver: ConversationDependencies['deliver']; createTask?: ConversationDependencies['createTask']; prepareControl?: ConversationDependencies['prepareControl'] }
 type CaptureContext = Pick<ProjectContext, 'root' | 'store' | 'manager'>;
 interface Project { id: string; root: string; status: string }
-interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean }
+interface Dependencies { mode(): 'local' | 'hosted'; ports(): readonly number[]; projects(): Promise<readonly Project[]>; dryRun?: boolean; singleProject?: boolean; telegramCall?: WebhookServiceOptions['telegramCall'] }
 /** Storage owners are independent of RunManagers; discovery never starts or recovers tasks. */
 export class WebhookCoordinator {
+  private telegramListeners = new Set<() => void>();
+  private telegramInteractions?: TelegramInteractions;
   private services = new Map<string, WebhookService>();
   private retiring = new Map<string, WebhookService>();
   private opening = new Map<string, Promise<WebhookService>>();
@@ -23,6 +27,19 @@ export class WebhookCoordinator {
   private stopped = false;
   private nextRecovery = new Map<string, number>();
   constructor(private readonly deps: Dependencies) {}
+  onTelegramChange(listener: () => void): () => void {
+    this.telegramListeners.add(listener);
+    return () => { this.telegramListeners.delete(listener); };
+  }
+  setTelegramInteractions(interactions: TelegramInteractions): void {
+    this.telegramInteractions = interactions;
+    for (const [root, service] of this.services) this.configureTelegram(service, root);
+  }
+  private configureTelegram(service: WebhookService, root: string): void {
+    const interactions = this.telegramInteractions;
+    if (interactions) service.setTelegramInteractions({ context: () => interactions.context(service.projectId, root), deliver: interactions.deliver,
+      createTask: interactions.createTask ?? (async () => ({ created: false as const, reason: 'creation_failed' as const })), prepareControl: interactions.prepareControl });
+  }
   count(): number { return this.services.size; }
   async get(projectId: string, root: string, pin = false): Promise<WebhookService> {
     if (!webhooksEnabled()) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');
@@ -48,10 +65,12 @@ export class WebhookCoordinator {
       const remote = parseRemote((await getRepoInfo(canonical))?.remote ?? '');
       const service = await WebhookService.open({ root: canonical, dataDir: join(canonical, '.ai/cezar'), projectId, mode: this.deps.mode(), serverPorts: this.deps.ports,
         cockpitLink: (projectId, taskId) => hostedTaskLink(listServerInstances(), this.deps.mode(), this.deps.ports()[0], process.env.CEZ_INSTANCE_ID, projectId, taskId),
-        scheduler: this.scheduler, dryRun: this.deps.dryRun, ...(remote?.host === 'github.com' ? { repository: `${remote.owner}/${remote.repo}` } : {}) });
+        scheduler: this.scheduler, telegramCall: this.deps.telegramCall, dryRun: this.deps.dryRun, ...(remote?.host === 'github.com' ? { repository: `${remote.owner}/${remote.repo}` } : {}) });
       if (!service) throw new WebhookStateError(409, 'Enable webhook delivery with CEZ_WEBHOOKS=1 and restart cezar');
       if (this.stopped) { await service.dispose(); throw new WebhookStateError(503, 'Webhook service is unavailable'); }
       if (existing) service.markCaptureGap();
+      service.on('telegram-change', () => { for (const listener of this.telegramListeners) listener(); });
+      this.configureTelegram(service, canonical);
       this.services.set(canonical, service);
       this.nextRecovery.delete(canonical);
       const attached = this.contexts.get(canonical);
@@ -110,6 +129,7 @@ export class WebhookCoordinator {
       if (project.status === 'missing' || !existsSync(join(project.root, '.ai/cezar/webhooks/endpoints.json'))) continue;
       await this.get(project.id, project.root).catch(() => undefined);
     }
+    for (const service of this.services.values()) await service.startTelegram().catch(() => undefined);
     // The boot owner remains pinned even when omitted by workspace registration.
     // Explicit removal owns the pause policy; discovery cannot promise another owner's stop.
     for (const [root, entry] of this.contexts) if (!this.services.has(root)) await this.attach(entry.context, entry.publicId, entry.ready, this.pinned.has(root));
@@ -130,7 +150,7 @@ export class WebhookCoordinator {
     return warning;
   }
   async dispose(): Promise<void> {
-    this.stopped = true; if (this.timer) clearInterval(this.timer);
+    this.stopped = true; this.telegramListeners.clear(); if (this.timer) clearInterval(this.timer);
     await Promise.allSettled([...this.opening.values()]);
     await Promise.allSettled([...this.services.values(), ...this.retiring.values()].map(service => service.dispose())); this.services.clear(); this.retiring.clear(); this.contexts.clear();
   }

@@ -1,0 +1,117 @@
+---
+title: "Reply to tasks from Telegram"
+description: "Pair a Telegram account with a local Cezar project and answer waiting tasks."
+version: opt-in
+sources:
+  - label: Telegram task-control settings
+    path: packages/web/src/routes/settings/telegram-inbound.tsx
+    line: 77
+  - label: Bot conversation
+    path: packages/cezar/src/telegram/conversation.ts
+    line: 136
+  - label: Cancel and continue previews
+    path: packages/cezar/src/telegram/controls.ts
+    line: 29
+  - label: Notification renderer
+    path: packages/cezar/src/webhooks/telegram.ts
+    line: 70
+  - label: Telegram authorization
+    path: packages/cezar/src/telegram/authorization.ts
+    line: 19
+related:
+  links:
+    - features/settings-and-projects/send-to-telegram
+---
+
+A local Cezar server can take answers, follow-ups and confirmed new tasks from Telegram people you approve for task control.
+Telegram notifications need `CEZ_WEBHOOKS=1`; task control also needs `CEZ_CHAT_INBOUND=1`. Both are set up in the same Telegram wizard.
+
+> **Good to know**: An approved person can instruct a coding agent that runs shell commands on this machine. Approve only people you trust.
+
+## Where to find it
+
+Settings → **External integrations** → **Telegram**. The button reads **Connect Telegram** until a bot is connected, then **Add a chat**.
+
+## Set up task control in a private chat
+
+1. Enter a **Notification name** and the **Bot token** from @BotFather, tick **This bot is dedicated to this project**, and choose **Continue**. Continue contacts Telegram to verify the token and starts listening for setup messages. The bot acknowledges **Start** during setup; project notifications and task control require activation.
+2. Open **Private chat with the bot** and press **Start** in Telegram. The wizard shows who pressed Start; that single private Start is the proof of the person's identity.
+3. Tick **Enable task control for this private chat**, read the shell-access warning, and choose what else the person may do: **Start tasks**, **Cancel tasks** and **Continue tasks**. All three are off by default; answering a task's questions and checking status are always allowed. A note under the permissions says that answering, starting and continuing tasks runs the agent and may incur provider costs.
+4. Activate. The final step says whether notifications only, or notifications and task control, are active.
+
+With only `CEZ_WEBHOOKS=1` the wizard sets up notifications and shows task control as unavailable until Cezar is started with `CEZ_CHAT_INBOUND=1`. A hosted cockpit offers no Telegram at all, notifications included.
+
+Leaving the wizard before activation (**Cancel setup**, closing the dialog) cancels the pending link, so abandoned attempts never use up pairing slots. When it was the bot's first setup, the bot is released too, so it is not left listed and another project can connect it. A link expires after five minutes, and restarting Cezar expires it too.
+
+A private chat serves exactly one person, the owner of that chat. To add another person, choose **Add a chat**, paste the same bot token and let that person press **Start** in their own private chat with the bot.
+
+## Set up a group
+
+1. In the wizard choose **Add to a group** instead of the private link, pick the group in Telegram and add the bot; it starts there automatically. Forum groups (with topics) are not supported.
+2. The wizard names the group. Tick **I understand all members of this group can read project messages.** and activate notifications.
+3. For task control, tick **Enable optional task control for a Telegram person** and choose **Continue**. The person to approve opens the private setup link and presses **Start**; compare the **Comparison code** with the code the bot sent them privately, tick the confirmation and choose **Activate task control**. Groups never offer **Start tasks**: new tasks start only from a private chat.
+
+Approve more members later from **People and permissions** → **Approve another member** on that group.
+
+In groups, address commands to the bot, for example `/status@my_bot <task-id>`, or Reply to a bot notification. The bot ignores other messages and Replies that do not belong to one of its notifications. Before acting on a group message or button it checks with Telegram that the person is still a member of the group, and refuses if they left or were removed. Someone who rejoins passes that check again, so **Revoke access** is the way to end a person's access. A group grant applies only in that group.
+
+## Manage chats and people
+
+The **Chats** list shows every Telegram chat of the project, bound to a bot or not: its name, private chat or group, notification state and last test, with **Send test**, **Pause**/**Resume**, **Options** and **Remove**. Pausing a chat also pauses its task control until you resume it; a paused chat whose last test did not pass asks for a passing test before you resume; removing it removes its approved people. **Options** sets the message content (**Minimal — IDs, status and your own title** or **Standard — task titles, questions and errors**), **Include an excerpt of the agent’s last message** (Standard only) and the notification delay: waiting and review notices wait that long and are skipped if you answer in the cockpit first. Changing options keeps the chat active. Task control needs Standard content; with Minimal, replies in that chat stop working.
+
+A second chat entry for the same Telegram chat is marked **Duplicate**: it doubles every notification, so remove it.
+
+**People and permissions** shows task control per chat. A chat without an approved person reads **Notifications only** and offers **Enable task control**; a group offers **Approve another member**; a private chat whose pairing went stale offers **Replace pairing**. Each person's row has the **Start tasks**, **Cancel tasks** and **Continue tasks** checkboxes and **Revoke access**. **Enable replies**/**Disable replies** turns task control for a chat on or off without losing approvals.
+
+Use one bot per project. Another application receiving updates for the same bot can cause a conflict. The bot token stays in Cezar's project secret store and is never shown again.
+
+## Talk to a task
+
+In an approved private chat, type a message. It goes to the task you last dealt with in that chat: the task you started with `/task`, a notice about a task you started, the last question notice you received, or the task you last addressed with `/reply`, `/continue`, `/status` or a Reply. Progress and final notices of other tasks do not move it; Reply to them instead.
+
+- While that task waits for an answer, the text answers its latest question.
+- While it is running or queued, the text is delivered as a follow-up message and the bot says so.
+- After it finished, the text opens the Continue preview: with **Continue tasks** allowed, the bot shows the task title, the message, the provider, account and model and a cost warning, and continues only after **Confirm**.
+
+For a task not started with `/task`, the agent's reply stays in the cockpit; the chat gets that task's normal notification.
+
+A Reply to a question notice answers that question. A Reply to a progress or final notice works like typing for that task: a follow-up while it runs, the Continue preview after it finished.
+When there is exactly one single-select question with fixed choices, the **Task needs your input** message shows one button per option; tapping one sends its label exactly as a Reply would. For a multi-select question or multiple questions, use a text Reply with your choices or answers instead. A question that changed, was answered in the cockpit or is older than 15 minutes refuses the tap. Only the person the buttons were sent to can use them, once.
+
+Commands: `/tasks` lists up to ten tasks, waiting first. `/status [task-id]` shows a task's status; without an ID it shows your latest task from that chat. `/reply <task-id> <text>` answers a task. A shortened ID needs at least eight characters and must identify one task. `/help` lists the commands. Commands are handled by the bot and never become task answers. In a group or in a private chat with no task context, plain text does not reach a task.
+
+## Start a task
+
+A person with **Start tasks** sends `/task <text>` in the private chat with the bot. The bot shows a preview with the text, project, workflow (`quick-task`) and provider, a warning that the agent can run shell commands and may incur costs, and **Confirm** and **Cancel**. Only **Confirm** starts the task; it works once, for two minutes, for the same person in the same chat, and access and provider availability are checked again at that moment. Without the permission the bot says which permission is missing. Groups cannot start tasks.
+
+The bot then sends **Started task `abcd1234`.**, notices when the task needs input and one final message such as **Status: Completed**. A finished task's final message, and a **Task needs your input** message where the agent asked in plain text, carry the agent's reply after **Agent:**, so "what is the latest commit?" gets its answer in the chat. Known secrets and file paths are removed on a best-effort basis; a reply too long for one Telegram message ends with **The full reply is in the cockpit.** These replies go only to the private chat of the person who started the task and need no excerpt option. The **Repository:** line says what happened to the code, for example **Unchanged** or **Pull request opened**. `/status` never includes what the agent wrote.
+
+For a task started from Telegram the bot sends these messages itself, without the chat's notification delay. If task control is not running (Cezar started without `CEZ_CHAT_INBOUND=1`, replies disabled, or the bot stopped), the chat's ordinary notifications take over; after such a gap the final message can arrive twice. Editing the person's permissions, or disabling and enabling replies again, does not change who sends the task's messages.
+
+For other tasks, structured questions show their text. When the agent asked in plain text, the waiting notice carries the end of its message only with Standard content and **Include an excerpt of the agent’s last message**; otherwise read it in the cockpit.
+
+Keep the computer and Cezar running. Commands older than 15 minutes are rejected and the bot asks you to send them again; Telegram keeps updates for at most 24 hours. If an interrupted action has an uncertain outcome, inspect the task before retrying; Cezar does not repeat it automatically. Simultaneous cockpit and Telegram answers may both reach the agent.
+
+## Cancel and continue
+
+**Cancel tasks** and **Continue tasks** are separate permissions, off by default. `/cancel <task-id>` and `/continue <task-id> [text]` show a preview with the task title and the message, and a **Confirm** button. Confirm within two minutes from the same Telegram account and chat; a button works once and restarting Cezar invalidates it. After Confirm the bot says what happened, for example **Cancelled task `abcd1234`.** or **Continuing task `abcd1234`.** Continue shows the saved provider, account and model and warns about cost; a missing or unavailable account needs attention in the cockpit. Changing permissions, task state or saved configuration requires a fresh preview.
+
+Per-tool **Allow**/**Deny** buttons for an agent's permission prompts are not supported; answer those in the cockpit.
+
+## Delivery limits
+
+With `CEZ_CHAT_INBOUND=1`, every loaded, available bot shares its sending budget between replies and notifications, including notifications-only chats and outbound-only receivers using the same verified token: at most one message per second to a chat and ten per second across the bot. Ready chats take turns, so a busy group cannot drain its whole backlog before another chat gets a turn. Existing project notification limits still apply. When no loaded, available bot matches the verified token, or `CEZ_CHAT_INBOUND` is off, notifications use the existing delivery path.
+
+If Telegram asks the bot to wait, replies and notifications both respect that pause. Notifications stay in the durable queue; short-lived replies can expire. Confirmation-button acknowledgements use a separate, bounded path with their own Telegram cooldown.
+
+## Stop or repair access
+
+**Disable replies** keeps approved people but stops reading their messages; while no chat of that bot has replies enabled, the bot does not poll and people who write to it get no answer. The Telegram tab then reads **Notifications only**, not as a fault. **Revoke access** removes one person. **Reset access** removes all approvals and reply links of a bot and keeps its notifications. **Disconnect bot** removes the bot's chats and releases its project assignment, so nothing is sent to those chats any more. A bot left with no chats in this project reads **No chats in this project — bot still assigned**; its **Disconnect bot** dialog offers **Release bot**, which removes its approved people and reply links and lets another project use it.
+
+A suspended chat names the cause: a bot removed from a group is fixed by adding it back and choosing **Enable replies**; a private chat whose person blocked the bot is fixed once they unblock it, then **Enable replies**; a group migrated to a supergroup by removing the chat and connecting the group again with **Add a chat**.
+
+A missing or damaged state never restores approvals automatically. **Reset access** becomes available only when Cezar can verify the complete state and its bot assignment. If the state changes while you decide, choose **Refresh status** first.
+
+**Diagnostics** (collapsed by default) holds two lists. **Recent Telegram actions** shows each command with the person's name, the eight-character task ID and the outcome. **Bot assignments** (available with `CEZ_WEBHOOKS=1` alone) can release an assignment belonging to a missing project, after confirmation; a running owner, a changed assignment or a restored project blocks the release, and the list says when it is incomplete.
+
+If setup waits for **Start**, press **Start** in the chat with the bot and keep the wizard open. If the link expired, start the setup again rather than reusing an old link. If only the task-control link expired, notifications stay on; use **Enable task control** on that chat to try again. If the bot is assigned to another project or used by another app, stop that consumer before connecting it here.

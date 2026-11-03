@@ -64,7 +64,7 @@ describe('independent webhook UI corrections', () => {
     await waitFor(() => expect(mocks.create).toHaveBeenCalledWith('alpha', expect.objectContaining({ name: 'Unrelated draft', url: 'https://receiver.invalid/new' })))
   })
   it('restores focus to the deleted receiver trigger after Escape', async () => {
-    const deletedReceiver = { kind: 'history', id: 'deleted', name: 'Retired alerts', deletedAt: '2026-01-02T00:00:00Z' }
+    const deletedReceiver = { kind: 'history', id: 'deleted', name: 'Retired alerts', format: 'slack.v1', deletedAt: '2026-01-02T00:00:00Z' }
     mocks.list.mockResolvedValue({ ...list(), history: [deletedReceiver], historyCount: 1 })
     mocks.history.mockResolvedValue({ items: [deletedReceiver] })
     mount()

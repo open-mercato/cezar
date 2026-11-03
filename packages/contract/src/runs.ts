@@ -21,6 +21,7 @@ export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
+import { telegramSourceProvenanceSchema } from './telegram-tasks.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -268,6 +269,9 @@ export const runRecordSchema = z.object({
       url: z.string(),
     })
     .optional(),
+  /** Provenance of a task launched from Telegram (spec 2026-10-29-telegram-setup-and-replies). The store
+   *  keeps the full source; the wire carries no chat, user, bot or message identifier. */
+  telegramSource: telegramSourceProvenanceSchema.optional(),
   /**
    * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
@@ -307,6 +311,8 @@ export const runRecordSchema = z.object({
    *  question was still unanswered. Present only on a `failed` run; the cockpit keeps such a run
    *  under "needs you" until the answer reopens it. Absent on records written before it existed. */
   awaitingAnswerSince: z.string().optional(),
+  /** A `waiting` run parked on an unanswered `CEZ:ASK` (#917); only a `waiting` run carries it. */
+  askParked: z.boolean().optional(),
   /** A run a `checkout: 'pr-head'` automation launched on a pull request's head (spec
    *  2026-10-06-agentic-e2e-checks Phase 3): the fetched head it tested. Absent on every other run. */
   prHead: z
@@ -440,7 +446,6 @@ export const runRecordSchema = z.object({
     })
     .optional(),
 });
-export type RunRecord = z.infer<typeof runRecordSchema>;
 
 /**
  * What `GET /runs` and `GET /runs/:id` answer: the stored record plus the live `usage` sample the
@@ -451,6 +456,8 @@ export const apiRunSchema = runRecordSchema.extend({
   usage: processUsageSchema.optional(),
 });
 export type ApiRun = z.infer<typeof apiRunSchema>;
+/** Public run data returned by the cockpit API and consumed by the web client. */
+export type RunRecord = ApiRun;
 
 // ---- the cross-project index --------------------------------------------------------------
 

@@ -909,6 +909,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  /** Internal Telegram launch provenance, persisted strictly before queue admission. */
+  telegramSource?: RunRecord['telegramSource'];
   /** Internal scheduled launch identity, persisted before any naming or execution side effect. */
   scheduledLaunch?: { id: string; provenance: NonNullable<RunRecord['automationTrigger']>; binding: NonNullable<RunRecord['deferredBinding']> };
   /** Internal child admission: inherit the launch guard without the scheduler's run identity. */
@@ -1878,7 +1880,7 @@ export class RunManager {
       ...(input.forkRef && input.worktree === false ? { worktree: undefined } : {}),
     };
     const run = this.store.createRun({
-      id: input.scheduledLaunch?.id,
+      id: input.scheduledLaunch?.id ?? input.telegramSource?.runId,
       title: makeRunTitle(input.task, workflow, input.images?.length) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
       task: input.task,
@@ -1898,6 +1900,7 @@ export class RunManager {
       // auto-nudge reads `input.autonomous` (`execute`), but the record is the
       // only source those after-the-fact consumers have.
       autonomous: input.autonomous === true,
+      telegramSource: input.telegramSource,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && !input.forkRef && input.worktree === false ? false : undefined,
@@ -1956,6 +1959,7 @@ export class RunManager {
         ...(refs.issueNumber !== undefined ? { issueNumber: refs.issueNumber } : {}),
       });
     }
+    if (input.telegramSource) this.store.flushCreatedRun(run);
     const binding = input.scheduledLaunch?.binding ?? input.deferredBinding;
     if (binding) {
       this.store.updateRun(run.id, {
@@ -3085,12 +3089,13 @@ export class RunManager {
   }
 
   /** Snapshot all attention sources; only explicit CEZ:ASK carries dispatch Guard semantics. */
-  private recordAttention(requestId: string, input: readonly { question: string; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
+  private recordAttention(requestId: string, input: readonly { question: string; multiSelect?: boolean; options?: readonly { label: string; description?: string }[] }[]): WebhookAttentionRequest {
     const attention: WebhookAttentionRequest = {
       requestId, askedAt: new Date().toISOString(),
       questions: input.slice(0, 20).map(q => ({
         question: q.question.slice(0, 2000),
         ...(q.options ? { options: q.options.slice(0, 10).map(o => ({ label: o.label.slice(0, 120), ...(o.description ? { description: o.description.slice(0, 500) } : {}) })) } : {}),
+        ...(q.multiSelect === true ? { multiSelect: true as const } : {}),
       })),
     };
     return attention;

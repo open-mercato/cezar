@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import { WebhooksSection } from '@/routes/settings/webhooks-section'
 const api = vi.hoisted(() => ({ list: vi.fn(), deliveries: vi.fn(), activity: vi.fn(), test: vi.fn(), retry: vi.fn(), replay: vi.fn(), pause: vi.fn() }))
-vi.mock('@/api/client', () => ({ webhookApi: api, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
+vi.mock('@/api/client', () => ({ webhookApi: api, telegramApi: { list: async () => ({ available: false, reason: 'flag_off', receivers: [], bots: [], grants: [] }) }, getSelfUpdate: async () => ({ version: 'dev', installKind: 'checkout' }) }))
 vi.mock('@/api/queries', () => ({ useHealth: () => ({ data: { capabilities: { webhooks: true } } }) }))
 const receiver = { kind: 'live', id: 'r', name: 'Alerts', format: 'cezar.json.v1', destination: 'https://example.com/', state: 'active', revision: 1, deliveryRevision: 1, profile: 'minimal', preset: 'attention', events: [], scope: 'every_task', graceSeconds: 180, allowLocalNetwork: false, includeScheduledFailures: false, pendingCount: 0, inFlightCount: 0, consecutiveFailures: 0, lastTest: 'none', activationBlocked: false }
 function mount(search: string) { render(<QueryClientProvider client={createQueryClient()}><MemoryRouter initialEntries={['/p/alpha/settings/webhooks'+search]}><WebhooksSection /></MemoryRouter></QueryClientProvider>) }
