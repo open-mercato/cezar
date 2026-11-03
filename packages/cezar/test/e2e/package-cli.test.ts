@@ -81,8 +81,10 @@ test('the release tarball installs and runs the dry-run CLI workflow', { timeout
     await writeFile(join(consumerDir, '.ai', 'cezar', 'config.json'), '{"skillsRepos": []}\n', 'utf8');
     const shipped = (await discoverSkills(consumerDir)).find((skill) => skill.name === 'change-impact');
     assert.equal(shipped?.source, 'builtin');
-    // realpath: the import resolves through a symlinked tmpdir (macOS /tmp → /private/tmp).
-    assert.equal(shipped?.path, join(await realpath(packageRoot), 'skills', 'change-impact', 'SKILL.md'));
+    // realpath on both sides: the import resolves through a symlinked tmpdir (macOS /tmp → /private/tmp),
+    // and on Windows it keeps an 8.3 short temp path (RUNNER~1) that realpath expands.
+    assert.ok(shipped?.path);
+    assert.equal(await realpath(shipped.path), await realpath(join(packageRoot, 'skills', 'change-impact', 'SKILL.md')));
 
     const fixtureRepo = join(root, 'fixture-repo');
     await mkdir(fixtureRepo);
