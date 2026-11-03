@@ -17,14 +17,14 @@ import { WebhookTestFeedback, type PendingWebhookTest } from './webhook-test-fee
 import { ReceiverHistory } from './webhook-history'
 import { activityLabel, endpointHealthTone, formatLabels, graceLabels, lastTestLabels, plural, presetLabels, profileLabels, receiverStateLabels, scopeLabels, sourceLabels, webhookGuide, webhookTime } from './webhook-presentation'
 type Confirmation = { title: string; text: string; run: () => Promise<unknown>; standard?: boolean; local?: boolean; receiver?: WebhookReceiver; deletesReceiver?: boolean }
-export function WebhooksSection() {
+export function WebhooksSection({ format }: { format?: Exclude<WebhookReceiver['format'], 'telegram.v1'> } = {}) {
   const projectId = useActiveProjectId() ?? 'default'
   const health = useHealth()
   if (health.isError) return <p role="status" className={chassis}>Webhook status unavailable — could not load server health.</p>
   if (!health.data) return <p role="status" className={chassis}>Loading webhook status…</p>
-  return <WebhookPanel key={projectId} projectId={projectId} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
+  return <WebhookPanel key={`${projectId}:${format ?? 'all'}`} projectId={projectId} format={format} enabled={health.data?.capabilities.webhooks === true} unsupportedPlatform={health.data?.capabilities.webhooksUnavailableReason === 'unsupported_platform'} />
 }
-function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
+function WebhookPanel({ projectId, enabled, unsupportedPlatform, format }: { format?: WebhookReceiver['format']; projectId: string; enabled: boolean; unsupportedPlatform: boolean }) {
   const client = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
@@ -109,6 +109,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     }
   }, [enabled, endpoint, validEndpoint, requestedTab, list.data])
   const [deleted, setDeleted] = useState(false)
+  // A receiver saved here stays listed here even if its destination moved it to another tile.
+  const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set())
   const [error, setError] = useState('')
   const [pendingTest, setPendingTest] = useState<PendingWebhookTest & { viewKey: string }>()
   // Retire the explicit test on navigation, including Back to an earlier location key.
@@ -124,6 +126,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
   const mutation = useMutation({ onMutate: () => ({ viewKey: view.current.token, form, confirmation }), mutationFn: async (run: () => Promise<unknown>) => {
     const key = view.current.token
     const result = await run()
+    const savedId = result && typeof result === 'object' && 'receiver' in result && result.receiver && typeof result.receiver === 'object' && 'id' in result.receiver && typeof result.receiver.id === 'string' ? result.receiver.id : undefined
+    if (format && savedId && currentView(key)) setKept(ids => ids.has(savedId) ? ids : new Set(ids).add(savedId))
     // Never put the one-time secret in React Query's shared mutation cache.
     const chatResult = result && typeof result === 'object' && 'receiver' in result
       && result.receiver && typeof result.receiver === 'object' && 'format' in result.receiver
@@ -169,8 +173,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       <a className="w-fit text-ui underline underline-offset-2 hover:text-foreground" href={guide.href} target="_blank" rel="noreferrer">{guide.note}</a>
     </section>
   </div>
-  // Telegram owns its receiver lifecycle in External integrations. Keep the
-  // generic webhook surface focused on receivers configured here.
+  // Telegram owns its receivers in Integrations → Telegram; a gallery tile shows only its format.
+  const visibleReceivers = receivers.filter(row => !format || row.format === format || kept.has(row.id))
   const current = validEndpoint && validTab && requestedTab !== 'settings' ? knownReceiver ?? resolution.data : undefined
   const notice = list.data?.notice
   const noticeReceiver = notice?.receiverId ? receivers.find(row => row.id === notice.receiverId) : undefined
@@ -196,7 +200,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <Button variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={list.isFetching} onClick={() => void list.refetch()}><RefreshCwIcon /></Button>
-        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft(webhookDraft()); setForm('new') }}><PlusIcon />Add receiver</Button>
+        <Button ref={addTrigger} disabled={list.isPending || !!list.error} onClick={event => { formFocusTarget.current = event.currentTarget; setError(''); setStale(false); setDraft({ ...webhookDraft(), ...(format ? { format } : {}) }); setForm('new') }}><PlusIcon />Add receiver</Button>
       </div>
     </section>
     {notice && <section role="status" className="flex min-w-0 flex-col gap-2 rounded-md border border-warning/50 bg-warning/10 p-3 text-sm [overflow-wrap:anywhere]">
@@ -215,8 +219,8 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {(error || list.error) && <p role="alert" className="text-sm text-danger">{error || list.error?.message}</p>}
     {list.data?.webhookHealth.status !== 'ready' && list.data?.webhookHealth.reason && <p role="status" className="rounded-md border border-warning/50 bg-warning/10 p-3 text-ui">{list.data.webhookHealth.reason}</p>}
     {list.isPending && <p className="text-sm text-muted-foreground">Loading receivers…</p>}
-    {!list.isPending && !list.error && !receivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.</p></div>}
-    {receivers.map(row => {
+    {!list.isPending && !list.error && !visibleReceivers.length && <div className="rounded-lg border border-dashed border-border p-6 text-center"><p className="text-sm font-medium">No receivers yet</p><p className="mt-1 text-ui text-muted-foreground">{emptyHints[format ?? 'all']}</p></div>}
+    {visibleReceivers.map(row => {
       const custom = !isChat(row)
       const inactive = ['inactive', 'disabled', 'paused'].includes(row.state)
       const needsPassingTest = row.lastTest !== 'success' && row.state === 'disabled'
@@ -257,6 +261,7 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
     {(historyCount > 0 || deleted) && <section className="flex flex-col gap-2">
       <div><Button size="sm" variant="ghost" onClick={() => setDeleted(value => !value)}>{deleted ? 'Hide deleted receivers' : `Show deleted receivers (${historyCount})`}</Button></div>
       {deleted && <>
+        {format && <p className="text-ui text-muted-foreground">Deleted receivers from all notification integrations.</p>}
         {history.error && <p role="alert" className="text-sm text-danger">{history.error.message}</p>}
         {history.data?.pages.flatMap(page => page.items).filter(isGenericWebhook).map(row => <Button key={row.id} ref={node => { if (node) historyTriggers.current.set(row.id, node); else historyTriggers.current.delete(row.id) }} variant="outline" className="h-auto max-w-full justify-start whitespace-normal py-2 text-left font-normal [overflow-wrap:anywhere]" onClick={() => navigateReceiver(row.id)}>{row.name} — deleted {webhookTime(row.deletedAt)}</Button>)}
         {history.data && !history.data.pages.some(page => page.items.length) && <p className="text-ui text-muted-foreground">No deleted receivers are kept.</p>}
@@ -282,6 +287,14 @@ function WebhookPanel({ projectId, enabled, unsupportedPlatform }: { projectId: 
 }
 
 const chassis = 'mx-auto flex w-full max-w-2xl min-w-0 flex-col gap-6 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6'
+// A gallery tile names only its own destination; the unfiltered list keeps the full hint.
+const emptyHints: Record<NonNullable<WebhookReceiver['format']> | 'all', string> = {
+  all: 'Add a Slack or Discord channel, or your own endpoint. Send a test, then activate it.',
+  'slack.v1': 'Add a Slack channel through its Incoming Webhook URL. Send a test, then activate it.',
+  'discord.v1': 'Add a Discord channel through its Webhook URL. Send a test, then activate it.',
+  'cezar.json.v1': 'Add your own HTTPS endpoint for signed task events. Send a test, then activate it.',
+  'telegram.v1': 'Telegram chats are set up in Integrations → Telegram.',
+}
 const isChat = (row: Pick<WebhookReceiver, 'format'>) => (row.format ?? 'cezar.json.v1') !== 'cezar.json.v1'
 const isTelegram = (row: { kind?: string; format?: string }) => row.format === 'telegram.v1'
 // Only Telegram rows carry a format; rows from releases before it are generic receivers.

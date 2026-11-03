@@ -10,11 +10,11 @@ import { queryKeys, useTrackerConnection, useTrackerAssociation, useTrackerCandi
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 
-export function TrackerSection() {
+export function TrackerSection({ providerKind }: { providerKind?: TrackerKind } = {}) {
   const connection = useTrackerConnection()
   const association = useTrackerAssociation()
   const queryClient = useQueryClient()
-  const [kind, setKind] = useState<TrackerKind>('jira')
+  const [kind, setKind] = useState<TrackerKind>(providerKind ?? 'jira')
   const [credentialKind, setCredentialKind] = useState<TrackerKind | null>(null)
   const [origin, setOrigin] = useState('')
   const [email, setEmail] = useState('')
@@ -114,19 +114,23 @@ export function TrackerSection() {
   const credentialBusy = saveCredentials.isPending || removeCredentials.isPending
   const savedAssociation = association.data?.association
   const currentConnection = connection.data?.connection
-  const scopeConnected = !!savedAssociation && (connection.data?.demo === true || (
+  const otherProvider = providerKind
+    ? currentConnection && currentConnection.kind !== providerKind ? currentConnection.kind
+      : savedAssociation && savedAssociation.kind !== providerKind ? savedAssociation.kind : null
+    : null
+  const scopeConnected = !!savedAssociation && (!providerKind || savedAssociation.kind === providerKind) && (connection.data?.demo === true || (
     !!currentConnection && currentConnection.kind === savedAssociation.kind
     && currentConnection.id === savedAssociation.connectionId
   ))
 
 
   if (association.isPending) return <p className="p-6 text-sm text-muted-foreground">Loading tracker settings…</p>
-  if (association.isError) return <p className="p-6 text-sm text-danger">{association.error.message}</p>
+  if (association.isError) return <div className="p-6 text-sm text-danger"><p role="alert">{association.error.message}</p><Button variant="outline" onClick={() => void association.refetch()}>Retry</Button></div>
 
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 p-4 md:p-6" data-slot="tracker-settings">
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold">Issue tracker</h2>
+        <h2 className="text-sm font-semibold">{providerKind ? `${TRACKER_PROVIDERS[providerKind].label} connection` : 'Issue tracker'}</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Connect a project or team from your issue tracker. Credentials belong only to this project and are stored locally outside the repository. Server-wide environment keys are not used.
         </p>
@@ -142,26 +146,27 @@ export function TrackerSection() {
               <UnplugIcon className="size-3.5" /> Disconnect
             </Button>
           </div>
-        ) : <p className="mt-4 text-sm font-medium">{connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : 'No tracker connected.'}</p>}
+        ) : <p className="mt-4 text-sm font-medium">{connection.isPending ? 'Loading connection…' : connection.isError ? 'Connection status unavailable.' : providerKind ? `${TRACKER_PROVIDERS[providerKind].label} is not connected.` : 'No tracker connected.'}</p>}
       </section>
 
-      {savedAssociation && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected ? <p className="text-sm text-warning">This scope needs reconnection with this project's credentials. Configure a connection, then browse and select its scope again.</p> : null}
+      {providerKind && otherProvider ? <p className="rounded-md border border-warning/30 bg-warning/5 p-3 text-sm text-warning">This project currently uses {TRACKER_PROVIDERS[otherProvider].label}. Connecting {TRACKER_PROVIDERS[providerKind].label} replaces the issue source for this project. Test integrations remain unchanged.</p> : null}
+      {savedAssociation && (!providerKind || savedAssociation.kind === providerKind) && currentConnection && !connection.isError && !connection.data?.demo && !scopeConnected ? <p className="text-sm text-warning">This scope needs reconnection with this project's credentials. Configure a connection, then browse and select its scope again.</p> : null}
       {connection.data?.error ? <p role="alert" className="text-sm text-danger">{connection.data.error}</p> : null}
-      <p className="text-xs text-muted-foreground">For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</p>
+      {!providerKind && <p className="text-xs text-muted-foreground">For local credential cleanup, run <code>cez tracker-connections list</code>, then <code>cez tracker-connections remove &lt;id&gt;</code>. Local deletion does not revoke the vendor token.</p>}
       {connection.isError ? <p className="text-sm text-danger">Could not load project connection. <button onClick={() => void connection.refetch()}>Retry</button></p> : null}
       <section className="rounded-lg border border-border bg-card p-4">
-        <h2 className="text-sm font-semibold">Connect a provider</h2>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
-          {trackerProviders.map((provider) => {
+        <h2 className="text-sm font-semibold">{providerKind ? 'Configure connection' : 'Connect a provider'}</h2>
+        <div className={providerKind ? 'mt-3' : 'mt-3 grid gap-3 sm:grid-cols-2'}>
+          {trackerProviders.filter(provider => !providerKind || provider.kind === providerKind).map((provider) => {
             const ready = !connection.isError && (connection.data?.demo === true || connection.data?.connection?.kind === provider.kind)
             return (
-              <div key={provider.kind} className="rounded-md border border-border p-3">
-                <p className="font-medium">{provider.label}</p>
+              <div key={provider.kind} className={providerKind ? 'flex flex-wrap items-center gap-2' : 'rounded-md border border-border p-3'}>
+                {!providerKind && <p className="font-medium">{provider.label}</p>}
                 {!connection.data?.demo ? <Button variant="outline" disabled={credentialBusy || connection.isPending || connection.isError} onClick={() => { resetSecrets(); setCredentialKind(provider.kind); setPickerOpen(false); setSelected(null) }}>
                   {connection.data?.connection?.kind === provider.kind ? 'Replace' : 'Configure'} {provider.label} credentials
                 </Button> : null}
                 <Button
-                  className="mt-3"
+                  className={providerKind ? undefined : 'mt-3'}
                   variant="outline"
                   disabled={!ready || credentialBusy}
                   onClick={() => { setKind(provider.kind); setPickerOpen(true); setSearch(''); setSelected(null) }}
@@ -175,7 +180,7 @@ export function TrackerSection() {
         </div>
       </section>
 
-      {connection.data?.connection ? <Button variant="outline" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>Remove project credentials</Button> : null}
+      {connection.data?.connection && (!providerKind || connection.data.connection.kind === providerKind) ? <Button variant="outline" disabled={credentialBusy} onClick={() => removeCredentials.mutate()}>Remove project credentials</Button> : null}
       {credentialKind ? (
         <form className="rounded-lg border border-border bg-card p-4" onSubmit={event => { event.preventDefault(); saveCredentials.mutate() }} autoComplete="off">
           <h2 className="font-medium">{TRACKER_PROVIDERS[credentialKind].label} credentials for this project</h2>

@@ -880,7 +880,7 @@ it('observes webhook transitions outside Settings with one private project strea
   await waitFor(() => expect(document.querySelector('[data-slot="toast"]')?.textContent).toBe('Ops is now active'))
   expect(document.body.textContent).not.toContain('PRIVATE_DESTINATION')
   fireEvent.click(screen.getByText('Webhook settings'))
-  await waitFor(() => expect(currentPathname()).toBe('/p/boot/settings/webhooks'))
+  await waitFor(() => expect(currentPathname()).toBe('/p/boot/settings/integrations'))
   expect(Stream.opened.filter(s => s.url.includes('/webhooks/events'))).toHaveLength(1)
   const first = Stream.opened.find(s => s.url.includes('/webhooks/events'))!
   expect(first.options).toEqual({ withCredentials: true })
