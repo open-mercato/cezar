@@ -1,0 +1,46 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — Preview of a sandbox port</title><link rel="stylesheet" href="mockup.css">
+<style>
+.views{display:flex;gap:2px;padding:0 20px;border-bottom:1px solid #262626}
+.views span{padding:10px 12px;color:#a1a1aa}.views span.on{color:#fff;border-bottom:2px solid #ececee}
+.bar{display:flex;gap:8px;align-items:center;padding:8px 14px;border-bottom:1px solid #262626}
+.url{flex:1;background:#0f0f11;border:1px solid #2f2f35;border-radius:8px;padding:6px 10px;display:flex;gap:8px;align-items:center}
+.frame{flex:1;margin:14px;border-radius:10px;background:#f7f7f8;color:#111;overflow:hidden;display:flex}
+.app-side{width:200px;background:#111827;color:#e5e7eb;padding:16px;font-size:13px}
+.app-side div{padding:6px 0;opacity:.85}
+.app-main{flex:1;padding:22px}
+.app-main h3{margin:0 0 14px;font-size:20px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.c{background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:14px;font-size:13px}
+.c b{font-size:22px;display:block;margin-top:4px}
+.ports{position:absolute;left:440px;top:146px;width:380px;background:#18181b;border:1px solid #34343a;border-radius:12px;padding:6px;box-shadow:0 20px 50px #000b}
+.mi{padding:8px 10px;border-radius:8px;display:flex;gap:10px;align-items:center}.mi.on{background:#26262b}
+.mh{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#8b8b93;padding:6px 10px 2px}
+</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small></small></div><div class="group">Active</div><div class="nav on"><span class="ic" style="color:#86efac">●</span>Test Open Mercato setup paths</div></aside>
+<main class="main" style="position:relative">
+  <div class="top"><h1>Test Open Mercato setup paths</h1><span class="pill violet">⬡ microsandbox · Ubuntu · 4 vCPU · 16 GB · <span style="color:#86efac">● running</span></span></div>
+  <div class="views"><span>Chat</span><span>Changes</span><span class="on">Preview</span><span>Terminal</span><span>Notes</span></div>
+  <div class="bar">
+    <span class="btn ghost">←</span><span class="btn ghost">↻</span>
+    <div class="url"><span class="pill violet" style="font-size:11px">⬡ sandbox :3000</span><span class="mono">localhost:3000/backend</span><span class="muted sm" style="margin-left:auto">via 127.0.0.1:54871</span></div>
+    <span class="btn">✎ Design Mode</span><span class="btn ghost">↗</span>
+  </div>
+  <div class="frame">
+    <div class="app-side"><b style="font-size:15px">Open Mercato</b><div>Dashboard</div><div>Customers</div><div>Sales</div><div>Catalog</div><div>Settings</div></div>
+    <div class="app-main"><h3>Dashboard</h3>
+      <div class="cards"><div class="c">Customers<b>0</b></div><div class="c">Orders<b>0</b></div><div class="c">Fresh install<b>✓</b></div></div>
+      <p style="color:#6b7280;font-size:13px;margin-top:16px">Seeded by <code>yarn mercato init</code> inside the sandbox. No host database is involved.</p>
+    </div>
+  </div>
+  <div class="ports">
+    <div class="mh">Sandbox ports</div>
+    <div class="mi on"><span class="pill ok"><span class="dot"></span></span><div class="grow"><b class="mono">:3000</b> <span class="muted sm">next dev · from terminal "npm run dev"</span></div><span class="muted sm mono">→ :54871</span></div>
+    <div class="mi"><span class="pill ok"><span class="dot"></span></span><div class="grow"><b class="mono">:5173</b> <span class="muted sm">opened by agent (cez preview open)</span></div><span class="muted sm mono">→ :54902</span></div>
+    <div class="mi"><span class="pill off">○</span><div class="grow"><b class="mono">:5432</b> <span class="muted sm">postgres · not HTTP</span></div><span class="muted sm">forward…</span></div>
+    <div class="mi muted sm">＋ Forward another sandbox port…</div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>

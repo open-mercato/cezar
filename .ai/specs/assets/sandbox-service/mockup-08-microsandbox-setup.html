@@ -1,0 +1,33 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Mockup — microsandbox not installed</title><link rel="stylesheet" href="mockup.css">
+<style>.cmd{background:#0a0a0a;border:1px solid #2f2f35;border-radius:8px;padding:9px 12px;font:12.5px "JetBrains Mono",ui-monospace,Menlo,monospace;display:flex;justify-content:space-between;align-items:center;margin-top:8px}
+.step{display:flex;gap:10px;margin-top:14px}.n{width:22px;height:22px;border-radius:50%;background:#26262b;display:grid;place-items:center;font-size:12px;flex:none}</style></head>
+<body>
+<aside class="side"><div class="brand">cezar <small>← Back</small></div><div class="group">General settings</div><div class="nav on"><span class="ic">⬡</span>Sandboxes <span class="new">new</span></div></aside>
+<main class="main">
+  <div class="top"><h1>Sandboxes</h1><p>Isolated machines a task can run in instead of this computer.</p></div>
+  <div class="content">
+    <div class="card">
+      <div style="display:flex;gap:12px;align-items:center"><div class="logo msb">msb</div>
+        <div class="grow"><b>microsandbox</b> <span class="muted">· local microVMs</span><div class="muted sm">Not installed on this computer. Checked <span class="mono">PATH</span>, <span class="mono">~/.microsandbox/bin/msb</span> and the <span class="mono">microsandbox</span> package.</div></div>
+        <span class="pill warn"><span class="dot"></span>Not installed</span></div>
+      <div class="tabs" style="margin-top:16px"><span class="tab on">macOS · Apple Silicon <span class="pill ok" style="font-size:10px">this computer</span></span><span class="tab">Linux</span><span class="tab">Windows</span><span class="tab">macOS · Intel</span></div>
+      <div class="step"><span class="n">1</span><div class="grow">Install with Homebrew <span class="muted sm">(Homebrew found at /opt/homebrew)</span>
+        <div class="cmd">brew install superradcompany/tap/microsandbox <span><span class="btn ghost">Copy</span><span class="btn primary">Run in a terminal tab</span></span></div>
+        <div class="hint">Or without Homebrew: <span class="mono">curl -fsSL https://install.microsandbox.dev | sh</span></div></div></div>
+      <div class="step"><span class="n">2</span><div class="grow">No extra setup on Apple Silicon. microsandbox uses the built-in Hypervisor.framework through libkrun.</div></div>
+      <div class="step"><span class="n">3</span><div class="grow"><span class="btn">↻ Check again</span> <span class="muted sm">cezar also re-checks when you come back to this page.</span></div></div>
+    </div>
+    <div class="card" style="opacity:.9">
+      <b class="sm">What the other tabs say</b>
+      <div class="grid2 sm" style="margin-top:8px;gap:10px 18px">
+        <div><b>Linux</b><div class="muted">Needs KVM. cezar checks <span class="mono">/dev/kvm</span>. If it is missing, enable virtualization in the BIOS. If it is not readable, run <span class="mono">sudo usermod -aG kvm $USER</span> and log in again. Then <span class="mono">curl -fsSL https://install.microsandbox.dev | sh</span>.</div></div>
+        <div><b>Windows</b><div class="muted">Needs Windows Hypervisor Platform: <span class="mono">Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform</span>, then reboot and install.</div></div>
+        <div><b>macOS · Intel</b><div class="muted">Not supported by microsandbox. Use an <b>SSH host</b> running Linux with KVM, or <b>Daytona</b>. Both are in "Add account".</div></div>
+        <div><b>Inside a VM or container</b><div class="muted">Nested virtualization must be on. Otherwise, use an SSH host.</div></div>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="tag">Illustrative mockup — spec 2026-11-03-sandbox-service</div>
+</body></html>
