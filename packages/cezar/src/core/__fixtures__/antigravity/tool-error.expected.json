@@ -1,0 +1,129 @@
+[
+  {
+    "type": "session.started",
+    "backend": "antigravity",
+    "sessionId": "ccbd0170-7e41-4d43-b695-e4e217cbe1f2",
+    "model": "gemini-3.8-flash-low",
+    "cwd": "/repo",
+    "tools": [
+      "invoke_subagent",
+      "manage_subagents",
+      "manage_task",
+      "replace_file_content",
+      "run_command",
+      "view_file",
+      "write_to_file"
+    ]
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "step_2",
+      "name": "Read",
+      "title": "Read /repo/missing-file-xyz.txt",
+      "toolKind": "read",
+      "status": "running",
+      "input": {
+        "AbsolutePath": "/repo/missing-file-xyz.txt",
+        "path": "/repo/missing-file-xyz.txt"
+      },
+      "locations": [
+        {
+          "path": "/repo/missing-file-xyz.txt"
+        }
+      ]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "step_2",
+      "name": "Read",
+      "title": "Read /repo/missing-file-xyz.txt",
+      "toolKind": "read",
+      "status": "failed",
+      "input": {
+        "AbsolutePath": "/repo/missing-file-xyz.txt",
+        "path": "/repo/missing-file-xyz.txt"
+      },
+      "locations": [
+        {
+          "path": "/repo/missing-file-xyz.txt"
+        }
+      ],
+      "error": "declaring permissions: cortex tool view_file: convert tool call for permissions: model output error: invalid tool call error (invalid_args) failed to read file: GetFileAttributesEx /repo/missing-file-xyz.txt: The system cannot find the file specified."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "msg_3",
+      "role": "assistant",
+      "text": "Attempted"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_3",
+    "field": "text",
+    "delta": " to read [missing-file-x"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_3",
+    "field": "text",
+    "delta": "yz.txt](file:///repo"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_3",
+    "field": "text",
+    "delta": "/missing-file-xyz.tx"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_3",
+    "field": "text",
+    "delta": "t), but the file does not exist in the workspace (`The system cannot fin"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "msg_3",
+    "field": "text",
+    "delta": "d the file specified`).\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "msg_3",
+      "role": "assistant",
+      "text": "Attempted to read [missing-file-xyz.txt](file:///repo/missing-file-xyz.txt), but the file does not exist in the workspace (`The system cannot find the file specified`).\n"
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 29319,
+      "output": 92,
+      "total": 29411
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 29319,
+      "output": 92,
+      "total": 29411
+    }
+  }
+]

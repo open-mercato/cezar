@@ -1,10 +1,12 @@
-import { ChevronRightIcon } from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, CopyIcon } from 'lucide-react'
 import { useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Virtualizer, type VirtualizerHandle } from 'virtua'
 
 import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { CommentCount } from '@/components/comment-count'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { toast } from '@/components/ui/toaster'
+import { writeClipboard } from '@/lib/clipboard'
 import { ensureLang, highlightSync, langForPath, type SynToken } from '@/lib/highlighter'
 import { cn } from '@/lib/utils'
 
@@ -670,13 +672,13 @@ function DiffFileCard({
           the stuck header to different device pixels, and one row of scrolling text showed above
           the header. Flush, the shadow lies outside the scroller and is clipped away; at the card's
           top, the card's `overflow-clip` hides it. */}
-      <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 border-b border-[color-mix(in_oklab,var(--border)_50%,var(--card))] bg-card shadow-[0_-1px_0_var(--card)]">
+      <header className="sticky top-[var(--diff-sticky-top,0px)] z-10 flex items-center border-b border-[color-mix(in_oklab,var(--border)_50%,var(--card))] bg-card shadow-[0_-1px_0_var(--card)]">
         <button
           type="button"
           data-slot="diff-file-header"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
         >
           <ChevronRightIcon
             className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
@@ -693,29 +695,30 @@ function DiffFileCard({
             )}
           </span>
           {badge ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               {badge}
             </span>
           ) : null}
           {file.image ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               image
             </span>
           ) : file.binary ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               binary
             </span>
           ) : null}
           {preview ? (
-            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+            <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px text-micro font-medium text-muted-foreground">
               preview
             </span>
           ) : null}
           <span className="ml-auto flex shrink-0 items-center gap-2">
             <CommentCount count={commentCount} />
-            <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
+            <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-meta" />
           </span>
         </button>
+        <CopyPathButton path={file.path} />
       </header>
       {open && preview ? (
         <MarkdownPreview file={file} loadFileText={loadFileText} imageSrc={imageSrc} />
@@ -747,6 +750,30 @@ function DiffFileCard({
         </div>
       ) : null}
     </section>
+  )
+}
+
+/** Copies the file's (new) path — a sibling of the header toggle, since a button cannot nest one. */
+function CopyPathButton({ path }: { path: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      data-action="copy-path"
+      aria-label={copied ? 'Copied' : 'Copy file path'}
+      title="Copy file path"
+      onClick={() => {
+        void writeClipboard(path)
+          .then(() => {
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => toast(`Copy failed — the path is ${path}`, { tone: 'danger' }))
+      }}
+      className="mr-2 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
+    >
+      {copied ? <CheckIcon aria-hidden className="size-3.5" /> : <CopyIcon aria-hidden className="size-3.5" />}
+    </button>
   )
 }
 
@@ -998,7 +1025,7 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
   const label = gap.count === undefined ? '⋯ unchanged lines to end of file' : `⋯ ${gap.count} unchanged ${gap.count === 1 ? 'line' : 'lines'}`
   if (!onExpand) {
     return (
-      <div data-slot="diff-gap" className="border-y border-border/40 bg-muted/20 px-4 py-0.5 text-[11px] text-soft-foreground">
+      <div data-slot="diff-gap" className="border-y border-border/40 bg-muted/20 px-4 py-0.5 text-meta text-soft-foreground">
         {label}
       </div>
     )
@@ -1008,7 +1035,7 @@ function GapRow({ gap, onExpand }: { gap: ContextGap; onExpand?: (gap: ContextGa
       type="button"
       data-slot="diff-gap"
       onClick={() => onExpand(gap)}
-      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-[11px] text-soft-foreground hover:bg-muted/50 hover:text-foreground"
+      className="block w-full border-y border-border/40 bg-muted/20 px-4 py-0.5 text-left text-meta text-soft-foreground hover:bg-muted/50 hover:text-foreground"
     >
       {label} — expand
     </button>

@@ -57,7 +57,7 @@ export function BookmarkletRow({
       >
         Copy
       </button>
-      {hint ? <span className="min-w-0 truncate text-[11px] text-soft-foreground">{hint}</span> : null}
+      {hint ? <span className="min-w-0 truncate text-meta text-soft-foreground">{hint}</span> : null}
     </div>
   )
 }

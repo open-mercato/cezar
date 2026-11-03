@@ -3,7 +3,12 @@ import { lifecycleQueryKeys } from './worktree-lifecycle'
 import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
 import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
 import { dashboardLive } from './dashboard-live'
-import { trackerChangedEventSchema } from '@open-mercato/cezar-api-client'
+import {
+  runArtifactsEventSchema,
+  trackerChangedEventSchema,
+  type ArtifactsBySubjectResponse,
+  type RunArtifactsResponse,
+} from '@open-mercato/cezar-api-client'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
@@ -61,7 +66,7 @@ import type {
 
 // Route-relative: `apiPath` adds the version (and would add the project scope, though this
 // stream is workspace-level and never scoped).
-const SSE_URL = apiPath('/workspace/events')
+const SSE_URL = `${apiPath('/workspace/events')}?slim=1`
 
 /** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
@@ -822,6 +827,32 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         lifecycleMaxTimer ??= setTimeout(refreshLifecycle, 1000)
       })
 
+      // A run's artifact listing changed (spec 2026-10-22-html-artifacts-and-impact). The frame is
+      // the WHOLE listing, so it replaces the cached answer; only a cache someone opened is patched.
+      current.addEventListener('artifacts', (event) => {
+        if (disposed || source !== current) return
+        lastFrameAt = Date.now()
+        let payload: unknown
+        try { payload = JSON.parse((event as MessageEvent<string>).data) } catch { return }
+        const parsed = runArtifactsEventSchema.safeParse(payload)
+        if (!parsed.success) return
+        const { project, runId, artifacts, truncated, versions } = parsed.data
+        if (project !== undefined && project !== activeProject(queryClient)) {
+          inactiveProjectRefresher.onEvent(project)
+          return
+        }
+        const listing: RunArtifactsResponse = { artifacts, truncated, ...(versions ? { versions } : {}) }
+        const key = queryKeys.runs.artifacts(runId)
+        if (queryClient.getQueryData(key) !== undefined) queryClient.setQueryData<RunArtifactsResponse>(key, listing)
+        // An impact control showing this run (Assessing… → Open impact) takes the same listing.
+        queryClient.setQueriesData<ArtifactsBySubjectResponse>(
+          { queryKey: queryKeys.runs.impactSubjects },
+          (answer) => (answer?.run?.id === runId ? patchSubjectListing(answer, listing) : answer),
+        )
+        // The project Assets page's rows carry run facts the frame does not, so it refetches.
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.projectAssets })
+      })
+
       for (const name of WORKSPACE_EVENT_NAMES) {
         current.addEventListener(name, (event) => {
           if (disposed || source !== current) return
@@ -1073,3 +1104,10 @@ export function useRunUsage(runId: string | undefined): ProcessUsage | undefined
 
 const noopSubscribe = (): (() => void) => () => undefined
 const getEmptyUsage = (): Record<string, ProcessUsage> => EMPTY_USAGE
+
+/** A subject answer with its run's listing replaced (the frame is the WHOLE listing). */
+function patchSubjectListing(answer: ArtifactsBySubjectResponse, listing: RunArtifactsResponse): ArtifactsBySubjectResponse {
+  if (answer.run === null) return answer
+  const { versions: _old, ...rest } = answer
+  return { ...rest, artifacts: listing.artifacts, truncated: listing.truncated, ...(listing.versions ? { versions: listing.versions } : {}) }
+}

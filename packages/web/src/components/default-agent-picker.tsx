@@ -121,7 +121,7 @@ export function DefaultAgentPicker({
             }
             onClick={() => onPick(row.runner.id, row.account, hasAccountChoice)}
             className={cn(
-              'rounded-sm px-3 py-1.5 text-left font-mono text-[13px] font-medium transition-colors disabled:opacity-50',
+              'rounded-sm px-3 py-1.5 text-left font-mono text-ui font-medium transition-colors disabled:opacity-50',
               checked ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
             )}
           >
@@ -130,7 +130,7 @@ export function DefaultAgentPicker({
               <span
                 data-slot={row.missing ? 'agents-account-missing' : 'agents-account-dir'}
                 data-runner={row.runner.id}
-                className="ml-2 font-sans text-[11.5px] text-soft-foreground"
+                className="ml-2 font-sans text-meta text-soft-foreground"
               >
                 {row.desc}
               </span>
