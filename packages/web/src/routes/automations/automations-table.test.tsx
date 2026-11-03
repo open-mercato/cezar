@@ -45,6 +45,15 @@ const cells = (id: string) => Array.from(row(id).querySelectorAll('td'))
 const headers = () => Array.from(document.querySelectorAll('th')).map((th) => th.textContent)
 
 describe('AutomationsTable', () => {
+  it('shows every trigger and the earliest union time before server due state exists (#1818)', () => {
+    const automation = { ...NIGHTLY, nextRunAt: undefined, schedule: { type: 'daily' as const, hour: 16, minute: 0 },
+      schedules: [{ type: 'daily' as const, hour: 16, minute: 0 }, { type: 'daily' as const, hour: 12, minute: 0 }] }
+    renderTable({ ...response(), automations: [automation] })
+    expect(cells(automation.id)[2]?.textContent).toBe('every day at 16:00; every day at 12:00')
+    expect(cells(automation.id)[2]?.getAttribute('title')).toBe('every day at 16:00; every day at 12:00')
+    expect(cells(automation.id)[4]?.textContent).toBe('Wed 12:00')
+  })
+
   it('lays out the design columns in order — Cost 7d hidden for now (AUTOMATION_COST_VISIBLE)', () => {
     renderTable()
 
@@ -79,6 +88,16 @@ describe('AutomationsTable', () => {
     expect(badge?.textContent).toBe('×4')
     expect(badge?.getAttribute('title')).toBe('dispatch · up to 4 subtasks')
     expect(row(STALE_PR.id).querySelector('[data-slot="dispatch-badge"]')).toBeNull()
+  })
+
+  it('flags a tracker automation whose access was never reviewed', () => {
+    const trackerTrigger = { events: ['issue.opened' as const], association: { kind: 'linear' as const, source: { id: 's', webUrl: 'https://linear.app/a' }, externalId: 't', externalName: 'T' } }
+    const legacy = { ...TRIAGE, id: 'legacy', kind: 'tracker' as const, events: undefined, trackerTrigger }
+    const reviewed = { ...TRIAGE, id: 'reviewed', kind: 'tracker' as const, events: undefined, trackerTrigger: { ...trackerTrigger, access: { version: 1 as const, writes: [] } } }
+    renderTable(response({ automations: [legacy, reviewed] as unknown as typeof AUTOMATIONS }))
+
+    expect(row('legacy').querySelector('[data-slot="needs-review-badge"]')?.textContent).toBe('Needs review')
+    expect(row('reviewed').querySelector('[data-slot="needs-review-badge"]')).toBeNull()
   })
 
   it('prints the trigger label with the full text as the tooltip', () => {

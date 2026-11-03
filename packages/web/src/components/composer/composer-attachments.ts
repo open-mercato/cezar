@@ -44,16 +44,23 @@ export function appendAttachment<T extends Pick<AttachmentInput, 'mediaType' | '
   return [...prev, next]
 }
 
-/** Extension → media type for a file whose own `type` is empty or unrecognised. `.log` is here
+/** Extension → media type for a file whose own `type` is empty or unrecognised. A Map, because the
+ *  key is a user-supplied filename fragment and an object would answer `constructor` off its prototype.
+ *  Images are limited to the four formats every backend decodes (no svg). `.log` is here
  *  because `text/plain` is what the allowlist takes, and a log the browser typed as `text/plain`
  *  is accepted either way — the fallback only decides the TYPELESS case. */
-const EXTENSION_MEDIA_TYPES: Record<string, string> = {
-  md: 'text/markdown',
-  markdown: 'text/markdown',
-  txt: 'text/plain',
-  log: 'text/plain',
-  pdf: 'application/pdf',
-}
+const EXTENSION_MEDIA_TYPES = new Map<string, string>([
+  ['md', 'text/markdown'],
+  ['markdown', 'text/markdown'],
+  ['txt', 'text/plain'],
+  ['log', 'text/plain'],
+  ['pdf', 'application/pdf'],
+  ['png', 'image/png'],
+  ['jpg', 'image/jpeg'],
+  ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'],
+  ['webp', 'image/webp'],
+])
 
 /** Text formats sent as `text/plain` (telemetry 6c4b3066: an `.html` was refused). The contract
  *  never widens to `text/html` — cezar serves attachments from the cockpit's origin — so the bytes
@@ -87,7 +94,7 @@ export function attachmentMediaType(file: File): string {
   // `application/octet-stream` is the browser saying it does not know — the extension may.
   if (isAttachmentMediaType(file.type) && file.type !== BINARY_ATTACHMENT_MEDIA_TYPE) return file.type
   const ext = file.name.includes('.') ? (file.name.split('.').pop()?.toLowerCase() ?? '') : ''
-  const known = EXTENSION_MEDIA_TYPES[ext]
+  const known = EXTENSION_MEDIA_TYPES.get(ext)
   if (known) return known
   if (PLAIN_TEXT_EXTENSIONS.has(ext)) return 'text/plain'
   if (file.type.startsWith('text/') || PLAIN_TEXT_MEDIA_TYPES.has(file.type)) return 'text/plain'

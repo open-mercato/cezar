@@ -53,7 +53,7 @@ export function WebhookTestFeedback({ projectId, test, openHistory }: { projectI
     : policyHints[row.reason ?? ''] ? `${policyHints[row.reason!]} Activation stays blocked until a test passes.`
     : 'Fix the receiver, then send a new test. Tests are not retried automatically.'
   const tone = delivered ? 'border-success/40' : finished ? 'border-danger/30 bg-danger/5' : 'border-border'
-  return <div role="status" data-test-delivery={test.deliveryId} className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-[13px] ${tone}`}>
+  return <div role="status" data-test-delivery={test.deliveryId} className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-ui ${tone}`}>
     <div className="min-w-0"><p>{message}</p>{hint && <p className="text-muted-foreground">{hint}</p>}</div>
     <Button size="sm" variant="ghost" onClick={() => openHistory(test.receiverId)}>View in history</Button>
   </div>

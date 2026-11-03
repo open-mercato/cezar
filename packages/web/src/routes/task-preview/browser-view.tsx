@@ -688,7 +688,7 @@ export function BrowserView({
             placeholder="Enter an address, e.g. http://localhost:3000"
             aria-label="Address"
             spellCheck={false}
-            className="h-8 text-[13px] focus-visible:ring-ring/30 md:text-[13px]"
+            className="h-8 text-ui focus-visible:ring-ring/30 md:text-ui"
           />
         </form>
         {designOffered ? (
@@ -717,7 +717,7 @@ export function BrowserView({
             <kbd
               data-slot="browser-design-key"
               aria-hidden="true"
-              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-[10px] leading-4 opacity-70"
+              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-micro leading-4 opacity-70"
             >
               {formatChord(DESIGN_CHORD)}
             </kbd>

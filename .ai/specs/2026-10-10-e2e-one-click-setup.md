@@ -72,9 +72,9 @@ stored, so re-running a setup does not switch providers by accident.
 
 | Step | Kind | What |
 | --- | --- | --- |
-| `setup` | agent | Check Node (`^22.22.3 \|\| >=24.8.0`) and that there is a web app; `npx --yes e2e@latest init --yes`; install with the repo's package manager; `app.url: http://127.0.0.1:0` with a `{port}` dev-server command; wire the provider of the first stored key name; a locator-only `tests/smoke.e2e.ts`; write `implement-and-e2e.yaml` from `E2E_WORKFLOW_TEMPLATE`; commit. |
+| `setup` | agent | Check Node (`^22.22.3 \|\| >=24.8.0`) and that there is a web app; `npx --yes e2e@^0.21.0 init --yes` with a flag per wizard answer (`--engine web`, `--gateway` from the first stored key, `--skills .agents/skills,.claude/skills`, `--mcp .mcp.json`, `--install`); `app.url: http://127.0.0.1:0` with a `{port}` dev-server command; wire the provider of the first stored key name; a locator-only `tests/smoke.e2e.ts`; write `implement-and-e2e.yaml` from `E2E_WORKFLOW_TEMPLATE`; commit. |
 | `e2e-list` | check | `npx --no-install e2e list` — loads the config, collects tests, no model, no app — then `grep -qF '{{task}}'` on the written workflow. |
-| `e2e-smoke` | check | `npx --no-install e2e run --reporter list,markdown --max-failures 3`, printing `.e2e/summary.md`. |
+| `e2e-smoke` | check | `npx --no-install e2e run --reporter list,markdown --max-failures 3 --max-duration 300000`, with `E2E_CACHE_DIR` from `CEZ_SHARED_CACHE_DIR`, printing `.e2e/summary.md`. |
 
 | `pr` | `github.draft-pr` | cezar opens the draft PR itself (`createDraftPr`, the review gate's mechanism), title `chore: set up e2e browser tests (TesterArmy e2e)`. Both its ports lead to the success end. |
 
@@ -130,6 +130,10 @@ the config is in the checkout.
 
 - `init --yes` is non-interactive (Web engine, AI Gateway, skill + MCP files, **no** dependency
   install); without a TTY and without `--yes` it exits 2. It never overwrites existing files.
+  Since 0.21.0 (e2e #1114, #1117, #1118, #1119, verified 2026-10-30 on 0.21.3): every wizard
+  answer is a flag and `--install` uses the repo's package manager; `E2E_CACHE_DIR` overrides
+  `cache.dir` (blank = unset); `run --max-duration` exits 1 with `RUN_TIMEOUT`;
+  `app.command.inheritEnv` passes named host variables to the app.
 - `e2e list` needs no credential; a locator-only test passes with no key.
 - Port 0 is accepted only on literal `127.0.0.1`/`[::1]` and requires `app.command`.
 - A missing browser downloads once per run, before the run's clock starts.
