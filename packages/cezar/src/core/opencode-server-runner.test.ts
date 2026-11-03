@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { parseUsageLimit } from './usage-limit.ts';
+import { agentTmpDir } from '../runs/agent-tmpdir.ts';
 import {
   KILL_GRACE_MS,
   OpencodeServerRunner,
@@ -693,12 +694,15 @@ describe('permission prompts outside the worktree (c3d30076 hung 21 h on one)', 
   });
 
   it('grants anything under the run\'s own TMPDIR, and only when cezar set it there', () => {
-    const tmp = '/repo/.ai/cezar/tmp/r1';
+    const tmp = agentTmpDir('/repo/.ai/cezar', 'r1');
     const withTmp = { ...env, TMPDIR: tmp };
     expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), withTmp)).toBe('once');
     expect(opencodePermissionReply(ask(`${tmp}/build/out.log`), env)).toBe('reject');
-    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r2/x'), withTmp)).toBe('reject');
-    expect(opencodePermissionReply(ask('/repo/.ai/cezar/tmp/r1-other/x'), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${dirname(tmp)}/r2/x`), withTmp)).toBe('reject');
+    expect(opencodePermissionReply(ask(`${tmp}-other/x`), withTmp)).toBe('reject');
+    // #999: the pre-move in-checkout location is no longer this run's scratch.
+    const legacy = '/repo/.ai/cezar/tmp/r1';
+    expect(opencodePermissionReply(ask(`${legacy}/x`), { ...env, TMPDIR: legacy })).toBe('reject');
     expect(opencodePermissionReply(ask('/tmp/x'), { ...env, TMPDIR: '/tmp' })).toBe('reject');
   });
 
