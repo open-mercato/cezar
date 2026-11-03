@@ -1,0 +1,25 @@
+---
+title: "Inspect files changed in any PR"
+description: "Browse a pull request diff without starting an agent task."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/github/github.tsx
+    line: 1271
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Open Changes on a pull request to inspect file differences without starting an agent. Filter files narrows the list; Previous and Next move between files.
+
+## Where to find it
+
+GitHub → Pull requests → PR → Changes
+
+## How to use it
+
+1. Open the PR and its Changes tab.
+2. Narrow the list with Filter files.
+3. Move between files with Previous and Next.
+
+> **Good to know**: The view shows the SHA identifying the revision being inspected. Refresh indicates when it changes. Cezar marks incomplete diffs and files without a patch.

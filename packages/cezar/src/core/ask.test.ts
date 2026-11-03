@@ -1,12 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ASK_MAX_OPTIONS,
+  ASK_MAX_QUESTIONS,
   parseAskMarker,
   parseAskMarkerResult,
   parseAskRequest,
   stripAskMarker,
+  type AskQuestion,
   type AskRequest,
 } from './ask.ts';
+
+/** A distinct, well-formed question — so a count test can only fail on the count. */
+function question(index: number): AskQuestion {
+  return {
+    header: `H${index}`,
+    question: `Question ${index}?`,
+    options: [{ label: 'yes' }, { label: 'no' }],
+  };
+}
 
 const valid: AskRequest = {
   questions: [
@@ -26,7 +38,7 @@ describe('parseAskRequest', () => {
     expect(parseAskRequest(valid)).toEqual(valid);
   });
 
-  it('accepts up to 4 questions with multiSelect and optional descriptions', () => {
+  it('accepts several questions with multiSelect and optional descriptions', () => {
     const req = {
       questions: [
         {
@@ -50,9 +62,23 @@ describe('parseAskRequest', () => {
     expect(parseAskRequest({ questions: [] })).toBeNull();
   });
 
-  it('rejects more than 4 questions', () => {
-    const q = valid.questions[0];
-    expect(parseAskRequest({ questions: [q, q, q, q, q] })).toBeNull();
+  // The cap used to be 4, for parity with AskUserQuestion. A live run lost its question to
+  // that: five legitimate decisions, whole payload refused, raw JSON shown to the user.
+  it('accepts the five-question card the old cap refused', () => {
+    const req = { questions: Array.from({ length: 5 }, (_, i) => question(i)) };
+    expect(parseAskRequest(req)).toEqual(req);
+  });
+
+  it('accepts a card at exactly ASK_MAX_QUESTIONS', () => {
+    const req = { questions: Array.from({ length: ASK_MAX_QUESTIONS }, (_, i) => question(i)) };
+    expect(parseAskRequest(req)?.questions).toHaveLength(ASK_MAX_QUESTIONS);
+  });
+
+  // Distinct questions, so this can only fail on the count — the old version passed five
+  // copies of one question, which the uniqueness refinement rejected on its own.
+  it('rejects more than ASK_MAX_QUESTIONS questions', () => {
+    const questions = Array.from({ length: ASK_MAX_QUESTIONS + 1 }, (_, i) => question(i));
+    expect(parseAskRequest({ questions })).toBeNull();
   });
 
   it('rejects a question with fewer than 2 options', () => {
@@ -63,18 +89,15 @@ describe('parseAskRequest', () => {
     ).toBeNull();
   });
 
-  it('rejects a question with more than 4 options', () => {
-    expect(
-      parseAskRequest({
-        questions: [
-          {
-            header: 'H',
-            question: 'Q?',
-            options: [{ label: 'a' }, { label: 'b' }, { label: 'c' }, { label: 'd' }, { label: 'e' }],
-          },
-        ],
-      }),
-    ).toBeNull();
+  it('accepts a question with more than 4 options, up to ASK_MAX_OPTIONS', () => {
+    const options = Array.from({ length: ASK_MAX_OPTIONS }, (_, i) => ({ label: `opt${i}` }));
+    const req = { questions: [{ header: 'H', question: 'Q?', options }] };
+    expect(parseAskRequest(req)?.questions[0]?.options).toHaveLength(ASK_MAX_OPTIONS);
+  });
+
+  it('rejects a question with more than ASK_MAX_OPTIONS options', () => {
+    const options = Array.from({ length: ASK_MAX_OPTIONS + 1 }, (_, i) => ({ label: `opt${i}` }));
+    expect(parseAskRequest({ questions: [{ header: 'H', question: 'Q?', options }] })).toBeNull();
   });
 
   it('rejects a header longer than 12 chars', () => {
@@ -210,7 +233,7 @@ describe('parseAskMarkerResult diagnostics', () => {
         {
           header: 'Choice',
           question: 'Which?',
-          options: ['a', 'b', 'c', 'd', 'e'].map((label) => ({ label })),
+          options: Array.from({ length: ASK_MAX_OPTIONS + 1 }, (_, i) => ({ label: `opt${i}` })),
         },
       ],
     };
@@ -329,6 +352,24 @@ describe('marker anchoring (last occurrence, trailing control lines)', () => {
 
   it('tolerates a trailing CEZ:DONE line after the payload', () => {
     expect(parseAskMarkerResult(`Pick one.\nCEZ:ASK ${askJson}\nCEZ:DONE`).kind).toBe('valid');
+  });
+
+  it('peels several trailing control lines, blank lines and indentation included', () => {
+    const text = `Pick one.\nCEZ:ASK ${askJson}\n\n  CEZ:MONITORING  \n\nCEZ:DONE\n`;
+    expect(parseAskMarkerResult(text).kind).toBe('valid');
+  });
+
+  it('keeps a control word that shares a line with other text', () => {
+    expect(parseAskMarkerResult(`CEZ:ASK ${askJson} CEZ:DONE`).kind).toBe('invalid-json');
+  });
+
+  // CodeQL js/redos (#10): the old anchored regex backtracked cubically over trailing newlines —
+  // 4,000 of them took ~13 s, 8,000 took 85 s, all of it on the server's event loop.
+  it('trims a turn ending in thousands of blank lines in linear time', () => {
+    const text = `CEZ:ASK {${'\n'.repeat(4000)}x`;
+    const started = performance.now();
+    expect(parseAskMarkerResult(text).kind).toBe('invalid-json');
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 
   it('still diagnoses prose that trails the keyword as invalid-json', () => {

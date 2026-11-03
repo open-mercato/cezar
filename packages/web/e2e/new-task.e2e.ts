@@ -1,11 +1,12 @@
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, getJson } from './agent-browser'
+import { runnerSchema } from '@open-mercato/cezar-api-client'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, getJson, stopFixtureServer } from './agent-browser'
 
 /**
  * The full-screen /new composer (R4 Steps 1.1 + 1.3) end-to-end against a LIVE dry-run server:
@@ -104,10 +105,9 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 180_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
-  if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
+  await stopFixtureServer(server, dataRoot)
 })
 
 describe('the full-screen /new against a live dry-run server', () => {
@@ -120,7 +120,9 @@ describe('the full-screen /new against a live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped('/new')}`)
     expect(browser.text('h1')).toBe('What should the agent work on?')
-    expect(browser.isVisible('[data-slot="twinkle-backdrop"]')).toBe(true)
+    // The onboarding grammar (spec 2026-10-26-first-run-onboarding § Composer): violet accent, no texture.
+    expect(browser.count('[data-route="new"][data-onboarding]')).toBe(1)
+    expect(browser.count('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBe(0)
     expect(
       browser.evaluate(
         `document.activeElement === document.querySelector('[data-slot="composer"] textarea')`,
@@ -147,7 +149,9 @@ describe('the full-screen /new against a live dry-run server', () => {
     const health = (await (await fetch(`${baseUrl}/api/v1/health`)).json()) as {
       checks: Array<{ name: string; available: boolean }>
     }
-    const runners = ['claude', 'codex', 'opencode'].filter((id) =>
+    // Derived from the shared Runner union, not restated, so a future backend cannot silently
+    // fall out of sync the way this list did for cursor (#807 review).
+    const runners = runnerSchema.options.filter((id) =>
       health.checks.some((c) => c.name === id && c.available),
     )
     if (runners.length > 1) {

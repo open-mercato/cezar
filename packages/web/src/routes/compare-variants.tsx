@@ -145,7 +145,7 @@ function CompareView({
             {title}
           </span>
         </h1>
-        <p className="text-[13px] text-muted-foreground">
+        <p className="text-ui text-muted-foreground">
           {variants.length} variants of the same task, each in its own worktree — pick the diff you
           want to keep. The others are cancelled and archived, their worktrees and branches removed.
         </p>
@@ -247,7 +247,7 @@ function VariantColumn({
         {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (
           <span
             data-slot="variant-token-metrics"
-            className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-soft-foreground"
+            className="ml-auto flex shrink-0 items-center gap-1.5 text-meta text-soft-foreground"
           >
             {showTokens ? (
               <DirectionalUsage
@@ -266,25 +266,25 @@ function VariantColumn({
       {/* Honestly labeled: this block is git's own `git diff --stat` output from the variant's
           worktree, not this UI's ± stat — the numbers can disagree with a partial fetch. */}
       <div className="flex min-w-0 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="eyebrow text-soft-foreground">
           git diff --stat
         </span>
         <pre
           data-slot="variant-diffstat"
-          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-[11px] leading-[1.6] whitespace-pre text-muted-foreground"
+          className="max-h-36 overflow-auto rounded-md bg-muted/60 px-2.5 py-2 font-mono text-meta leading-[1.6] whitespace-pre text-muted-foreground"
         >
           {variant.diffStat.trimEnd() || '(no changes)'}
         </pre>
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <span className="text-[10.5px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <span className="eyebrow text-soft-foreground">
           Progress
         </span>
         {variant.handoffExcerpt ? (
           <div
             data-slot="variant-progress"
-            className="max-h-28 min-w-0 overflow-hidden text-[12.5px] text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
+            className="max-h-28 min-w-0 overflow-hidden text-label text-muted-foreground [mask-image:linear-gradient(to_bottom,black_75%,transparent)]"
           >
             <Markdown>{variant.handoffExcerpt}</Markdown>
           </div>
@@ -324,7 +324,7 @@ function VariantDiff({ variant }: { variant: GroupVariant }) {
       data-variant={variant.variant}
       className="min-w-0 overflow-hidden rounded-lg border border-border bg-card"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-[13px] font-medium hover:bg-muted/50">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-ui font-medium hover:bg-muted/50">
         <ChevronRightIcon
           className={cn('size-3.5 shrink-0 text-soft-foreground transition-transform', open && 'rotate-90')}
           aria-hidden="true"

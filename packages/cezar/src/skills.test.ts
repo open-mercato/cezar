@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  BUILTIN_SKILLS_DIR,
   discoverSkills,
   filterImportedTeamSkills,
+  parseFrontmatter,
   readImportedSkills,
   type Skill,
 } from './skills.ts';
@@ -157,6 +159,65 @@ describe('discoverSkills local entrypoints', () => {
   });
 });
 
+describe('parseFrontmatter', () => {
+  it('accepts YAML folded and literal descriptions, BOMs, trailing delimiter whitespace, and quoted arrays', () => {
+    const parsed = parseFrontmatter(
+      '\uFEFF---\n' +
+        'name: "say \\\"hi\\\""\n' +
+        "quote: 'it''s fine'\n" +
+        'description: >\n' +
+        '  Use when: the build fails\n' +
+        '  and needs investigation.\n' +
+        'literal: |\n' +
+        '  Line one.\n' +
+        '  Line two.\n' +
+        'tags: ["a, b", c]\n' +
+        '---   \n' +
+        'Body\n',
+    );
+    expect(parsed.frontmatter.name).toBe('say "hi"');
+    expect(parsed.frontmatter.quote).toBe("it's fine");
+    expect(parsed.frontmatter.description).toBe('Use when: the build fails and needs investigation.\n');
+    expect(parsed.frontmatter.literal).toBe('Line one.\nLine two.\n');
+    expect(parsed.frontmatter.tags).toEqual(['a, b', 'c']);
+    expect(parsed.body).toBe('Body\n');
+  });
+
+  it('keeps legacy scalar spelling and per-key fallback for unsupported YAML values', () => {
+    const parsed = parseFrontmatter(
+      '---\n' +
+        'name: 0042\n' +
+        'description: FALSE\n' +
+        'interactive: true\n' +
+        'description2: >\n' +
+        '  folded text\n' +
+        'unsupported: null\n' +
+        '---\nBody',
+    );
+    expect(parsed.frontmatter.name).toBe('0042');
+    expect(parsed.frontmatter.description).toBe('FALSE');
+    expect(parsed.frontmatter.interactive).toBe(true);
+    expect(parsed.frontmatter.description2).toBe('folded text\n');
+    expect(parsed.frontmatter.unsupported).toBe('null');
+  });
+
+  it.each(['42', 'true', '0042', 'FALSE', 'null'])('keeps legacy description spelling for %s', (value) => {
+    const parsed = parseFrontmatter(`---\ndescription: ${value}\n---\nBody`);
+    expect(parsed.frontmatter.description).toBe(value);
+  });
+
+  it('accepts both YAML boolean and legacy string forms of interactive', () => {
+    expect(parseFrontmatter('---\ninteractive: true\n---\n').frontmatter.interactive).toBe(true);
+    expect(parseFrontmatter("---\ninteractive: 'true'\n---\n").frontmatter.interactive).toBe('true');
+  });
+
+  it('falls back to the legacy parser for unquoted colon-space values', () => {
+    const parsed = parseFrontmatter('---\ndescription: Use when: the build fails\n---\nBody');
+    expect(parsed.frontmatter.description).toBe('Use when: the build fails');
+    expect(parsed.body).toBe('Body');
+  });
+});
+
 /**
  * The one skill cezar ships itself (spec 2026-09-13-automations-from-prompt): listed only on a
  * cockpit that has automations on AND publishes a transport, and shadowed by a repo skill of the
@@ -212,5 +273,45 @@ describe('the built-in create-cezar-automation skill', () => {
     const matches = (await discoverSkills(repoRoot)).filter((s) => s.name === 'create-cezar-automation');
     expect(matches).toHaveLength(1);
     expect(matches[0]).toMatchObject({ source: 'ai', body: 'House version' });
+  });
+});
+
+/** The bundled skill directory (spec 2026-10-22-html-artifacts-and-impact Q6). */
+describe('built-in skill directory', () => {
+  async function repo(): Promise<string> {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cez-skills-bundled-'));
+    tempDirs.push(repoRoot);
+    await mkdir(join(repoRoot, '.ai/cezar'), { recursive: true });
+    // No team repos: nothing is cloned in the background.
+    await writeFile(join(repoRoot, '.ai/cezar/config.json'), '{"skillsRepos": []}');
+    return repoRoot;
+  }
+
+  it('ships change-impact, resolved from the package (src under tsx, dist when installed)', async () => {
+    expect(BUILTIN_SKILLS_DIR.replace(/\\/g, '/')).toMatch(/\/packages\/cezar\/skills\/$|\/cezar\/skills\/$/);
+    const skill = (await discoverSkills(await repo())).find((s) => s.name === 'change-impact');
+    expect(skill).toMatchObject({ source: 'builtin', path: join(BUILTIN_SKILLS_DIR, 'change-impact', 'SKILL.md') });
+    expect(skill?.body).toContain('cez impact render');
+  });
+
+  it('has the LOWEST precedence: a user copy anywhere wins', async () => {
+    const repoRoot = await repo();
+    const bundled = await mkdtemp(join(tmpdir(), 'cez-skills-pkg-'));
+    tempDirs.push(bundled);
+    await mkdir(join(bundled, 'change-impact'), { recursive: true });
+    await writeFile(join(bundled, 'change-impact/SKILL.md'), '---\nname: change-impact\n---\nShipped');
+    await writeFile(join(bundled, 'only-shipped.md'), '---\nname: only-shipped\n---\nShipped too');
+    await mkdir(join(repoRoot, '.agents/skills/change-impact'), { recursive: true });
+    await writeFile(join(repoRoot, '.agents/skills/change-impact/SKILL.md'), '---\nname: change-impact\n---\nHouse');
+    const skills = await discoverSkills(repoRoot, bundled);
+    const impact = skills.filter((s) => s.name === 'change-impact');
+    expect(impact).toHaveLength(1);
+    expect(impact[0]).toMatchObject({ source: 'agents', body: 'House' });
+    expect(skills.find((s) => s.name === 'only-shipped')).toMatchObject({ source: 'builtin' });
+  });
+
+  it('a missing package dir is an empty tier, never an error', async () => {
+    const skills = await discoverSkills(await repo(), join(tmpdir(), 'cez-no-such-skills-dir'));
+    expect(skills.some((s) => s.name === 'change-impact')).toBe(false);
   });
 });

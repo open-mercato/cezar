@@ -1,10 +1,10 @@
-import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AppShell, routeOwnsScrollArrival, type AppShellProps } from './app-shell'
-import { NAV_ITEMS } from './nav-items'
+import { NAV_ITEMS, visibleNavItems } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
 afterEach(() => {
@@ -55,6 +55,39 @@ describe('AppShell', () => {
   it('renders the routed view in the main region', () => {
     renderShell('/', {}, <p>route content</p>)
     expect(within(screen.getByRole('main')).getByText('route content')).toBeTruthy()
+  })
+
+  // Brand guideline ("Znak z nazwą"): the mark WITHOUT its tile, in the text colour, beside the
+  // lowercase name in Chakra Petch SemiBold — 26px over 19px with a gap of 0.6 × the type size.
+  it('renders the brand lockup: the tile-less mark beside the lowercase name', () => {
+    renderShell('/')
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement | null
+    expect(lockup).toBeTruthy()
+    expect(lockup!.style.gap).toBe('11.4px')
+
+    const mark = lockup!.querySelector('[data-slot="brand-mark"]') as SVGElement | null
+    expect(mark).toBeTruthy()
+    expect(mark!.getAttribute('height')).toBe('26')
+    expect(mark!.getAttribute('fill')).toBe('currentColor')
+    // No tile: polygons only, no rect behind them and no <img> of the tiled icon.
+    expect(mark!.querySelectorAll('polygon')).toHaveLength(4)
+    expect(mark!.querySelector('rect')).toBeNull()
+    expect(sidebar().querySelector('img[src="/icon.svg"]')).toBeNull()
+
+    const name = lockup!.querySelector('[data-slot="brand-name"]') as HTMLElement | null
+    expect(name?.textContent).toBe('cezar')
+    expect(name!.style.fontSize).toBe('19px')
+    expect(name!.style.fontFamily).toBe('var(--brand)')
+    expect(name!.className).toContain('font-semibold')
+    expect(name!.className).toContain('tracking-normal')
+  })
+
+  it('renders a workspace name and uploaded logo when supplied', () => {
+    renderShell('/', { brandName: 'Acme Studio', brandLogoUrl: '/api/v1/workspace/branding-logo?v=abc' })
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement
+    expect(lockup.querySelector('[data-slot="brand-name"]')?.textContent).toBe('Acme Studio')
+    expect(lockup.querySelector('[data-slot="brand-logo"]')?.getAttribute('src')).toBe('/api/v1/workspace/branding-logo?v=abc')
+    expect(lockup.querySelector('[data-slot="brand-mark"]')).toBeNull()
   })
 
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
@@ -109,6 +142,7 @@ describe('AppShell', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -120,6 +154,7 @@ describe('AppShell', () => {
       '/inbox',
       '/git',
       '/github',
+      '/assets',
       '/automations',
       '/skills',
       '/workflows',
@@ -133,7 +168,7 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge && !item.tracker).length)
   })
 
   // #801: same degradation for the opt-in automations capability — the item disappears, it does
@@ -142,7 +177,7 @@ describe('AppShell', () => {
     renderShell('/', { automationsAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations).length)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations && !item.tracker).length)
   })
 
   it('shows the Automations item once the capability is on', () => {
@@ -156,6 +191,7 @@ describe('AppShell', () => {
       ['/', 'Tasks'],
       ['/git', 'Git'],
       ['/skills', 'Skills'],
+      ['/assets', 'Assets'],
       // Tasks stays lit while a task thread is open (spec's "Task list & table").
       ['/tasks/abc123', 'Tasks'],
     ]
@@ -210,8 +246,10 @@ describe('AppShell', () => {
 
   /* The footer used to be one wrapping row that overflowed the 264px column, so the theme toggle
    * silently fell onto a line of its own (#702). jsdom cannot measure that — but it can pin the
-   * structure that makes the wrap impossible: two rows, by construction, not by luck. */
-  describe('sidebar footer is two intentional rows (#702)', () => {
+   * structure that makes the wrap impossible: deliberate rows, by construction, not by luck. The
+   * machine glance is one more of them when it is mounted, which is why it is passed as a slot and
+   * asserted first in the list below. */
+  describe('sidebar footer rows are intentional (#702)', () => {
     const controls = () =>
       document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
 
@@ -221,10 +259,20 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly two children: the search bar, then the controls row', () => {
+    it('has exactly two children without the machine glance: the search bar, then the controls', () => {
       renderShell('/', { version: '1.2.3' })
       const children = Array.from(footer().children) as HTMLElement[]
       expect(children.map((child) => child.dataset.slot)).toEqual([
+        'command-palette-hint',
+        'sidebar-footer-controls',
+      ])
+    })
+
+    it('puts the machine glance above both, as its own row', () => {
+      renderShell('/', { version: '1.2.3', hostWidget: <span data-slot="host-widget-stub" /> })
+      const children = Array.from(footer().children) as HTMLElement[]
+      expect(children.map((child) => child.dataset.slot)).toEqual([
+        'host-widget-stub',
         'command-palette-hint',
         'sidebar-footer-controls',
       ])
@@ -300,6 +348,7 @@ describe('AppShell', () => {
       expect(document.querySelector('[data-slot="repo-chip"]')).toBeNull()
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
       expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
+      expect(document.querySelector('[data-slot="star-chip"]')).toBeNull()
     })
 
     it('renders the repo chip and version chip from props', () => {
@@ -307,6 +356,63 @@ describe('AppShell', () => {
       expect(screen.getByText('cezar / main')).toBeTruthy()
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
+    })
+
+    describe('the ⭐ ask', () => {
+      const chip = () => document.querySelector('[data-slot="star-chip"]') as HTMLAnchorElement | null
+
+      it('renders the count beside the version chip, in the one controls row', () => {
+        renderShell('/', { version: '1.2.3', starCount: 1234 })
+        const row = document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
+        expect(row.querySelector('[data-slot="star-chip"]')).not.toBeNull()
+        expect(within(footer()).getByText('1.2k')).toBeTruthy()
+      })
+
+      it('is absent — not empty — when the count is unavailable', () => {
+        // Offline, a rate-limited IP, or `CEZ_NO_BANNER=1`. A button advertising a number it
+        // cannot produce is worse than no button, and the row has no room to spare either.
+        renderShell('/', { version: '1.2.3', starCount: null })
+        expect(chip()).toBeNull()
+      })
+
+      it('still renders at zero — a real count, not a missing one', () => {
+        renderShell('/', { version: '1.2.3', starCount: 0 })
+        expect(chip()).not.toBeNull()
+        expect(within(footer()).getByText('0')).toBeTruthy()
+      })
+
+      it('links to cezar, in a new tab, leaking neither opener nor referrer', () => {
+        renderShell('/', { starCount: 42 })
+        expect(chip()?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+        expect(chip()?.getAttribute('target')).toBe('_blank')
+        expect(chip()?.getAttribute('rel')).toContain('noopener')
+        expect(chip()?.getAttribute('rel')).toContain('noreferrer')
+      })
+
+      it('names itself for a screen reader with the exact count, not the abbreviation', () => {
+        renderShell('/', { starCount: 12_345 })
+        // The visible chip abbreviates for the 264px column; the accessible name must not —
+        // "12.3k stars" is a worse answer to "how many" than the number itself.
+        const label = chip()?.getAttribute('aria-label') ?? ''
+        expect(label).toMatch(/star cezar on github/i)
+        // Formatted for the reader's own locale, so assert it the same way rather than pinning
+        // `12,345` — that spelling is a property of the test machine, not of this component.
+        expect(label).toContain(new Intl.NumberFormat().format(12_345))
+        expect(label).not.toContain('12.3k')
+      })
+
+      it('is shrink-0, leaving the version chip as the row\'s one elastic item (#876)', () => {
+        // Two elastic controls would give the row two ways to lose its width budget. The star
+        // chip is six characters at worst, so it can afford to be rigid.
+        renderShell('/', { version: '1.2.3', starCount: 12_345 })
+        expect(chip()?.className).toContain('shrink-0')
+      })
+
+      it('offers no reward and blocks nothing — the chip is a link and only a link', () => {
+        renderShell('/', { starCount: 1000 })
+        expect(chip()?.tagName).toBe('A')
+        expect(chip()?.textContent ?? '').not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium)\b/i)
+      })
     })
 
     describe('version chip update affordance (#368)', () => {
@@ -363,6 +469,22 @@ describe('AppShell', () => {
       expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
     })
 
+    it('dots a nav item whose feature shipped since the user started (spec 2026-10-26, "Coming back")', () => {
+      renderShell('/', { newNavItems: new Set(['/workflows', '/settings']) })
+      const markers = [...document.querySelectorAll('[data-slot="nav-new-marker"]')]
+      expect(markers).toHaveLength(2)
+      expect(markers.map((marker) => marker.closest('a')?.getAttribute('href'))).toEqual(['/workflows', '/settings'])
+      expect(screen.getByRole('link', { name: /Workflows\s*New/ })).toBeDefined()
+    })
+
+    it('puts the "What\u2019s new" row in the sidebar footer, above the host widget', () => {
+      renderShell('/', { whatsNew: <button type="button" data-slot="whats-new">What’s new</button>, hostWidget: <div data-slot="host-widget" /> })
+      const footer = document.querySelector('[data-slot="sidebar-footer"]')
+      const row = footer?.querySelector('[data-slot="whats-new"]')
+      expect(row).not.toBeNull()
+      expect(row?.compareDocumentPosition(footer!.querySelector('[data-slot="host-widget"]')!) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+
     it('renders no Skills marker without an actionable update', () => {
       renderShell()
       expect(document.querySelector('[data-slot="nav-update-marker"]')).toBeNull()
@@ -409,6 +531,51 @@ describe('AppShell', () => {
     })
   })
 
+  /**
+   * Dashboard and All tasks stack directly against each other, so they are peers: one row
+   * height, one type scale, one violet icon. Dashboard shipped with its own inline class string
+   * and drifted to a taller row with a grey icon; these pin the pair together.
+   */
+  describe('top-level doors read as peers', () => {
+    const dashboard = () => document.querySelector('[data-slot="dashboard-link"]') as HTMLElement
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement
+
+    /** The shared skin, minus the active-state background either row adds on its own page. */
+    const skin = (el: HTMLElement) => [...el.classList].filter(c => c !== 'bg-muted').sort()
+
+    it('paints both rows from the same class string', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      expect(skin(dashboard())).toEqual(skin(allTasks()))
+    })
+
+    it('gives both rows the touch height that relaxes to 36px on desktop', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        expect(row.classList.contains('h-11')).toBe(true)
+        expect(row.classList.contains('md:h-9')).toBe(true)
+        // The drifted Dashboard row was `min-h-11` with no desktop override — 8px taller than
+        // the row beneath it at every width above `md`.
+        expect(row.classList.contains('min-h-11')).toBe(false)
+      }
+    })
+
+    it('gives both icons the violet accent', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        const icon = row.querySelector('svg') as SVGElement
+        expect(icon).not.toBeNull()
+        expect(icon.getAttribute('class')).toContain('text-violet/70')
+      }
+    })
+
+    it('brings its own icon to full strength on its own page', () => {
+      renderShell('/dashboard', { projectGroups: <p>groups</p> })
+      const icon = dashboard().querySelector('svg') as SVGElement
+      expect(icon.getAttribute('class')).toContain('text-violet')
+      expect(icon.getAttribute('class')).not.toContain('text-violet/70')
+    })
+  })
+
   describe('banner slot', () => {
     it('renders the banner when one is passed', () => {
       renderShell('/', { banner: <p>banner content</p> })
@@ -449,6 +616,38 @@ describe('AppShell', () => {
 
   /** jsdom cannot evaluate `md:` — so assert the structure and the responsive classes that
    *  encode it, and leave "does it actually reflow at 390px" to the e2e iPhone screenshot. */
+  /** Settings is full-screen (spec 2026-10-13-unified-settings): the shell renders none of its
+   *  chrome on a settings URL — the settings frame brings its own header, nav and way back. */
+  describe('chromeless settings', () => {
+    for (const entry of ['/p/boot/settings/agents', '/p/boot/settings', '/settings/global/appearance', '/settings/global']) {
+      it(`${entry} renders no sidebar, no drawer trigger and no mobile top bar`, () => {
+        renderShell(entry)
+        const shell = document.querySelector('[data-slot="app-shell"]') as HTMLElement
+        expect(shell.hasAttribute('data-chromeless')).toBe(true)
+        expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+        expect(document.querySelector('[data-slot="mobile-top-bar"]')).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Open menu' })).toBeNull()
+        // The routed view still renders in the one scrolling region.
+        expect(within(document.querySelector('[data-slot="main"]') as HTMLElement).getByText('route content')).toBeTruthy()
+      })
+    }
+
+    it('keeps the banner row — provider failures link INTO settings, so the fix stays visible', () => {
+      renderShell('/p/boot/settings/agents', { banner: <div data-testid="banner">auth failed</div> })
+      expect(screen.getByTestId('banner')).toBeTruthy()
+      expect(document.querySelector('[data-slot="banner-slot"]')?.className).toContain('row-start-2')
+    })
+
+    it('is NOT chromeless on a look-alike path, or on the Skills page that /settings/skills redirects to', () => {
+      renderShell('/p/boot/settingsfoo')
+      expect(document.querySelector('[data-slot="app-shell"]')?.hasAttribute('data-chromeless')).toBe(false)
+      expect(sidebar()).not.toBeNull()
+      cleanup()
+      renderShell('/p/boot/skills')
+      expect(sidebar()).not.toBeNull()
+    })
+  })
+
   describe('responsive skeleton', () => {
     it('hides the sidebar below md and shows it from md up', () => {
       renderShell()
@@ -472,6 +671,64 @@ describe('AppShell', () => {
       expect(within(bar).getByText('Skills')).toBeTruthy()
     })
 
+  })
+
+  describe('foldable sidebar', () => {
+    it('folds into a rail, remembers it, and unfolds with focus on the fold button', () => {
+      renderShell()
+      fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      const unfold = screen.getByRole('button', { name: 'Show sidebar' })
+      expect(document.activeElement).toBe(unfold)
+      expect(localStorage.getItem('cez-sidebar-folded')).toBe('1')
+
+      fireEvent.click(unfold)
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Hide sidebar' }))
+      expect(localStorage.getItem('cez-sidebar-folded')).toBeNull()
+    })
+
+    it('toggles with Mod+B', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+    })
+
+    it('Mod+B from a focused textarea keeps focus there', () => {
+      renderShell('/', {}, <textarea aria-label="composer" />)
+      const composer = screen.getByRole('textbox', { name: 'composer' })
+      composer.focus()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).toBe(composer)
+      fireEvent.keyDown(composer, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      expect(document.activeElement).toBe(composer)
+    })
+
+    it('ignores a held Mod+B and one pressed behind a dialog', () => {
+      renderShell()
+      const mod = /mac/i.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', repeat: true, ...mod })
+      expect(sidebar()).toBeTruthy()
+      const dialog = document.createElement('div')
+      dialog.setAttribute('role', 'dialog')
+      document.body.append(dialog)
+      fireEvent.keyDown(window, { key: 'b', code: 'KeyB', ...mod })
+      expect(sidebar()).toBeTruthy()
+      dialog.remove()
+    })
+
+    it('loads folded without stealing focus', () => {
+      localStorage.setItem('cez-sidebar-folded', '1')
+      renderShell()
+      expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+      expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Show sidebar' }))
+    })
   })
 
   /** The resizable desktop column (#788, option C). jsdom has no layout engine, so these assert
@@ -782,8 +1039,9 @@ describe('AppShell', () => {
 
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      expect(links.map((a) => a.getAttribute('href'))).toEqual(NAV_ITEMS.map((item) => item.to))
-      expect(links.map((a) => a.textContent)).toEqual(NAV_ITEMS.map((item) => item.label))
+      const visible = visibleNavItems({ forge: true, inbox: true, automations: true })
+      expect(links.map((a) => a.getAttribute('href'))).toEqual(visible.map((item) => item.to))
+      expect(links.map((a) => a.textContent)).toEqual(visible.map((item) => item.label))
 
       // …and the rest of the sidebar came along, not just the nav.
       expect(within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })).toBeTruthy()
@@ -864,5 +1122,49 @@ describe('AppShell', () => {
       expect(content.className).toContain('pt-[env(safe-area-inset-top)]')
       expect(content.className).toContain('pb-[env(safe-area-inset-bottom)]')
     })
+  })
+})
+
+
+describe('Dashboard active navigation', () => {
+  it.each(['/dashboard', '/dashboard?view=costs', '/dashboard?period=30d'])('highlights %s beyond hover', entry => {
+    renderShell(entry)
+    const link = screen.getByRole('link', { name: 'Dashboard' })
+    expect(link.getAttribute('aria-current')).toBe('page')
+    expect(link.classList.contains('bg-muted')).toBe(true)
+  })
+  it('does not remain highlighted on another page', () => {
+    renderShell('/tasks')
+    const link = screen.getByRole('link', { name: 'Dashboard' })
+    expect(link.getAttribute('aria-current')).toBeNull()
+    expect(link.classList.contains('bg-muted')).toBe(false)
+  })
+})
+
+describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2)', () => {
+  it('folds the sidebar to an icon rail while a view holds it, and the rail asks the holder to let go', async () => {
+    const { holdSidebarRail } = await import('@/lib/sidebar-rail')
+    renderShell('/tasks/r1/assets')
+    expect(sidebar()).toBeTruthy()
+
+    const onExit = vi.fn()
+    let release = () => {}
+    act(() => {
+      release = holdSidebarRail(onExit)
+    })
+    expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
+    const rail = document.querySelector('[data-slot="focus-sidebar-rail"]') as HTMLElement
+    expect(rail).toBeTruthy()
+    // The rail still navigates: every nav item as an icon link, Tasks lit for a task URL.
+    expect(within(rail).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
+    // The project Assets page (Phase 3) is in the rail as well as the expanded nav.
+    expect(within(rail).getByRole('link', { name: 'Assets' }).getAttribute('href')).toBe('/assets')
+
+    fireEvent.click(within(rail).getByRole('button', { name: 'Show sidebar' }))
+    expect(onExit).toHaveBeenCalledTimes(1)
+
+    act(() => release())
+    expect(sidebar()).toBeTruthy()
+    expect(document.querySelector('[data-slot="focus-sidebar-rail"]')).toBeNull()
   })
 })

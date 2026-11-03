@@ -14,8 +14,9 @@ import { onWorkspaceEvent } from '@/api/global-events'
 import { queryScope } from '@open-mercato/cezar-api-client'
 import { useHealth } from '@/api/queries'
 import { toast } from '@/components/ui/toaster'
-import { cliOf } from '@/lib/automation-cli'
+import { cliOf, trackerCliNeedsReview, TRACKER_CLI_REVIEW_NOTE } from '@/lib/automation-cli'
 import { useActiveProjectId } from '@/lib/project-router'
+import { writeClipboard } from '@/lib/clipboard'
 
 /**
  * The Automations page's data and the row actions every screen shares (spec
@@ -53,6 +54,7 @@ export function useAutomationsQuery(enabled: boolean) {
 
 export interface AutomationActions {
   /** Schedule → `run` (a launch, paused or not); poll → `check` with mode `execute`. */
+  preview: (automation: AutomationListEntry) => Promise<void>
   runNow: (automation: AutomationListEntry) => Promise<void>
   toggleEnabled: (automation: AutomationListEntry) => Promise<void>
   /** Creates a PAUSED copy named "<name> (copy)". */
@@ -74,8 +76,16 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         toast(`Started "${automation.name}" — the task is queued.`)
       } else {
         await checkAutomation(automation.id, 'execute')
-        toast(`Checking GitHub for "${automation.name}" now.`)
+        toast(`Checking events for "${automation.name}" now.`)
       }
+    },
+    onSuccess: () => void refresh(),
+    onError: fail,
+  })
+  const preview = useMutation({
+    mutationFn: async (automation: AutomationListEntry) => {
+      await checkAutomation(automation.id, 'preview')
+      toast(`Preview queued for "${automation.name}" — no tasks will launch. See the execution log for results.`)
     },
     onSuccess: () => void refresh(),
     onError: fail,
@@ -92,8 +102,10 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         ...(automation.description ? { description: automation.description } : {}),
         kind: automation.kind,
         ...(automation.kind === 'schedule'
-          ? { schedule: automation.schedule }
-          : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
+          ? { schedule: automation.schedule, ...(automation.schedules ? { schedules: automation.schedules } : {}) }
+          : automation.kind === 'tracker'
+            ? { trackerTrigger: automation.trackerTrigger, intervalSeconds: automation.intervalSeconds, filters: automation.filters }
+            : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
         task: automation.task,
       }
       return createAutomation(body)
@@ -111,6 +123,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
   })
 
   return {
+    preview: (automation) => preview.mutateAsync(automation).then(() => undefined, () => undefined),
     runNow: (automation) => run.mutateAsync(automation).then(() => undefined, () => undefined),
     toggleEnabled: (automation) => toggle.mutateAsync(automation).then(() => undefined, () => undefined),
     duplicate: (automation) => duplicate.mutateAsync(automation).then(() => undefined, () => undefined),
@@ -119,25 +132,27 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
       const line = cliOf({
         name: automation.name,
         kind: automation.kind,
+        trackerTrigger: automation.trackerTrigger,
         schedule: automation.schedule,
+        schedules: automation.schedules,
         events: automation.events,
         intervalSeconds: automation.intervalSeconds,
         filters: automation.filters,
         task: automation.task,
       })
-      await copyText(line)
+      await copyText(line, trackerCliNeedsReview(automation) ? TRACKER_CLI_REVIEW_NOTE : undefined)
     },
-    busy: run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
+    busy: preview.isPending || run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
   }
   // `data` is accepted so a caller can key actions on the loaded zone later without a new hook.
   void data
 }
 
 /** Clipboard write with the honest failure the spec asks for (non-secure contexts have none). */
-export async function copyText(text: string): Promise<void> {
+export async function copyText(text: string, note?: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
-    toast('Copied to the clipboard.')
+    await writeClipboard(text)
+    toast(note ? `Copied to the clipboard. ${note}` : 'Copied to the clipboard.')
   } catch {
     toast('Copy failed — select the text to copy it.', { tone: 'danger' })
   }

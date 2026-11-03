@@ -5,11 +5,29 @@ import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
 import { RunStore, type RunRecord } from '../runs/store.ts';
+import { defaultAgentAccountStore, mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { RunManager, type StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
+
+// `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
+// executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
+// env-only resolution so the suite reads the same on every host; `claude-bin.test.ts` tests
+// discovery for real.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/claude-bin.ts')>()),
+  resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+}));
+
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, the junie test below spawned a real
+// `junie` process (#M3 review). `connected: false` with no hint is what a genuinely unverifiable
+// ACP handshake maps to — the 'unknown' status the one junie test in this file is about.
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: false })),
+}));
 
 const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
 
@@ -266,6 +284,7 @@ describe('the gate verifies before it refuses', () => {
   let repoRoot: string;
   let store: RunStore;
   let startRun: ReturnType<typeof vi.fn>;
+  const openTerminal = vi.fn(async () => true);
   const savedDryRun = process.env.CEZ_DRY_RUN;
 
   beforeEach(() => {
@@ -273,6 +292,7 @@ describe('the gate verifies before it refuses', () => {
     // be off or these would pass without exercising anything.
     delete process.env.CEZ_DRY_RUN;
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-gate-verify-'));
+    openTerminal.mockClear();
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     startRun = vi.fn((_workflow: WorkflowDef, input: StartRunInput) => store.createRun({
       title: 'Task',
@@ -283,9 +303,10 @@ describe('the gate verifies before it refuses', () => {
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    await mergeWriteAgentAccounts(() => defaultAgentAccountStore());
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });
@@ -293,14 +314,15 @@ describe('the gate verifies before it refuses', () => {
   /** A claude whose login state the test controls, with a clock it can advance. */
   const setup = (options: { disabled?: ProviderId[] } = {}) => {
     let now = 1_000;
-    const state = { claudeLoggedIn: false, probes: 0 };
+    const state = { claudeLoggedIn: false, workLoggedIn: false, probes: 0 };
     const providerAuth = new ProviderAuthService({
       platform: 'linux',
       now: () => now,
-      runCommand: async (executable) => {
+      runCommand: async (executable, _args, _timeout, env) => {
         state.probes += 1;
         if (executable === 'claude') {
-          return state.claudeLoggedIn
+          const loggedIn = env?.CLAUDE_CONFIG_DIR ? state.workLoggedIn : state.claudeLoggedIn;
+          return loggedIn
             ? { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 }
             : { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 };
         }
@@ -315,6 +337,7 @@ describe('the gate verifies before it refuses', () => {
       version: 'test',
       providerAuth,
       workspaceConfig: memoryWorkspaceConfig(options.disabled ?? []),
+      openTerminal,
     });
     return { app, providerAuth, state, advance: (ms: number) => { now += ms; } };
   };
@@ -336,6 +359,15 @@ describe('the gate verifies before it refuses', () => {
     expect(startRun).toHaveBeenCalledTimes(1);
   });
 
+  it('allows Junie runs when credentials are unknown because Junie has no read-only auth probe', async () => {
+    const { app } = setup();
+
+    const response = await start(app, 'junie');
+
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledTimes(1);
+  });
+
   it('still refuses when the fresh answer agrees — verifying is not a way in', async () => {
     const { app, providerAuth, advance } = setup();
     await providerAuth.status();
@@ -347,6 +379,96 @@ describe('the gate verifies before it refuses', () => {
       error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
     });
     expect(startRun).not.toHaveBeenCalled();
+  });
+
+  // Telemetry ac53a6ef: the gate probed only the discovered login, never the account the run uses.
+  const addWorkAccount = () => mergeWriteAgentAccounts((accounts) => {
+    accounts.accounts.push({ id: 'work', provider: 'claude', configDir: join(repoRoot, 'claude-work'), label: 'Work', addedAt: '' });
+  });
+
+  it('starts the run on a signed-in selected account even when the default login is signed out', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    await mergeWriteAgentAccounts((accounts) => { accounts.defaults.claude = 'work'; });
+    state.workLoggedIn = true;
+
+    const response = await start(app, 'claude');
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a composer-picked account that is signed out, even when the default login is fine', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    state.claudeLoggedIn = true;
+
+    const response = await apiRequest(app, '/api/v1/runs', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ task: 'Task', runner: 'claude', agentProfile: 'work', steps: [{ id: 'task', prompt: '{{task}}' }] }),
+    });
+    expect(response.status).toBe(409);
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  // 0.15.2 regression of ac53a6ef: the machine-wide account is signed out while the discovered
+  // login — the only one `GET /providers/status` describes — is fine. The refusal must say which.
+  it('names the signed-out workspace-default account instead of pointing at Providers', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    await mergeWriteAgentAccounts((accounts) => { accounts.defaults.claude = 'work'; });
+    state.claudeLoggedIn = true;
+
+    const response = await start(app, 'claude');
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Claude Code account "Work" is not signed in. Sign it in under Settings → Agent accounts, or choose another account for this task.',
+    });
+    expect(startRun).not.toHaveBeenCalled();
+  });
+
+  /** A run whose `work` step owns session `sess-1`, recorded on `profileId` (none = the default login). */
+  const sessionRun = (status: RunRecord['status'], profileId?: string) => {
+    const run = store.createRun({
+      title: 'Task',
+      workflow: 'quick-task',
+      task: 'Task',
+      runner: 'claude',
+      steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+    });
+    store.updateRun(run.id, { status });
+    store.updateStep(run.id, 'work', { sessionId: 'sess-1', ...(profileId ? { profileId } : {}) });
+    return run;
+  };
+
+  it('gates a resume on the account that owns the session, not the project selection', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    await mergeWriteAgentAccounts((accounts) => { accounts.defaults.claude = 'work'; });
+    state.claudeLoggedIn = true; // the session's (default) login is fine; the project's account is not
+    const run = sessionRun('done');
+
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/open-in-cli`, { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(openTerminal).toHaveBeenCalledTimes(1);
+  });
+
+  it('gates a fresh CLI launch on the account it opens, not the one the run recorded', async () => {
+    const { app, state } = setup();
+    await addWorkAccount();
+    state.workLoggedIn = true; // the recorded account is fine; the project's (default) login is not
+    const run = sessionRun('running', 'work');
+
+    const response = await apiRequest(app, `/api/v1/runs/${run.id}/open-in`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ target: 'cli:claude' }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: 'Claude Code credentials are unavailable. Authorize it in Settings → Agents → Providers.',
+    });
+    expect(openTerminal).not.toHaveBeenCalled();
   });
 
   it('cannot be talked out of a rejection it actually observed during a run', async () => {

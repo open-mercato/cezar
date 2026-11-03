@@ -1,5 +1,7 @@
 import * as React from 'react'
 
+import { isApplePlatform } from './keybindings'
+
 /**
  * The one "cmd-or-ctrl + key" helper (spec, cross-cutting keyboard rule): macOS and
  * Windows/Linux modifiers are always registered together, never as two separate bindings that
@@ -42,13 +44,31 @@ export type CommandShortcutEvent = Pick<
  *  - A focused input/textarea/contenteditable swallows it — except the palette's own input.
  *  - `key` compares case-insensitively so Caps Lock (which reports `K`) still matches.
  */
-export function shouldTriggerCommandShortcut(event: CommandShortcutEvent, key: string): boolean {
+export function shouldTriggerCommandShortcut(
+  event: CommandShortcutEvent,
+  key: string,
+  { inEditable = false }: CommandShortcutOptions = {},
+): boolean {
   if (typeof event.key !== 'string' || event.key.toLowerCase() !== key.toLowerCase()) return false
   if (!event.metaKey && !event.ctrlKey) return false
   if (event.altKey || event.shiftKey) return false
   if (event.repeat) return false
-  if (isEditableTarget(event.target) && !isCommandPaletteInput(event.target)) return false
+  if (isEditableTarget(event.target) && !isCommandPaletteInput(event.target)) {
+    if (!inEditable) return false
+    // Typing keeps its own meaning of the OTHER modifier: Ctrl+P is "line up" in a macOS text
+    // field, so there only the platform's own chord counts. In the terminal every Ctrl chord is
+    // the shell's, so only ⌘ on a Mac fires (spec 2026-10-17-task-palette).
+    const apple = isApplePlatform()
+    if (event.target instanceof HTMLElement && event.target.closest('.xterm')) return apple && event.metaKey
+    if (apple ? !event.metaKey : !event.ctrlKey) return false
+  }
   return true
+}
+
+export interface CommandShortcutOptions {
+  /** Fire even while typing. For a chord no text field gives a meaning to and whose browser default
+   *  would otherwise win there — ⌘P would print the page from the composer (spec 2026-10-17-task-palette). */
+  inEditable?: boolean
 }
 
 /**
@@ -58,21 +78,26 @@ export function shouldTriggerCommandShortcut(event: CommandShortcutEvent, key: s
  * Firefox's search bar, ⌘N a new window) and must not act on the ones we claim. The handler
  * lives in a ref so a fresh closure per render never re-subscribes the listener.
  */
-export function useCommandShortcut(key: string, handler: (event: KeyboardEvent) => void): void {
+export function useCommandShortcut(
+  key: string,
+  handler: (event: KeyboardEvent) => void,
+  options: CommandShortcutOptions = {},
+): void {
   const handlerRef = React.useRef(handler)
   React.useLayoutEffect(() => {
     handlerRef.current = handler
   })
+  const inEditable = options.inEditable === true
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!shouldTriggerCommandShortcut(event, key)) return
+      if (!shouldTriggerCommandShortcut(event, key, { inEditable })) return
       event.preventDefault()
       handlerRef.current(event)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [key])
+  }, [key, inEditable])
 }
 
 /**

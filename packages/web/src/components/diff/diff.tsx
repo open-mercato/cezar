@@ -5,6 +5,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { cn } from '@/lib/utils'
 
 import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { diffScroller, scrollWithin } from './scroll-within'
 import type { DiffFileChange, DiffProps } from './types'
 
 /**
@@ -26,18 +27,31 @@ import type { DiffFileChange, DiffProps } from './types'
  * the inline `DiffFallback` below renders the same props as plain marked-up patch text:
  * degraded, never blank.
  */
+type Engine = { View: ComponentType<DiffProps> } | 'failed'
+
+/** The chunk resolves once per page; every later mount renders it synchronously instead of
+ *  flashing "Loading diff…". A failure is not remembered, so the next mount retries. */
+let loadedEngine: { View: ComponentType<DiffProps> } | null = null
+let enginePromise: Promise<Engine> | null = null
+function loadEngine(): Promise<Engine> {
+  enginePromise ??= import('./diff-view').then(
+    (module) => (loadedEngine = { View: module.DiffView }),
+    () => {
+      enginePromise = null
+      return 'failed' as const
+    },
+  )
+  return enginePromise
+}
+
 export function Diff(props: DiffProps) {
-  const [engine, setEngine] = useState<{ View: ComponentType<DiffProps> } | 'failed' | null>(null)
+  const [engine, setEngine] = useState<Engine | null>(loadedEngine)
   useEffect(() => {
+    if (loadedEngine) return
     let cancelled = false
-    import('./diff-view').then(
-      (module) => {
-        if (!cancelled) setEngine({ View: module.DiffView })
-      },
-      () => {
-        if (!cancelled) setEngine('failed')
-      },
-    )
+    loadEngine().then((loaded) => {
+      if (!cancelled) setEngine(loaded)
+    })
     return () => {
       cancelled = true
     }
@@ -65,10 +79,10 @@ export function Diff(props: DiffProps) {
 /**
  * The zero-dependency fallback: same props, raw patch text with `+`/`-` line tints from the
  * theme tokens. No parser, no highlighter, no lazy import — nothing here can fail the way
- * the engine chunk can. Split mode degrades to unified; that is documented degradation, not
- * a bug.
+ * the engine chunk can. Split mode degrades to unified and Markdown `preview` to the plain
+ * patch; that is documented degradation, not a bug.
  */
-export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewRef, className }: DiffProps) {
+export function DiffFallback({ files, wrap = false, imageSrc, oldImageSrc, onOpenInApp, viewRef, className }: DiffProps) {
   const stat: DiffStat = {
     adds: files.reduce((sum, file) => sum + file.adds, 0),
     dels: files.reduce((sum, file) => sum + file.dels, 0),
@@ -85,7 +99,8 @@ export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewR
     scrollToPath: (path: string) => {
       for (const element of root.current?.querySelectorAll<HTMLElement>('[data-slot="diff-file"]') ?? []) {
         if (element.dataset.path === path) {
-          element.scrollIntoView({ block: 'start', behavior: 'smooth' })
+          const scroller = diffScroller(element)
+          if (scroller) scrollWithin(scroller, element, Number.parseFloat(getComputedStyle(element).scrollMarginTop) || 0)
           return
         }
       }
@@ -106,6 +121,7 @@ export function DiffFallback({ files, wrap = false, imageSrc, onOpenInApp, viewR
           wrap={wrap}
           imageSrc={imageSrc}
           onOpenInApp={onOpenInApp}
+          oldImageSrc={oldImageSrc}
         />
       ))}
     </div>
@@ -117,24 +133,30 @@ function FallbackFile({
   wrap,
   imageSrc,
   onOpenInApp,
+  oldImageSrc,
 }: {
   file: DiffFileChange
   wrap: boolean
   imageSrc?: (path: string) => string
   onOpenInApp?: (path: string) => void
+  oldImageSrc?: (path: string) => string
 }) {
   return (
-    <section data-slot="diff-file" data-path={file.path} className="min-w-0 overflow-clip rounded-md border border-border bg-card">
+    <section
+      data-slot="diff-file"
+      data-path={file.path}
+      className="min-w-0 scroll-mt-[var(--diff-sticky-top,0px)] overflow-clip rounded-md border border-border bg-card"
+    >
       <header className="flex items-center gap-2 border-b border-border/50 px-3 py-2">
         <span data-slot="diff-file-path" className="min-w-0 truncate font-mono text-xs font-medium">
           {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
         </span>
         <span className="ml-auto shrink-0">
-          <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-[11px]" />
+          <DiffStatLabel stat={{ adds: file.adds, dels: file.dels, files: 1 }} className="text-meta" />
         </span>
       </header>
       {shouldPreviewImage(file) ? (
-        <ImagePreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
+        <ImagePreview file={file} imageSrc={imageSrc} oldImageSrc={oldImageSrc} onOpenInApp={onOpenInApp} />
       ) : file.binary ? (
         <p className="px-4 py-2.5 text-xs text-soft-foreground">Binary file — no text diff.</p>
       ) : file.patch === '' ? (

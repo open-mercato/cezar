@@ -102,14 +102,14 @@ export function AddAccountDialog({
         </DialogHeader>
 
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-[13px]">
+          <label className="flex items-center gap-2 text-ui">
             <span className="text-muted-foreground">Agent</span>
             <select
               aria-label="Agent"
               data-slot="add-account-provider"
               value={provider}
               onChange={(event) => setProvider(event.target.value as ProviderId)}
-              className="rounded-md border border-input bg-card px-2 py-1 text-[13px] outline-none focus-visible:border-ring"
+              className="rounded-md border border-input bg-card px-2 py-1 text-ui outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               {providers.map((id) => (
                 <option key={id} value={id}>
@@ -118,7 +118,7 @@ export function AddAccountDialog({
               ))}
             </select>
           </label>
-          <label className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
+          <label className="flex min-w-0 flex-1 items-center gap-2 text-ui">
             <span className="shrink-0 text-muted-foreground">Name</span>
             <input
               type="text"
@@ -127,13 +127,13 @@ export function AddAccountDialog({
               value={label}
               placeholder="Work"
               onChange={(event) => setLabel(event.target.value)}
-              className="min-w-0 flex-1 rounded-md border border-input bg-card px-2 py-1 text-[13px] outline-none focus-visible:border-ring"
+              className="min-w-0 flex-1 rounded-md border border-input bg-card px-2 py-1 text-ui outline-none focus-visible:border-ring"
             />
           </label>
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label className="flex min-w-0 items-center gap-2 text-[13px]">
+          <label className="flex min-w-0 items-center gap-2 text-ui">
             <span className="shrink-0 text-muted-foreground">Folder</span>
             <input
               type="text"
@@ -148,7 +148,7 @@ export function AddAccountDialog({
                 setSelected(null)
                 create.reset()
               }}
-              className="min-w-0 flex-1 rounded-md border border-input bg-card px-2 py-1 font-mono text-[12.5px] outline-none focus-visible:border-ring"
+              className="min-w-0 flex-1 rounded-md border border-input bg-card px-2 py-1 font-mono text-label outline-none focus-visible:border-ring"
             />
             <Button
               type="button"
@@ -161,7 +161,7 @@ export function AddAccountDialog({
               {browsing ? 'Hide folders' : 'Browse…'}
             </Button>
           </label>
-          <p className="text-[11.5px] text-soft-foreground">
+          <p className="text-meta text-soft-foreground">
             A <code>~</code> is kept as written and expanded when the agent runs.
           </p>
         </div>
@@ -183,7 +183,7 @@ export function AddAccountDialog({
         {/* The server's own words: "that is already this agent's default folder", "already used
             by …", "must be an absolute path". This dialog cannot know which applies. */}
         {create.isError ? (
-          <p data-slot="add-account-error" className="min-w-0 break-words text-[13px] text-danger">
+          <p data-slot="add-account-error" className="min-w-0 break-words text-ui text-danger">
             {create.error instanceof Error ? create.error.message : 'could not add that folder'}
           </p>
         ) : null}

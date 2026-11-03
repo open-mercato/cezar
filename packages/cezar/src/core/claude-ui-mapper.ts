@@ -70,6 +70,20 @@ export interface ClaudeUiMapperState {
   /** `TaskCreate` calls whose result has not arrived yet, keyed by tool_use id.
    *  The entry parks here until the result reveals its real id. */
   readonly pendingTaskCreates: ReadonlyMap<string, PlanEntry>;
+  /** Text/thinking blocks already opened by `stream_event` deltas whose
+   *  whole-block `assistant` frame has not arrived yet, oldest first. */
+  readonly streaming: readonly StreamingBlock[];
+}
+
+/** A block being streamed. `index` is the wire `content_block` index, which
+ *  restarts with every API message; the `assistant` frame carrying the whole
+ *  block lands right after its deltas and completes the same item id. */
+interface StreamingBlock {
+  readonly id: string;
+  readonly kind: 'message' | 'reasoning';
+  readonly index: number;
+  readonly parentItemId?: string;
+  readonly text: string;
 }
 
 export interface ClaudeUiMapping {
@@ -89,6 +103,7 @@ export function createClaudeUiState(opts: { fallbackSessionId?: string } = {}): 
     openTools: new Map(),
     tasks: new Map(),
     pendingTaskCreates: new Map(),
+    streaming: [],
   };
 }
 
@@ -119,8 +134,10 @@ export function mapClaudeMessage(msg: unknown, state: ClaudeUiMapperState): Clau
       return mapToolResults(msg, state);
     case 'result':
       return mapResult(msg, state);
+    case 'stream_event':
+      return mapStreamEvent(msg, state);
     default:
-      // stream_event, control_request, … — nothing to render yet.
+      // control_request, rate_limit_event, … — nothing to render.
       return { events: [], state };
   }
 }
@@ -146,6 +163,68 @@ function mapInit(msg: Record<string, unknown>, state: ClaudeUiMapperState): Clau
   return { events, state: { ...state, sessionStarted: true, pendingTurnIds: [] } };
 }
 
+// ---- stream_event deltas → item.started + item.delta -----------------------
+
+/** `--include-partial-messages` frames: only text and thinking deltas render.
+ *  Tool-input JSON deltas and signatures are skipped — the tool item comes
+ *  from the whole `tool_use` block, as before. */
+function mapStreamEvent(msg: Record<string, unknown>, state: ClaudeUiMapperState): ClaudeUiMapping {
+  const event = isRecord(msg.event) ? msg.event : undefined;
+  if (event?.type !== 'content_block_delta' || typeof event.index !== 'number' || !isRecord(event.delta)) {
+    return { events: [], state };
+  }
+  const delta = event.delta;
+  const streamed =
+    delta.type === 'text_delta' && typeof delta.text === 'string'
+      ? { kind: 'message' as const, field: 'text' as const, text: delta.text }
+      : delta.type === 'thinking_delta' && typeof delta.thinking === 'string'
+        ? { kind: 'reasoning' as const, field: 'reasoning' as const, text: delta.thinking }
+        : undefined;
+  if (streamed === undefined || streamed.text === '') return { events: [], state };
+
+  const parentItemId = str(msg.parent_tool_use_id);
+  const index = event.index;
+  const events: UiEvent[] = [];
+  let itemSeq = state.itemSeq;
+  const streaming = [...state.streaming];
+  let at = -1;
+  for (let i = streaming.length - 1; i >= 0; i--) {
+    const block = streaming[i] as StreamingBlock;
+    if (block.index === index && block.kind === streamed.kind && block.parentItemId === parentItemId) {
+      at = i;
+      break;
+    }
+  }
+  if (at < 0) {
+    const id = `item_${++itemSeq}`;
+    const item: UiMessageItem | UiReasoningItem =
+      streamed.kind === 'message'
+        ? { kind: 'message', id, role: 'assistant', text: '' }
+        : { kind: 'reasoning', id, text: '' };
+    if (parentItemId !== undefined) item.parentItemId = parentItemId;
+    events.push({ type: 'item.started', item });
+    const block: StreamingBlock = { id, kind: streamed.kind, index, text: '' };
+    streaming.push(parentItemId === undefined ? block : { ...block, parentItemId });
+    at = streaming.length - 1;
+  }
+  const block = streaming[at] as StreamingBlock;
+  streaming[at] = { ...block, text: block.text + streamed.text };
+  events.push({ type: 'item.delta', itemId: block.id, field: streamed.field, delta: streamed.text });
+  return { events, state: { ...state, itemSeq, streaming } };
+}
+
+/** The oldest streamed block of this kind and parent, which the whole-block
+ *  `assistant` frame now completes. */
+function takeStreamed(
+  streaming: readonly StreamingBlock[],
+  kind: StreamingBlock['kind'],
+  parentItemId: string | undefined,
+): { block: StreamingBlock; rest: StreamingBlock[] } | undefined {
+  const at = streaming.findIndex((block) => block.kind === kind && block.parentItemId === parentItemId);
+  if (at < 0) return undefined;
+  return { block: streaming[at] as StreamingBlock, rest: [...streaming.slice(0, at), ...streaming.slice(at + 1)] };
+}
+
 // ---- assistant blocks → message/reasoning/tool items -----------------------
 
 function mapAssistant(msg: Record<string, unknown>, state: ClaudeUiMapperState): ClaudeUiMapping {
@@ -157,25 +236,42 @@ function mapAssistant(msg: Record<string, unknown>, state: ClaudeUiMapperState):
   let tasks = state.tasks;
   let pendingTaskCreates = state.pendingTaskCreates;
   let sawAssistantText = state.sawAssistantText;
+  let streaming = state.streaming;
 
   for (const raw of content) {
     if (!isRecord(raw)) continue;
     if (raw.type === 'text' && typeof raw.text === 'string') {
-      // Whole blocks per API round-trip — claude sends no deltas in this
-      // mode, so we never fake `item.delta`s: started + completed.
+      // A block its deltas already opened completes under the same id; one
+      // that was never streamed (no partial messages, a sub-agent) is emitted
+      // whole: started + completed.
       // Counted against the result fallback exactly as the runner counts it:
       // every text block, sub-agent ones included (`ctx.textChunks.push` runs
       // regardless of `parent_tool_use_id`).
       sawAssistantText = true;
-      const item: UiMessageItem = { kind: 'message', id: `item_${++itemSeq}`, role: 'assistant', text: raw.text };
+      const taken = takeStreamed(streaming, 'message', parentItemId);
+      const item: UiMessageItem = { kind: 'message', id: taken?.block.id ?? `item_${++itemSeq}`, role: 'assistant', text: raw.text };
       if (parentItemId !== undefined) item.parentItemId = parentItemId;
-      events.push({ type: 'item.started', item }, { type: 'item.completed', item });
-    } else if (raw.type === 'thinking' && typeof raw.thinking === 'string' && raw.thinking.trim() !== '') {
+      if (taken) {
+        streaming = taken.rest;
+        events.push({ type: 'item.completed', item });
+      } else {
+        events.push({ type: 'item.started', item }, { type: 'item.completed', item });
+      }
+    } else if (raw.type === 'thinking' && typeof raw.thinking === 'string') {
+      const taken = takeStreamed(streaming, 'reasoning', parentItemId);
       // Blank `thinking` is skipped: it carries no information and would only
-      // mint a dead "Thinking —" row in the session view (#528).
-      const item: UiReasoningItem = { kind: 'reasoning', id: `item_${++itemSeq}`, text: raw.thinking };
+      // mint a dead "Thinking —" row in the session view (#528). A streamed
+      // block keeps the text its deltas carried.
+      const text = raw.thinking.trim() !== '' ? raw.thinking : taken?.block.text ?? '';
+      if (text.trim() === '') continue;
+      const item: UiReasoningItem = { kind: 'reasoning', id: taken?.block.id ?? `item_${++itemSeq}`, text };
       if (parentItemId !== undefined) item.parentItemId = parentItemId;
-      events.push({ type: 'item.started', item }, { type: 'item.completed', item });
+      if (taken) {
+        streaming = taken.rest;
+        events.push({ type: 'item.completed', item });
+      } else {
+        events.push({ type: 'item.started', item }, { type: 'item.completed', item });
+      }
     } else if (raw.type === 'tool_use' && typeof raw.id === 'string' && typeof raw.name === 'string') {
       const display = toolDisplay(raw.name, raw.input);
       const item: UiToolItem = {
@@ -228,7 +324,7 @@ function mapAssistant(msg: Record<string, unknown>, state: ClaudeUiMapperState):
   if (events.length === 0) return { events, state };
   return {
     events,
-    state: { ...state, itemSeq, openTools: openTools ?? state.openTools, tasks, pendingTaskCreates, sawAssistantText },
+    state: { ...state, itemSeq, openTools: openTools ?? state.openTools, tasks, pendingTaskCreates, sawAssistantText, streaming },
   };
 }
 
@@ -514,12 +610,24 @@ function mapResult(msg: Record<string, unknown>, state: ClaudeUiMapperState): Cl
     }
   }
 
+  // A streamed block whose whole-block frame never came (the turn was cut)
+  // still closes, holding what its deltas delivered.
+  let sawAssistantText = state.sawAssistantText;
+  for (const block of state.streaming) {
+    if (block.kind === 'message' && block.text !== '') sawAssistantText = true;
+    const item: UiMessageItem | UiReasoningItem =
+      block.kind === 'message'
+        ? { kind: 'message', id: block.id, role: 'assistant', text: block.text }
+        : { kind: 'reasoning', id: block.id, text: block.text };
+    if (block.parentItemId !== undefined) item.parentItemId = block.parentItemId;
+    events.push({ type: 'item.completed', item });
+  }
+
   // The result fallback, mirroring claude-cli-runner.ts's `textChunks.length === 0`
   // branch: a session that streamed no assistant text block carries its whole
   // reply on `msg.result`. The runner emits a v1 `text` for it; without the v2
   // twin below, the cockpit's per-turn "v2 wins" dedup drops that line and the
   // turn renders tool cards with no prose at all.
-  let sawAssistantText = state.sawAssistantText;
   if (!sawAssistantText && typeof msg.result === 'string' && msg.result !== '') {
     sawAssistantText = true;
     const item: UiMessageItem = {
@@ -556,6 +664,7 @@ function mapResult(msg: Record<string, unknown>, state: ClaudeUiMapperState): Cl
       currentTurnId: null,
       openTools: openTools ?? state.openTools,
       sawAssistantText,
+      streaming: [],
     },
   };
 }

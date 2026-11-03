@@ -156,6 +156,11 @@ describe('stampManifests', () => {
       version: '0.1.5',
       dependencies: { '@open-mercato/cezar': '^0.1.5' },
     },
+    runAlias: {
+      name: 'cezar-run',
+      version: '0.1.5',
+      dependencies: { '@open-mercato/cezar': '^0.1.5' },
+    },
   });
 
   it('stamps every manifest to the snapshot version and pins each sibling exact', () => {
@@ -166,6 +171,8 @@ describe('stampManifests', () => {
     // Exact, no range: `npx cezar-cli@<v>` must run this PR's code, and the service must
     // resolve the api-client it was cut with.
     expect(stamped.alias.dependencies).toEqual({ '@open-mercato/cezar': '0.1.5-pr482.123' });
+    expect(stamped.runAlias.version).toBe('0.1.5-pr482.123');
+    expect(stamped.runAlias.dependencies).toEqual({ '@open-mercato/cezar': '0.1.5-pr482.123' });
     expect(stamped.cezar.devDependencies).toEqual({
       '@open-mercato/cezar-api-client': '0.1.5-pr482.123',
     });
@@ -178,10 +185,12 @@ describe('stampManifests', () => {
         apiClient: { name: '@old/client', version: '0.1.5' },
         cezar: { name: '@pat-lewczuk/cezar', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },
         alias: { name: 'cezar-cli', version: '0.1.5', dependencies: { '@pat-lewczuk/cezar': '^0.1.5' } },
+        runAlias: { name: 'cezar-run', version: '0.1.5', dependencies: { '@pat-lewczuk/cezar': '^0.1.5' } },
       },
       '0.1.5-develop.7',
     );
     expect(stamped.alias.dependencies).toEqual({ '@pat-lewczuk/cezar': '0.1.5-develop.7' });
+    expect(stamped.runAlias.dependencies).toEqual({ '@pat-lewczuk/cezar': '0.1.5-develop.7' });
     expect(stamped.cezar.dependencies).toEqual({ '@old/client': '0.1.5-develop.7' });
   });
 
@@ -206,6 +215,7 @@ describe('stampManifests', () => {
     expect(stamped.alias.repository).toEqual(repository);
     expect(stamped.alias.homepage).toBe('https://example.test');
     expect(stamped.alias.bugs).toEqual({ url: 'https://example.test/issues' });
+    expect(stamped.runAlias.repository).toEqual(repository);
   });
 
   it('leaves the alias untouched when the service declares no repository', () => {

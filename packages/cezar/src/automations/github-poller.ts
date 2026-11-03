@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { ghEnv } from '../core/gh-env.ts';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import type { GithubAutomationDefinition, AutomationEvent } from './types.ts';
@@ -11,6 +12,8 @@ const TIMELINE_PAGE_SIZE = 100;
  *  item just inside it can cost one page more than this. */
 const TIMELINE_MAX_PAGES = 5;
 const GITHUB_COMMAND_TIMEOUT_MS = 30_000;
+/** `/search/issues` serves at most 1000 rows, ten pages of `HARD_CANDIDATE_CAP`. */
+const CLOSED_SEARCH_MAX_PAGES = 10;
 
 const githubItemSchema = z.object({
   id: z.number().int().positive().optional(),
@@ -20,12 +23,16 @@ const githubItemSchema = z.object({
   html_url: z.string().url(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime().optional(),
+  closed_at: z.string().datetime().nullable().optional(),
   user: z.object({ login: z.string() }),
   assignees: z.array(z.object({ login: z.string() })).default([]),
   labels: z.array(z.object({ name: z.string() })).default([]),
   repository_url: z.string().url(),
   pull_request: z.unknown().optional(),
 });
+
+/** `merged_at` on a search hit's `pull_request` stub — the only place `/search/issues` says "merged". */
+const pullRequestStubSchema = z.object({ merged_at: z.string().datetime().nullable().optional() }).passthrough();
 
 const searchResponseSchema = z.object({ items: z.array(githubItemSchema) });
 const labelTimelineEventSchema = z.object({
@@ -81,21 +88,40 @@ export interface GithubPollResult {
 }
 
 export interface GithubPollerOptions {
+  /** GitHub Enterprise host; omitted for github.com. Added to every `gh api` as `--hostname`. */
+  host?: string;
   run?: (executable: string, args: readonly string[]) => Promise<string>;
 }
 
 export interface GithubPollOptions {
   since?: string;
+  /**
+   * Widen this ONE poll's record budget past the definition's own `filters.maxRecords`, clamped
+   * to the search API's 100-record ceiling. The scheduler raises it to climb out of a saturated
+   * overlap band (#982); the stored definition is never touched.
+   */
+  maxRecords?: number;
 }
+
+/** The widest budget one poll may be given — the `/search/issues` page ceiling. */
+export const POLL_RECORD_CEILING = HARD_CANDIDATE_CAP;
 
 export class GithubPoller {
   private readonly run: NonNullable<GithubPollerOptions['run']>;
 
+  private readonly host: string | undefined;
+
   constructor(options: GithubPollerOptions = {}) {
-    this.run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], {
+    this.host = options.host && options.host.toLowerCase() !== 'github.com' ? options.host : undefined;
+    const run = options.run ?? (async (executable, args) => (await execFileAsync(executable, [...args], {
       maxBuffer: 4 * 1024 * 1024,
       timeout: GITHUB_COMMAND_TIMEOUT_MS,
+      env: ghEnv(),
     })).stdout);
+    const host = this.host;
+    this.run = host
+      ? (executable, args) => run(executable, args[0] === 'api' ? ['api', '--hostname', host, ...args.slice(1)] : args)
+      : run;
   }
 
   async poll(
@@ -115,12 +141,16 @@ export class GithubPoller {
         || event === 'pull_request.review_requested'
         || event === 'pull_request.rereview_requested',
     );
+    const closedEvents = definition.events.filter(
+      (event) => event === 'pull_request.closed' || event === 'pull_request.merged',
+    );
     const sources: Array<{
       family: 'issues' | 'prs' | 'mixed';
-      activity: 'created' | 'updated';
+      activity: 'created' | 'updated' | 'closed';
       opened: boolean;
       labels: boolean;
       reviews: boolean;
+      closed?: boolean;
     }> = [];
     if (openedEvents.length) {
       sources.push({
@@ -139,9 +169,15 @@ export class GithubPoller {
     if (reviewEvents.length) {
       sources.push({ family: 'prs', activity: 'updated', opened: false, labels: false, reviews: true });
     }
+    if (closedEvents.length) {
+      sources.push({ family: 'prs', activity: 'closed', opened: false, labels: false, reviews: false, closed: true });
+    }
 
-    const perPage = Math.min(definition.filters.maxRecords, HARD_CANDIDATE_CAP);
-    const expectedRepoUrl = `https://api.github.com/repos/${owner}/${repo}`.toLowerCase();
+    const maxRecords = Math.min(options.maxRecords ?? definition.filters.maxRecords, HARD_CANDIDATE_CAP);
+    // github.com answers `https://api.github.com/repos/o/r`; Enterprise answers `…/api/v3/repos/o/r`
+    // (self-hosted) or `https://api.<sub>.ghe.com/repos/o/r`, so Enterprise matches on the tail.
+    const expectedRepoPath = `/repos/${owner}/${repo}`.toLowerCase();
+    const expectedRepoUrl = `https://api.github.com${expectedRepoPath}`;
     const observations: Array<{
       timestamp: string;
       tieBreaker: string;
@@ -159,19 +195,34 @@ export class GithubPoller {
         // A review event on a merged or closed PR asks for work nobody can act on any more.
         source.reviews,
       );
-      const args = [
-        'api', '--method', 'GET', '/search/issues',
-        '-f', `q=${query}`,
-        '-f', `per_page=${perPage}`,
-        '-f', `sort=${source.activity}`,
-        '-f', 'order=asc',
-      ];
-      const raw = await this.run('gh', args);
-      const response = searchResponseSchema.parse(JSON.parse(raw));
+      const closedSource = source.activity === 'closed';
+      const search = async (page: number) => {
+        const args = [
+          'api', '--method', 'GET', '/search/issues',
+          '-f', `q=${query}`,
+          '-f', `per_page=${closedSource ? HARD_CANDIDATE_CAP : maxRecords}`,
+          // Search cannot sort by close time; `updated` is the nearest order (closed_at <= updated_at).
+          '-f', `sort=${closedSource ? 'updated' : source.activity}`,
+          '-f', 'order=asc',
+          ...(page > 1 ? ['-f', `page=${page}`] : []),
+        ];
+        return searchResponseSchema.parse(JSON.parse(await this.run('gh', args))).items;
+      };
+      let items = await search(1);
+      if (closedSource) {
+        // Ordered by `updated`, a full page is not the earliest closes: a PR closed first but touched
+        // since sits further on, and a cursor taken from this page would pass it for good. Read the
+        // whole result (search's own 1000-row ceiling) and let the close-time sort pick the prefix.
+        for (let page = 2, last = items; last.length >= HARD_CANDIDATE_CAP && page <= CLOSED_SEARCH_MAX_PAGES; page += 1) {
+          last = await search(page);
+          items = [...items, ...last];
+        }
+      }
       const sourceObservations: typeof observations = [];
-      truncated ||= response.items.length >= perPage;
-      for (const item of response.items.slice(0, HARD_CANDIDATE_CAP)) {
-        if (item.repository_url.toLowerCase() !== expectedRepoUrl) continue;
+      truncated ||= items.length >= maxRecords;
+      for (const item of closedSource ? items : items.slice(0, HARD_CANDIDATE_CAP)) {
+        const itemRepoUrl = item.repository_url.toLowerCase();
+        if (this.host ? !itemRepoUrl.endsWith(expectedRepoPath) : itemRepoUrl !== expectedRepoUrl) continue;
         if (source.opened && item.pull_request && definition.events.includes('pull_request.opened')) {
           const candidate = normalizeOpened(owner, repo, item, 'pull_request.opened');
           if (atOrAfter(candidate.timestamp, options.since)) {
@@ -191,6 +242,18 @@ export class GithubPoller {
             });
           }
         }
+        if (source.closed && item.pull_request) {
+          const candidate = normalizeClosed(owner, repo, item);
+          if (candidate && atOrAfter(candidate.timestamp, options.since)) {
+            sourceObservations.push({
+              timestamp: candidate.timestamp,
+              tieBreaker: candidate.tieBreaker,
+              candidate: definition.events.includes(candidate.event) && matchesFilters(candidate, definition)
+                ? candidate
+                : undefined,
+            });
+          }
+        }
         if (source.labels && !item.pull_request) {
           const timeline = await this.timeline(owner, repo, item.number);
           const events = reconstructLabelEvents(owner, repo, item, timeline);
@@ -203,11 +266,11 @@ export class GithubPoller {
                 ? event
                 : undefined,
             });
-            if (sourceObservations.length >= perPage) break;
+            if (sourceObservations.length >= maxRecords) break;
           }
           const lastEventAt = events.at(-1)?.timestamp;
           if (
-            sourceObservations.length < perPage
+            sourceObservations.length < maxRecords
             && item.updated_at
             && atOrAfter(item.updated_at, options.since)
             && (!lastEventAt || item.updated_at > lastEventAt)
@@ -239,11 +302,11 @@ export class GithubPoller {
                 ? event
                 : undefined,
             });
-            if (sourceObservations.length >= perPage) break;
+            if (sourceObservations.length >= maxRecords) break;
           }
           const lastEventAt = events.at(-1)?.timestamp;
           if (
-            sourceObservations.length < perPage
+            sourceObservations.length < maxRecords
             && item.updated_at
             && atOrAfter(item.updated_at, options.since)
             && (!lastEventAt || item.updated_at > lastEventAt)
@@ -254,18 +317,18 @@ export class GithubPoller {
             });
           }
         }
-        if (sourceObservations.length >= perPage) break;
+        if (!closedSource && sourceObservations.length >= maxRecords) break;
       }
       sourceObservations.sort(compareObservation);
-      truncated ||= sourceObservations.length >= perPage;
-      observations.push(...sourceObservations.slice(0, perPage));
+      truncated ||= sourceObservations.length >= maxRecords;
+      observations.push(...sourceObservations.slice(0, maxRecords));
     }
     observations.sort(compareObservation);
-    const evaluated = observations.slice(0, definition.filters.maxRecords);
+    const evaluated = observations.slice(0, maxRecords);
     const cursor = evaluated.at(-1);
     return {
       candidates: onePerPullRequest(evaluated.flatMap((observation) => observation.candidate ? [observation.candidate] : [])),
-      truncated: truncated || observations.length > definition.filters.maxRecords,
+      truncated: truncated || observations.length > maxRecords,
       pages: sources.length,
       cursor: cursor ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker } : undefined,
     };
@@ -302,7 +365,18 @@ export class GithubPoller {
       '-H', 'Accept: application/vnd.github+json', '-f', `per_page=${TIMELINE_PAGE_SIZE}`,
       '-f', `page=${page}`,
     ]);
-    return z.array(timelineEventSchema).parse(JSON.parse(raw));
+    // Filter BEFORE validating. `/timeline` is a heterogeneous, additive GitHub
+    // surface — `commented`, `cross-referenced`, `assigned`, `renamed`, … all
+    // share the array with the two entries this poller reconstructs from. Passing
+    // the whole array through `timelineEventSchema` made the first such entry
+    // reject the parse, and the throw propagated out of `poll()`, so no candidate
+    // on the page was ever evaluated (#914). `timelineEventSchema` stays strict
+    // for the entries that matter: a `labeled` entry with a malformed `label` is
+    // still dropped rather than crashing the poll.
+    return z.array(z.unknown()).parse(JSON.parse(raw)).flatMap((entry) => {
+      const parsed = timelineEventSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
   }
 
   /** The last page number from the `Link` header of a header-included request; 1 when absent. */
@@ -318,8 +392,8 @@ export class GithubPoller {
 /**
  * One launch per PR per poll for the review events: requesting four reviewers at once is four
  * timeline rows but one "this PR wants a review". The latest row of each PR wins — for a request,
- * that is also the narrower `rereview_requested` when both exist. The others need no receipt: the
- * next poll's overlap window re-collapses them onto the same winner, which is already receipted.
+ * that is also the narrower `rereview_requested` when both exist. `ProjectAutomationScheduler`
+ * repeats the same intent against durable receipts for rows that arrive just after a poll.
  */
 export function onePerPullRequest(candidates: GithubCandidate[]): GithubCandidate[] {
   const familyOf = (event: AutomationEvent) =>
@@ -371,7 +445,7 @@ export function buildSearchQuery(
   repo: string,
   definition: GithubAutomationDefinition,
   family: 'issues' | 'prs' | 'mixed' = 'mixed',
-  activity: 'created' | 'updated' = 'created',
+  activity: 'created' | 'updated' | 'closed' = 'created',
   since?: string,
   openOnly = false,
 ): string {
@@ -408,6 +482,29 @@ function normalizeOpened(owner: string, repo: string, item: z.infer<typeof githu
     author: item.user.login,
     assignees: item.assignees.map((assignee) => assignee.login),
     labels: item.labels.map((label) => label.name),
+  };
+}
+
+/**
+ * A closed PR as ONE of two disjoint events: `pull_request.merged`, or `pull_request.closed` when it
+ * was closed without merging. Undefined for a PR that is open again (reopened clears `closed_at`).
+ * A reopen-and-close yields a new `closed_at`, hence a new event id.
+ */
+export function normalizeClosed(
+  owner: string,
+  repo: string,
+  item: z.infer<typeof githubItemSchema>,
+): GithubCandidate | undefined {
+  if (!item.closed_at) return undefined;
+  const mergedAt = pullRequestStubSchema.safeParse(item.pull_request).data?.merged_at ?? undefined;
+  const event = mergedAt ? 'pull_request.merged' : 'pull_request.closed';
+  const timestamp = mergedAt ?? item.closed_at;
+  return {
+    ...normalizeOpened(owner, repo, item, 'pull_request.opened'),
+    event,
+    eventId: `${owner}/${repo}:${item.node_id}:${event}:${timestamp}`,
+    timestamp,
+    tieBreaker: `${item.node_id}:${event}`,
   };
 }
 

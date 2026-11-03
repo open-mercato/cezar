@@ -1,0 +1,7 @@
+[
+  {
+    "type": "session.error",
+    "message": "Copilot CLI authentication failed — run `copilot login`, or set COPILOT_GITHUB_TOKEN (GH_TOKEN and GITHUB_TOKEN are read too, in that order).",
+    "fatal": true
+  }
+]

@@ -67,14 +67,14 @@ export function Segmented<T extends string>({
               onChange(option.value)
             }}
             className={cn(
-              'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-[12.5px] font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground',
+              'flex h-7 items-center justify-center gap-1.5 rounded-[7px] px-3 text-label font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground',
               full && 'flex-1',
               isActive && 'bg-card font-semibold text-foreground shadow-xs',
             )}
           >
             {option.label}
             {option.count !== undefined ? (
-              <small className="font-mono text-[11px] font-normal tabular-nums">{option.count}</small>
+              <small className="font-mono text-meta font-normal tabular-nums">{option.count}</small>
             ) : null}
           </button>
         )

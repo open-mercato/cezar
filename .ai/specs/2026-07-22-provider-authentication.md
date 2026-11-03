@@ -222,7 +222,12 @@ Behavior:
 - In local-handoff mode, an already-connected provider returns the second 200 response without
   opening a terminal, a not-installed provider returns 409 with its install hint, and a
   disconnected provider opens the vendor login command in a real terminal rooted at the boot
-  repository.
+  repository. An `unknown` provider (installed, but its status could not be read) opens the login
+  too: refusing left Connect a dead end, and the vendor's own login is the surface that can say
+  what is wrong (telemetry `abf08514`, Windows). After opening a login the server re-checks that
+  account 15 s … 15 min later (seven probes at most, `LOGIN_WATCH_OFFSETS_MS`) and stops at the
+  first connected answer, emitting `provider-status` for the default account — the cockpit does
+  not poll provider status, so this is how the card learns the login finished.
 - A successful launch returns 200 with `{ opened: true, command }`.
 - If no terminal emulator can be opened, the route returns 409 with a human error and the exact
   copyable `command`.
@@ -232,7 +237,7 @@ Behavior:
   `400 { error: 'provider must be claude, codex, opencode, or pi' }`.
 - If the selected provider row cannot be found after a fresh probe, the route returns
   `500 { error: 'Authentication could not be verified. Try again.' }`. The route's 409 responses
-  always include the copyable command; they cover not-installed, unknown, hosted-handoff, and
+  always include the copyable command; they cover not-installed, hosted-handoff, and
   terminal-launch cases.
 
 Launching the vendor CLI is the maximum safe automation: the CLI owns browser authorization,

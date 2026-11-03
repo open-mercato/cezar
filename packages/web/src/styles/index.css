@@ -83,6 +83,20 @@
     U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* The wordmark's face (brand guideline, "Znak z nazwą"): Chakra Petch SemiBold, whose chamfered
+ * corners repeat the angles of the mark. ONE weight, latin only — it sets five letters, the
+ * name `cezar`, and nothing else in the cockpit. Vendored from @fontsource/chakra-petch v5.3.0
+ * (SIL OFL 1.1, licence beside the binary). */
+@font-face {
+  font-family: 'Chakra Petch';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../assets/fonts/chakra-petch-latin-600-normal.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 /* ---------- tokens: dark (default) ---------- */
 
 :root {
@@ -155,12 +169,14 @@
   /* type stacks — the woff2 above, then platform fallbacks */
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
+  /* The wordmark only. Falls back to the UI face, never to a system display font. */
+  --brand: 'Chakra Petch', var(--sans);
 
-  /* reading measure — the max width of the task view's column (header, thread, changes,
-   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
-   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
-   * `max-w-[var(--measure)]` so one token moves every column together. */
-  --measure: 820px;
+  /* reading measure — the max width of the task view's column (header, thread, commits) and
+   * the skill detail view. The default is full-width (`none`) so the cockpit uses the available
+   * screen; Settings → Appearance → Reading width can pin it back to the old 820px reading
+   * column. Consumed as `max-w-[var(--measure)]` so one token moves every column together. */
+  --measure: none;
 
   /* shiki syntax highlighting (dark) */
   --syn-key: #c4b5fd;
@@ -260,11 +276,15 @@
   --spacing: 0.1875rem;
 }
 
-/* Wide reading width (Settings → Appearance → Reading width): open the task-view column from the
- * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
- * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
+/* Narrow reading width (Settings → Appearance → Reading width): pin the task-view column to the
+ * old 820px reading measure. Full width is the absence of the attribute; `wide` remains as a
+ * compatibility alias for a stale cached shell or pre-migration localStorage mirror. */
+:root[data-width='narrow'] {
+  --measure: 820px;
+}
+
 :root[data-width='wide'] {
-  --measure: 1180px;
+  --measure: none;
 }
 
 /* ---------- tokens: radius + shadow ----------
@@ -290,6 +310,28 @@
   --shadow-sm: 0 2px 4px 0 rgba(27, 28, 29, 0.04);
   --shadow-md: 0 16px 32px -12px rgba(14, 18, 27, 0.1);
   --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.45);
+
+  /* The type scale (typography audit, 2026-10-30): six steps below `text-base`, each one pixel
+   * apart, so the same role is the same size everywhere. Font-size only — line-height stays
+   * inherited, as the arbitrary `text-[13px]` these replace left it. `text-xs` (12) and
+   * `text-sm` (14) keep Tailwind's line-heights and remain in use. Nothing smaller than 10px is
+   * type: the 7–9px labels inside the onboarding pictures are drawing, not reading. */
+  --text-micro: 10px;
+  --text-meta: 11px;
+  --text-label: 12px;
+  --text-ui: 13px;
+  --text-body: 14px;
+  --text-lead: 15px;
+}
+
+/* The eyebrow: the small capitals over a section, a table column or a card (typography audit,
+ * 2026-10-30). One size, weight and tracking for every one of them; the colour is the caller's
+ * (`text-soft-foreground` as a rule, `text-violet` on an onboarding surface). */
+@utility eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
 }
 
 /* ---------- Tailwind theme: utilities point at the tokens above ----------
@@ -323,6 +365,8 @@
   --color-success: var(--success);
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
+  /* Warning ink and borders — the readable amber, never the --pending fill. */
+  --color-warning: var(--pending-strong);
   --color-info: var(--info);
   --color-conflict: var(--conflict);
 
@@ -346,6 +390,20 @@
 
   /* `rounded-md` is the default control radius — the token sheet spells that step `--radius`. */
   --radius-md: var(--radius);
+}
+
+/* The landing's `//` eyebrow before a dashboard module heading. CSS generated content IS part
+ * of an element's accessible name, so the slashes carry empty alt text (`/ ""`): a screen
+ * reader announces "Usage & cost", not "slash slash Usage & cost". The plain declaration first
+ * is the fallback for engines without content alt text, which drop the second one. */
+@utility section-mark {
+  &::before {
+    content: '//';
+    content: '//' / '';
+    margin-right: 0.375rem;
+    letter-spacing: normal;
+    color: var(--violet);
+  }
 }
 
 /* ---------- base ---------- */
@@ -382,6 +440,16 @@
   kbd,
   samp {
     font-family: var(--mono);
+  }
+
+  /* v3's preflight gave buttons `cursor: pointer`; v4 dropped that rule, so they fall back to the
+   * user agent's arrow. In this cockpit anything clickable reads as clickable, so enabled buttons
+   * and button-like roles opt back into the pointer. Disabled controls keep the arrow (and their
+   * own `cursor-not-allowed` where set), and an explicit `cursor-*` utility still wins — the
+   * `utilities` layer outranks `base`. */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
   }
 
   ::placeholder {
@@ -427,67 +495,6 @@
   }
 }
 
-/* ---------- ghost code (new-task hero backdrop) ----------
- * The `/new` hero's "someone is quietly writing code" texture (ghost-code-backdrop.tsx).
- * Character-by-character reveal is the classic CSS typewriter: the line clips at `width`,
- * animated 0 → n·1ch in `steps(n)`, so glyphs appear whole; the reveal edge carries a 1px
- * border that reads as the caret and a second animation blanks it shortly after the line
- * lands. Everything is driven by per-line vars the component sets (`--n` chars, `--t` type
- * duration, `--d` start delay, `--cycle` full loop length).
- * Reduced motion: the base rules render every line fully typed, static, at the block's
- * resting opacity — the animations only exist inside the motion-safe media block. */
-
-.ghost-code-line {
-  width: calc(var(--n) * 1ch);
-  overflow: hidden;
-  white-space: pre;
-}
-.ghost-code-block {
-  opacity: 0.3;
-}
-@media (prefers-reduced-motion: no-preference) {
-  .ghost-code-block {
-    opacity: 0;
-    animation: ghost-block-fade var(--cycle) linear forwards;
-  }
-  .ghost-code-line {
-    width: 0;
-    border-right: 1px solid transparent;
-    animation:
-      ghost-type var(--t) steps(var(--n)) var(--d) forwards,
-      ghost-caret-off 1ms linear calc(var(--d) + var(--t) + 700ms) forwards;
-  }
-}
-@keyframes ghost-type {
-  from {
-    width: 0;
-    border-right-color: var(--primary);
-  }
-  to {
-    width: calc(var(--n) * 1ch);
-    border-right-color: var(--primary);
-  }
-}
-@keyframes ghost-caret-off {
-  to {
-    border-right-color: transparent;
-  }
-}
-@keyframes ghost-block-fade {
-  0% {
-    opacity: 0;
-  }
-  4% {
-    opacity: 0.3;
-  }
-  93% {
-    opacity: 0.3;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
 /* ---------- thread markdown (mockup `.msg-assist`) ----------
  * Chat-scale typography for assistant messages. Streamdown ships document-scale utility
  * classes on its elements (text-2xl headings, prose paddings); these rules are deliberately
@@ -497,6 +504,12 @@
 
 .thread-markdown {
   line-height: 1.6;
+}
+/* #1356: Scroll list containers too: Streamdown makes li > p inline, so paragraph overflow is inert.
+ * Keep markers within the list's padding; clipping individual li would hide outside markers. */
+.thread-markdown :is(p, ul, ol, h1, h2, h3, h4, h5, h6) {
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
@@ -535,4 +548,201 @@
 .thread-markdown [data-streamdown='code-block'] pre {
   font-size: 12px;
   line-height: 1.55;
+}
+/* Streamdown emits one span per line with no newline between them and makes them `block` only
+ * when line numbers are on; we turn those off, so without this every fence collapses to one line. */
+.thread-markdown [data-streamdown='code-block-body'] code > span {
+  display: block;
+}
+
+/* ---------- document markdown (diff preview) ----------
+ * Reading scale for a whole Markdown FILE (the Changes tab's preview toggle), layered on the
+ * chat rules above: a centred ~72ch measure, body text a step up, headings with real
+ * hierarchy and forge-style rules under h1/h2, roomier block spacing. Same unlayered
+ * reasoning; the doubled class outranks the `.thread-markdown` rules it overrides. */
+
+.thread-markdown.markdown-document {
+  max-width: 72ch;
+  margin-inline: auto;
+  font-size: 15px;
+  line-height: 1.7;
+}
+.thread-markdown.markdown-document :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.6em 0 0.6em;
+  line-height: 1.3;
+}
+/* Streamdown's own first-child reset lives in the utilities layer, which the unlayered heading
+ * margin above outranks — restate it, or a file opening with `# Title` starts ~40px down. */
+.thread-markdown.markdown-document > :first-child {
+  margin-top: 0;
+}
+.thread-markdown.markdown-document h1 {
+  font-size: 1.75em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.thread-markdown.markdown-document h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+.thread-markdown.markdown-document h3 {
+  font-size: 1.2em;
+}
+.thread-markdown.markdown-document :is(h4, h5, h6) {
+  font-size: 1em;
+}
+.thread-markdown.markdown-document :is(p, ul, ol, table, blockquote) {
+  margin: 0.9em 0;
+}
+.thread-markdown.markdown-document li + li {
+  margin-top: 0.3em;
+}
+.thread-markdown.markdown-document hr {
+  margin: 2em 0;
+  border-color: var(--border);
+}
+.thread-markdown.markdown-document img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.thread-markdown.markdown-document [data-streamdown='code-block'] pre {
+  font-size: 13px;
+}
+
+.thread-markdown [data-streamdown='mermaid'] {
+  --pele-bg: var(--background);
+  --pele-fg: var(--foreground);
+  --pele-muted: var(--muted-foreground);
+  --pele-line: var(--muted-foreground);
+  --pele-surface: var(--card);
+  --pele-surface-alt: var(--muted);
+  --pele-border: var(--border);
+  --pele-accent: var(--primary);
+  background: var(--background);
+  border-radius: var(--radius-md);
+}
+
+.thread-markdown [data-streamdown='mermaid'] [role='img'] {
+  width: 100%;
+}
+
+/* ---------- first-run onboarding (spec 2026-10-26-first-run-onboarding) ----------
+ * The onboarding surfaces use the violet accent whatever the user's accent is: the `--primary`
+ * family swap `[data-accent='violet']` makes, scoped to the first-run container. */
+[data-onboarding] {
+  /* Darker than --violet so white button text reaches AA (5.2:1); the button itself stays over
+   * 3:1 on the dark card. The violet text tokens keep #8f86e8 here (5.8:1 on the dark card). */
+  --primary: #6457e8;
+  --primary-foreground: #ffffff;
+  --ring: var(--violet);
+}
+/* On white, #8f86e8 text is only 3.1:1 — the darker violet carries the labels and links too. */
+.light [data-onboarding] {
+  --violet: #6457e8;
+}
+
+/* The feature announcement: a violet wash fading into the card, a border that catches it. */
+.onboarding-announcement {
+  border-color: color-mix(in srgb, var(--violet) 35%, var(--border));
+  background:
+    radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--violet) 22%, transparent), transparent 55%),
+    var(--card);
+  box-shadow: 0 24px 60px -36px color-mix(in srgb, var(--violet) 70%, transparent);
+}
+
+/* The stage a "What's new" miniature stands on: the same violet light, from below. */
+.onboarding-preview {
+  background:
+    radial-gradient(90% 120% at 50% 100%, color-mix(in srgb, var(--violet) 24%, transparent), transparent 70%),
+    var(--card);
+}
+
+/* ---------- composer tips (spec 2026-10-26-first-run-onboarding, § Composer tips) ----------
+ * The card under the composer points at the control it explains (`.composer-tip-arrow`, placed by
+ * measurement) and rings it (`.composer-tip-halo`). The pictures move once, a little: rows rise
+ * in (`--i` staggers them), a bar fills, a branch draws itself, a thumbnail drops in. Without
+ * motion every piece simply sits where it ends up. */
+.composer-tip-arrow {
+  position: absolute;
+  top: -6px;
+  width: 12px;
+  height: 12px;
+  transform: translateX(-50%) rotate(45deg);
+  border-top: 1px solid color-mix(in srgb, var(--violet) 35%, var(--border));
+  border-left: 1px solid color-mix(in srgb, var(--violet) 35%, var(--border));
+  background: var(--card);
+}
+.composer-tip-halo {
+  box-shadow: 0 0 0 2px var(--violet);
+}
+.tip-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .composer-tip-halo {
+    animation: tip-halo 2.4s ease-out infinite;
+  }
+  .tip-rise {
+    opacity: 0;
+    transform: translateY(6px);
+    animation: tip-rise 0.5s ease-out calc(var(--i, 0) * 160ms + 250ms) forwards;
+  }
+  .tip-progress {
+    width: 0;
+    animation: tip-progress 2.2s ease-in-out 400ms forwards;
+  }
+  .tip-draw {
+    stroke-dashoffset: 1;
+    animation: tip-draw 1.1s ease-out calc(var(--i, 0) * 250ms + 250ms) forwards;
+  }
+  .tip-drop {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.92);
+    animation: tip-drop 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) 500ms forwards;
+  }
+  .tip-caret {
+    animation: tip-blink 1s steps(2) infinite;
+  }
+}
+@keyframes tip-halo {
+  0% {
+    box-shadow:
+      0 0 0 2px var(--violet),
+      0 0 0 2px color-mix(in srgb, var(--violet) 45%, transparent);
+  }
+  70%,
+  100% {
+    box-shadow:
+      0 0 0 2px var(--violet),
+      0 0 0 12px transparent;
+  }
+}
+@keyframes tip-rise {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes tip-progress {
+  to {
+    width: 100%;
+  }
+}
+@keyframes tip-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes tip-drop {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes tip-blink {
+  to {
+    opacity: 0;
+  }
 }

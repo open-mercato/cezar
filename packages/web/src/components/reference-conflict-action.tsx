@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
 import { useProjectRun } from '@/api/queries'
 import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chip'
+import { useReferenceStatusLookup } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
+import { prioritizeTaskReferences, taskReferences, type TaskReferenceInput } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -119,6 +121,13 @@ export function ResolveConflictsForRun({
   return <ResolveConflictsButton run={run.data} projectId={projectId} prNumber={prNumber} />
 }
 
+/** The run a `TaskReferenceChip` paints for: its full record (the chip's own project, from the
+ *  provider), or a slim row plus the project it belongs to — the conflict action then loads the
+ *  record itself (`ResolveConflictsForRun`). */
+type TaskReferenceChipRun =
+  | { run: ApiRun; projectId?: undefined }
+  | { run: TaskReferenceInput & Parameters<typeof runTitle>[0] & { id: string }; projectId: string }
+
 /**
  * A reference chip for a row that HAS its run record — the chip plus the action, in one call.
  *
@@ -132,21 +141,62 @@ export function TaskReferenceChip({
   reference,
   className,
   compact = false,
-}: {
-  run: ApiRun
+  projectId: rowProjectId,
+}: TaskReferenceChipRun & {
   reference: { kind: 'PR' | 'Issue'; number?: number; url?: string }
   className?: string
   /** The narrow sidebar row — the chip's own abbreviation. The panel it opens is the full one:
    *  there is room for words in a panel wherever the row it hangs off is. */
   compact?: boolean
 }) {
+  const statuses = useReferenceStatusLookup()
+  const { lookup } = statuses
+  const projectId = rowProjectId ?? statuses.projectId
+  // The caller supplies the already-resolved primary (including a repoBase-synthesized URL).
+  // Add only additional PRs when that primary is a PR; an issue chip must not suddenly grow an
+  // unrelated PR from the run's history, and preserving the supplied primary keeps synthesized
+  // links reachable on surfaces that do not carry project metadata.
+  const additional =
+    reference.kind === 'PR'
+      ? taskReferences(run).filter(
+          (candidate) =>
+            candidate.kind === 'PR' &&
+            (candidate.number !== reference.number ||
+              (!!candidate.url && !!reference.url && candidate.url !== reference.url)),
+        )
+      : []
+  const chips =
+    reference.number === undefined
+      ? [reference, ...additional]
+      : prioritizeTaskReferences(
+          [{ ...reference, number: reference.number }, ...additional],
+          (candidate) =>
+            projectId
+              ? lookup({ projectId, kind: candidate.kind, number: candidate.number }).status
+              : undefined,
+        )
   return (
-    <ReferenceChip
-      reference={reference}
-      taskTitle={runTitle(run)}
-      conflictAction={<ResolveConflictsButton run={run} prNumber={reference.number} />}
-      className={className}
-      compact={compact}
-    />
+    <>
+      {chips.map((item, index) => (
+        <Fragment key={`${item.kind}-${item.number ?? 'unknown'}-${item.url ?? index}`}>
+          <ReferenceChip
+            reference={item}
+            taskTitle={runTitle(run)}
+            projectId={rowProjectId}
+            conflictAction={
+              rowProjectId === undefined ? (
+                <ResolveConflictsButton run={run as ApiRun} prNumber={item.number} />
+              ) : (
+                // A slim row (the palettes' cross-project list): the record is fetched by the
+                // action itself, and only once a conflict panel actually opens — as on All tasks.
+                <ResolveConflictsForRun projectId={rowProjectId} runId={run.id} prNumber={item.number} />
+              )
+            }
+            className={className}
+            compact={compact}
+          />
+        </Fragment>
+      ))}
+    </>
   )
 }

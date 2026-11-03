@@ -19,6 +19,8 @@ describe('activeNavPath', () => {
     ['/github', '/github'],
     ['/github/issues/42', '/github'],
     ['/github/prs/7', '/github'],
+    ['/tracker', '/tracker'],
+    ['/tracker/OPS-7', '/tracker'],
     ['/workflows', '/workflows'],
     ['/workflows/ship-it', '/workflows'],
 
@@ -69,6 +71,8 @@ describe('NAV_ITEMS', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Tracker',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -95,7 +99,15 @@ describe('visibleNavItems', () => {
     visibleNavItems(opts).map((item) => item.label)
 
   it('with everything available, the full nav renders', () => {
-    expect(visibleNavItems({ forge: true, inbox: true, automations: true })).toEqual(NAV_ITEMS)
+    expect(labelsOf({ forge: true, inbox: true, automations: true, tracker: 'jira' })).toEqual([
+      'Tasks', 'Inbox', 'Git', 'GitHub', 'Jira', 'Assets', 'Automations', 'Skills', 'Workflows', 'Settings',
+    ])
+  })
+
+  it('shows the saved provider label and hides an unassociated tracker', () => {
+    expect(labelsOf({ tracker: 'jira' })).toContain('Jira')
+    expect(labelsOf({ tracker: 'linear' })).toContain('Linear')
+    expect(labelsOf()).not.toContain('Tracker')
   })
 
   it('without a forge, only the GitHub item drops out — a schedule needs no remote', () => {
@@ -103,6 +115,7 @@ describe('visibleNavItems', () => {
       'Tasks',
       'Inbox',
       'Git',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -115,6 +128,7 @@ describe('visibleNavItems', () => {
       'Tasks',
       'Git',
       'GitHub',
+      'Assets',
       'Automations',
       'Skills',
       'Workflows',
@@ -128,6 +142,7 @@ describe('visibleNavItems', () => {
       'Inbox',
       'Git',
       'GitHub',
+      'Assets',
       'Skills',
       'Workflows',
       'Settings',
@@ -144,6 +159,7 @@ describe('visibleNavItems', () => {
     expect(labelsOf({ forge: false, inbox: false, automations: false })).toEqual([
       'Tasks',
       'Git',
+      'Assets',
       'Skills',
       'Workflows',
       'Settings',

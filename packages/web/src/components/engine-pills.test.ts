@@ -18,6 +18,8 @@ const resolved = (over: Partial<ResolvedEngine> = {}): ResolvedEngine => ({
   runner: 'claude',
   runnerExplicit: false,
   model: '',
+  reasoningEffort: '',
+  reasoningEfforts: [],
   runners: ['claude'],
   defaultRunner: 'claude',
   canRun: true,
@@ -88,8 +90,9 @@ function stubResolverFetch({
       if (path === '/api/v1/config') {
         return jsonResponse({ defaultRunner: projectDefault, defaultModels: {}, modelsLocked: false })
       }
-      if (path === '/api/v1/models?runner=codex') {
-        return jsonResponse({ runner: 'codex', models: [], source: 'live', stale: false })
+      if (path.startsWith('/api/v1/models?runner=')) {
+        const runner = path.includes('cursor') ? 'cursor' : 'codex'
+        return jsonResponse({ runner, models: [], source: 'live', stale: false })
       }
       if (path.endsWith('/workspace/agent-profiles')) {
         return jsonResponse({
@@ -122,6 +125,7 @@ describe('useResolvedEngine provider status', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -164,6 +168,7 @@ describe('useResolvedEngine provider status', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'unknown', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -182,6 +187,7 @@ describe('useResolvedEngine provider status', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -202,6 +208,7 @@ describe('useResolvedEngine provider status', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -225,6 +232,12 @@ describe('engineBody', () => {
 
   it('omits a resolved native model when model selection is locked', () => {
     expect(engineBody(resolved({ model: 'opus', modelsLocked: true })).model).toBeUndefined()
+  })
+
+  it('sends a selected Codex effort but omits the native default', () => {
+    expect(engineBody(resolved({ runner: 'codex', reasoningEffort: 'high' })).reasoningEffort).toBe('high')
+    expect(engineBody(resolved({ runner: 'codex', reasoningEffort: '' })).reasoningEffort).toBeUndefined()
+    expect(engineBody(resolved({ runner: 'codex', reasoningEffort: 'high', modelsLocked: true })).reasoningEffort).toBeUndefined()
   })
 
   it('omits the runner when it is already what the server would choose', () => {
@@ -264,10 +277,10 @@ describe('engineBody', () => {
     const body = engineBody(
       resolved({ runner: 'claude', defaultRunner: 'claude', runners: ['claude'], model: '' }),
     )
-    expect(body).toEqual({ runner: undefined, model: undefined })
+    expect(body).toEqual({ runner: undefined, model: undefined, reasoningEffort: undefined })
   })
 
-  it.each<Runner>(['claude', 'codex', 'opencode', 'pi'])(
+  it.each<Runner>(['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'gemini'])(
     'is symmetric for %s as the host default',
     (runner) => {
       expect(engineBody(resolved({ runner, defaultRunner: runner })).runner).toBeUndefined()

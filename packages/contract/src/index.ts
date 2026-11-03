@@ -4,6 +4,8 @@
  */
 export * from './events.ts';
 export * from './health.ts';
+export * from './runners.ts';
+export * from './agent.ts';
 export * from './runs.ts';
 export * from './drafts.ts';
 export * from './repo.ts';
@@ -18,3 +20,30 @@ export * from './zoned-time.ts';
 export * from './automation-schedule.ts';
 export * from './automations.ts';
 export * from './dispatch.ts';
+export * from './dashboard.ts';
+export * from './dashboard-costs.ts';
+export * from './dashboard-overview.ts';
+export * from './dashboard-insights.ts';
+export * from './host.ts';
+export * from './tracker.ts';
+export * from './self-update.ts';
+export * from './telemetry.ts';
+export * from './star-count.ts';
+export * from './worktree-lifecycle.ts';
+export * from './preview.ts';
+export * from './start-app.ts';
+export * from './secrets.ts';
+export * from './e2e.ts';
+
+export * from './webhooks.ts';
+export * from './terminal.ts';
+export * from './agent-setup.ts';
+export * from './workspace-layouts.ts';
+export * from './artifacts.ts';
+export * from './impact.ts';
+export * from './assets.ts';
+export * from './deferred-start-state.ts';
+export * from './deferred-start.ts';
+export * from './usage-windows.ts';
+
+export * from './tracker-operations.ts';

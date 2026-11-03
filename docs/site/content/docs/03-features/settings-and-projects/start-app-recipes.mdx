@@ -1,0 +1,26 @@
+---
+title: "Shared and personal Start app recipes"
+description: "Save service commands and the address to open after startup."
+related:
+  links:
+    - guides/common-questions
+    - architecture/cli-and-configuration
+sources:
+  - label: "Implementation"
+    path: packages/web/src/routes/task-preview/start-app-editor.tsx
+    line: 20
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+A recipe stores the commands needed to start an application. It can launch several services, each in a separate terminal tab. The team version is saved in repository configuration. A personal recipe overrides it on your computer.
+
+## Where to find it
+
+Preview → startup recipe editor
+
+## How to use it
+
+1. Open the recipe editor.
+2. Choose the team or personal scope.
+3. Add service commands and an optional address, then save.
+
+> **Good to know**: The team recipe is stored in `.ai/cezar/config.json`; the personal recipe is in `~/.cezar/`config.json. These commands run on the Cezar host.

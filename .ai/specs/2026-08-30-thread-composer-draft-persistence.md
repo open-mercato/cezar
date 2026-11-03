@@ -151,6 +151,7 @@ unchanged while the thread uses the server store.
 | --- | --- | --- |
 | `composer` | The thread reply composer — text + images | 1 / 2 |
 | `review-notes` | Review panel, "Notes for the agent" | 3 |
+| `diff-comments` | Changes-tab line comments (self-review) — `text` holds their JSON list; the thread composer shows them as chips and sends them with the next message | later (2026-10-05) |
 | `task-prompt` | The queued run's prompt, inline editor | 3 |
 | `message:<msgId>` | A queued message's inline editor | 3 |
 | `title` | The header's rename input | 3 |
@@ -242,7 +243,7 @@ Notes that keep this inside the repo's laws:
 
 - **An empty `PUT` is a delete.** `{ text: '', images: [] }` removes the entry and its blobs, so the
   Q4 policy ("cleared when emptied") is enforced server-side and not merely by client politeness.
-- **`:surface` is validated**, not interpolated: `^(composer|review-notes|task-prompt|title|message:[A-Za-z0-9_-]{1,64})$`.
+- **`:surface` is validated**, not interpolated: `^(composer|review-notes|diff-comments|task-prompt|title|message:[A-Za-z0-9_-]{1,64})$`.
   It reaches the filesystem as a path segment, so an unvalidated value is a traversal.
 - The image `GET` answers **JSON with base64**, not raw bytes: the composer's `PendingImage` is
   base64 already, and every response shape in this repo is a zod schema.

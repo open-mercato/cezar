@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createRunner } from './core/runner-factory.ts';
@@ -6,6 +6,7 @@ import { loadConfig } from './config.ts';
 import { discoverSkills, type Skill } from './skills.ts';
 import { resolveProfileEnvForRoot } from './workspace/agent-profiles.ts';
 import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.ts';
+import { E2E_CONFIG_FILES } from './e2e-setup.ts';
 
 /**
  * Chain-from-prompt (spec 008): one cheap `claude` call turns the user's task
@@ -24,6 +25,15 @@ const PLANNER_SYSTEM_PROMPT =
   '"command" (a shell verification check); include the {{task}} placeholder in agent prompts where ' +
   "the user's task text belongs; 1-5 steps; prefer fewer; \"title\" is a short kebab-case name for " +
   'the whole workflow (2-4 words, e.g. "fix-and-review").';
+
+const PLANNER_REDUCED_SYSTEM_PROMPT =
+  `${PLANNER_SYSTEM_PROMPT} Names listed without a description are still valid choices.`;
+
+export const PLANNER_CATALOG_DEFAULTS = {
+  maxFull: 15,
+  maxDescriptionChars: 160,
+  budgetChars: 6_000,
+} as const;
 
 const plannerResponseSchema = z.object({
   /** A short workflow name the builder pre-fills. Optional so older / partial answers still parse. */
@@ -60,6 +70,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   ]);
   const skillNames = new Set(skills.map((s) => s.name));
   const userPrompt = buildPlannerPrompt(task, skills, verifyCommands);
+  const systemPrompt = buildPlannerSystemPrompt(skills);
 
   // Plan with the configured default runner. `plannerModel` ("sonnet") is a
   // Claude alias, so only pass it when the planner runs on Claude — Codex /
@@ -75,7 +86,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
     let text: string;
     try {
       const result = await runner.run({
-        systemPrompt: PLANNER_SYSTEM_PROMPT,
+        systemPrompt,
         userPrompt,
         cwd: repoRoot,
         allowedTools: [],
@@ -103,10 +114,8 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
 }
 
 /** The `[cez-planner]` marker lets the CEZ_DRY_RUN mock recognize a planning call. */
-function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: string[]): string {
-  const catalog = skills.length
-    ? skills.map((s) => `- ${s.name} — ${s.description ?? ''}`).join('\n')
-    : '(no skills available)';
+export function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: string[]): string {
+  const catalog = buildSkillCatalog(task, skills);
   const verify = verifyCommands.length
     ? verifyCommands.map((c) => `- ${c}`).join('\n')
     : '(none detected)';
@@ -124,13 +133,99 @@ function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: strin
   ].join('\n');
 }
 
+/** Keep the original system prompt for small catalogs; explain the name-only tail only when used. */
+export function buildPlannerSystemPrompt(skills: Skill[]): string {
+  return buildFullSkillCatalog(skills).length > PLANNER_CATALOG_DEFAULTS.budgetChars
+    ? PLANNER_REDUCED_SYSTEM_PROMPT
+    : PLANNER_SYSTEM_PROMPT;
+}
+
+export interface SkillCatalogOptions {
+  maxFull?: number;
+  maxDescriptionChars?: number;
+  budgetChars?: number;
+}
+
+/** Build the planner's bounded skill catalog without changing discovery order or Skill objects. */
+export function buildSkillCatalog(
+  task: string,
+  skills: Skill[],
+  options: SkillCatalogOptions = {},
+): string {
+  const { maxFull, maxDescriptionChars, budgetChars } = {
+    ...PLANNER_CATALOG_DEFAULTS,
+    ...options,
+  };
+  const original = buildFullSkillCatalog(skills);
+  if (original.length <= budgetChars) return original;
+
+  const explicit = new Set(
+    skills.filter((skill) => mentionsSkill(task, skill.name)).map((skill) => skill.name),
+  );
+  const described = skills.filter((skill) => explicit.has(skill.name));
+  const ranked = skills
+    .filter((skill) => !explicit.has(skill.name))
+    .sort((a, b) => {
+      const score = scoreSkill(task, b) - scoreSkill(task, a);
+      return score || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    });
+  described.push(...ranked.slice(0, Math.max(0, maxFull - described.length)));
+  const describedNames = new Set(described.map((skill) => skill.name));
+  const describedLines = described.map(
+    (skill) => `- ${skill.name} — ${(skill.description ?? '').slice(0, maxDescriptionChars)}`,
+  );
+  const nameOnlyLines = skills
+    .filter((skill) => !describedNames.has(skill.name))
+    .map((skill) => `- ${skill.name}`);
+  return [...describedLines, ...nameOnlyLines].join('\n');
+}
+
+function buildFullSkillCatalog(skills: Skill[]): string {
+  return skills.length
+    ? skills.map((s) => `- ${s.name} — ${s.description ?? ''}`).join('\n')
+    : '(no skills available)';
+}
+
+function mentionsSkill(task: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9_-])/?${escaped}(?![A-Za-z0-9_-])`, 'i').test(task);
+}
+
+const SCORER_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'with', 'this', 'that',
+]);
+
+function scoreSkill(task: string, skill: Skill): number {
+  const taskTokens = new Set(tokens(task));
+  const nameTokens = tokens(skill.name);
+  const descriptionTokens = tokens(skill.description ?? '');
+  return (
+    nameTokens.filter((token) => taskTokens.has(token)).length * 3 +
+    descriptionTokens.filter((token) => taskTokens.has(token)).length
+  );
+}
+
+function tokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 1 && !SCORER_STOP_WORDS.has(token));
+}
+
 /**
  * Detect verification commands the planner may propose as `check` steps:
- * `package.json` scripts (test/lint/build) and Makefile targets (first 50
- * lines). Best effort — an unreadable file just contributes nothing.
+ * `package.json` scripts (test/lint/build/test:e2e), an `e2e.config.*`, and
+ * Makefile targets (first 50 lines). Best effort — an unreadable file just
+ * contributes nothing.
+ *
+ * The end-to-end command goes LAST, after the cheap checks, because that is
+ * the order a chain wants it in: a browser suite that drives the app is the
+ * slowest and (with agent steps in it) the only one that costs model calls, so
+ * it is worth reaching only once the unit tests are green.
  */
-async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
+export async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
   const out: string[] = [];
+  let e2e: string | undefined;
   const pkgSchema = z.object({ scripts: z.record(z.string(), z.string()).default({}) });
   try {
     const raw: unknown = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
@@ -139,9 +234,20 @@ async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
       if (pkg.data.scripts['test']) out.push('npm test');
       if (pkg.data.scripts['lint']) out.push('npm run lint');
       if (pkg.data.scripts['build']) out.push('npm run build');
+      // Whatever the repo's own suite is — `e2e`, Playwright, Cypress — the script
+      // is the project's answer for how to run it, so prefer it over our guess.
+      if (pkg.data.scripts['test:e2e']) e2e = 'npm run test:e2e';
     }
   } catch {
     // no package.json — fine
+  }
+  if (!e2e) {
+    for (const file of E2E_CONFIG_FILES) {
+      if (await exists(join(repoRoot, file))) {
+        e2e = 'npx e2e run';
+        break;
+      }
+    }
   }
   try {
     const make = await readFile(join(repoRoot, 'Makefile'), 'utf8');
@@ -153,7 +259,17 @@ async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
   } catch {
     // no Makefile — fine
   }
+  if (e2e) out.push(e2e);
   return out;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

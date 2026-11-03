@@ -11,9 +11,29 @@ import type { RunManager } from '../workflows/run.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
+// The claude binary these cases assert on is discovered from the real machine, so without a pin
+// the handoff command would be whatever the DEVELOPER has — `'/Users/x/.local/bin/claude' --resume
+// …` on a host installed by `install.sh`, a bare `claude` on CI. `claudeShellCommand` is pinned
+// alongside `resolveClaudeBin` because it is what `open-in-app.ts` and `server.ts` call, and a
+// mock of one does not reach the other's in-module use of it. Discovery itself is covered by
+// `claude-bin.test.ts`, and the handoff's own use of it by `open-in-app-claude-bin.test.ts`.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/claude-bin.ts')>()),
+  resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+  claudeShellCommand: () => process.env.CEZ_CLAUDE_BIN ?? null,
+}));
+
 // The terminal launcher actually spawns a process (osascript/cmd/x-terminal-emulator) — mocked
 // so this suite exercises only the command construction, never a real terminal window.
 vi.mock('./open-in-terminal.js', () => ({ openInTerminal: vi.fn(async () => true) }));
+
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, every status probe in this suite spawned a
+// real `junie` process — on a machine with Junie installed and logged in, that authenticates
+// against JetBrains for real per test case (#M3 review).
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
 
 const mockOpenInTerminal = vi.mocked(openInTerminal);
 

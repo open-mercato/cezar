@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
+import { DEFAULT_IDLE_TIMEOUT_MINUTES, DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -38,6 +38,8 @@ export interface WorkspaceResourceLimits {
   maxParallel: number;
   /** Durable monitoring sessions that do not consume active-task capacity. */
   maxMonitoringSessions?: number;
+  /** Plain waiting/ASK session idle timeout in minutes; null/0 disables it. */
+  idleTimeoutMinutes?: number | null;
   /** Automatic monitoring re-check cadence in minutes. Default ON at
    *  `DEFAULT_MONITORING_WAKE_MINUTES`; explicit `null` means stay parked; absent means
    *  "this loader predates the key" and reads as the default. */
@@ -79,12 +81,14 @@ function normalizeRootSync(root: string): string {
  *    that stopped a live workspace dead.
  */
 export interface AccountHolds {
+  deadlines?: ReadonlyMap<string, number>;
   deadline: ReadonlySet<string>;
   inFlight: ReadonlySet<string>;
 }
 
 /** One manager's seam into the shared counter. */
 export interface SemaphoreParticipant {
+  refreshQueueReasons?(): void;
   /** Slots this manager currently holds. The #347 exemption lives in the
    *  participant's own accounting: `waiting` runs are already subtracted. */
   busySlots(): number;
@@ -98,6 +102,14 @@ export interface SemaphoreParticipant {
    *  have registered first. */
   oldestQueuedAt(): number | null;
   /**
+   * Epoch ms of this manager's newest "Run First" promotion still waiting in its queue, or null
+   * when none is (brief 2026-09-23-queued-task-run-next). `release()` hands a freed slot to a
+   * promoted queue before any FIFO one, so a promoted task in project B is preferred over an
+   * older unpromoted task in project A. Optional so a stub participant — and any caller that
+   * predates promotion — keeps the plain longest-waiting order.
+   */
+  newestPromotionAt?(): number | null;
+  /**
    * Agent accounts this participant is holding, by KIND (spec
    * 2026-08-03-auto-resume-after-usage-limit, `RunManager.accountHolds`).
    *
@@ -106,11 +118,15 @@ export interface SemaphoreParticipant {
    * and any caller that predates the hold — keeps working; absent simply holds nothing.
    */
   accountHolds?(): AccountHolds;
+  /** Runs a restart would interrupt (queued, waiting or running) — the self-update dialog's
+   *  warning. Optional for stubs; absent counts none. */
+  activeRuns?(): number;
 }
 
 const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   maxParallel: 2,
   maxMonitoringSessions: 2,
+  idleTimeoutMinutes: DEFAULT_IDLE_TIMEOUT_MINUTES,
   monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
   autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
@@ -131,6 +147,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
   return {
     maxParallel: resources.maxParallel,
     maxMonitoringSessions: resources.maxMonitoringSessions,
+    idleTimeoutMinutes: resources.idleTimeoutMinutes,
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
@@ -167,7 +184,17 @@ export class WorkspaceSemaphore {
    *  `dispose()` must call it so a torn-down project stops counting. */
   register(participant: SemaphoreParticipant): () => void {
     this.participants.add(participant);
-    return () => this.participants.delete(participant);
+    return () => {
+      if (this.participants.delete(participant)) this.notifyAccountHoldsChanged();
+    };
+  }
+
+  private notifyingHolds = false;
+  notifyAccountHoldsChanged(): void {
+    if (this.notifyingHolds) return;
+    this.notifyingHolds = true;
+    try { for (const participant of this.participants) participant.refreshQueueReasons?.(); }
+    finally { this.notifyingHolds = false; }
   }
 
   /** Slots held across EVERY registered manager (waiting runs excluded by
@@ -178,6 +205,22 @@ export class WorkspaceSemaphore {
     return total;
   }
 
+  /** Runs a restart would interrupt, across every registered project — not just the boot one. */
+  activeRuns(): number {
+    let total = 0;
+    for (const participant of this.participants) total += participant.activeRuns?.() ?? 0;
+    return total;
+  }
+
+  /** No slot held and nothing queued anywhere in the workspace — when "update when idle" may
+   *  restart. Waiting runs do not count (#347): they are parked on the user, and boot resumes them. */
+  idle(): boolean {
+    for (const participant of this.participants) {
+      if (participant.busySlots() > 0 || participant.oldestQueuedAt() !== null) return false;
+    }
+    return true;
+  }
+
   /** Cached workspace-wide parallel cap. */
   maxParallel(): number {
     return this.limits.maxParallel;
@@ -185,6 +228,12 @@ export class WorkspaceSemaphore {
 
   maxMonitoringSessions(): number {
     return this.limits.maxMonitoringSessions ?? 2;
+  }
+
+  idleTimeoutMinutes(): number | null {
+    return this.limits.idleTimeoutMinutes === undefined
+      ? DEFAULT_IDLE_TIMEOUT_MINUTES
+      : this.limits.idleTimeoutMinutes;
   }
 
   /** Cadence for automatic monitoring re-checks, or null when the operator chose "park
@@ -218,20 +267,23 @@ export class WorkspaceSemaphore {
    * whose window has reopened or leak a stampede through one that has not.
    */
   accountHolds(): AccountHolds {
+    const deadlines = new Map<string, number>();
     const deadline = new Set<string>();
     const inFlight = new Set<string>();
     for (const participant of this.participants) {
       const holds = participant.accountHolds?.();
       if (!holds) continue;
+      for (const [key, at] of holds.deadlines ?? []) deadlines.set(key, Math.min(at, deadlines.get(key) ?? Infinity));
       for (const key of holds.deadline) deadline.add(key);
       for (const key of holds.inFlight) inFlight.add(key);
     }
-    return { deadline, inFlight };
+    return { deadline, inFlight, deadlines };
   }
 
   /**
    * A slot came free somewhere in the workspace: pump EVERY manager,
-   * longest-waiting-queue first.
+   * longest-waiting-queue first — except that a queue holding a "Run First"
+   * promotion goes ahead of every queue that does not (newest promotion first).
    *
    * This is the counterpart to `busy()` being workspace-wide. A `RunManager`
    * only ever pumps itself, so before this existed a freed slot reached
@@ -260,10 +312,19 @@ export class WorkspaceSemaphore {
         const ordered = [...this.participants]
           .map((participant) => ({
             participant,
+            // A promoted queue ("Run First") goes before every FIFO one, newest promotion first.
+            promoted: participant.newestPromotionAt?.() ?? null,
             // Empty queues sort last — they have nothing to claim the slot with.
             since: participant.oldestQueuedAt() ?? Number.MAX_SAFE_INTEGER,
           }))
-          .sort((a, b) => a.since - b.since);
+          .sort((a, b) => {
+            if (a.promoted !== null || b.promoted !== null) {
+              if (a.promoted === null) return 1;
+              if (b.promoted === null) return -1;
+              if (a.promoted !== b.promoted) return b.promoted - a.promoted;
+            }
+            return a.since - b.since;
+          });
         for (const { participant } of ordered) await participant.pump();
       } while (this.pendingRelease);
     } finally {
@@ -299,6 +360,7 @@ export class WorkspaceSemaphore {
     } catch {
       // keep the last good snapshot
     }
+    this.notifyAccountHoldsChanged();
     // A raised cap is capacity appearing everywhere at once — same sweep.
     await this.release();
   }
