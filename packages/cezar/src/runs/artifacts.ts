@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from 'node:fs';
 import { lstat, open, readdir } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import { ARTIFACT_NAME_RE, type RunArtifact, type RunArtifactKind, type RunArtifactVersion } from '@open-mercato/cezar-contract';
+import { ARTIFACT_NAME_RE, ARTIFACT_PATH_RE, type RunArtifact, type RunArtifactKind, type RunArtifactVersion } from '@open-mercato/cezar-contract';
 import { imageMimeType } from '../server/git-changes.ts';
 
 /**
@@ -9,7 +9,7 @@ import { imageMimeType } from '../server/git-changes.ts';
  * listing a run's artifacts directory, telling the agent about it, and watching it while live.
  */
 
-/** Q5 caps: a runaway agent stays bounded. */
+/** Q5 caps: a runaway agent stays bounded. `MAX_ARTIFACTS` applies to each level of the listing. */
 export const MAX_ARTIFACTS = 64;
 export const MAX_ARTIFACT_BYTES = 10 * 1024 * 1024;
 const TITLE_SNIFF_BYTES = 8 * 1024;
@@ -151,17 +151,18 @@ async function listFiles(dir: string, prefix: string, out: Array<{ name: string;
 /**
  * The run's artifacts, newest first. Never throws — a missing or unreadable directory is an
  * empty listing. Files at the top and, with `nested` (the default), one folder level down as
- * `<folder>/<file>`, so a page's screenshots folder shows up and can be served to it. Skips
- * dotfiles, symlinks and names the serving route could not address, so a listed name is always
- * a regular file inside `dir`.
+ * `<folder>/<file>`. Skips dotfiles, symlinks and names the serving route could not address.
+ * The two levels are capped apart, so a burst of screenshots never pushes the page out.
  */
 export async function scanArtifacts(dir: string, { nested = true }: { nested?: boolean } = {}): Promise<ArtifactListing> {
-  const files: Array<{ name: string; size: number; mtimeMs: number }> = [];
+  const top: Array<{ name: string; size: number; mtimeMs: number }> = [];
+  const below: Array<{ name: string; size: number; mtimeMs: number }> = [];
   const subdirs: string[] = [];
-  await listFiles(dir, '', files, nested ? subdirs : undefined);
-  for (const sub of subdirs) await listFiles(join(dir, sub), `${sub}/`, files);
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
-  const kept = files.slice(0, MAX_ARTIFACTS);
+  await listFiles(dir, '', top, nested ? subdirs : undefined);
+  for (const sub of subdirs) await listFiles(join(dir, sub), `${sub}/`, below);
+  const newest = (a: { name: string; mtimeMs: number }, b: { name: string; mtimeMs: number }) =>
+    b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name);
+  const kept = [...top.sort(newest).slice(0, MAX_ARTIFACTS), ...below.sort(newest).slice(0, MAX_ARTIFACTS)].sort(newest);
   const artifacts: RunArtifact[] = [];
   for (const file of kept) {
     const kind = kindOf(file.name, file.size);
@@ -178,7 +179,27 @@ export async function scanArtifacts(dir: string, { nested = true }: { nested?: b
     });
   }
   const versions = await listArtifactVersions(dir);
-  return { artifacts, truncated: files.length > MAX_ARTIFACTS, ...(versions.length ? { versions } : {}) };
+  const truncated = top.length > MAX_ARTIFACTS || below.length > MAX_ARTIFACTS;
+  return { artifacts, truncated, ...(versions.length ? { versions } : {}) };
+}
+
+/**
+ * One addressable artifact, by the same rules the scan lists by — but uncapped and without a
+ * directory walk, so serving a page's 80th screenshot neither 404s nor rescans. `null` when the
+ * name is not a regular file at the top or in a real (non-dot, non-symlink) folder of `dir`.
+ */
+export async function findArtifact(dir: string, name: string): Promise<RunArtifact | null> {
+  if (!ARTIFACT_PATH_RE.test(name)) return null;
+  const segments = name.split('/');
+  if (segments.some((segment) => segment.startsWith('.'))) return null;
+  try {
+    if (segments.length === 2 && !(await lstat(join(dir, segments[0]!))).isDirectory()) return null;
+    const info = await lstat(join(dir, name));
+    if (!info.isFile()) return null;
+    return { name, kind: kindOf(name, info.size), size: info.size, updatedAt: new Date(info.mtimeMs).toISOString() };
+  } catch {
+    return null;
+  }
 }
 
 /**

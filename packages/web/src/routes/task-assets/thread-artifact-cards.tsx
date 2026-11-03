@@ -29,8 +29,10 @@ export function ThreadArtifactCards({ runId }: { runId: string }) {
   const listing = useRunArtifacts(runId)
   const artifacts = listing.data?.artifacts ?? []
   if (artifacts.length === 0) return null
-  const newest = byNewest(artifacts)
-  const shown = newest.slice(0, SHOWN).reverse()
+  // A file in a folder is a page's supporting file (its screenshots) unless it is a page itself.
+  const cardable = artifacts.filter((a) => !a.name.includes('/') || a.kind === 'html' || a.kind === 'markdown')
+  if (cardable.length === 0) return null
+  const shown = byNewest(cardable).slice(0, SHOWN).reverse()
   const more = artifacts.length - shown.length
   return (
     <div data-slot="thread-artifacts" className="flex flex-col gap-2 py-2">

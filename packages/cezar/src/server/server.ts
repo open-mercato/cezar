@@ -179,7 +179,7 @@ import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
 import type { RunEvent, RunRecord, RunStatus, RunStore } from '../runs/store.ts';
 import { artifactsDir } from '../runs/store.ts';
-import { artifactsCdnEnabled, existingVersionDir, scanArtifacts } from '../runs/artifacts.ts';
+import { artifactsCdnEnabled, existingVersionDir, findArtifact, scanArtifacts } from '../runs/artifacts.ts';
 import { artifactHeaders, artifactsBaseUrl, artifactsFrame, openArtifact, type ArtifactsBusPayload } from './artifacts.ts';
 import { newestSubjectRun, parseSubjectQuery, resolveImpactSubject, subjectStale } from '../impact/launch.ts';
 import { listProjectAssets } from '../runs/project-assets.ts';
@@ -4919,7 +4919,7 @@ export function createApp(deps: ServerDeps) {
     const runDir = artifactsDir(dataDir, id);
     const dir = v === undefined ? runDir : await existingVersionDir(runDir, Number(v));
     if (!dir) return c.json({ error: 'artifact not found' }, 404);
-    const artifact = (await scanArtifacts(dir)).artifacts.find((each) => each.name === name);
+    const artifact = await findArtifact(dir, name);
     const stream = artifact ? await openArtifact(dir, name) : null;
     if (!artifact || !stream) return c.json({ error: 'artifact not found' }, 404);
     return c.body(stream, 200, artifactHeaders(artifact, artifactsCdnEnabled(), artifactsBaseUrl(c.req.url)));
@@ -5695,8 +5695,8 @@ export function createApp(deps: ServerDeps) {
       return c.json(await scanArtifacts(artifactsDir(dataDir, id)));
     })
 
-    // One artifact's bytes. Membership in a FRESH scan is the traversal guard (the scan lists
-    // only regular, non-dot files), the same idea as `repoIndexContains`.
+    // One artifact's bytes. `findArtifact` (the scan's own rules, uncapped) is the traversal guard:
+    // only regular, non-dot files at the top or in a real folder, never through a symlink.
     // `?v=<n>` serves kept revision n (spec R4) from `.versions/<n>/`, same guard, same headers.
     .get('/runs/:id/artifacts/:name', paramZodValidator(artifactNameParamSchema), queryZodValidator(artifactFileQuerySchema), async (c) => {
       const { id, name } = c.req.valid('param');

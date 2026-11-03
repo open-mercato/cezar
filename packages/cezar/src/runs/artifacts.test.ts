@@ -6,6 +6,7 @@ import {
   artifactsCdnEnabled,
   artifactsPromptPart,
   extractTitle,
+  findArtifact,
   MAX_ARTIFACT_BYTES,
   MAX_ARTIFACTS,
   scanArtifacts,
@@ -75,6 +76,17 @@ describe('scanArtifacts (spec 2026-10-22-html-artifacts Q5)', () => {
     expect(listing.truncated).toBe(true);
   });
 
+  it('caps the top level and the folders apart, so screenshots never push a page out', async () => {
+    writeFileSync(join(dir, 'report.html'), 'x');
+    utimesSync(join(dir, 'report.html'), new Date(0), new Date(0));
+    mkdirSync(join(dir, 'shots'));
+    for (let i = 0; i < MAX_ARTIFACTS + 16; i++) writeFileSync(join(dir, 'shots', `s${i}.png`), 'x');
+    const listing = await scanArtifacts(dir);
+    expect(listing.artifacts.map((a) => a.name)).toContain('report.html');
+    expect(listing.artifacts.filter((a) => a.name.startsWith('shots/'))).toHaveLength(MAX_ARTIFACTS);
+    expect(listing.truncated).toBe(true);
+  });
+
   it('lists a file over 10 MB as other, whatever its extension', async () => {
     writeFileSync(join(dir, 'big.html'), '');
     truncateSync(join(dir, 'big.html'), MAX_ARTIFACT_BYTES + 1);
@@ -89,6 +101,29 @@ describe('scanArtifacts (spec 2026-10-22-html-artifacts Q5)', () => {
     const { artifacts } = await scanArtifacts(dir);
     expect(artifacts.find((a) => a.name === 'late.html')?.title).toBeUndefined();
     expect(artifacts.find((a) => a.name === 'doc.md')?.title).toBe('The heading');
+  });
+});
+
+describe('findArtifact — the uncapped serving guard', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-artifacts-find-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('finds a file the listing cap left out, and nothing the scan would skip', async () => {
+    mkdirSync(join(dir, 'shots'));
+    for (let i = 0; i < MAX_ARTIFACTS + 5; i++) writeFileSync(join(dir, 'shots', `s${i}.png`), 'x');
+    writeFileSync(join(dir, '.hidden.png'), 'x');
+    mkdirSync(join(dir, '.versions'));
+    writeFileSync(join(dir, '.versions', 'a.png'), 'x');
+    symlinkSync(join(dir, 'shots'), join(dir, 'linked'));
+    for (let i = 0; i < MAX_ARTIFACTS + 5; i++) {
+      expect(await findArtifact(dir, `shots/s${i}.png`)).toMatchObject({ name: `shots/s${i}.png`, kind: 'image' });
+    }
+    for (const name of ['.hidden.png', '.versions/a.png', 'linked/s0.png', 'shots', 'shots/missing.png', 'a/b/c.png', '../x.png']) {
+      expect(await findArtifact(dir, name), name).toBeNull();
+    }
   });
 });
 

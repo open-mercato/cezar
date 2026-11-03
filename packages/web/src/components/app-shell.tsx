@@ -467,7 +467,7 @@ function FocusSidebarRail({
 }) {
   return (
     <aside
-      data-slot="sidebar-rail"
+      data-slot="focus-sidebar-rail"
       className={cn(
         'hidden w-12 shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-2 md:flex',
         desktop === 'macos' && 'pt-[36px]',

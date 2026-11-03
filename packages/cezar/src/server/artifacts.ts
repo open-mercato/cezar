@@ -44,9 +44,10 @@ const INERT_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
 
 /**
  * The run's artifacts directory as a CSP source, from the URL the artifact was requested at:
- * everything up to and including `/artifacts/`, so a page's relative `<img src>` resolves inside
+ * everything up to and including `/runs/<id>/artifacts/`, so a page's relative `<img src>` resolves inside
  * it whichever alias (`/api/v1/…` or `/api/v1/p/<project>/…`) served the page. `undefined` when the
- * URL holds anything a CSP source list could misread.
+ * URL holds anything a CSP source list could misread. The host is the one this server saw: behind
+ * a proxy that rewrites `Host` (the Vite dev proxy included) the images fail closed.
  */
 export function artifactsBaseUrl(requestUrl: string): string | undefined {
   let url: URL;
@@ -55,9 +56,10 @@ export function artifactsBaseUrl(requestUrl: string): string | undefined {
   } catch {
     return undefined;
   }
-  const at = url.pathname.lastIndexOf('/artifacts/');
-  if (at < 0 || (url.protocol !== 'http:' && url.protocol !== 'https:')) return undefined;
-  const base = `${url.origin}${url.pathname.slice(0, at)}/artifacts/`;
+  // The route's own `/runs/<id>/artifacts/`, never a folder that happens to be named `artifacts`.
+  const route = /^.*?\/runs\/[^/]+\/artifacts\//.exec(url.pathname);
+  if (!route || (url.protocol !== 'http:' && url.protocol !== 'https:')) return undefined;
+  const base = `${url.origin}${route[0]}`;
   return /^[A-Za-z0-9:/._~%@[\]-]+$/.test(base) ? base : undefined;
 }
 

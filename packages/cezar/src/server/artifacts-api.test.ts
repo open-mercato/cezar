@@ -7,7 +7,7 @@ import { runArtifactsEventSchema, runArtifactsResponseSchema } from '@open-merca
 import { MAX_ARTIFACT_BYTES } from '../runs/artifacts.ts';
 import { artifactsDir, RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
-import { artifactCsp, artifactsBaseUrl, artifactsFrame } from './artifacts.ts';
+import { artifactCsp, artifactsBaseUrl, artifactsFrame, openArtifact } from './artifacts.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
@@ -64,6 +64,12 @@ describe('artifactsBaseUrl', () => {
     expect(artifactsBaseUrl('http://127.0.0.1:4321/api/v1/runs/r1/files')).toBeUndefined();
     expect(artifactsBaseUrl("http://127.0.0.1:4321/api/v1/runs/r;1'/artifacts/x.html")).toBeUndefined();
   });
+
+  it("anchors on the route's own artifacts segment, not a folder named artifacts", () => {
+    expect(artifactsBaseUrl('http://127.0.0.1:4321/api/v1/runs/r1/artifacts/artifacts/x.html')).toBe(
+      'http://127.0.0.1:4321/api/v1/runs/r1/artifacts/',
+    );
+  });
 });
 
 describe('GET /runs/:id/artifacts[/:name]', () => {
@@ -116,6 +122,21 @@ describe('GET /runs/:id/artifacts[/:name]', () => {
       expect(res.headers.get('content-type'), path).toBe('image/png');
       expect(await res.text(), path).toBe('png');
     }
+  });
+
+  it("serves a page's images past the listing cap", async () => {
+    writeFileSync(join(dir, 'report.html'), '<p>r</p>');
+    mkdirSync(join(dir, 'shots'));
+    for (let i = 0; i < 80; i++) writeFileSync(join(dir, 'shots', `s${i}.png`), 'png');
+    expect((await get('/report.html')).status).toBe(200);
+    for (const i of [0, 79]) expect((await get(`/shots/s${i}.png`)).status).toBe(200);
+  });
+
+  it('openArtifact refuses a folder that became a symlink after the scan', async () => {
+    mkdirSync(join(outside, 'secrets'));
+    writeFileSync(join(outside, 'secrets', 'a.png'), 'secret');
+    symlinkSync(join(outside, 'secrets'), join(dir, 'shots'));
+    expect(await openArtifact(dir, 'shots/a.png')).toBeNull();
   });
 
   it('refuses a symlinked folder, a dot folder and anything two folders down', async () => {

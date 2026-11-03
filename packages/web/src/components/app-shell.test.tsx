@@ -1153,7 +1153,7 @@ describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2
       release = holdSidebarRail(onExit)
     })
     expect(document.querySelector('[data-slot="sidebar"]')).toBeNull()
-    const rail = document.querySelector('[data-slot="sidebar-rail"]') as HTMLElement
+    const rail = document.querySelector('[data-slot="focus-sidebar-rail"]') as HTMLElement
     expect(rail).toBeTruthy()
     // The rail still navigates: every nav item as an icon link, Tasks lit for a task URL.
     expect(within(rail).getByRole('link', { name: 'Tasks' }).getAttribute('aria-current')).toBe('page')
@@ -1165,6 +1165,6 @@ describe('AppShell — Focus rail (spec 2026-10-22-html-artifacts-and-impact, R2
 
     act(() => release())
     expect(sidebar()).toBeTruthy()
-    expect(document.querySelector('[data-slot="sidebar-rail"]')).toBeNull()
+    expect(document.querySelector('[data-slot="focus-sidebar-rail"]')).toBeNull()
   })
 })

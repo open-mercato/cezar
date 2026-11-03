@@ -68,4 +68,10 @@ describe('ThreadArtifactCards', () => {
     await waitFor(() => expect(cards()).toEqual(['b.md', 'c.png', 'd.json']))
     expect(screen.getByRole('link', { name: '1 more in Assets' }).getAttribute('href')).toBe('/tasks/r1/assets')
   })
+
+  it("keeps a page's screenshots folder out of the cards, counting it under more", () => {
+    mount([art('report.html', 'html', 1), art('shots/a.png', 'image', 2), art('shots/b.png', 'image', 3), art('site/index.html', 'html', 4)])
+    expect(cards()).toEqual(['report.html', 'site/index.html'])
+    expect(screen.getByRole('link', { name: '2 more in Assets' })).toBeTruthy()
+  })
 })
