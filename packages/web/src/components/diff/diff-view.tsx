@@ -768,7 +768,7 @@ function CopyPathButton({ path }: { path: string }) {
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           })
-          .catch(() => toast('Copy failed — select the path to copy it.', { tone: 'danger' }))
+          .catch(() => toast(`Copy failed — the path is ${path}`, { tone: 'danger' }))
       }}
       className="mr-2 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground"
     >
