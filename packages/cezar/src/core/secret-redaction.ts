@@ -26,7 +26,7 @@ export const REDACTED = '[REDACTED]';
  * constant, one answer: what we refuse to forward is exactly what we scrub.
  */
 export const SECRET_NAME_RE =
-  /(TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|_KEY$|_KEY_|APIKEY|API_KEY|PRIVATE_KEY|ACCESS_KEY|_AUTH$|_AUTH_|SESSION|COOKIE|PASSPHRASE)/i;
+  /(^CEZ_TRACKER_CAPABILITY$|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|_KEY$|_KEY_|APIKEY|API_KEY|PRIVATE_KEY|ACCESS_KEY|_AUTH$|_AUTH_|SESSION|COOKIE|PASSPHRASE)/i;
 
 /** Names matched above whose value is NOT a secret (a socket path, a pid, a
  *  desktop-session id) — collecting them would scrub ordinary paths from the

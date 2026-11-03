@@ -53,13 +53,13 @@ export function EditorRunAs({
         ariaLabel="Base branch"
         readOnly
         hint="Every run branches off the project's base branch."
-        label={<span className="font-mono text-[11.5px]">base: {baseBranch ?? '…'}</span>}
+        label={<span className="text-meta">base: {baseBranch ?? '…'}</span>}
         value={baseBranch ?? ''}
         options={[]}
         onPick={() => undefined}
       />
       <span className="flex-1" />
-      <Label className="text-[13px] font-medium">
+      <Label className="text-ui font-medium">
         Autonomous
         <Switch aria-label="Autonomous" checked={autonomous} onCheckedChange={onAutonomous} />
       </Label>

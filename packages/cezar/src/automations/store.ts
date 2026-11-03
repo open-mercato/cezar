@@ -1,4 +1,4 @@
-import { deferredCreationRecordSchema, type DeferredCreationRecord } from '@open-mercato/cezar-contract';
+import { deferredCreationRecordSchema, schedulesOf, type DeferredCreationRecord } from '@open-mercato/cezar-contract';
 import {
   closeSync,
   existsSync,
@@ -138,6 +138,10 @@ export class AutomationStore {
       const definition = automationDefinitionSchema.parse({
         ...current,
         ...input,
+        // #1818: an old client's explicit single schedule REPLACES the union. Retaining an
+        // unknown list would make its successful edit leave hidden triggers firing.
+        ...(input.schedule && input.schedules === undefined ? { schedules: undefined } : {}),
+        ...(Array.isArray(input.schedules) ? { schedule: input.schedule ?? input.schedules[0] } : {}),
         id,
         revision: current.revision + 1,
         createdAt: current.createdAt,
@@ -149,7 +153,10 @@ export class AutomationStore {
       // an edit would skip the widening re-poll that makes the narrowed filter take effect, so the very
       // remediation the log prescribes would silently do nothing (#982).
       if (this.state(id)) {
-        this.setState(id, (current) => ({ ...current, revision: definition.revision, pinnedCursor: undefined }));
+        const timingChanged = JSON.stringify(schedulesOf(current)) !== JSON.stringify(schedulesOf(definition));
+        this.setState(id, (state) => ({ ...state, revision: definition.revision, pinnedCursor: undefined,
+          ...(timingChanged ? { nextRunAt: undefined } : {}),
+        }));
       }
       // Baseline and definition publish under one lease; readers snapshot under that lease too.
       initializeState?.(definition);

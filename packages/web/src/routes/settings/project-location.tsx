@@ -88,13 +88,13 @@ export function ProjectLocationNav() {
   if (root === null) return null
   return (
     <div data-slot="project-location" data-variant="nav" className="mt-auto px-2.5 pt-3">
-      <p className="text-[11px] text-soft-foreground">Project folder</p>
+      <p className="text-meta text-soft-foreground">Project folder</p>
       <button
         type="button"
         data-action="project-location-copy"
         title={`${root} — click to copy`}
         onClick={() => copyPath(root)}
-        className="block w-full truncate text-left font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        className="block w-full truncate text-left font-mono text-meta text-muted-foreground transition-colors hover:text-foreground"
       >
         {root}
       </button>

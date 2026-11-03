@@ -27,14 +27,14 @@ import { drawerStorageKey } from './drawer-state'
  *  `graph` is the task's live workflow graph. It is offered on every task, like `browser` and for
  *  the same reason: a task with no stored definition gets the view's own honest empty state
  *  ("No workflow graph") rather than a tile that silently is not there. */
-export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'terminal'
+export type ViewId = 'session' | 'changes' | 'commits' | 'files' | 'browser' | 'graph' | 'assets' | 'terminal'
 
-export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'terminal']
+export const VIEW_IDS: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'browser', 'graph', 'assets', 'terminal']
 
 /** The view tabs, left to right: Chat is home and Changes is what a task is reviewed by; the
  *  rarely opened Graph sits near the end, and Notes (its own page) lands before Preview
  *  (`strip.ts`). Terminal is last; the ` key docks it as a drawer instead. */
-export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'terminal']
+export const FIXED_VIEW_ORDER: readonly ViewId[] = ['session', 'changes', 'commits', 'files', 'graph', 'browser', 'assets', 'terminal']
 
 /** The route each view tab deep-links to, for pages that are not the workspace (Notes). */
 export const VIEW_PATHS: Record<ViewId, string> = {
@@ -44,6 +44,7 @@ export const VIEW_PATHS: Record<ViewId, string> = {
   files: 'files',
   browser: 'preview',
   graph: 'graph',
+  assets: 'assets',
   terminal: 'terminal',
 }
 
@@ -57,6 +58,8 @@ const VIEW_LABELS: Record<ViewId, string> = {
   // The task's app, with Design Mode (spec 2026-10-09-design-mode).
   browser: 'Preview',
   graph: 'Graph',
+  // What the run's agent published (spec 2026-10-22-html-artifacts-and-impact).
+  assets: 'Assets',
   terminal: 'Terminal',
 }
 
@@ -95,6 +98,13 @@ const LEGACY_VIEW_NAMES: Partial<Record<ViewId, readonly string[]>> = {
 /** Whether `name` is the automatic name of `view`'s own layout, under any label it has had. */
 export function isViewName(name: string, view: ViewId): boolean {
   return name === VIEW_LABELS[view] || (LEGACY_VIEW_NAMES[view]?.includes(name) ?? false)
+}
+
+/** Names a returning user may still search for: every label the view has had, plus what moved
+ *  into it (Design Mode lives in Preview). The task palette matches them as keywords. */
+export function viewAliases(view: ViewId): readonly string[] {
+  const moved: Partial<Record<ViewId, readonly string[]>> = { browser: ['Design Mode'], terminal: ['Shell'] }
+  return [...(LEGACY_VIEW_NAMES[view] ?? []), ...(moved[view] ?? [])]
 }
 
 export function viewLabel(view: ViewId): string {
@@ -213,8 +223,9 @@ export const DEFAULT_LAYOUT_NAME = VIEW_LABELS.session
  *  default for everyone else. */
 export function defaultState(): WorkspaceState {
   return {
-    // Terminal is not pre-seeded: its card is minted on first use, like any deep link.
-    layouts: VIEW_IDS.filter((view) => view !== 'terminal').map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
+    // Terminal and Assets are not pre-seeded: their cards are minted on first use, like any deep
+    // link — most tasks never publish an asset.
+    layouts: VIEW_IDS.filter((view) => view !== 'terminal' && view !== 'assets').map((view) => ({ name: VIEW_LABELS[view], columns: [{ view, width: 100 }] })),
     active: DEFAULT_LAYOUT_NAME,
   }
 }

@@ -1,4 +1,4 @@
-# Unreleased
+# 0.17.0 (2026-10-29)
 
 ## Highlights
 Tasks can start later: schedule one for a date or for when a usage limit resets, straight from the split Send button, or start a queued task now over the parallel cap. Projects can go trunk-based, so tasks work in the checkout and you commit to the base branch after review. You can answer an agent's question in your own words, set global instructions that every task receives, and add your organisation's skills repositories. Projects can send webhook notifications to Slack, Discord or your own receiver, and a self-hosted cockpit can manage agent accounts. Agent failures that are not bugs, such as an overloaded API, billing, a usage limit or a full disk, are retried or explained instead of reported as crashes. The cockpit gets faster on big workspaces, and conversations render Mermaid diagrams. The rest is fixes: `cezar serve` opens the project it was started in, workflows resume after a usage limit, a task's leftover processes are stopped when it settles, and monitoring runs no longer wait on a human to leave that state.
