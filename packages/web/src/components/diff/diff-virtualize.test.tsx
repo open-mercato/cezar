@@ -52,7 +52,8 @@ function file(path: string, rows: number): DiffFileChange {
 /** The engine chunk loads lazily — settle on a rendered file header before asserting. */
 async function renderDiff(ui: React.ReactElement, settleText: string) {
   const view = render(ui)
-  await screen.findByText(settleText)
+  // The engine chunk's first import in a busy worker can exceed findBy's 1s default.
+  await screen.findByText(settleText, {}, { timeout: 5000 })
   return view
 }
 

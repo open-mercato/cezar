@@ -86,7 +86,7 @@ export function TelemetryConsentBanner() {
     <div data-slot="telemetry-consent-banner" className="px-4 pb-3 md:px-5 md:pb-4">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-lg border bg-card px-4 py-3 shadow-lg">
         <ShieldCheckIcon className="hidden size-[18px] shrink-0 text-violet sm:block" aria-hidden="true" />
-        <p className="min-w-0 flex-1 basis-[280px] text-[13px] leading-relaxed text-muted-foreground">
+        <p className="min-w-0 flex-1 basis-[280px] text-ui leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">Help improve cezar?</span> With your OK we send task
           counts and crash reports to the maintainers — never prompts, code, paths or repo names. Change it
           anytime in Settings → Privacy.{' '}
@@ -112,10 +112,10 @@ function ConsentList({ title, tone, items }: { title: string; tone: 'ok' | 'no';
   const Icon = tone === 'ok' ? CheckIcon : XIcon
   return (
     <div>
-      <span className="block text-[13px] font-medium text-foreground">{title}</span>
+      <span className="block text-ui font-medium text-foreground">{title}</span>
       <ul className="mt-2 space-y-1.5">
         {items.map((item) => (
-          <li key={item} className="flex gap-2 text-[13px] leading-snug text-muted-foreground">
+          <li key={item} className="flex gap-2 text-ui leading-snug text-muted-foreground">
             <Icon
               className={`mt-0.5 size-3.5 shrink-0 ${tone === 'ok' ? 'text-success' : 'text-soft-foreground'}`}
               aria-hidden="true"
@@ -153,7 +153,7 @@ export function TelemetryDetailsDialog({
       >
         <div className="space-y-5 p-6">
           <div className="space-y-1.5">
-            <span className="block font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            <span className="block eyebrow text-muted-foreground">
               What is sent
             </span>
             <DialogTitle className="text-xl font-semibold tracking-tight">Usage data, in full</DialogTitle>
