@@ -470,6 +470,9 @@ describe('buildCheckEnv', () => {
       expect(buildCheckEnv(gh).GITHUB_TOKEN).toBe('gh');
       expect(buildCheckEnv(gh, { untrusted: false }).GH_TOKEN).toBe('ghp');
     });
+  });
+});
+
 it.each(['0', '1', 'true', 'yes'])('drops inherited tracker capabilities but admits an explicitly issued launch grant (FULL=%s)', full => {
   const source = { CEZ_AGENT_ENV_FULL: full, PATH: '/usr/bin', NORMAL_HOST_SETTING: 'preserved-in-full', CEZ_TRACKER_CAPABILITY: 'parent-grant', cez_tracker_capability: 'mixed-case-parent', CEZ_API_URL: 'http://127.0.0.1:3456' };
   const unbound = buildChildEnv({ backend: 'codex', source });
