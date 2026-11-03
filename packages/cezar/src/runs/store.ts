@@ -36,7 +36,8 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
+import type { RunArtifact, RunArtifactVersion } from '@open-mercato/cezar-contract';
+import { dispatchSchema, runSubjectSchema, trackerAssociationSchema, trackerAutomationEventSchema, webhookAttentionRequestSchema, webhookCompletionReasonSchema, worktreeLifecycleProjectionSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -284,6 +285,8 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10); a bad one drops the field. */
+  subject: runSubjectSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   attentionRequest: webhookAttentionRequestSchema.optional().catch(undefined),
   completionReason: webhookCompletionReasonSchema.optional().catch(undefined),
@@ -584,6 +587,12 @@ const MAX_TOOL_INPUT_HAYSTACK_CHARS = 8_192;
 /** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
  *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
 export type RepoHandle = { owner: string; name: string };
+
+/** What a run's agent publishes for the user (spec 2026-10-22-html-artifacts-and-impact) — outside
+ *  the worktree, so it never reaches autosave, Changes or a PR, and survives Discard. */
+export function artifactsDir(dataDir: string, runId: string): string {
+  return join(dataDir, 'artifacts', runId);
+}
 
 /** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
  *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
@@ -1205,7 +1214,8 @@ function lockRunIndex(dataDir: string): () => void {
  * File-backed run store: `runs.json` index (atomic tmp+rename writes, the
  * pattern from @cezar/core's IssueStore) plus one append-only NDJSON event
  * file per run. Also the in-process event bus the SSE endpoints subscribe to:
- * emits `('run', RunRecord)` and `('event', { runId, event: RunEvent })`.
+ * emits `('run', RunRecord)`, `('event', { runId, event: RunEvent })` and
+ * `('artifacts', { runId, artifacts, truncated })`.
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
@@ -2208,6 +2218,12 @@ export class RunStore extends EventEmitter {
     return join(this.dataDir, 'runs', `${runId}-images`);
   }
 
+  /** Fan a changed artifact listing out to the SSE streams (spec 2026-10-22-html-artifacts). */
+  publishArtifacts(runId: string, listing: { artifacts: RunArtifact[]; truncated: boolean; versions?: RunArtifactVersion[] }): void {
+    if (!this.runs.has(runId)) return;
+    this.emit('artifacts', { runId, ...listing });
+  }
+
   private touch(run: RunRecord): void {
     this.observeLifecycle(run.id, run);
     this.scheduleSave();
@@ -2264,6 +2280,7 @@ export class RunStore extends EventEmitter {
       rmSync(this.eventsPath(id), { force: true });
       rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
       rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+      rmSync(artifactsDir(this.dataDir, id), { recursive: true, force: true });
       // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
       // unreachable by definition, and it may be holding megabytes of pasted screenshots.
       deleteRunDrafts(this.dataDir, id);

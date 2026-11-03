@@ -35,6 +35,7 @@ describe('every mutating route carries a typed body into AppType', () => {
   // mount is the same sub-app, so it stands or falls with this one.
   type _Checks = [
     Assert<HasTypedBody<'/api/v1/runs', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/impact', '$post'>>,
     Assert<HasTypedBody<'/api/v1/deferred-start/options', '$post'>>,
     Assert<HasTypedBody<'/api/v1/deferred-start/preview', '$post'>>,
     Assert<HasTypedBody<'/api/v1/deferred-start', '$post'>>,
