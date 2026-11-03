@@ -19,6 +19,8 @@ describe('in-flight turn inactivity bound (#1499)', () => {
     touchTurn(id: string, s: unknown): void;
     endTurnWatch(id: string, s: unknown): void;
     trackRunningTool(s: unknown, e: unknown): void;
+    trackRunningToolCall(s: unknown, e: unknown): void;
+    tryAutonomousNudge(id: string, s: unknown, stepId: string, ask: null, d: unknown): boolean;
   };
   const m = () => manager as unknown as Internals;
   const minutes = (n: number) => vi.advanceTimersByTime(n * 60_000);
@@ -88,5 +90,26 @@ describe('in-flight turn inactivity bound (#1499)', () => {
     m().endTurnWatch(runId, state);
     minutes(TURN_STALL_MS / 60_000 * 2);
     expect(status()).toBe('running');
+  });
+
+  it('a v1-only tool call gets the longer bound too', () => {
+    m().trackRunningToolCall(state, { type: 'tool-call', id: 'c1', tool: 'Bash', input: {} });
+    m().touchTurn(runId, state);
+    minutes(TURN_STALL_MS / 60_000 + 5);
+    expect(status()).toBe('running');
+    m().trackRunningToolCall(state, { type: 'tool-result', toolCallId: 'c1', result: '', isError: false });
+    m().touchTurn(runId, state);
+    minutes(TURN_STALL_MS / 60_000 + 1);
+    expect(status()).toBe('waiting');
+  });
+
+  it('a turn started by the autonomous nudge is bounded too', () => {
+    Object.assign(state, { autonomous: true, session: { open: true, sendMessage: () => true } });
+    m().touchTurn(runId, state);
+    m().endTurnWatch(runId, state); // the previous turn ended
+    const idle = { hasDispatch: false, dispatched: false, overBudget: false, rePrompted: false };
+    expect(m().tryAutonomousNudge(runId, state, 's', null, idle)).toBe(true);
+    minutes(TURN_STALL_MS / 60_000 + 1);
+    expect(status()).toBe('waiting');
   });
 });

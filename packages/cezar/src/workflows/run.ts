@@ -2810,6 +2810,7 @@ export class RunManager {
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     const digest = this.flushInbox(runId);
     if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
+    this.touchTurn(runId, state); // the injected turn gets the in-flight bound too (#1499)
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
@@ -4929,6 +4930,7 @@ export class RunManager {
     );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      this.trackRunningToolCall(state, event);
       this.touchTurn(runId, state);
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
@@ -7066,6 +7068,7 @@ export class RunManager {
     );
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      this.trackRunningToolCall(state, event);
       this.touchTurn(runId, state);
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
@@ -8539,6 +8542,7 @@ export class RunManager {
       return false;
     }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
+    this.touchTurn(runId, state); // the nudged turn gets the in-flight bound too (#1499)
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
@@ -8620,6 +8624,7 @@ export class RunManager {
       return false;
     }
     if (!state.session.sendMessage([{ type: 'text', text: COMPACTION_CONTINUE_NUDGE }])) return false;
+    this.touchTurn(runId, state); // the continued turn gets the in-flight bound too (#1499)
     state.compactionContinues = attempts + 1;
     this.store.appendEvent(runId, {
       type: 'note',
@@ -8706,13 +8711,22 @@ export class RunManager {
     if (state.stallParked) this.unparkStall(runId, state, 'the turn ended');
   }
 
+  /** The v1 twin of `trackRunningTool`, for a backend whose tools never reach the v2 stream. */
+  private trackRunningToolCall(state: ActiveRun, event: AgentEvent): void {
+    if (event.type !== 'tool-call' && event.type !== 'tool-result') return;
+    const tools = (state.runningTools ??= new Set());
+    if (event.type === 'tool-call') tools.add(`v1:${event.id}`);
+    else if (tools.delete(`v1:${event.toolCallId}`) && !tools.size) this.clearStallTimer(state);
+  }
+
   private trackRunningTool(state: ActiveRun, event: UiEvent): void {
     if (event.type !== 'item.started' && event.type !== 'item.updated' && event.type !== 'item.completed') return;
     if (event.item.kind !== 'tool') return;
     const open = event.type !== 'item.completed' && (event.item.status === 'running');
     const tools = (state.runningTools ??= new Set());
     if (open) tools.add(event.item.id);
-    else tools.delete(event.item.id);
+    // The last tool closed: drop the long deadline so the `touchTurn` that follows re-arms the short one.
+    else if (tools.delete(event.item.id) && !tools.size) this.clearStallTimer(state);
   }
 
   private clearIdleTimer(state: ActiveRun): void {
