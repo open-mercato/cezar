@@ -23,3 +23,7 @@ Settings → Global → Resources → Waiting-session idle timeout
 3. Resume a closed session with Continue on the task.
 
 > **Good to know**: Sessions marked as monitoring are exempt from this timeout.
+
+## A turn that goes silent
+
+This timeout only covers a session that is waiting between turns. A turn that is still in flight but silent has its own bound, on by default and not configurable: after 45 minutes with no agent output (4 hours while the backend reports a tool as running) the task is parked as needing you and releases its slot. The session stays open. Any new output from the agent, or a message from you, makes the task active again; Cancel stops it.
