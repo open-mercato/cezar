@@ -32,4 +32,9 @@ Decision confirmed by the reporter (2026-11-04): hover-reveal on collapsed rows,
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Run the full validation gate
+- [x] 2.1 Run the full validation gate — 375180ce
+
+## Gate notes
+
+- typecheck, test:unit (49/49), build, test:package (34/34): pass.
+- `npm test`: 14011 pass, 20 fail in 5 server/lib files (`codex-usage-probe`, `disclaim-spawn`, `lifecycle-settlement`, `agent-fallback`, `tasks-table`). The same 20 fail on clean `origin/main` 0ff3291b on this machine, and CI on that SHA is green, so they are local-environment failures (locale time format, local clone paths), not regressions. All 1045 task-thread tests pass.
