@@ -45,20 +45,20 @@ still resumable with Continue.
 
 ### Phase 1: Record and contract
 
-- [ ] 1.1 Add idleClosedAt to the contract and the run store with the failed-only invariant
+- [x] 1.1 Add idleClosedAt to the contract and the run store with the failed-only invariant — 8d7859da
 
 ### Phase 2: Engine
 
-- [ ] 2.1 Stamp idleClosedAt at both idle settles, drop the dead branch, flag the idle step-end
+- [x] 2.1 Stamp idleClosedAt at both idle settles, drop the dead branch, flag the idle step-end — 890ee6a6
 
 ### Phase 3: Server rows, dashboards and telemetry
 
-- [ ] 3.1 Carry idleClosedAt on row builders and exclude idle closes from failure counts and task_failed
+- [x] 3.1 Carry idleClosedAt on row builders and exclude idle closes from failure counts and task_failed — 568ef5b0
 
 ### Phase 4: Cockpit
 
-- [ ] 4.1 Add the closed · idle attention rung, dot tone, footer and transcript handling
+- [x] 4.1 Add the closed · idle attention rung, dot tone, footer and transcript handling — 77544790
 
 ### Phase 5: Docs
 
-- [ ] 5.1 Add the BACKWARD_COMPATIBILITY entry and the waiting-timeout page section
+- [x] 5.1 Add the BACKWARD_COMPATIBILITY entry and the waiting-timeout page section — 3caf2189
