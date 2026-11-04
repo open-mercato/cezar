@@ -17,9 +17,10 @@ const RUNNER_DISPLAY_ORDER: Record<Runner, number> = {
   cursor: 4,
   pi: 5,
   copilot: 6,
-  antigravity: 7,
-  gemini: 8,
-  kimi: 9,
+  omp: 7,
+  antigravity: 8,
+  gemini: 9,
+  kimi: 10,
 }
 export const RUNNER_ORDER: readonly Runner[] = [...RUNNER_IDS].sort(
   (a, b) => RUNNER_DISPLAY_ORDER[a] - RUNNER_DISPLAY_ORDER[b],
@@ -176,9 +177,15 @@ function sameProviderStatusRow(left: ProviderStatus, right: ProviderStatus): boo
  * Providers whose auth cannot be verified offline, so an `unknown` probe is inconclusive rather
  * than signed out and the run itself surfaces a real rejection. Junie has no read-only status
  * command; Antigravity's (`agy models`) calls Google's API, so a network blip reads as unknown —
- * treating that as unusable silently moved a task's Continue onto claude. Mirrors the server gate.
+ * treating that as unusable silently moved a task's Continue onto claude; omp's login may live
+ * only in the OS keychain. Mirrors the server gate.
  */
-const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<Runner> = new Set(['junie', 'antigravity'])
+const RUNNABLE_WHEN_UNVERIFIED: ReadonlySet<Runner> = new Set([
+  'junie',
+  'antigravity',
+  // omp's login can live only in the OS keychain (#1139).
+  'omp',
+])
 
 /** Whether an enabled provider row may run: connected, or unverifiable (see above). */
 export function providerRowRunnable(row: Pick<ProviderStatus, 'provider' | 'status'>): boolean {

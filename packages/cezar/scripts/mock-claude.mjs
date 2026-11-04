@@ -75,6 +75,25 @@ if (resumedId && (missingSessions.includes('*') || missingSessions.includes(resu
 
 emit({ type: 'system', subtype: 'init' });
 
+// Plan usage windows, so the dry-run header shows its live gauges (real wire shape). Sent once,
+// on the first ordinary turn: a `mock:limit` session must report only its terminal limit.
+let planWindowsSent = false;
+function emitPlanWindows() {
+  if (planWindowsSent) return;
+  planWindowsSent = true;
+  const nowSec = Math.floor(Date.now() / 1000);
+  emit({
+    type: 'rate_limit_event',
+    rate_limit_info: {
+      status: 'allowed',
+      unifiedWindows: {
+        five_hour: { utilization: 0.17, resetsAt: nowSec + 2 * 3600 + 19 * 60 },
+        seven_day: { utilization: 0.2, resetsAt: nowSec + 3 * 86400 },
+      },
+    },
+  });
+}
+
 let turn = 0;
 
 // `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
@@ -386,6 +405,7 @@ async function respond(userText, imageCount) {
     });
     return;
   }
+  emitPlanWindows();
 
   // `mock:md` → answer with a markdown-rich reply (#346 QA: tables, nested
   // lists, emphasis, fences, quotes) instead of the scripted turn.
