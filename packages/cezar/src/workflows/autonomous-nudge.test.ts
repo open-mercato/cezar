@@ -211,7 +211,7 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     // No `mock:autonomous` arming: the mock answers every nudge plainly and never emits
     // CEZ:DONE, which is the stuck-agent case the cap exists for.
     const record = manager.startRun(SINGLE_STEP, {
-      task: 'never finishes on its own',
+      task: 'mock:vary never finishes on its own',
       worktree: false,
       autonomous: true,
     });
