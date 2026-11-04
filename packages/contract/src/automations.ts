@@ -1,3 +1,4 @@
+import { trackerAccessSchema } from './tracker-operations.ts';
 import { deferredStartStateSchema, deferredCreationRecordSchema } from './deferred-start-state.ts';
 import { z } from 'zod';
 import { trackerAssociationSchema, trackerAutomationEventSchema, trackerFailureSchema } from './tracker.ts';
@@ -44,6 +45,7 @@ export const automationEventSchema = z.enum([
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 
 export const trackerTriggerSchema = z.object({
+  access: trackerAccessSchema.optional(),
   events: z.array(trackerAutomationEventSchema).min(1).max(4),
   targetStatusIds: z.array(z.string().min(1)).max(100).optional(),
   changedLabelIds: z.array(z.string().min(1)).max(100).optional(),
@@ -420,6 +422,7 @@ export const automationTemplateSchema = z.object({
     steps: automationTaskSchema.shape.steps,
     runner: z.string().optional(),
     model: z.string().optional(),
+    reasoningEffort: z.string().optional(),
     autonomous: z.boolean().optional(),
     dispatch: automationDispatchSchema.optional(),
     checkout: automationTaskSchema.shape.checkout,
