@@ -759,7 +759,7 @@ function CopyCommandButton({ command, reveal = false }: { command: string; revea
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           })
-          .catch(() => toast(`Copy failed — select the command to copy it.`, { tone: 'danger' }))
+          .catch(() => toast('Copy failed — the browser blocked clipboard access.', { tone: 'danger' }))
       }}
       className={cn(
         'mt-[3px] mr-1.5 shrink-0 rounded p-1 text-soft-foreground hover:bg-muted hover:text-foreground',

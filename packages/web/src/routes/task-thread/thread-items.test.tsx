@@ -201,7 +201,8 @@ describe('ToolCard — states', () => {
     expect(commands).toHaveLength(1)
     expect(commands[0]?.textContent).toBe(long)
     expect(codeTexts()).toEqual([long]) // printed once, never alongside the capped title
-    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy()
+    // Expanded, the copy button is always visible — never hover-hidden.
+    expect(screen.getByRole('button', { name: 'Copy command' }).className).not.toContain('opacity-0')
   })
 
   it('a running command too long for the header is expandable before any output arrives', () => {
