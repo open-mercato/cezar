@@ -161,6 +161,7 @@ class OpencodeSession implements AgentSession {
   private closed!: Promise<void>;
   private stderrChunks: string[] = [];
   private serverOpen = true;
+  private stopped = false;
   private baseUrl: string | undefined;
   private sessionId: string | undefined;
   private apiVersion: 1 | 2 = 1;
@@ -256,7 +257,8 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut && !this.retryGaveUp && this.serverOpen) {
+        // `stopped`, not `serverOpen`: a child that exits on its own also closes the server (#1396).
+        if (!this.timedOut && !this.retryGaveUp && !this.stopped) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
@@ -323,6 +325,7 @@ class OpencodeSession implements AgentSession {
   }
 
   end(): void {
+    this.stopped = true;
     if (!this.serverOpen) return;
     this.serverOpen = false;
     this.finishTurn();
@@ -331,6 +334,7 @@ class OpencodeSession implements AgentSession {
   }
 
   interrupt(): void {
+    this.stopped = true;
     this.serverOpen = false;
     if (this.baseUrl && this.sessionId) {
       const path = this.apiVersion === 2 ? `/api/session/${this.sessionId}/interrupt` : `/session/${this.sessionId}/abort`;
@@ -398,6 +402,9 @@ class OpencodeSession implements AgentSession {
     this.child = child;
     this.serverPort = port;
     this.hasExited = trackChildExit(child);
+    child.once('exit', () => {
+      this.serverOpen = false;
+    });
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = wrapSpawnError(err, this.bin);
@@ -434,13 +441,14 @@ class OpencodeSession implements AgentSession {
         return await this.waitForServerUrl(this.serverPort);
       } catch (err) {
         const retry = attempt < SERVER_PORT_ATTEMPTS && this.hasExited() && (await this.lostPort());
-        if (!retry || !this.serverOpen) {
+        if (!retry || this.stopped) {
           // Local transcript only: the stderr tail can name paths, so it stays
           // out of the error message that telemetry groups on.
           const tail = this.stderrChunks.join('').trim().slice(-800);
           if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
           throw err;
         }
+        this.serverOpen = true;
         this.spawnServer(randomServerPort());
       }
     }

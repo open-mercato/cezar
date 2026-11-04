@@ -544,6 +544,7 @@ Useful environment variables:
 | `CEZ_CURSOR_AGENT_BIN=/path/to/cursor-agent` | Override which Cursor Agent CLI binary is used. Unset: `cursor-agent` on PATH, then `~/.local/bin/cursor-agent`, then `agent` on PATH. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CEZ_COPILOT_BIN=/path/to/copilot` | Override which GitHub Copilot CLI binary is used. |
+| `CEZ_OMP_BIN=/path/to/omp` | Override which `omp` binary is used. |
 | `CEZ_AGY_BIN=/path/to/agy` | Override which Google Antigravity CLI (`agy`) binary is used. |
 | `CEZ_GEMINI_BIN=/path/to/gemini` | Override which `gemini` binary (Gemini CLI, run as `gemini --acp`) is used. |
 | `CEZ_KIMI_BIN=/path/to/kimi` | Override which Kimi Code CLI binary is used. |

@@ -204,9 +204,9 @@ import {
 } from './graph.ts';
 
 /** Backends whose runner honors `resume` (AgentRunSpec) — graph `session.continue` and the
- *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; Gemini
- *  resumes through ACP `session/load` (#581). */
-const RESUMABLE_BACKENDS: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'codex', 'pi', 'gemini']);
+ *  verdict nudge need it. OpenCode always starts a new session; Cursor has no resume yet; omp resumes
+ *  its RPC session (#1139); Gemini resumes through ACP `session/load` (#581). */
+const RESUMABLE_BACKENDS: ReadonlySet<RunnerId> = new Set<RunnerId>(['claude', 'codex', 'pi', 'omp', 'gemini']);
 /**
  * The reply to a one-question ask card without the card's own framing: a click on an option
  * sends `<header>: <label>` (`web/src/routes/task-thread/ask-card.tsx` `formatAnswer`), a typed
@@ -5521,8 +5521,15 @@ export class RunManager {
       (event) => this.store.appendEvent(runId, { ...event, stepId }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
     );
+    // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
+    if (backend !== 'claude') this.store.clearLiveUsage(runId);
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'usage-status') {
+        // Record-only: the header gauges read the run record, the transcript never shows it.
+        this.store.setLiveUsage(runId, event.status);
+        return;
+      }
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;
@@ -7731,8 +7738,15 @@ export class RunManager {
       (event) => emit({ ...event, stepId: step.id }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
     );
+    // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
+    if (backend !== 'claude') this.store.clearLiveUsage(runId);
     const onEvent = (event: AgentEvent) => {
       if (state.cancelled || this.active.get(runId) !== state) return;
+      if (event.type === 'usage-status') {
+        // Record-only: the header gauges read the run record, the transcript never shows it.
+        this.store.setLiveUsage(runId, event.status);
+        return;
+      }
       if (resumeGuard.hold(event)) {
         if (sessionError === undefined && event.type === 'error') {
           sessionError = event.message;

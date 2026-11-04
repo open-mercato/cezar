@@ -2385,6 +2385,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
       ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
+      ...(profile.provider === 'omp' ? { omp: profile.path } : {}),
       ...(profile.provider === 'pi' ? { pi: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
@@ -8763,6 +8764,9 @@ const RESUME_COMMANDS: Record<RunnerId, (sessionId: string) => string | null> = 
   junie: (sessionId) => `junie --resume --session-id=${sessionId}`,
   // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
   copilot: (sessionId) => `copilot --resume ${sessionId}`,
+  // The RPC session id is omp's own session id, which `--resume` accepts
+  // (`omp --mode rpc --resume <id>` spawns the same process resumed).
+  omp: (sessionId) => `omp --resume ${sessionId}`,
   // The ACP session id is the id of Gemini's own chat recording, which `--resume` accepts.
   gemini: (sessionId) => `gemini --resume ${sessionId}`,
   // `-S, --session [id]` resumes that session; bare `--session` opens a picker (`kimi --help`, 2.3.2).
