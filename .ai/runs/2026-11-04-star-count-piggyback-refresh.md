@@ -25,12 +25,12 @@ The ⭐ chip stops polling on its own timer. The star count refreshes only when 
 
 ### Phase 1: Server cadence
 
-- [ ] 1.1 Raise the star-count TTL and failure backoff to 15 minutes, with tests
+- [x] 1.1 Raise the star-count TTL and failure backoff to 15 minutes, with tests — fff34e0cc
 
 ### Phase 2: Cockpit piggyback refresh
 
-- [ ] 2.1 Replace the star-count poll with a refresh triggered by other queries, with a test
+- [x] 2.1 Replace the star-count poll with a refresh triggered by other queries, with a test — 41c4dd233
 
 ### Phase 3: Docs
 
-- [ ] 3.1 Update the star-count cadence in AGENTS.md, BACKWARD_COMPATIBILITY.md, docs/reference.md and .env.example
+- [x] 3.1 Update the star-count cadence in AGENTS.md, BACKWARD_COMPATIBILITY.md, docs/reference.md and .env.example — c66ace7db
