@@ -114,6 +114,14 @@ const server = createServer((req, res) => {
       res.end(JSON.stringify({ id: SESSION_ID, title: 'cezar task' }));
       return;
     }
+    // Reopen a stored session; any other id is gone, as after a server data reset.
+    const stored = req.method === 'GET' ? url.match(/^\/session\/([^/]+)$/) : null;
+    if (stored) {
+      const known = stored[1] === SESSION_ID;
+      res.writeHead(known ? 200 : 404, { 'content-type': 'application/json' });
+      res.end(known ? JSON.stringify({ id: SESSION_ID }) : JSON.stringify({ name: 'NotFoundError', data: { message: 'Session not found' } }));
+      return;
+    }
     // The current reply route, or — under `MOCK_LEGACY_PERMISSION=1`, a server
     // from before the permission rework — only the session-scoped one.
     const legacy = process.env.MOCK_LEGACY_PERMISSION === '1';

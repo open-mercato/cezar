@@ -1,5 +1,5 @@
 import type { AgentEvent, AgentSession, ContentBlock } from '../core/agent-runner.ts';
-import { isClaudeMissingSessionError } from '../core/claude-cli-runner.ts';
+import { isMissingSessionError } from '../core/claude-cli-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { track } from '../telemetry.ts';
 
@@ -40,7 +40,7 @@ export class ResumeFallback {
   hold(event: AgentEvent): boolean {
     if (!this.pending) return false;
     if (event.type === 'error') {
-      if (isClaudeMissingSessionError(event.message)) this.missing = true;
+      if (isMissingSessionError(event.message)) this.missing = true;
       this.held.push(event);
       return true;
     }
@@ -127,7 +127,7 @@ export function interruptAfterGrace(session: AgentSession | undefined): void {
 
 /** No session id in the text: the store's secret redaction would print it as `[REDACTED]`. */
 export const MISSING_SESSION_NOTE =
-  "claude no longer has this conversation (its transcript was removed) — continuing in a fresh session with this task's saved context";
+  "the agent no longer has this conversation (its session was removed) — continuing in a fresh session with this task's saved context";
 
 /**
  * Awaits the fresh session that replaced a pruned resume and sends `session_resume_fallback` with

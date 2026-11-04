@@ -11,6 +11,8 @@ import type { AgentEvent } from './agent-runner.ts';
 import { parseUsageLimit } from './usage-limit.ts';
 import {
   KILL_GRACE_MS,
+  OPENCODE_MISSING_SESSION,
+
   OpencodeServerRunner,
   SERVER_PORT_ATTEMPTS,
   SERVER_START_MAX_MS,
@@ -425,6 +427,37 @@ describe('dc1a91a6 a server with neither the 2.x probe nor the 1.x session route
       { type: 'error', message: `opencode: ${unsupportedServerMessage(405)}` },
     ]);
     expect(unsupportedServerMessage(405)).not.toMatch(/not supported yet/);
+  }, 30_000);
+});
+
+describe.each([
+  ['1.x', 'mock-opencode-serve.mjs', 'ses_mock_1'],
+  ['2.x', 'mock-opencode-v2-serve.mjs', 'ses_v2_mock'],
+])('1193 reopening a stored OpenCode %s session', (_api, fixture, storedId) => {
+  const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', fixture);
+  const run = async (sessionId: string) => {
+    const events: AgentEvent[] = [];
+    const session = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 }).startSession(
+      { userPrompt: 'continue', cwd: process.cwd(), resume: true, sessionId },
+      (e) => events.push(e),
+      { autoEndAfterFirstTurn: true },
+    );
+    await session.result;
+    return events;
+  };
+
+  it('reuses the stored session when the server still has it', async () => {
+    const events = await run(storedId);
+    expect(events).toContainEqual({ type: 'session', sessionId: storedId });
+    expect(events.filter((e) => e.type === 'error')).toEqual([]);
+  }, 30_000);
+
+  it('reports a missing session in the shape the Continue fallback recognises', async () => {
+    const events = await run('ses_gone');
+    expect(events.filter((e) => e.type === 'error')).toEqual([
+      { type: 'error', message: `opencode: ${OPENCODE_MISSING_SESSION}` },
+    ]);
+    expect(events.some((e) => e.type === 'session')).toBe(false);
   }, 30_000);
 });
 

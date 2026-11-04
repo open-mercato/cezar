@@ -92,9 +92,10 @@ const QUOTA_REASON_RE = /limit|quota/i;
  * bound to the run's `cwd` (worktree), gives OpenCode the same multi-turn shape
  * as the Claude runner: each `sendMessage` posts another prompt to the same
  * session (history is kept server-side) and `session/abort` cancels. "Continue"
- * starts a fresh server and a fresh session — `bootstrap()` always `POST
- * /session` and does not read `spec.sessionId`; resuming a server-side session
- * id is not implemented.
+ * starts a fresh server and reopens the stored session through `GET /session/:id` (2.x:
+ * `GET /api/session/:id`);
+ * a session the server no longer has fails with `OPENCODE_MISSING_SESSION` so the
+ * caller can fall back to portable context (#1193).
  *
  * Auth = the host's opencode config/logins. The agent runs autonomously:
  * nothing can answer a permission prompt, so the runner answers each one
@@ -134,6 +135,9 @@ export class OpencodeServerRunner implements AgentRunner {
 }
 
 /** The server answered with a non-2xx status — an answer, unlike `OpencodeTransportError`. */
+/** The stored session is gone from the server; matched by `isMissingSessionError` (#1193). */
+export const OPENCODE_MISSING_SESSION = 'opencode no longer has the requested session (HTTP 404)';
+
 class OpencodeStatusError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -559,10 +563,19 @@ class OpencodeSession implements AgentSession {
       permissions: [{ action: '*', resource: '*', effect: 'allow' }],
       ...(model ? { model } : {}),
     } : { title: 'cezar task' };
+    const resumeId = this.spec.resume ? this.spec.sessionId : undefined;
+    const sessions = this.apiVersion === 2 ? '/api/session' : '/session';
     let created: Record<string, unknown>;
     try {
-      created = await this.http('POST', this.apiVersion === 2 ? '/api/session' : '/session', body);
+      // Reopen the stored session (#1193); 2.x serves its web shell on the 1.x path, so each
+      // API reads its own route.
+      created = resumeId
+        ? await this.http('GET', `${sessions}/${encodeURIComponent(resumeId)}`, undefined)
+        : await this.http('POST', sessions, body);
     } catch (err) {
+      if (resumeId && err instanceof OpencodeStatusError && err.status === 404) {
+        throw new Error(OPENCODE_MISSING_SESSION);
+      }
       // Probing said 1.x yet the session route is refused: not a server we can drive.
       if (this.apiVersion === 1 && err instanceof OpencodeStatusError && (err.status === 404 || err.status === 405)) {
         throw new Error(unsupportedServerMessage(err.status));
@@ -570,6 +583,7 @@ class OpencodeSession implements AgentSession {
       throw err;
     }
     this.sessionId = stringField(created, 'id');
+    if (resumeId && this.sessionId !== resumeId) throw new Error(OPENCODE_MISSING_SESSION);
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     if (this.apiVersion === 2) this.v2Events = new OpencodeV2Events(this.sessionId);
     this.emit({ type: 'session', sessionId: this.sessionId });
@@ -582,7 +596,8 @@ class OpencodeSession implements AgentSession {
     await this.consumeEvents();
     if (this.apiVersion === 2 && !this.sseConnected) throw new Error('OpenCode V2 event stream could not be established');
 
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
+    // A reopened session already carries its system prompt in its history.
+    const first = resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
     await this.prompt(first);
   }
 

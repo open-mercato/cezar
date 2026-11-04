@@ -118,3 +118,23 @@ describe('trackFallbackOutcome — session_resume_fallback (#1438)', () => {
     expect(vi.mocked(track).mock.calls).toEqual([['session_resume_fallback', { label: 'cancelled' }]]);
   });
 });
+
+describe('ResumeFallback across backends (#1193)', () => {
+  it.each([
+    'codex: no rollout found for thread id 019a-abc',
+    'opencode: opencode no longer has the requested session (HTTP 404)',
+  ])('treats %s as a missing session', (message) => {
+    const { fallback } = guard();
+    expect(fallback.hold({ type: 'error', message })).toBe(true);
+    expect(fallback.takeFallback()).toEqual([]);
+  });
+
+  it.each(['codex: unauthorized', 'opencode: model not found: foo/bar session', 'GET /session/x → 500 boom'])(
+    'does not treat %s as a missing session',
+    (message) => {
+      const { fallback } = guard();
+      fallback.hold({ type: 'error', message });
+      expect(fallback.takeFallback()).toBeUndefined();
+    },
+  );
+});

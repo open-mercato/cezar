@@ -40,6 +40,13 @@ const server = createServer((req, res) => {
     emit('server.connected', {});
     return;
   }
+  // Reopen a stored session (#1193): the real 2.2.5 answers `{data}` or a JSON 404.
+  const stored = req.method === 'GET' ? path.match(/^\/api\/session\/([^/]+)$/) : null;
+  if (stored) {
+    return stored[1] === sessionID
+      ? json(res, { data: { id: sessionID, location: { directory: process.cwd() } } })
+      : json(res, { _tag: 'SessionNotFoundError', sessionID: stored[1], message: `Session not found: ${stored[1]}` }, 404);
+  }
   let body = '';
   req.on('data', (chunk) => { body += chunk; });
   req.on('end', () => {
