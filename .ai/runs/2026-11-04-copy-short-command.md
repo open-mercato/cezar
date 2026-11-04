@@ -27,8 +27,8 @@ Decision confirmed by the reporter (2026-11-04): hover-reveal on collapsed rows,
 
 ### Phase 1: Copy button on every command card
 
-- [ ] 1.1 Render CopyCommandButton for every execute command, hover-revealed when collapsed, with tests
-- [ ] 1.2 Update the tool-card-full-command spec's Copy and Validation rules
+- [x] 1.1 Render CopyCommandButton for every execute command, hover-revealed when collapsed, with tests — 566324a9
+- [x] 1.2 Update the tool-card-full-command spec's Copy and Validation rules — 375180ce
 
 ### Phase 2: Validation
 
