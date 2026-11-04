@@ -355,6 +355,7 @@ export function ThreadView({
             loading={history.isFetchingOlder}
             error={history.olderError}
             fallback={history.fallback}
+            fallbackTruncated={history.fallbackTruncated}
             retainedPages={history.retainedPages}
             onLoad={scroll.loadOlder}
           />
@@ -647,6 +648,7 @@ function HistoryBoundary({
   loading,
   error,
   fallback,
+  fallbackTruncated,
   retainedPages,
   onLoad,
 }: {
@@ -654,13 +656,16 @@ function HistoryBoundary({
   loading: boolean
   error?: string
   fallback: boolean
+  fallbackTruncated?: boolean
   retainedPages: number
   onLoad: () => void
 }) {
   if (fallback) {
     return (
       <p data-slot="history-fallback" className="text-center text-xs text-soft-foreground" role="status">
-        Progressive history is unavailable; showing the complete session.
+        {fallbackTruncated
+          ? 'Progressive history is unavailable; showing only the most recent part of the session.'
+          : 'Progressive history is unavailable; showing the complete session.'}
       </p>
     )
   }
