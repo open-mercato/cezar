@@ -309,6 +309,11 @@ export const runRecordSchema = z.object({
    *  parked. Invariant: only a `waiting` run carries it — `updateRun` and
    *  `reconcileLoadedRun` retire it on any other status, so no caller has to. */
   askParked: z.boolean().optional(),
+  /** True when an autonomous session parked because it exhausted the automatic continue cap.
+   *  Additive and optional so old run records remain readable; unlike `askParked`, this marker
+   *  must survive the waiting park and terminal settlement so a dispatched parent hears `partial`.
+   *  A human Continue retires it before opening the new session. */
+  autoContinueCapReached: z.boolean().optional(),
   /**
    * When the run's session ended — the inactivity timer, a crash, a cezar restart — while a
    * `CEZ:ASK` question was still unanswered. The run is `failed` on the record (no process, no

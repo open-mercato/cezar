@@ -207,6 +207,24 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(nudgeNotes(record.id)).toEqual([]);
   }, 40_000);
 
+  it('a live user message after the cap clears the cause and restarts the nudge budget', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'never finishes on its own',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting' && r.autoContinueCapReached === true, 120_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_AUTO_CONTINUES);
+
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'keep going' }])).toBe(true);
+    expect(store.getRun(record.id)?.autoContinueCapReached).toBeUndefined();
+    // The next turn end nudges again from 1 instead of re-parking on a counter still at the cap.
+    await waitFor(record.id, () => nudgeNotes(record.id).length > MAX_AUTO_CONTINUES);
+    expect(nudgeNotes(record.id)[MAX_AUTO_CONTINUES]).toContain(`(1/${MAX_AUTO_CONTINUES})`);
+    expect(store.getRun(record.id)?.autoContinueCapReached).toBeUndefined();
+  }, 180_000);
+
   it('stops at MAX_AUTO_CONTINUES and parks the run, so the loop is bounded', async () => {
     // No `mock:autonomous` arming: the mock answers every nudge plainly and never emits
     // CEZ:DONE, which is the stuck-agent case the cap exists for.
@@ -223,8 +241,24 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(notes[MAX_AUTO_CONTINUES - 1]).toContain(
       `(${MAX_AUTO_CONTINUES}/${MAX_AUTO_CONTINUES})`,
     );
-    // The cap hands the run back exactly as a non-autonomous turn end does.
+    // The cap hands the run back exactly as a non-autonomous turn end does, but records why so
+    // settlement and a dispatched parent's report cannot mistake it for completed work.
     expect(store.getRun(record.id)?.activity).toBeUndefined();
+    expect(store.getRun(record.id)?.autoContinueCapReached).toBe(true);
+    // Cancelling the auto-resume mechanism is not a human continuation and must not erase why
+    // this unattended run stopped.
+    expect(manager.cancelAutoResume(record.id)).toBe(true);
+    expect(store.getRun(record.id)?.autoContinueCapReached).toBe(true);
+    // Finish stays an explicit "stop here" (#917, #1076): it settles normally and keeps the cause,
+    // which is what a dispatched parent's report reads.
+    expect(manager.finish(record.id)).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(store.getRun(record.id)?.autoContinueCapReached).toBe(true);
+    expect(store.getRun(record.id)?.error).toBeUndefined();
+    // The accepted human Continue starts a new cap epoch and can complete normally.
+    expect(manager.continueRun(record.id, { text: 'mock:done after the cap' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(store.getRun(record.id)?.autoContinueCapReached).toBeUndefined();
   }, 180_000);
 
   it('parks on a question the agent repeats after a nudge instead of nudging it to the cap', async () => {

@@ -4996,6 +4996,12 @@ export class RunManager {
         // The session closed while we waited: keep the message the way the ladder would.
         if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
       });
+      if (userAuthored) {
+        // The message was accepted into the asynchronous resume ladder, so it is already a
+        // human continuation even though the backend send happens after the repo lease returns.
+        this.store.updateRun(runId, { autoContinueCapReached: undefined });
+        state.autoContinues = 0;
+      }
       return true;
     }
 
@@ -5027,6 +5033,13 @@ export class RunManager {
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       for (const write of imageLibraryWrites) write();
+      // A live user message is also an accepted human continuation. Synthetic scheduler and
+      // dispatch messages use userAuthored=false, so they cannot erase the unattended-cap cause.
+      if (userAuthored) {
+        // ...and a fresh unattended budget: the cap bounds nudges without a human in between.
+        this.store.updateRun(runId, { autoContinueCapReached: undefined });
+        state.autoContinues = 0;
+      }
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
@@ -5269,6 +5282,12 @@ export class RunManager {
     // human got there first — and then the counter starts over, because the cap only exists to
     // bound UNATTENDED resumes.
     this.clearAutoResume(runId);
+    // Only an explicitly accepted human Continue starts a fresh cap epoch. Unattended recovery
+    // and child-report continuations pass deferForCapacity=true and must preserve the durable
+    // cause until the child settles and reports partial.
+    if (!deferForCapacity) {
+      this.store.updateRun(runId, { autoContinueCapReached: undefined });
+    }
     // A human turn resets attempted candidates; the policy snapshot and account holds remain.
     if (!deferForCapacity && run.fallbackEpisode) this.store.updateRun(runId, { fallbackEpisode: undefined });
 
@@ -9179,7 +9198,17 @@ export class RunManager {
     //  - the budget brake (Q6 ii): a run that has spent its ceiling stops spending.
     if (dispatchTurn.dispatched || dispatchTurn.overBudget) return false;
     if (dispatchTurn.hasDispatch && ask) return false;
-    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) {
+      if (this.store.getRun(runId)?.autoContinueCapReached !== true) {
+        this.store.updateRun(runId, { autoContinueCapReached: true });
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `autonomous — automatic continue cap reached (${MAX_AUTO_CONTINUES}); the run is parked for manual continuation`,
+        });
+      }
+      return false;
+    }
     if (state.cancelled) return false;
     // A question repeated verbatim after a nudge is not a preference the agent can settle on
     // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
