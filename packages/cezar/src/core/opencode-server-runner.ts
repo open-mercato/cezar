@@ -141,6 +141,14 @@ class OpencodeStatusError extends Error {
   }
 }
 
+/** No session id in the text: the store's secret redaction would print it as `[REDACTED]`. */
+const OPENCODE_MISSING_SESSION = 'opencode no longer has the session this task resumes';
+
+/** True only for the runner's own "reopen answered 404" error — never a URL that merely names a session. */
+export function isOpencodeMissingSessionError(message: string): boolean {
+  return message.includes(OPENCODE_MISSING_SESSION);
+}
+
 /** The server answered neither the 2.x `/api/info` probe nor the 1.x session route (#1513). */
 export function unsupportedServerMessage(status: number): string {
   return (
@@ -559,7 +567,28 @@ class OpencodeSession implements AgentSession {
     else if (!/^1\./.test(info.version)) throw new Error('Unsupported OpenCode server API version');
   }
 
+  /** Reopens the 1.x session a Continue resumes (#1193); a 404 is the one "it is gone" answer. */
+  private async reopenSession(sessionId: string): Promise<Record<string, unknown>> {
+    let reopened: Record<string, unknown>;
+    try {
+      reopened = await this.http('GET', `/session/${encodeURIComponent(sessionId)}`, undefined);
+    } catch (err) {
+      if (err instanceof OpencodeStatusError && err.status === 404) throw new Error(OPENCODE_MISSING_SESSION);
+      throw err;
+    }
+    if (stringField(reopened, 'id') !== sessionId) throw new Error(OPENCODE_MISSING_SESSION);
+    return reopened;
+  }
+
   private async bootstrap(): Promise<void> {
+    // Only 1.x is reopened: a 2.x resume still starts a new session, as before.
+    const resumeId = this.spec.resume && this.apiVersion === 1 ? this.spec.sessionId : undefined;
+    if (resumeId) await this.openSession(await this.reopenSession(resumeId));
+    else await this.openSession(await this.createSession());
+    await this.prompt(resumeId ? this.spec.userPrompt : prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt));
+  }
+
+  private async createSession(): Promise<Record<string, unknown>> {
     const id = parseModelIdentity(this.spec.model);
     const model = id ? v2Model(id.provider, id.model) : undefined;
     const body = this.apiVersion === 2 ? {
@@ -577,7 +606,11 @@ class OpencodeSession implements AgentSession {
       }
       throw err;
     }
-    this.sessionId = stringField(created, 'id');
+    return created;
+  }
+
+  private async openSession(opened: Record<string, unknown>): Promise<void> {
+    this.sessionId = stringField(opened, 'id');
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     if (this.apiVersion === 2) this.v2Events = new OpencodeV2Events(this.sessionId);
     this.emit({ type: 'session', sessionId: this.sessionId });
@@ -589,9 +622,6 @@ class OpencodeSession implements AgentSession {
     // lost (a race this await closes; the bundled mock made it visible).
     await this.consumeEvents();
     if (this.apiVersion === 2 && !this.sseConnected) throw new Error('OpenCode V2 event stream could not be established');
-
-    const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
-    await this.prompt(first);
   }
 
   /**

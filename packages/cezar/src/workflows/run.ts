@@ -5579,6 +5579,7 @@ export class RunManager {
       sessionId !== undefined,
       (event) => this.store.appendEvent(runId, { ...event, stepId }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+      backend,
     );
     // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
     if (backend !== 'claude') this.store.clearLiveUsage(runId);
@@ -5994,9 +5995,9 @@ export class RunManager {
         await session.result;
         if (sessionError) throw new Error(sessionError);
       } catch (err) {
-        // Claude pruned the transcript this task resumes (cleanupPeriodDays): continue in a fresh
+        // The backend lost the session this task resumes (#1193): continue in a fresh
         // session seeded with the task's persisted state instead of failing every Continue.
-        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback();
+        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback(err);
         if (!replay || !recordBeforeTurn || sessionId === undefined) throw err;
         sessionError = undefined;
         turnText = '';
@@ -7807,6 +7808,7 @@ export class RunManager {
       graphHooks?.resumeSessionId !== undefined,
       (event) => emit({ ...event, stepId: step.id }),
       (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+      backend,
     );
     // The gauges are Claude's; a turn on another backend would otherwise keep showing them.
     if (backend !== 'claude') this.store.clearLiveUsage(runId);
@@ -8223,10 +8225,10 @@ export class RunManager {
         result = await session.result;
         if (sessionError) throw new Error(sessionError);
       } catch (err) {
-        // The node's own session was pruned by Claude (cleanupPeriodDays): rerun the node in a
+        // The backend lost the node's own session (#1193): rerun the node in a
         // fresh session seeded with the task's persisted state, as `runContinuation` does.
         const resumedId = graphHooks?.resumeSessionId;
-        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback();
+        const replay = state.cancelled || this.active.get(runId) !== state ? undefined : resumeGuard.takeFallback(err);
         const record = this.store.getRun(runId);
         if (!replay || resumedId === undefined || !record) throw err;
         sessionError = undefined;
