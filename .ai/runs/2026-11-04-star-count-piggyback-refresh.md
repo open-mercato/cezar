@@ -21,6 +21,8 @@ The ⭐ chip stops polling on its own timer. The star count refreshes only when 
 
 ## Progress
 
+PR: #1944
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Server cadence
