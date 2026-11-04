@@ -1,6 +1,6 @@
 import { GithubIcon } from '@/components/icons'
 import {
-  occurrencesBetween,
+  scheduleOccurrencesBetween,
   zonedParts,
   zonedWallTimeToUtc,
   type AutomationListEntry,
@@ -59,7 +59,7 @@ export function occurrencesIn(
   const out: CalendarOccurrence[] = []
   for (const automation of automations) {
     if (automation.kind !== 'schedule' || !automation.schedule) continue
-    for (const at of occurrencesBetween(automation.schedule, fromMs, toMs, timeZone)) {
+    for (const at of scheduleOccurrencesBetween(automation, fromMs, toMs, timeZone)) {
       const parts = zonedParts(at, timeZone)
       if (parts) out.push({ automation, at, parts })
     }
@@ -108,7 +108,7 @@ export function EventBlock({
       title={`${automation.name} · ${time}`}
       onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
       className={cn(
-        'absolute right-[3px] left-[3px] flex cursor-pointer overflow-hidden rounded-[6px] border border-border bg-card text-left text-[11.5px] leading-[1.3] font-medium text-foreground shadow-xs',
+        'absolute right-[3px] left-[3px] flex cursor-pointer overflow-hidden rounded-[6px] border border-border bg-card text-left text-meta leading-[1.3] font-medium text-foreground shadow-xs',
         wide ? 'h-12 flex-col items-start gap-[3px] px-2 py-[5px]' : 'h-6 flex-row items-center gap-1.5 px-1.5',
         !automation.enabled && 'opacity-50',
       )}
@@ -119,7 +119,7 @@ export function EventBlock({
         <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
       </span>
       {wide ? (
-        <span className="max-w-full overflow-hidden font-mono text-[10.5px] leading-[1.3] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
+        <span className="max-w-full overflow-hidden font-mono text-micro leading-[1.3] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
           {time}
           {runAs ? ` · ${runAs}` : ''}
         </span>
@@ -135,7 +135,7 @@ export function HourGutter() {
       {Array.from({ length: 24 }, (_, hour) => (
         <div
           key={hour}
-          className="-translate-y-[6px] pr-2 text-right font-mono text-[10.5px] text-soft-foreground"
+          className="-translate-y-[6px] pr-2 text-right font-mono text-micro text-soft-foreground"
           style={{ height: HOUR_H }}
         >
           {hour ? hm(hour) : ''}
@@ -180,20 +180,20 @@ export function PollBand({ automations }: { automations: readonly AutomationList
   if (!polls.length) return null
   return (
     <div data-slot="poll-band" className="grid grid-cols-[48px_minmax(0,1fr)] border-b border-border">
-      <div className="py-2 pr-2 text-right font-mono text-[10.5px] text-soft-foreground">poll</div>
+      <div className="py-2 pr-2 text-right font-mono text-micro text-soft-foreground">poll</div>
       <div className="flex flex-col gap-1 border-l border-border px-2 py-1.5">
         {polls.map((automation) => (
           <div
             key={automation.id}
             data-slot="poll-row"
-            className="flex h-[22px] min-w-0 items-center gap-2 overflow-hidden rounded-[6px] border border-violet/25 bg-violet/8 px-2 text-[11.5px] font-medium"
+            className="flex h-[22px] min-w-0 items-center gap-2 overflow-hidden rounded-[6px] border border-violet/25 bg-violet/8 px-2 text-meta font-medium"
           >
             <GithubIcon className="size-3 shrink-0 text-violet" />
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
-            <span className="overflow-hidden font-mono text-[10.5px] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
+            <span className="overflow-hidden font-mono text-micro font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
               {triggerLabel(automation)}
             </span>
-            <span className="ml-auto shrink-0 font-mono text-[10.5px] font-normal whitespace-nowrap text-soft-foreground">
+            <span className="ml-auto shrink-0 font-mono text-micro font-normal whitespace-nowrap text-soft-foreground">
               {automation.runs7d} runs
             </span>
           </div>

@@ -113,6 +113,37 @@ export function githubClient({ token, repository }: { token: string | undefined;
       const { status } = await call('GET', `${r}/releases/tags/${encodeURIComponent(tag)}`);
       return status === 200;
     },
+    /** PRs merged within the last `days`, newest activity first (at most 300 scanned). */
+    async mergedPulls(days: number): Promise<{ number: number; base: string; labels: string[] }[]> {
+      const since = Date.now() - days * 86_400_000;
+      const out: { number: number; base: string; labels: string[] }[] = [];
+      for (let page = 1; page <= 3; page += 1) {
+        const batch = await ok<{ number: number; merged_at: string | null; updated_at: string; base: { ref: string }; labels: { name: string }[] }[]>(
+          'GET',
+          `${r}/pulls?state=closed&sort=updated&direction=desc&per_page=100&page=${page}`,
+        );
+        for (const pr of batch) {
+          if (pr.merged_at && Date.parse(pr.merged_at) >= since) {
+            out.push({ number: pr.number, base: pr.base.ref, labels: pr.labels.map((l) => l.name) });
+          }
+        }
+        // Sorted by update time: once a page ends before the window, nothing older can be in it.
+        const last = batch.at(-1);
+        if (batch.length < 100 || (last && Date.parse(last.updated_at) < since)) break;
+      }
+      return out;
+    },
+    /** The state of the PR whose head is `branch` in this repository, if any: an open one wins,
+     *  then a merged one, then a closed one. */
+    async pullStateByHead(branch: string): Promise<'open' | 'merged' | 'closed' | null> {
+      const pulls = await ok<{ state: string; merged_at: string | null }[]>(
+        'GET',
+        `${r}/pulls?state=all&head=${owner}:${encodeURIComponent(branch)}&per_page=100`,
+      );
+      if (pulls.some((p) => p.state === 'open')) return 'open';
+      if (pulls.some((p) => p.merged_at)) return 'merged';
+      return pulls.length > 0 ? 'closed' : null;
+    },
     /** Open a PR, or return the open one already proposing `head` → `base`. */
     async openPullRequest({ head, base, title, body }: { head: string; base: string; title: string; body: string }): Promise<PullRequest> {
       const existing = await ok<PullRequest[]>('GET', `${r}/pulls?state=open&base=${encodeURIComponent(base)}&head=${owner}:${encodeURIComponent(head)}`);

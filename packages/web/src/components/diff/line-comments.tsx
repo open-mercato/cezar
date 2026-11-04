@@ -340,14 +340,14 @@ function SavedComment({
       // around it; the lines it covers carry the accent bar in their gutter edge.
       role="group"
       aria-label={`Comment on ${describeLines(comment, comment.start)}`}
-      className="flex flex-col gap-1.5 rounded-md border border-primary/40 bg-card px-3 py-2.5 text-[13px] leading-normal shadow-sm transition-shadow duration-500 data-[flash=true]:ring-2 data-[flash=true]:ring-primary"
+      className="flex flex-col gap-1.5 rounded-md border border-primary/40 bg-card px-3 py-2.5 text-ui leading-normal shadow-sm transition-shadow duration-500 data-[flash=true]:ring-2 data-[flash=true]:ring-primary"
     >
       {outdated ? (
         // The line under this card is not the one the note was about: say so, and show the code it
         // WAS about, rather than letting the note read as if it were about what is here now.
         <div data-slot="diff-line-comment-outdated" className="flex flex-col gap-1">
-          <p className="text-[11px] font-medium text-pending-strong">Outdated — the code here changed since this comment</p>
-          <pre className="max-h-32 overflow-auto rounded-sm border border-border/60 bg-muted/40 px-2 py-1 font-mono text-[12px] whitespace-pre text-muted-foreground">
+          <p className="text-meta font-medium text-pending-strong">Outdated — the code here changed since this comment</p>
+          <pre className="max-h-32 overflow-auto rounded-sm border border-border/60 bg-muted/40 px-2 py-1 font-mono text-label whitespace-pre text-muted-foreground">
             {comment.excerpt}
           </pre>
         </div>

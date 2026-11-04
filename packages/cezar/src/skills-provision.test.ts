@@ -116,4 +116,19 @@ describe('provisionSkills', () => {
     expect(existsSync(join(cwd, '.claude/escape'))).toBe(false);
     expect(existsSync(join(root, 'escape'))).toBe(false);
   });
+
+  it('copies a bundled built-in skill directory (references/ included) and never links into the package', async () => {
+    const pkg = join(root, 'pkg/skills/change-impact');
+    mkdirSync(join(pkg, 'references'), { recursive: true });
+    writeFileSync(join(pkg, 'SKILL.md'), '---\nname: change-impact\n---\nBody');
+    writeFileSync(join(pkg, 'references/analysis-contract.md'), '# contract');
+    const shipped = skill('change-impact', 'Body', { path: join(pkg, 'SKILL.md'), source: 'builtin' });
+    expect(await provisionSkills(cwd, [shipped], [shipped])).toEqual(['change-impact']);
+    for (const dir of ['.claude/skills', '.agents/skills']) {
+      const dest = join(cwd, dir, 'change-impact');
+      expect(lstatSync(dest).isSymbolicLink()).toBe(false);
+      expect(readFileSync(join(dest, 'references/analysis-contract.md'), 'utf8')).toBe('# contract');
+    }
+    expect(execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' })).toBe('');
+  });
 });

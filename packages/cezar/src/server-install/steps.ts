@@ -343,6 +343,7 @@ export function depCheckStep(opts: DepStepOpts = {}): InstallStep {
 const NPM_GLOBAL: Record<string, string> = {
   claude: '@anthropic-ai/claude-code',
   codex: '@openai/codex',
+  gemini: '@google/gemini-cli',
 };
 
 /**

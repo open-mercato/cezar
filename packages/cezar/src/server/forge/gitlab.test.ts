@@ -1073,6 +1073,62 @@ describe('GitLab driver — listChecks', () => {
   });
 });
 
+// ---- headChecks (#1533 parity) -------------------------------------------------------------------
+// The workflow engine's wait-for-CI node judges ONE commit, never "the MR's checks": an MR detail
+// still describing the previous head (or a pipeline built for it) must keep the node polling.
+
+describe('GitLab driver — headChecks', () => {
+  const SHA = 'a'.repeat(40);
+  const OLD = 'b'.repeat(40);
+  const head = (fields: Record<string, unknown>) => JSON.stringify(fields);
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('is stale while the MR head is not the commit the node waits for', async () => {
+    routeGlabMr({ details: { 7: head({ sha: OLD, head_pipeline: { status: 'success', sha: OLD } }) } });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.headChecks!(7, SHA)).toEqual({ kind: 'stale', headOid: OLD });
+  });
+
+  it('answers the head pipeline glyph once the MR head is that commit', async () => {
+    routeGlabMr({ details: { 7: head({ sha: SHA.toUpperCase(), head_pipeline: { status: 'failed', sha: SHA } }) } });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.headChecks!(7, SHA)).toEqual({ kind: 'checks', glyph: 'failing' });
+  });
+
+  it('a pipeline still built for the previous head is not this commit\'s verdict', async () => {
+    routeGlabMr({ details: { 7: head({ sha: SHA, head_pipeline: { status: 'success', sha: OLD } }) } });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.headChecks!(7, SHA)).toEqual({ kind: 'unavailable' });
+  });
+
+  it('reports a conflicting MR as conflict, whatever its pipeline says', async () => {
+    routeGlabMr({ details: { 7: head({ sha: SHA, has_conflicts: true, head_pipeline: { status: 'success', sha: SHA } }) } });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.headChecks!(7, SHA)).toEqual({ kind: 'conflict' });
+  });
+
+  it('no pipeline yet is a null glyph — the node keeps polling', async () => {
+    routeGlabMr({ details: { 7: head({ sha: SHA }) } });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.headChecks!(7, SHA)).toEqual({ kind: 'checks', glyph: null });
+  });
+
+  it('never throws: a glab failure or an unreadable answer is unavailable', async () => {
+    routeGlabMr({ details: { 7: { fail: GLAB_401 }, 8: 'not json' } });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.headChecks!(7, SHA)).toEqual({ kind: 'unavailable' });
+    expect(await driver.headChecks!(8, SHA)).toEqual({ kind: 'unavailable' });
+  });
+});
+
 describe('GitLab driver — prStatus', () => {
   beforeEach(() => {
     vi.stubEnv('CEZ_DRY_RUN', '');

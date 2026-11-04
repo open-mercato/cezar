@@ -1,19 +1,25 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { opendirSync } from 'node:fs';
+import { existsSync, opendirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { extname, isAbsolute } from 'node:path';
+import { extname, isAbsolute, join } from 'node:path';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
-import { isSignalTerminationExit } from './agent-runner.ts';
+import { RUNNER_IDS, isSignalTerminationExit, type RunnerId } from './agent-runner.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
+import { resolveAntigravityBin } from './antigravity-runner.ts';
 import { isForeignCursorAgent, resolveCursorAgentBin } from './cursor-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
+import { agentHomePaths } from '../paths.ts';
+import { resolveKimiExecutable } from './kimi-runner.ts';
 import { spawnableCommand } from './windows-shim.ts';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
+/** Every runner is a provider cezar verifies — one tuple, the contract's. */
+export const PROVIDER_IDS = RUNNER_IDS;
+export type ProviderId = RunnerId;
 export type ProviderConnectionState =
   | 'connected'
   | 'disconnected'
@@ -85,6 +91,14 @@ export function providerAuthChecksDisabled(
   return env[AGENT_MODELS_LOCKED_ENV] === '1';
 }
 
+/** What a status parser may consult beyond the command's own answer. */
+export interface ProviderParseContext {
+  /** The account's config dir when a non-default account is being probed; absent = the default. */
+  configDir?: string;
+  /** The environment credential discovery reads — the service's injected `env`, never `process.env` directly. */
+  env: NodeJS.ProcessEnv;
+}
+
 interface ProviderDescriptor {
   id: ProviderId;
   executable: () => string;
@@ -93,7 +107,7 @@ interface ProviderDescriptor {
   /** The CLI's own self-update, where it has one; others update the way they were installed. */
   updateArgs?: readonly string[];
   installHint: string;
-  parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
+  parse: (result: ProviderCommandResult, context: ProviderParseContext) => ProviderConnectionState | null;
   /** See {@link RunProviderCommand}'s `stdin`. */
   stdin?: () => ProviderStdin;
   /** Arguments that print the CLI's version for an inconclusive report; default `--version`. */
@@ -120,6 +134,10 @@ interface ProviderDescriptor {
    * answer is unreadable; `true` reports `not-installed` (telemetry 8d304c50, f67df9d2).
    */
   foreign?: (executable: string, version: ProviderCommandResult) => boolean;
+  /** What `foreign` reports instead of the generic "not a working CLI" text. */
+  foreignHint?: (result: ProviderCommandResult) => string | undefined;
+  /** What to tell the user when `parse` answers `unknown` on purpose (default: the generic hint). */
+  unknownHint?: string;
   /** The `CEZ_*_BIN` override `executable` honours — only so a report can say the binary came from it. */
   overrideEnv: string;
 }
@@ -184,9 +202,10 @@ const RUNTIME_AUTH_VERIFY_COOLDOWN_MS = 60_000;
  *  wrong answer, and it is now paid in the background; fixing it properly means per-provider
  *  timestamps and merging partial probe results. */
 function cacheTtlFor(rows: readonly ProviderStatus[]): number {
-  // Junie deliberately remains `unknown` after a successful handshake, so it must not force
-  // every other provider's cached credential result onto the short negative-answer window.
-  return rows.filter((row) => row.provider !== 'junie').every((row) => row.status === 'connected')
+  // Junie deliberately remains `unknown` after a successful handshake, and Gemini's status is an
+  // environment read that stays `unknown` without a visible key — neither may force every other
+  // provider's cached credential result onto the short negative-answer window.
+  return rows.filter((row) => row.provider !== 'junie' && row.provider !== 'gemini').every((row) => row.status === 'connected')
     ? CONNECTED_TTL_MS
     : UNSETTLED_TTL_MS;
 }
@@ -359,7 +378,9 @@ function parseJunieStatus(_result: ProviderCommandResult): ProviderConnectionSta
 
 function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   if (result.exitCode !== 0) return null;
-  const lines = normalizedLines(result.stdout);
+  // pi ≥ 0.73 reroutes stdout to stderr whenever stdin is not a TTY (`takeOverStdout` in its
+  // main.js), so the probe's whole answer arrives on stderr (telemetry f67df9d2, after #1548).
+  const lines = normalizedLines(result.stdout, result.stderr);
   if (lines.some((line) => /^provider\s+model\s+context\s+max-out\s+thinking\s+images$/.test(line))) {
     return 'connected';
   }
@@ -413,6 +434,74 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * omp has no auth-status subcommand: `--version` proves the CLI is there. Credentials live in
+ * omp's own `agent.db` / OS keychain plus the provider-key environment (the same MULTI_PROVIDER_*
+ * set `buildChildEnv` forwards). Evidence — a NON-EMPTY provider key in the environment, or an
+ * agent.db in the active agent dir (`$PI_CODING_AGENT_DIR` or `~/.omp/agent`) — counts as
+ * `connected`; its absence is `unknown`, never `disconnected` (a keychain-only login is invisible
+ * from outside), and carries the auth hint.
+ */
+const OMP_AUTH_HINT =
+  'omp keeps its login in its own auth store — run `omp` once and log in; provider API keys in the environment (e.g. OPENROUTER_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY) also work';
+
+function parseOmpStatus(result: ProviderCommandResult, context: ProviderParseContext): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return ompHasConfiguredCredential(context.env, context.configDir) ? 'connected' : 'unknown';
+}
+
+/**
+ * Evidence of an omp login, for the account being probed: a non-empty provider KEY in the
+ * environment, or the `agent.db` omp writes on login into the account's own agent dir (a second
+ * account is its own `$PI_CODING_AGENT_DIR`, so the default account's store says nothing about it).
+ * `env` is the service's injected environment (`ProviderAuthService`'s `env` option): the only
+ * host state this probe reads, so a test pins both answers instead of asking the developer's shell.
+ */
+function ompHasConfiguredCredential(env: NodeJS.ProcessEnv, configDir?: string): boolean {
+  const hasNonEmptyKey = Object.keys(env).some((name) => isOmpCredentialVariable(name) && (env[name] ?? '').trim() !== '');
+  if (hasNonEmptyKey) return true;
+  return existsSync(join(configDir ?? agentHomePaths(env).omp, 'agent.db'));
+}
+
+/**
+ * Only a KEY-shaped variable of a provider family omp resolves is a credential: `OPENAI_BASE_URL`
+ * or `ANTHROPIC_MODEL` name a provider without authenticating anything. Mirrors
+ * MULTI_PROVIDER_PREFIXES in agent-env.ts for the families; exported so the tests strip exactly
+ * the variables the check reads.
+ */
+export function isOmpCredentialVariable(name: string): boolean {
+  const upper = name.toUpperCase();
+  return OMP_CREDENTIAL_PREFIXES.some((prefix) => upper.startsWith(prefix)) && /(_API_KEY|_KEY|_TOKEN)$/.test(upper);
+}
+
+/** The provider-key families omp resolves from the environment (mirrors MULTI_PROVIDER_PREFIXES in agent-env.ts). */
+export const OMP_CREDENTIAL_PREFIXES: readonly string[] = [
+  'OPENAI_',
+  'ANTHROPIC_',
+  'AZURE_OPENAI_',
+  'OPENROUTER_',
+  'GROQ_',
+  'MISTRAL_',
+  'GEMINI_',
+  'GOOGLE_GENERATIVE_AI_',
+  'DEEPSEEK_',
+  'XAI_',
+  'PERPLEXITY_',
+  'TOGETHER_',
+  'FIREWORKS_',
+];
+
+/**
+ * Gemini CLI has no `auth status` subcommand (#581): `--version` proves the CLI is there, and the
+ * credentials are read where the CLI itself reads them (`gemini-credentials.ts`). Evidence of a key,
+ * a gateway or a Vertex project is `connected`; its absence is `unknown`, never `disconnected` — a
+ * keychain-stored key or a Workspace login is invisible from outside — and carries the API-key hint.
+ */
+function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return geminiHasCredentials() ? 'connected' : 'unknown';
+}
+
 /** Telemetry 298c2e1f: a `copilot` that answered with no JSON-RPC frame never started an ACP
  *  server — an old Copilot CLI, or another program of that name (AWS Copilot) first on PATH. */
 function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefined {
@@ -420,6 +509,16 @@ function copilotUnrecognizedHint(result: ProviderCommandResult): string | undefi
   return 'The `copilot` command did not start GitHub Copilot CLI\'s ACP server. Update it with '
     + '`npm i -g @github/copilot`, or point CEZ_COPILOT_BIN at the GitHub Copilot CLI if another '
     + 'program named `copilot` comes first on PATH.';
+}
+
+/** `kimi provider list`: one `<name>  type=…  models=N  source=…` row per provider, or
+ *  "No providers configured." before `kimi login`. */
+function parseKimiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
+  const lines = normalizedLines(result.stdout);
+  if (lines.some((line) => /\stype=\S+\s+models=[1-9]\d*/.test(line))) return 'connected';
+  if (lines.some((line) => line.includes('no providers configured'))) return 'disconnected';
+  return null;
 }
 
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
@@ -506,9 +605,65 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     stdin: copilotAcpProbeStdin,
     // The version of the binary the probe ran, not a cached newer package.
     versionArgs: ['--no-auto-update', '--version'],
+    // No ACP frame and no semver on stdout or stderr: not a Copilot CLI that can run here, so a
+    // status of its own, not a crash report on every boot (telemetry 298c2e1f, #1580).
+    foreign: (_executable, version) => !process.env.CEZ_COPILOT_BIN
+      && (version.exitCode !== 0 || (cliVersionFrom(version.stdout) ?? cliVersionFrom(version.stderr)) === null),
+    foreignHint: copilotUnrecognizedHint,
     unrecognizedHint: copilotUnrecognizedHint,
   },
+  {
+    id: 'omp',
+    overrideEnv: 'CEZ_OMP_BIN',
+    executable: () => process.env.CEZ_OMP_BIN ?? 'omp',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's own auth flow (agent.db / keychain) is the entry.
+    loginArgs: [],
+    installHint: `Install OMP (brew install can1357/tap/omp). ${OMP_AUTH_HINT}`,
+    parse: parseOmpStatus,
+    unknownHint: OMP_AUTH_HINT,
+  },
+  {
+    id: 'antigravity',
+    overrideEnv: 'CEZ_AGY_BIN',
+    executable: () => resolveAntigravityBin(),
+    // `agy models` needs a session: signed in it lists the account's models and exits 0 (agy 1.4.0),
+    // signed out it exits 1 asking to sign in - without prompting and without spending a request.
+    statusArgs: ['models'],
+    // agy has no login subcommand; the first interactive `agy` launch runs the Google sign-in.
+    loginArgs: [],
+    updateArgs: ['update'],
+    installHint: 'Install the Antigravity CLI (https://antigravity.google/docs/cli), then run `agy` once and sign in with Google.',
+    parse: parseAntigravityStatus,
+  },
+  {
+    id: 'gemini',
+    executable: () => process.env.CEZ_GEMINI_BIN ?? 'gemini',
+    overrideEnv: 'CEZ_GEMINI_BIN',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's `/auth` is where a key is entered.
+    loginArgs: [],
+    installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
+    parse: parseGeminiStatus,
+    unknownHint: GEMINI_AUTH_HINT,
+  },
+  {
+    id: 'kimi',
+    overrideEnv: 'CEZ_KIMI_BIN',
+    executable: () => resolveKimiExecutable(),
+    statusArgs: ['provider', 'list'],
+    loginArgs: ['login'],
+    installHint: 'Install Kimi Code, then run `kimi login`.',
+    parse: parseKimiStatus,
+  },
 ];
+
+function parseAntigravityStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode === 0) return 'connected';
+  const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  if (text.includes('sign in') || text.includes('authentication required')) return 'disconnected';
+  return null;
+}
 
 function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionState | null {
   // probe() already handles ENOENT / any other errorCode before calling parse() — result here
@@ -598,7 +753,9 @@ export function defaultRunProviderCommand(
   const cwd = probeCwdFallback();
   return new Promise((resolve) => {
     let closeTimer: NodeJS.Timeout | undefined;
+    let lingerTimer: NodeJS.Timeout | undefined;
     let closedUnanswered = false;
+    let answered = false;
     const child = execFile(
       file,
       argv,
@@ -614,6 +771,7 @@ export function defaultRunProviderCommand(
       },
       (error, stdout, stderr) => {
         clearTimeout(closeTimer);
+        clearTimeout(lingerTimer);
         const commandError = error as (NodeJS.ErrnoException & {
           killed?: boolean;
           signal?: string | null;
@@ -621,16 +779,18 @@ export function defaultRunProviderCommand(
         const code = commandError?.code;
         // A held-open stdin closed by the timer means the answer never came: the CLI then exits 0
         // on EOF, which read as an unrecognized answer and skipped the longer re-ask (298c2e1f).
-        const timedOut = commandError?.code === 'ETIMEDOUT'
+        // An answer in hand is not a hang, however the CLI then failed to exit (telemetry 5f52beba).
+        const timedOut = !answered && (commandError?.code === 'ETIMEDOUT'
           || (commandError?.killed === true && commandError.signal === 'SIGTERM')
-          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout)));
+          || (closedUnanswered && !stdin?.closeWhen?.(String(stdout))));
         resolve({
           stdout: String(stdout),
           stderr: String(stderr),
           exitCode: typeof code === 'number' ? code : error ? null : 0,
           errorCode: typeof code === 'string' ? code : undefined,
           timedOut,
-          ...(!timedOut && commandError?.signal ? { signal: commandError.signal } : {}),
+          // The linger kill after an answer is cezar's own cleanup, not an interruption to re-ask over.
+          ...(!timedOut && !answered && commandError?.signal ? { signal: commandError.signal } : {}),
         });
       },
     );
@@ -652,7 +812,12 @@ export function defaultRunProviderCommand(
     };
     const onData = (chunk: Buffer | string): void => {
       seen += String(chunk);
-      if (closeWhen(seen)) close();
+      if (!closeWhen(seen)) return;
+      answered = true;
+      close();
+      // Copilot 1.0.103 on Windows answered session/new and then outlived EOF until cezar's
+      // timeout killed it, twice, and the answer was reported as a hang (telemetry 5f52beba).
+      lingerTimer = setTimeout(() => child.kill(), STDIN_CLOSE_MARGIN_MS);
     };
     output.on('data', onData);
     closeTimer = setTimeout(() => {
@@ -800,6 +965,7 @@ export class ProviderAuthService {
   private readonly platform: NodeJS.Platform;
   private readonly createAuthFailureId: () => string;
   private readonly probeJunie: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
+  private readonly env: NodeJS.ProcessEnv;
   private readonly onInconclusive?: (probe: InconclusiveProbe) => void;
   /** Once per provider, reason and account kind per process: the background re-check runs every
    *  minute while a provider is logged out, and one broken install must not become a report a minute. */
@@ -842,11 +1008,16 @@ export class ProviderAuthService {
      *  discovery cwd (`server.ts`'s `bootRoot`) instead of silently diverging from it. */
     cwd?: string;
     probeJunie?: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
+    /** The environment a status parser may read (omp's credential discovery is env- and
+     *  file-shaped evidence, not a CLI answer). Injected like `runCommand` and `now` so the suite
+     *  pins both of omp's answers instead of inheriting whatever keys the developer's shell exports. */
+    env?: NodeJS.ProcessEnv;
     /** Told when a CLI probe ends `unknown`, at most once per provider/reason/account kind. */
     onInconclusive?: (probe: InconclusiveProbe) => void;
   }) {
     this.onInconclusive = options?.onInconclusive;
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
+    this.env = options?.env ?? process.env;
     this.now = options?.now ?? Date.now;
     this.platform = options?.platform ?? process.platform;
     this.createAuthFailureId = options?.createAuthFailureId ?? randomUUID;
@@ -1300,16 +1471,17 @@ export class ProviderAuthService {
           ? this.runCommand(executable, args, timeoutMs)
           : this.runCommand(executable, args, timeoutMs, env);
     };
+    const parseContext: ProviderParseContext = { env: this.env, ...(configDir ? { configDir } : {}) };
     try {
       result = await run();
       // A hang is reported only when it survives a second, longer ask outside the concurrent burst.
       if (result.timedOut) result = await run(descriptor.statusArgs, RETRY_TIMEOUT_MS);
       // A CLI that exits 0 having printed nothing at all did not answer — `claude auth status
       // --json` does this intermittently (telemetry 35838a52). Ask once more before giving up.
-      if (isSilentSuccess(result) && descriptor.parse(result) === null) result = await run();
+      if (isSilentSuccess(result) && descriptor.parse(result, parseContext) === null) result = await run();
       // A signal meant for someone else (or the OOM killer) is not an answer: ask once more.
-      if (wasInterrupted(result) && descriptor.parse(result) === null) result = await run();
-      const fallback = descriptor.parse(result) === null ? descriptor.fallbackArgs?.(result) : undefined;
+      if (wasInterrupted(result) && descriptor.parse(result, parseContext) === null) result = await run();
+      const fallback = descriptor.parse(result, parseContext) === null ? descriptor.fallbackArgs?.(result) : undefined;
       if (fallback) result = await run(fallback);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -1339,7 +1511,10 @@ export class ProviderAuthService {
           + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at the CLI.`,
       };
     }
-    const status = descriptor.parse(result);
+    const status = descriptor.parse(result, parseContext);
+    // A deliberate `unknown` (omp: no credential visible) is the parser's answer, not an
+    // inconclusive probe — it carries the descriptor's own hint and is never reported.
+    if (status === 'unknown') return { provider: descriptor.id, status, hint: descriptor.unknownHint ?? UNKNOWN_HINT };
     if (status !== null) return { provider: descriptor.id, status };
     // Still interrupted: unknown, but unreported — there is no CLI defect to group on.
     if (wasInterrupted(result)) return { provider: descriptor.id, status: 'unknown', hint: INTERRUPTED_HINT };
@@ -1371,8 +1546,9 @@ export class ProviderAuthService {
         return {
           provider: descriptor.id,
           status: 'not-installed',
-          hint: `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
-            + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
+          hint: descriptor.foreignHint?.(result)
+            ?? `\`${executable}\` on PATH is not a working ${descriptor.id} CLI. `
+              + `${descriptor.installHint} Or point ${descriptor.overrideEnv} at it.`,
         };
       }
     }

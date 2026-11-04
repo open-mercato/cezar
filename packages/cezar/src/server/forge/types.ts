@@ -1,4 +1,5 @@
 import type { RunRecord } from '../../runs/store.ts';
+import type { GithubItem } from '@open-mercato/cezar-contract';
 
 /**
  * Forge-driver seam (cockpit-ui redesign spec §"Forge-driver seam"): every
@@ -22,23 +23,7 @@ export interface ForgeAvailability {
 
 /** One issue or pull request, flattened for the cockpit. `/api/github` serves
  *  exactly this shape (BACKWARD_COMPATIBILITY.md §2 — do not reshape). */
-export interface ForgeItem {
-  kind: 'issue' | 'pr';
-  number: number;
-  title: string;
-  author: string;
-  createdAt: string;
-  labels: string[];
-  /** Deprecated in the list tier; hydrated through the detail endpoint when omitted. */
-  body?: string;
-  url: string;
-  comments: number;
-  /** PRs only. */
-  isDraft?: boolean;
-  additions?: number;
-  deletions?: number;
-  checks?: 'passing' | 'failing' | 'pending' | null;
-}
+export type ForgeItem = GithubItem;
 
 /** One comment (or PR review summary) in an issue/PR conversation thread (#499). Served by the
  *  new `GET /api/github/comments/:kind/:number` endpoint; additive, no impact on `ForgeItem`. */
@@ -137,6 +122,11 @@ export interface ForgeListOptions {
   limit?: number;
   issuesCursor?: string;
   prsCursor?: string;
+  /** The caller already exhausted this side (#1750): page the other one only, never restart this
+   *  one from page one. Meaningful only to a cursor-paged driver (GitHub); GitLab's list is one
+   *  page with no cursors, so it ignores both. */
+  issuesDone?: boolean;
+  prsDone?: boolean;
 }
 
 /** The `GET /api/github` payload — the tab's whole listing: availability, both open sets and the
@@ -290,6 +280,16 @@ export type ForgeRefKind = 'repo' | 'issue' | 'pr' | 'branch' | 'commit';
 /** The single enum a PR row's checks glyph renders (never `undefined` on the wire). */
 export type ForgeChecksGlyph = 'passing' | 'failing' | 'pending' | null;
 
+/** CI verdict for ONE exact commit of a PR (#1533) — what the workflow engine's wait-for-CI node
+ *  judges, never a PR-number cache: `stale` while the PR's head is not that commit yet (a push not
+ *  landed), `conflict` for a PR that conflicts with its base at that head (CI will not run), else
+ *  the checks rollup for the commit. Offline or a logged-out CLI is `unavailable`, not a verdict. */
+export type ForgeHeadChecksVerdict =
+  | { kind: 'unavailable' }
+  | { kind: 'stale'; headOid: string }
+  | { kind: 'conflict' }
+  | { kind: 'checks'; glyph: ForgeChecksGlyph };
+
 /** The `GET /api/github/checks` payload — lazy CI glyphs for on-screen PR rows (#664).
  *  Forge-neutral (spec 2026-08-10-forge-provider-adapters); `GithubChecksData` aliases it. */
 export type ForgeChecksData =
@@ -394,6 +394,8 @@ export interface ForgeDriver {
   ): Promise<ForgeCommentsData>;
   /** Lazy CI glyphs for on-screen PR rows (#664). Optional; never throws. */
   listChecks?(numbers: number[]): Promise<ForgeChecksData>;
+  /** The CI verdict for PR `number` at exactly `sha` (#1533). Optional; never throws. */
+  headChecks?(number: number, sha: string): Promise<ForgeHeadChecksVerdict>;
   /** Batched reference status for task-table chips, filed by what each number turned out to be.
    *  Optional; never throws. */
   refStatus?(prs: number[], issues: number[]): Promise<ForgeRefStatusData>;

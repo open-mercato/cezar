@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Toaster, onDangerToast, resetToasts, toast } from './toaster'
+import { Toaster, UNREACHABLE_TOAST, onDangerToast, resetToasts, toast } from './toaster'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -14,6 +14,28 @@ afterEach(() => {
 })
 
 describe('Toaster', () => {
+  // Telemetry 2e454012: a body read that fails after the headers rejects with the browser's raw
+  // `TypeError: Failed to fetch`, which every `toast(error.message)` call site showed verbatim.
+  it.each(['Failed to fetch', 'Load failed', 'network error', 'NetworkError when attempting to fetch resource.'])(
+    'turns the raw transport failure %j into the cannot-reach message',
+    (raw) => {
+      const seen: string[] = []
+      const off = onDangerToast((message) => seen.push(message))
+      render(<Toaster />)
+      act(() => toast(raw, { tone: 'danger' }))
+
+      expect(screen.getByRole('status').textContent).toBe(UNREACHABLE_TOAST)
+      expect(seen).toEqual([UNREACHABLE_TOAST])
+      off()
+    },
+  )
+
+  it('leaves a message that merely mentions fetching alone', () => {
+    render(<Toaster />)
+    act(() => toast('Failed to fetch the PR list: 502', { tone: 'danger' }))
+    expect(screen.getByRole('status').textContent).toBe('Failed to fetch the PR list: 502')
+  })
+
   it('renders nothing while the queue is empty', () => {
     render(<Toaster />)
     expect(document.querySelector('[data-slot="toaster"]')).toBeNull()

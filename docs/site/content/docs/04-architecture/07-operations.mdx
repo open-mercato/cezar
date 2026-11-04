@@ -1,0 +1,105 @@
+---
+title: "Server operation, security, and recovery"
+description: "Where agents execute commands, how to expose the cockpit through a proxy, and how to back up data. Installation and troubleshooting procedures."
+sources:
+  - label: "Remote deployment options"
+    path: docs/reference.md
+    line: 676
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Service and reverse proxy troubleshooting"
+    path: docs/server-install/ubuntu-vps.md
+    line: 259
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Terminal in hosted mode"
+    path: .env.example
+    line: 147
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Agent process environment"
+    path: packages/cezar/src/core/agent-env.ts
+    line: 1
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Encryption and key location"
+    path: packages/cezar/src/workspace/secrets.ts
+    line: 20
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "NDJSON event files"
+    path: packages/cezar/src/runs/store.ts
+    line: 1830
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Configuration recovery from backup"
+    path: packages/cezar/src/workspace/config.ts
+    line: 329
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Temporary directory troubleshooting"
+    path: docs/reference.md
+    line: 520
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+  - label: "Telemetry consent"
+    path: packages/cezar/src/telemetry.ts
+    line: 66
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+## Which machine runs the agent
+
+Agents, tests, and shell commands run on the Cezar server machine. Opening the cockpit on a phone lets you control that machine. A worktree separates task files and its branch, but does not create a container or separate system permissions.
+
+Cezar listens on 127.0.0.1 by default. Remote access needs a front end with TLS and authentication. `CEZ_REMOTE=1` changes the available host features but does not add a password or users. In hosted mode, the task terminal is disabled by default. `CEZ_TERMINAL=1` makes it available to people admitted by the proxy.
+
+## Installing on a server
+
+The installer supports ubuntu-vps and macosx-ngrok. A standard Ubuntu installation sets up nginx, HTTPS through Let's Encrypt, htpasswd sign-in, and a systemd service. The macOS variant uses ngrok and launchd.
+
+Run the following command on the target server. It starts the wizard and changes that machine's configuration. The --domain parameter creates a separate instance with its own port and service; it does not configure a local documentation session.
+
+```bash
+npx cezar-run server-install \
+  --platform ubuntu-vps \
+  --domain cezar.example.com
+```
+
+> **Good to know**: If the host already has a reverse proxy, choose --external-proxy. The existing proxy then handles TLS and sign-in. Use --bind-host only when the proxy cannot reach the loopback address, such as from a container. This parameter does not provide access control.
+
+## Agent environment and secrets
+
+By default, an agent process receives a limited set of variables: required tool settings, backend authentication, and permitted integration variables. `CEZ_ENV_PASSTHROUGH=A,B` adds the named variables to that set. `CEZ_AGENT_ENV_FULL=1` passes the entire host environment, including any secrets it contains.
+
+Settings → Secrets stores values in `~/.cezar/`secrets/ using AES-256-GCM encryption. The key lives in the system keychain or a .key file with permissions 0600. Secrets go to the recipients specified by audience, such as check steps. This store is separate from the agent environment and does not automatically pass secrets to agent sessions.
+
+Cezar redacts recognized confidential data from saved transcripts by default. It detects only known patterns and registered values, so logs can still contain private code or data. Telemetry requires consent. Model backends, GitHub, and skill updates have their own network connections.
+
+## Preparing a backup
+
+The procedure below follows Cezar's file layout. It is an operational recommendation; there is no built-in backup command that performs it. Stop active work and data writes while taking the snapshot so the backup captures a consistent state.
+
+1. Copy the repository with .git, branches, and any needed worktrees. A branch does not include uncommitted worktree changes.
+2. Include all of &lt;repo>/`.ai/cezar/`: `runs.json`, runs/\*.ndjson, attachments, configuration, workflows, and automation state.
+3. Copy `CEZ_HOME`, which defaults to `~/.cezar`, with the project registry, agent accounts, and tracker connections. Restrict access to this backup.
+4. Check that you can recover the Secrets key from the keychain. Encrypted files alone are not enough to restore secrets on another host.
+5. Test restoration in a separate directory with a separate `CEZ_HOME`. Before resuming automations, check project paths, backend sign-in, and access to saved tasks.
+
+> **Good to know**: `config.json`.bak restores the registry after the global `config.json` is damaged or lost. It is not a full backup of tasks, repositories, or credentials.
+
+## Where to start troubleshooting
+
+| Symptom | First step |
+| --- | --- |
+| 502 from the reverse proxy | Check the service and its logs, then make a local GET `/api/v1/health` request. The service name depends on the instance. |
+| 403 when writing through the proxy | Check that Origin and Host match, including the port. Nginx should forward $http_host without stripping the port. |
+| CLI cannot find tasks | Check `CEZ_API_URL`, the actual server port, and `CEZ_PROJECT_ID`. |
+| Empty shell output / temp directory error | Check free space, quota, and inodes on the repository disk. The task temporary directory is `.ai/cezar/tmp/<id>`. |
+| Project missing after restart | Check `CEZ_HOME` and the project registry before adding directories again. |
+
+```bash
+# Read status without restarting the service
+curl --fail-with-body -sS http://127.0.0.1:4321/api/v1/health
+
+# For the default Ubuntu system service
+systemctl status cezar
+journalctl -u cezar -n 50
+
+# Disk containing the project
+df -h /path/to/project
+df -i /path/to/project
+```
+
+> **Good to know**: For a user service, add --user. For a named instance, use its actual service name. Do not delete `runs.json` or worktrees as the first repair step.

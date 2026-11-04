@@ -16,7 +16,11 @@ import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { forgeLabel } from '@/lib/forge-display'
 import { useDocumentTitle } from '@/lib/use-document-title'
-import { useActiveProjectId } from '@/lib/project-router'
+import { stripProjectPrefix, useActiveProjectId } from '@/lib/project-router'
+import { withServedBootProject } from '@/lib/served-boot-project'
+import { useActiveForge } from '@/lib/active-forge'
+import { useFeatureNews, WhatsNewNavItem } from '@/components/first-run'
+import { TaskSwitchShortcut } from '@/lib/use-task-switch-shortcut'
 import { unreadDoneCount } from '@/lib/read-state'
 import { runTitle } from '@/lib/task-groups'
 import { pageTitleContext } from '@/routes'
@@ -79,7 +83,14 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
   const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
-  const registry = useProjects().data
+  // Records the visit and dots the nav items whose feature shipped since (spec
+  // 2026-10-26-first-run-onboarding, "Coming back").
+  const newNavItems = useFeatureNews(stripProjectPrefix(pathname))
+  const projectsData = useProjects().data
+  const registry = useMemo(
+    () => withServedBootProject(projectsData, projectId, health.data),
+    [projectsData, projectId, health.data],
+  )
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
   // Unread done items (#unread-done-items) for the Tasks badge. This shell sits ABOVE the routed
@@ -144,6 +155,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mounts nothing below `md` or in remote, so neither the CSS-hidden column nor a hosted cockpit
   // ever pays for a sample it cannot show.
   const hostWidget = useMemo(() => <HostUsageWidget />, [])
+  const whatsNew = useMemo(() => <WhatsNewNavItem />, [])
   const projectGroups = useMemo(
     () =>
       projects ? (
@@ -157,6 +169,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           automationsAvailable={automationsAvailable}
           inboxCount={todos.data?.length ?? null}
           skillsUpdateAvailable={skillsUpdateAvailable}
+          newNavItems={newNavItems}
         />
       ) : undefined,
     [
@@ -165,9 +178,12 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       automationsAvailable,
       todos.data?.length,
       skillsUpdateAvailable,
+      newNavItems,
     ],
   )
-  const toolsMenu = useMemo(() => <ToolsMenu health={health.data} />, [health.data])
+  // The active project's forge, not the boot folder's (#1410) — feeds the flat nav and the note.
+  const activeForge = useActiveForge()
+  const toolsMenu = useMemo(() => <ToolsMenu health={health.data} forge={activeForge} />, [health.data, activeForge])
 
   return (
     // The viewed project's forge, for every reference chip under the shell (Step 5.10). Here
@@ -176,8 +192,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
     // own destabilizes the scope resolution the router does above it (`ForgeScopeContext`).
     <ReferenceForgeScope forge={forgeKind}>
       {/* The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
-          which renders in `children`. The provider goes here because this is the lowest node that
-          has both of them under it — the spec requires the two sets of tabs to be one filter. */}
+          which renders in `children`. The provider goes here because this is the lowest node that has
+          both of them under it — the spec requires the two sets of tabs to be one filter. */}
       <ListViewProvider>
         <AppShell
           repo={repo}
@@ -196,9 +212,10 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           // unread is 0, which AppShell also renders as no badge.
           unreadCount={runs.data ?? null}
           skillsUpdateAvailable={skillsUpdateAvailable}
+          newNavItems={newNavItems}
           // Shown whenever the remote is a recognized forge, like each project group's tab (#698);
           // a cold or failed probe is the GitHub page's to explain and retry (#1412).
-          forgeAvailable={health.data?.forge != null}
+          forgeAvailable={activeForge != null}
           // Same source as the title above — the viewed project's kind, read from the URL (`useForgeKind`).
           forgeKind={forgeKind}
           // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
@@ -208,6 +225,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           automationsAvailable={automationsAvailable}
           tracker={tracker}
           banner={banner}
+          whatsNew={whatsNew}
           footerBanner={footerBanner}
           singleProject={health.data?.capabilities.singleProject === true}
           taskQuickList={taskQuickList}
@@ -224,6 +242,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         <CommandPalette />
         {/* ⌘P, its task-scoped twin (spec 2026-10-17-task-palette). */}
         <TaskPalette />
+        {/* ⌥↑/⌥↓ walk the sidebar's tasks, ⌥⇧ the ones that need you — on every page. */}
+        <TaskSwitchShortcut />
       </ListViewProvider>
     </ReferenceForgeScope>
   )

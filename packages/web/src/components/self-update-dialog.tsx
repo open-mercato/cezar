@@ -147,7 +147,7 @@ export function SelfUpdateDialog({
             {data.scheduled ? (
               <div
                 data-slot="self-update-scheduled"
-                className="flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-[12.5px]"
+                className="flex items-center justify-between gap-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-label"
               >
                 <p className="min-w-0">
                   {brandName} switches to <span className="font-semibold">{targetName(data.scheduled.target)}</span> as soon
@@ -163,7 +163,7 @@ export function SelfUpdateDialog({
                 </Button>
               </div>
             ) : data.activeRuns > 0 && data.canSelfUpdate ? (
-              <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
+              <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-label text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
                 them; {brandName} re-queues or resumes them on the way back up.
                 {' '}The &ldquo;when idle&rdquo; buttons wait for them to finish instead.
@@ -171,7 +171,7 @@ export function SelfUpdateDialog({
             ) : null}
 
             {setChannel.error ? (
-              <p className="text-[12.5px] text-danger">
+              <p className="text-label text-danger">
                 Could not switch the channel: {setChannel.error.message}
                 {/* The cockpit is read from disk on every request, the server only at boot: a rebuilt
                     worktree can show a channel its still-running server has never heard of. */}
@@ -181,14 +181,14 @@ export function SelfUpdateDialog({
               </p>
             ) : null}
 
-            {apply.error ? <p className="text-[12.5px] text-danger">{apply.error.message}</p> : null}
-            {schedule.error ? <p className="text-[12.5px] text-danger">{schedule.error.message}</p> : null}
-            {cancelScheduled.error ? <p className="text-[12.5px] text-danger">{cancelScheduled.error.message}</p> : null}
+            {apply.error ? <p className="text-label text-danger">{apply.error.message}</p> : null}
+            {schedule.error ? <p className="text-label text-danger">{schedule.error.message}</p> : null}
+            {cancelScheduled.error ? <p className="text-label text-danger">{cancelScheduled.error.message}</p> : null}
 
             {data.job ? <JobPanel data={data} /> : null}
           </div>
         ) : status.error ? (
-          <p className="text-[13px] text-danger">{status.error.message}</p>
+          <p className="text-ui text-danger">{status.error.message}</p>
         ) : null}
       </DialogContent>
     </Dialog>
@@ -219,8 +219,8 @@ function ChannelToggle({
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
-        <div className="text-[13px] font-semibold">Release channel</div>
-        <div className="text-[12px] text-muted-foreground">
+        <div className="text-ui font-semibold">Release channel</div>
+        <div className="text-label text-muted-foreground">
           {CHANNEL_HINTS[data.channel]}
         </div>
       </div>
@@ -241,7 +241,7 @@ function ChannelToggle({
               disabled={busy}
               onClick={() => !active && onChange(channel.value)}
               className={cn(
-                'rounded-[5px] px-3 py-1 text-[12.5px] font-semibold transition-colors',
+                'rounded-[5px] px-3 py-1 text-label font-semibold transition-colors',
                 active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
               )}
             >
@@ -285,10 +285,10 @@ function LatestCard({
     // squeeze a one-row layout into a narrow word-per-line column.
     return (
       <div data-slot="self-update-latest" className="flex flex-col gap-2 rounded-md border border-border bg-card px-3 py-2.5">
-        <div className="min-w-0 text-[13px] break-words">
+        <div className="min-w-0 text-ui break-words">
           {dev?.source === 'link' ? (
             <>
-              Running worktree <span className="font-mono text-[12.5px] font-semibold">{dev.branch ?? dev.id}</span>, not
+              Running worktree <span className="font-mono text-label font-semibold">{dev.branch ?? dev.id}</span>, not
               a release.
             </>
           ) : dev?.source === 'local' ? (
@@ -304,7 +304,7 @@ function LatestCard({
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-          <div className="min-w-0 text-[11.5px] break-words text-muted-foreground">
+          <div className="min-w-0 text-meta break-words text-muted-foreground">
             {data.channel === 'development' ? (
               'Switch the channel back to Stable or Nightly to follow releases again.'
             ) : !data.checkedAt ? (
@@ -352,7 +352,7 @@ function LatestCard({
     >
       {/* A floor on the text so a third button wraps the row instead of squeezing a long nightly
           version into a word-per-line column. */}
-      <div className="min-w-[14rem] flex-1 text-[13px] break-words">
+      <div className="min-w-[14rem] flex-1 text-ui break-words">
         {!data.checkedAt ? (
           <span className="text-muted-foreground">The npm registry has not answered yet.</span>
         ) : target ? (
@@ -366,7 +366,7 @@ function LatestCard({
           </>
         )}
         {data.checkedAt ? (
-          <div className="text-[11.5px] text-muted-foreground">checked {new Date(data.checkedAt).toLocaleTimeString()}</div>
+          <div className="text-meta text-muted-foreground">checked {new Date(data.checkedAt).toLocaleTimeString()}</div>
         ) : null}
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -429,12 +429,12 @@ function VersionPicker({
   const selected = options.find((option) => option.value === picked)
   return (
     <div data-slot="self-update-picker" className="flex min-w-0 flex-col gap-2">
-      <div className="text-[13px] font-semibold">
+      <div className="text-ui font-semibold">
         Pick a version <span className="font-normal text-muted-foreground">· {data.channel}</span>
       </div>
       <div className="flex min-w-0 items-center gap-2">
         <Select value={picked} onValueChange={onPick} disabled={options.length === 0 || jobBusy}>
-          <SelectTrigger size="sm" aria-label="Version" className="w-0 min-w-0 flex-1 text-[13px]">
+          <SelectTrigger size="sm" aria-label="Version" className="w-0 min-w-0 flex-1 text-ui">
             <SelectValue placeholder={options.length === 0 ? 'No versions known' : 'Choose a version to install'} />
           </SelectTrigger>
           <SelectContent className="max-h-72">
@@ -469,7 +469,7 @@ function VersionPicker({
           {selected?.installed ? 'Switch & restart' : 'Install & restart'}
         </Button>
       </div>
-      <p className="text-[11.5px] text-muted-foreground">
+      <p className="text-meta text-muted-foreground">
         Any version, older ones included. Installed versions stay on disk, so switching back is instant.
       </p>
     </div>
@@ -493,10 +493,10 @@ function InstallHint({ data }: { data: SelfUpdateStatus }) {
         ? 'cezar install'
         : 'npx cezar-cli install'
   return (
-    <div data-slot="self-update-install-hint" className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-[12.5px]">
+    <div data-slot="self-update-install-hint" className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-label">
       <p>{data.reason}</p>
       <p className="mt-1.5 text-muted-foreground">Run this once, then start cezar with the plain command:</p>
-      <pre className="mt-1.5 overflow-x-auto rounded bg-background px-2 py-1.5 font-mono text-[12px]">{command}</pre>
+      <pre className="mt-1.5 overflow-x-auto rounded bg-background px-2 py-1.5 font-mono text-label">{command}</pre>
     </div>
   )
 }
@@ -550,7 +550,7 @@ function JobPanel({ data }: { data: SelfUpdateStatus }) {
 
   return (
     <div data-slot="self-update-job" className="flex min-w-0 flex-col gap-1.5">
-      <div className="flex items-center justify-between text-[12.5px]">
+      <div className="flex items-center justify-between text-label">
         <span className="font-semibold">
           {job.status === 'running'
             ? `Installing ${job.target}…`
@@ -565,11 +565,11 @@ function JobPanel({ data }: { data: SelfUpdateStatus }) {
       </div>
       <pre
         ref={logRef}
-        className="max-h-40 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-2 py-1.5 font-mono text-[11px] leading-[1.5] break-all whitespace-pre-wrap text-muted-foreground"
+        className="max-h-40 min-w-0 overflow-y-auto rounded-md border border-border bg-background px-2 py-1.5 font-mono text-meta leading-[1.5] break-all whitespace-pre-wrap text-muted-foreground"
       >
         {job.log.join('\n')}
       </pre>
-      {job.error ? <p className="text-[12.5px] text-danger">{job.error}</p> : null}
+      {job.error ? <p className="text-label text-danger">{job.error}</p> : null}
     </div>
   )
 }

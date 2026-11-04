@@ -39,11 +39,19 @@ describe('release workflows', () => {
     expect(checkout.with.ref).toBe('${{ github.ref_name }}');
   });
 
-  it('runs the backport job only for PRs that carry a backport label', () => {
+  it('backports from a scan in the repository context, so fork PRs are covered', () => {
     const wf = load('.github/workflows/backport.yml');
-    const condition = String(wf.jobs.backport.if);
-    expect(condition).toMatch(/contains\(join\(github\.event\.pull_request\.labels\.\*\.name/);
+    // A fork's PR event carries no secrets: merges (push) and the schedule must reach it instead.
+    expect(wf.on.push.branches).toEqual(['main']);
+    expect(wf.on.schedule).toHaveLength(1);
+    expect(wf.on.pull_request_target).toBeUndefined();
+    expect(String(wf.jobs.queue.if)).toMatch(/head\.repo\.full_name == github\.repository/);
+    expect(wf.concurrency['cancel-in-progress']).toBe(false);
+    // Only runs that scan share the group: a no-op run must not displace a waiting scan.
+    expect(String(wf.concurrency.group)).toMatch(/head\.repo\.full_name == github\.repository[\s\S]*'backport' \|\| format\('backport-noop-/);
     const action = steps(wf).find((s) => String(s.uses).startsWith('korthout/backport-action@'));
+    expect(action.with.source_pr_number).toBe('${{ matrix.pr }}');
+    expect(action.with.target_branches).toBe('${{ matrix.target }}');
     expect(String(action.with.copy_labels_pattern)).not.toMatch(/qa-approved/);
   });
 });

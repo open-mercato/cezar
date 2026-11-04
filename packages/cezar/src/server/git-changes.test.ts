@@ -67,6 +67,24 @@ describe('collectChanges — structured diff vs base', () => {
 
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
+  it('works for a project registered at a subdirectory of its repository (#581 follow-up)', async () => {
+    // A monorepo package is a legitimate project root: git must still discover the repository
+    // above it. The earlier Gemini branch pinned `GIT_CEILING_DIRECTORIES` to the parent of `cwd`
+    // for test isolation, which made every git call from such a root answer "not a git
+    // repository"; this pins the discovery so that cannot come back.
+    mkdirSync(join(dir, 'packages', 'app'), { recursive: true });
+    writeFileSync(join(dir, 'packages', 'app', 'index.ts'), 'export const v = 1;\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(dir, 'checkout', '-b', 'task');
+    writeFileSync(join(dir, 'packages', 'app', 'index.ts'), 'export const v = 2;\n');
+
+    const result = await collectChanges(join(dir, 'packages', 'app'), 'main');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.files.map((f) => f.path)).toEqual(['packages/app/index.ts']);
+  });
+
   it('reports modified, added, deleted, renamed and binary files with counts and patches', async () => {
     writeFileSync(join(dir, 'mod.txt'), 'line one\nline two\n');
     writeFileSync(join(dir, 'del.txt'), 'goes away\n');
@@ -673,6 +691,31 @@ describe('session git API routes', () => {
     const body = (await res.json()) as ChangesPayload;
     expect(body.files.map((file) => file.path)).toEqual(['reviewed.txt']);
     expect(body.repointedHead).toEqual({ headBranch: 'review/pr-42', taskBranch: 'task' });
+  });
+
+  it('runs without a worktree never serve ignored files from the real checkout', async () => {
+    const bare = store.createRun({ title: 'i', workflow: 'quick-task', task: 'i', worktree: false, steps: [] });
+    writeFileSync(join(repoRoot, '.gitignore'), '.env\nprivate/\n');
+    writeFileSync(join(repoRoot, '.env'), 'TOKEN=secret\n');
+    mkdirSync(join(repoRoot, 'private'), { recursive: true });
+    writeFileSync(join(repoRoot, 'private', 'endpoints.json'), '{"secret":"whsec_x"}\n');
+    writeFileSync(join(repoRoot, 'visible.txt'), 'ok\n');
+
+    for (const path of ['.env', 'private/endpoints.json', 'private', 'private/', './.env', 'private/absent.json']) {
+      const res = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=${encodeURIComponent(path)}`);
+      expect(res.status).toBe(409);
+      const body = await res.text();
+      expect(body).not.toContain('secret');
+      expect(body).toContain('not in the repository index');
+    }
+    const listing = await apiRequest(app, `/api/v1/runs/${bare.id}/files`);
+    expect(listing.status).toBe(200);
+    const names = ((await listing.json()) as { entries: Array<{ name: string }> }).entries.map((entry) => entry.name);
+    expect(names).toContain('visible.txt');
+    expect(names).not.toContain('.env');
+    expect(names).not.toContain('private');
+    const visible = await apiRequest(app, `/api/v1/runs/${bare.id}/files?path=visible.txt`);
+    expect(visible.status).toBe(200);
   });
 
   it('runs without a worktree read Changes, Files and Commits from the current checkout', async () => {

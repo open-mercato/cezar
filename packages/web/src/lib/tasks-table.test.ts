@@ -10,6 +10,7 @@ import {
   formatMem,
   ownedTaskPr,
   prNumber,
+  taskCellMinWidth,
   scheduledResume,
   taskReference,
   taskPrUrl,
@@ -856,5 +857,13 @@ describe('ownedTaskPr — the PR a task may ACT on', () => {
         ],
       }),
     ).toBeUndefined()
+  })
+})
+
+describe('taskCellMinWidth (#979)', () => {
+  it('gives the indent back on top of the root floor', () => {
+    expect(taskCellMinWidth(0)).toBe(220)
+    expect(taskCellMinWidth(1)).toBe(234)
+    expect(taskCellMinWidth(2)).toBe(248)
   })
 })

@@ -1,12 +1,12 @@
 import { randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, promises as fsp, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import { readFileWithRetry, renameSyncWithRetry } from '../fs-rename.ts';
+import { readFileWithRetry, renameSyncWithRetry, renameWithRetry } from '../fs-rename.ts';
 // Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
 // file must not `.catch` away are the same constants the PATCH route validates against, so they
 // are imported rather than repeated.
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH, perRunner } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } from '../paths.ts';
 
@@ -24,11 +24,11 @@ import { assertCezarHomeWriteIsSandboxed, isAbsolutePath, workspaceConfigPath } 
  * - a corrupt file degrades to in-memory defaults plus ONE warning line, and
  *   is left in place until the next successful merge-write replaces it. What
  *   makes that survivable is the `config.json.bak` snapshot below, which the
- *   load path restores from before degrading — NOT re-registration: since boot
- *   registration became seed-once (`shouldAutoRegisterProject`), opening a
- *   project no longer writes it back, so a registry lost with its snapshot is
- *   re-added with `cezar projects add <dir>` (or the cockpit's Add project),
- *   one gesture per project. Nothing inside any repo is ever at stake.
+ *   load path restores from before degrading. A normal serve launch can
+ *   re-register its eligible project; headless/non-serve callers retain the
+ *   seed-once `shouldAutoRegisterProject` rule, and any remaining roots can be
+ *   restored with `cezar projects add <dir>` (or the cockpit's Add project).
+ *   Nothing inside any repo is ever at stake.
  */
 
 /** `id` slug rule — mirrors the spec: `^[a-z0-9][a-z0-9-]{0,63}$`. */
@@ -151,16 +151,7 @@ const composerDefaultsSchema = z
 const agentDefaultsSchema = z
   .object({
     runner: z.enum(PROVIDER_IDS).optional().catch(undefined),
-    models: z
-      .object({
-        claude: z.string().trim().min(1).max(200).optional().catch(undefined),
-        codex: z.string().trim().min(1).max(200).optional().catch(undefined),
-        opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
-        cursor: z.string().trim().min(1).max(200).optional().catch(undefined),
-        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
-        junie: z.string().trim().min(1).max(200).optional().catch(undefined),
-        copilot: z.string().trim().min(1).max(200).optional().catch(undefined),
-      })
+    models: perRunner(z.string().trim().min(1).max(200).optional().catch(undefined))
       .passthrough()
       .optional()
       .catch(undefined),
@@ -248,6 +239,9 @@ const workspaceConfigSchema = z
       .catch(undefined),
     /** Last UTC day (YYYY-MM-DD) cezar checked in — what keeps the daily ping to one a day. */
     lastActiveOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().catch(undefined),
+    /** Global instructions: read by every agent step in every project, merged BEFORE the
+     *  project's own `systemPrompt`, which wins where they conflict (`resolveExtraSystemPrompt`). */
+    systemPrompt: z.string().trim().min(1).max(20_000).optional().catch(undefined),
     /** Global opt-in model policy. The native coding-agent model becomes
      * authoritative while runner choice remains available. */
     modelsLocked: z.boolean().optional().catch(undefined),
@@ -475,6 +469,44 @@ export function atomicWriteJsonSync(path: string, value: unknown): void {
   }
 }
 
+/** Async twin of {@link atomicWriteJsonSync} for files a request may be READING concurrently: the
+ *  sync retry blocks the event loop, so a reader's open handle — which is what makes a win32
+ *  rename fail EPERM — can never close until the budget is spent (telemetry 4a7c9f6c). */
+export async function atomicWriteJson(path: string, value: unknown): Promise<void> {
+  assertCezarHomeWriteIsSandboxed(path);
+  await fsp.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const tmp = atomicTmpPath(path);
+  try {
+    const handle = await fsp.open(tmp, 'w', 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8' });
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await renameWithRetry(tmp, path);
+  } catch (error) {
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+  await fsp.chmod(path, 0o600).catch(() => {});
+}
+
+const pathQueues = new Map<string, Promise<unknown>>();
+
+/** Runs `task` after every earlier one queued for `path` in this process has settled, so one
+ *  request's read-modify-write never reads the file while another's rename replaces it. */
+export function serializedByPath<T>(path: string, task: () => Promise<T>): Promise<T> {
+  const previous = pathQueues.get(path) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  const settled = next.catch(() => {});
+  pathQueues.set(path, settled);
+  void settled.then(() => {
+    if (pathQueues.get(path) === settled) pathQueues.delete(path);
+  });
+  return next;
+}
+
 /**
  * Read-modify-write merge: re-read the file, apply `mutator`, atomic-rename
  * write (`0600`, dir `0700`). Because every writer re-reads immediately before
@@ -499,20 +531,22 @@ export async function mergeWriteWorkspaceConfig(
   mutator: (config: WorkspaceConfig) => WorkspaceConfig | void,
 ): Promise<WorkspaceConfig> {
   const path = workspaceConfigPath();
-  const current = await readWorkspaceConfig(path, true);
-  const next = mutator(current) ?? current;
-  atomicWriteJsonSync(path, next);
-  // Refresh the snapshot after EVERY successful write, including an emptied
-  // registry (#731). Skipping the empty case left a stale non-empty backup:
-  // removing the last project, then losing config.json, resurrected the project
-  // the user had deliberately unregistered. An empty snapshot is not restored on
-  // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
-  // registry the user intended rather than the old projects.
-  try {
-    atomicWriteJsonSync(workspaceConfigBackupPath(path), next);
-  } catch {
-    // Best-effort: the registry itself is already safely on disk, and a
-    // failed snapshot must never turn a successful write into an error.
-  }
-  return next;
+  return serializedByPath(path, async () => {
+    const current = await readWorkspaceConfig(path, true);
+    const next = mutator(current) ?? current;
+    await atomicWriteJson(path, next);
+    // Refresh the snapshot after EVERY successful write, including an emptied
+    // registry (#731). Skipping the empty case left a stale non-empty backup:
+    // removing the last project, then losing config.json, resurrected the project
+    // the user had deliberately unregistered. An empty snapshot is not restored on
+    // load (see loadWorkspaceConfigBackup), so recovery now settles on the empty
+    // registry the user intended rather than the old projects.
+    try {
+      await atomicWriteJson(workspaceConfigBackupPath(path), next);
+    } catch {
+      // Best-effort: the registry itself is already safely on disk, and a
+      // failed snapshot must never turn a successful write into an error.
+    }
+    return next;
+  });
 }

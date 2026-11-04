@@ -49,12 +49,15 @@ const IMPORTS_HELPER = /from '(?:\.\.\/)*(?:\.\/)?(?:core\/)?gh-env\.ts'/;
 /** A forge driver spawns through `forge/cli.ts`'s runners, which apply `ghEnv` themselves (pinned below). */
 const FORGE_CLI = /^server\/forge\/[^/]+\.ts$/;
 const IMPORTS_FORGE_CLI = /from '\.\/cli\.ts'/;
+/** The shared project runner applies `ghEnv` to every command it spawns (`create-project.ts`,
+ *  which this guard checks itself), so a file whose `gh` calls go through it is covered too. */
+const USES_SHARED_RUNNER = /import \{[^}]*\bspawnCommandRunner\b[^}]*\} from '(?:\.\.?\/)+(?:server\/)?create-project\.ts'/;
 
 describe('every gh call site runs with ghEnv', () => {
   it('imports the helper in each file that spawns gh', () => {
     const offenders = sourceFiles(SRC)
       .map((path) => [path.slice(SRC.length + 1), readFileSync(path, 'utf8')] as const)
-      .filter(([name, text]) => GH_SPAWN.test(text) && !IMPORTS_HELPER.test(text))
+      .filter(([name, text]) => GH_SPAWN.test(text) && !IMPORTS_HELPER.test(text) && !USES_SHARED_RUNNER.test(text))
       .filter(([name, text]) => !(FORGE_CLI.test(name) && IMPORTS_FORGE_CLI.test(text)))
       .map(([name]) => name);
     expect(offenders).toEqual([]);

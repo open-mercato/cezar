@@ -109,6 +109,39 @@ export function injectPicker(html: string): string {
   return SCRIPT_TAG + html;
 }
 
+/**
+ * Lets the cockpit frame the mirror when the app forbids embedding (`X-Frame-Options: SAMEORIGIN`,
+ * `frame-ancestors 'self'` — Next.js apps commonly send both). Only the cockpit origin is added;
+ * the rest of the app's CSP is left exactly as sent.
+ */
+export function allowFramingBy(headers: Record<string, string | string[]>, parentOrigin: string): void {
+  const xfo = headers['x-frame-options'];
+  delete headers['x-frame-options'];
+  const csp = headers['content-security-policy'];
+  const policies = csp === undefined ? [] : Array.isArray(csp) ? csp : [csp];
+  if (!policies.some((policy) => /(^|;)\s*frame-ancestors(\s|;|$)/i.test(policy))) {
+    // `X-Frame-Options` was the only framing policy: dropping it bare would let ANY page frame the mirror.
+    if (xfo === undefined) return;
+    const self = String(xfo).trim().toUpperCase() === 'SAMEORIGIN' ? "'self' " : '';
+    headers['content-security-policy'] = [...policies, `frame-ancestors ${self}${parentOrigin}`];
+    return;
+  }
+  const rewrite = (policy: string): string =>
+    policy
+      .split(';')
+      .map((directive) => {
+        const [name, ...sources] = directive.trim().split(/\s+/);
+        if (name?.toLowerCase() !== 'frame-ancestors') return directive;
+        // `'none'` cannot be combined with a source, so it is replaced rather than extended.
+        const kept = sources.filter((source) => source.toLowerCase() !== "'none'");
+        const indent = /^\s*/.exec(directive)![0];
+        return `${indent}frame-ancestors ${[...kept, parentOrigin].join(' ')}`;
+      })
+      .join(';');
+  const rewritten = policies.map(rewrite);
+  headers['content-security-policy'] = Array.isArray(csp) ? rewritten : rewritten[0]!;
+}
+
 export class DesignProxies {
   private readonly entries = new Map<string, Entry>();
   private readonly idleMs: number;
@@ -277,6 +310,7 @@ export class DesignProxies {
           if (value === undefined || HOP_BY_HOP.has(name)) continue;
           answer[name] = value;
         }
+        allowFramingBy(answer, entry.parentOrigin);
         // A redirect to the app's own origin stays inside the proxy; one that leaves it, leaves.
         if (typeof answer.location === 'string' && answer.location.startsWith(entry.upstream.origin)) {
           answer.location = own + answer.location.slice(entry.upstream.origin.length);

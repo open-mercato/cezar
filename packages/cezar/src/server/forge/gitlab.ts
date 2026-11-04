@@ -34,6 +34,7 @@ import type {
   ForgeComment,
   ForgeCommentsData,
   ForgeDriver,
+  ForgeHeadChecksVerdict,
   ForgeItem,
   ForgeListData,
   ForgeListOptions,
@@ -758,6 +759,36 @@ function mockGitlabChecks(numbers: number[]): ForgeChecksData {
   return { available: true, checks };
 }
 
+/** The fields the wait-for-CI verdict reads off one MR detail: the head, whether it conflicts with
+ *  its target, and the head pipeline — whose own `sha` can trail the MR's by a push. */
+const glMrHeadSchema = z.object({
+  sha: z.string().optional(),
+  has_conflicts: z.boolean().optional(),
+  head_pipeline: z.object({ status: z.string(), sha: z.string().optional() }).nullish(),
+});
+
+/**
+ * GitLab's twin of `fetchPrHeadChecks` (#1533): the CI verdict for MR `iid` at exactly `sha`, read
+ * uncached from the MR detail, so the workflow engine's wait-for-CI node never answers for the
+ * MR's previous head. `stale` until the MR's head is `sha`; `conflict` when GitLab reports the MR
+ * conflicts with its target (no pipeline will judge it); a `head_pipeline` still built for an older
+ * commit is not this commit's verdict either, so that keeps polling as `unavailable`. Never throws.
+ */
+async function fetchGitlabMrHeadChecks(repoRoot: string, iid: number, sha: string): Promise<ForgeHeadChecksVerdict> {
+  try {
+    const out = await glab(repoRoot, ['api', `projects/:fullpath/merge_requests/${iid}`], MR_DETAIL_TIMEOUT_MS);
+    const mr = glMrHeadSchema.parse(JSON.parse(out));
+    if (!mr.sha) return { kind: 'unavailable' };
+    if (mr.sha.toLowerCase() !== sha.toLowerCase()) return { kind: 'stale', headOid: mr.sha };
+    if (mr.has_conflicts === true) return { kind: 'conflict' };
+    const pipelineSha = mr.head_pipeline?.sha;
+    if (pipelineSha && pipelineSha.toLowerCase() !== sha.toLowerCase()) return { kind: 'unavailable' };
+    return { kind: 'checks', glyph: pipelineGlyph(mr.head_pipeline?.status) };
+  } catch {
+    return { kind: 'unavailable' };
+  }
+}
+
 /**
  * Lazy CI glyphs for on-screen MR rows (Step 3.4, mirrors `fetchGithubChecks`). Numbers are
  * de-duplicated, validated and capped at `GH_CHECKS_MAX` — GitHub's own cap, reused as-is so the
@@ -1220,6 +1251,9 @@ export function createGitlabDriver(repoRoot: string, parsed: ParsedRemote): Forg
 
     // Lazy CI glyphs for on-screen MR rows (#664 parity) — byte-identical shape to GitHub's.
     listChecks: (numbers) => fetchGitlabChecks(repoRoot, numbers),
+
+    // The wait-for-CI node's verdict for one exact MR head (#1533 parity).
+    headChecks: (number, sha) => fetchGitlabMrHeadChecks(repoRoot, number, sha),
 
     // Bounded, read-only file changes for a merge request — forge-neutral caps (Step 3.5).
     prDiff: (number, opts) => fetchGitlabPrDiff(repoRoot, number, opts?.refresh),

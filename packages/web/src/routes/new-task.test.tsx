@@ -54,6 +54,7 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  runtimeId: '00000000-0000-4000-8000-000000000001',
   projects: [],
   bootProject: 'default',
   repoRoot: '/repo',
@@ -64,7 +65,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, webhooks: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -168,6 +169,7 @@ const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
   skillsAutoUpdate: null,
   effectiveSkillsAutoUpdate: true,
   orgSkillsRepos: [],
+  systemPrompt: null,
   composerDefaults: {
     autonomous: null,
     worktree: null,
@@ -218,6 +220,9 @@ function serve(overrides: {
   uiState?: Record<string, unknown>
   /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
+  /** Non-2xx catalog answers, or a request that never settles (`'pending'`). */
+  skillsStatus?: number | 'pending'
+  workflowsStatus?: number | 'pending'
   deferredPreview?: () => Promise<Response>
   createRun?: unknown
   /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
@@ -241,6 +246,8 @@ function serve(overrides: {
     repo: REPO,
     uiState: {},
     uiStateStatus: 200,
+    skillsStatus: 200 as number | 'pending',
+    workflowsStatus: 200 as number | 'pending',
     createRun: { id: 'r1' },
     createRunStatus: 201,
     launchKey: 'k-real',
@@ -267,13 +274,34 @@ function serve(overrides: {
           ? data.providerStatus()
           : json(data.providerStatus, data.providerStatusStatus)
       }
+      if (url === '/api/v1/models?runner=codex') {
+        return json({
+          runner: 'codex',
+          models: [{
+            id: 'gpt-future',
+            label: 'gpt-future',
+            description: 'Newest',
+            reasoningEfforts: [
+              { id: 'low', description: 'Faster' },
+              { id: 'high', description: 'More thorough' },
+            ],
+          }],
+          source: 'live',
+          stale: false,
+        })
+      }
       // One catalog per discovering runner — the composer reads the selected runner's, so a
       // single shared answer would let a codex-only fixture stand in for claude's picker.
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
-      if (url === '/api/v1/skills') return json(data.skills)
-      if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
+      if (url === '/api/v1/skills') {
+        if (data.skillsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.skills, data.skillsStatus)
+      }
+      if (url === '/api/v1/workflows' && method === 'GET') {
+        if (data.workflowsStatus === 'pending') return new Promise<never>(() => {})
+        return json(data.workflows, data.workflowsStatus)
+      }
       if (url === '/api/v1/repo') return json(data.repo)
       if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
       if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
@@ -371,12 +399,15 @@ describe('the hero surface', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Run mode' })).toBeNull()
   })
 
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the hero in the onboarding grammar: title, subtitle, a plain violet surface, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    // Spec 2026-10-26-first-run-onboarding § Composer: the page wears the onboarding palette and
+    // no background texture — the twinkles and the ghost code are gone.
+    expect(document.querySelector('[data-route="new"]')?.hasAttribute('data-onboarding')).toBe(true)
+    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
     // per-state cases live in "the run-mode note" below.
@@ -458,6 +489,40 @@ describe('picker data flows', () => {
     })
   })
 
+  it('shows effort only for a concrete discovered Codex model and posts an explicit choice', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]') as HTMLElement)
+    let options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
+
+    // Model auto has no discovered capability, so there is no effort picker yet.
+    expect(document.querySelector('[data-slot="effort-pill"]')).toBeNull()
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    let discovered: HTMLElement | undefined
+    await waitFor(() => {
+      discovered = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('gpt-future'))
+      expect(discovered).toBeDefined()
+    })
+    fireEvent.click(discovered as HTMLElement)
+    await waitFor(() => expect(document.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="effort-pill"]') as HTMLElement)
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('high')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'Think it through' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({
+      task: 'Think it through',
+      runner: 'codex',
+      model: 'gpt-future',
+      reasoningEffort: 'high',
+    })
+  })
+
   it('excludes disconnected providers from the runner choices even when health detects them', async () => {
     serve({ health: HEALTH_ALL, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -527,7 +592,7 @@ describe('picker data flows', () => {
 
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
-      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
+      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', reasoningEffort: null, variants: 1,
       worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
@@ -1039,7 +1104,7 @@ describe('submit', () => {
     // 404, not a 5xx: the query client never retries a 4xx (query-client.ts), so the query
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
-      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
+      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null, reasoningEffort: null,
       variants: 1, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
@@ -1052,6 +1117,42 @@ describe('submit', () => {
     const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')
     // The other prefs still persist — only the unknowable map is left alone.
     expect(put?.body).not.toHaveProperty('skillUsage')
+  })
+
+  // Telemetry 31eda062: a failed catalog fetch left `sourcesReady` false forever, so every
+  // Start answered "Still loading workflows and skills". 404s land errored at once (no retry).
+  it('a FAILED skills fetch still starts the drafted workflow — never "Still loading"', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve({ skillsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'fix-and-verify' })
+    expect(screen.queryByText(/Still loading workflows and skills/)).toBeNull()
+  })
+
+  it('a FAILED catalog keeps the drafted skill instead of swapping in quick-task', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ skillsStatus: 404, workflowsStatus: 404 })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Fix it' } })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(false))
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ task: 'Fix it', steps: [expect.objectContaining({ skill: 'om-fix' })] })
+  })
+
+  it('Start stays disabled while the catalog is still loading', async () => {
+    serve({ workflowsStatus: 'pending' })
+    renderNewTask()
+    await waitFor(() => expect(textarea().disabled).toBe(false))
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+
+    expect(screen.getByRole('button', { name: 'Start task' }).hasAttribute('disabled')).toBe(true)
   })
 
   it('a WORKFLOW source posts { workflow, task }', async () => {
@@ -1337,7 +1438,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true, terminal: false, designMode: false, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, webhooks: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
