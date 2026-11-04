@@ -282,12 +282,7 @@ export function useRunGitStep(run: ApiRun): RunGitStep {
     prUrl,
     prStatus,
     prConflicting: prEntry.conflicting,
-<<<<<<< HEAD
-    agentBlocked: agent.blockedBy ? (agent.reason ?? 'the agent cannot be reached') : undefined,
-=======
     agentBlocked: agentBlockedBy ? (agentReason ?? 'the agent cannot be reached') : undefined,
-    assessment: run.subject !== undefined,
->>>>>>> 7c367e3 (fix(web): keep closed-run provider gates optimistic while status loads (#719) (#1850))
   })
 
   // The step in flight, if any: its button shows a spinner and refuses a second click.

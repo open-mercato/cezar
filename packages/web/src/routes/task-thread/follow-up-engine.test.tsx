@@ -224,38 +224,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-<<<<<<< HEAD
     expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future' })
-=======
-    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' })
-  })
-
-  it('shows the persisted Codex effort without overriding it until the user picks a new value', async () => {
-    serve()
-    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
-
-    expect((await screen.findByLabelText('Effort')).textContent).toContain('high')
-    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-    await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({})
-  })
-
-  it('resets carried effort explicitly when the model changes', async () => {
-    serve()
-    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
-
-    // The model list comes with provider status, which Continue no longer waits for (#719).
-    const button = await screen.findByRole('button', { name: /continue/i })
-    await waitFor(() => expect(button.getAttribute('data-pending')).toBe('false'))
-    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Model' }))
-    const options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((option) => option.textContent?.includes('gpt-5.6-codex')) as HTMLElement)
-
-    expect((await screen.findByLabelText('Effort')).textContent).toContain('Codex default')
-    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-    await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ model: 'gpt-5.6-codex', reasoningEffort: '' })
->>>>>>> 7c367e3 (fix(web): keep closed-run provider gates optimistic while status loads (#719) (#1850))
   })
 
   it('shows a read-only native model while locked and still permits switching runners', async () => {
