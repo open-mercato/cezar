@@ -130,6 +130,9 @@ jobs:
         if: runner.os == 'Windows'
         run: npm test -- packages/cezar/src/webhooks --no-file-parallelism --testTimeout=180000 --hookTimeout=30000
 
+      - name: Verify test home isolation
+        run: npm test -- packages/cezar/src/workspace/home-safety --no-file-parallelism
+
       - name: Build application on macOS and Windows
         if: runner.os != 'Linux'
         run: npm run build
