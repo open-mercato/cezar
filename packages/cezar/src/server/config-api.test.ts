@@ -78,6 +78,7 @@ describe('the config API', () => {
       baseBranch: null,
       defaultRunner: 'claude',
       systemPrompt: null,
+      branchNaming: null,
       defaultModels: {},
       modelsLocked: false,
       maxParallel: 2,
@@ -85,6 +86,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -255,6 +264,7 @@ describe('the config API', () => {
       baseBranch: 'develop',
       defaultRunner: 'claude',
       systemPrompt: 'Be brief.',
+      branchNaming: null,
       defaultModels: { claude: 'opus' },
       modelsLocked: false,
       maxParallel: 5,
@@ -262,6 +272,14 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      landingBlocked: null,
+      requiredChecks: [],
+      defaultSkill: null,
+      askSkill: null,
+      teamSkills: true,
     });
   });
 
@@ -338,6 +356,54 @@ describe('liveTitleUpdates round-trip (task auto-naming spec)', () => {
   });
 });
 
+describe('branchNaming round-trip (spec 2026-10-11-branch-naming-instructions)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let app: Hono;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-configapi-branch-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const put = (body: unknown) =>
+    apiRequest(app, '/api/v1/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  const rawFile = () =>
+    JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
+
+  it('stores the instructions trimmed, answers them, and clears on null or ""', async () => {
+    const set = (await (await put({ branchNaming: '  start with feature/  ' })).json()) as Record<string, unknown>;
+    expect(set.branchNaming).toBe('start with feature/');
+    expect(rawFile().branchNaming).toBe('start with feature/');
+
+    const emptied = (await (await put({ branchNaming: '' })).json()) as Record<string, unknown>;
+    expect(emptied.branchNaming).toBeNull();
+    expect(rawFile().branchNaming).toBeUndefined();
+
+    await put({ branchNaming: 'x' });
+    const cleared = (await (await put({ branchNaming: null })).json()) as Record<string, unknown>;
+    expect(cleared.branchNaming).toBeNull();
+    expect(rawFile().branchNaming).toBeUndefined();
+  });
+
+  it('refuses instructions over the cap with the limit in the message', async () => {
+    const res = await put({ branchNaming: 'x'.repeat(4_001) });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('4000');
+  });
+});
+
 describe('reviewGate round-trip (optional review gate, #489)', () => {
   let repoRoot: string;
   let store: RunStore;
@@ -363,6 +429,41 @@ describe('reviewGate round-trip (optional review gate, #489)', () => {
     });
   const rawFile = () =>
     JSON.parse(readFileSync(join(repoRoot, '.ai/cezar', 'config.json'), 'utf8')) as Record<string, unknown>;
+
+  it('PUT round-trips the trunk-based keys and clears them on null (spec 2026-10-20-trunk-based-projects)', async () => {
+    const on = (await (await put({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    })).json()) as Record<string, unknown>;
+    expect(on).toMatchObject({
+      profile: 'trunk',
+      taskWorkspace: 'in-place',
+      landing: 'auto',
+      landingBlocked: null,
+      requiredChecks: ['node scripts/kb.ts validate'],
+      defaultSkill: 'ingest',
+      askSkill: 'ask',
+      teamSkills: false,
+    });
+    expect(rawFile().skillsRepos).toEqual([]);
+
+    const off = (await (await put({
+      profile: null,
+      taskWorkspace: null,
+      landing: null,
+      requiredChecks: null,
+      defaultSkill: '',
+      askSkill: null,
+      teamSkills: true,
+    })).json()) as Record<string, unknown>;
+    expect(off).toMatchObject({ profile: null, taskWorkspace: null, landing: null, requiredChecks: [], defaultSkill: null, teamSkills: true });
+    expect(Object.keys(rawFile()).sort()).toEqual([]);
+  });
 
   it('GET exposes reviewGate; PUT true/false/null round-trips and clears the raw key', async () => {
     // Default (no config key) is null — the CEZ_REVIEW_GATE env (OFF) decides.

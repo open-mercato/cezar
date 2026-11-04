@@ -1,5 +1,7 @@
 > **Updated 2026-09-19:** this is the single authoritative browsing and project-credential specification. The two 2026-09-19 connection/storage documents are non-normative redirects. This is a design contract, not a claim that these surfaces already exist on the base branch; implementation is maintained separately.
 
+> **Updated 2026-10-27:** connection records are encrypted and agents use mediated access; see the update sections at the end.
+
 # Browse Jira and Linear tasks alongside GitHub
 
 ## 📝 TLDR
@@ -663,3 +665,29 @@ or authorize a startup vendor probe.
   coverage and no boot-stream change; old consumers continue working.
 - Implement and verify §1/§2/§3/§9 declarations, association unknown-field preservation, and the
   narrowly scoped credential-record exception. This document is not evidence those fixes shipped.
+
+## 📝 Update (2026-10-27): encrypted connection records
+
+Supersedes the interim dotenv store above. Settings writes `<project-hash>.vault` records under
+`CEZ_HOME/tracker-connections/`, encrypted with the secrets vault's data key (spec 2026-10-10).
+On first read a valid legacy `.env` record migrates in place: connection ID and project
+association are preserved, and the plaintext is deleted only after encrypted readback succeeds. A
+non-secret `.migrated` marker survives removal, so stale plaintext from an older process is never
+re-accepted. With a read-only home or an unavailable key a valid legacy record stays readable
+unmigrated; ciphertext never falls back to plaintext. Both formats keep the 32 KiB bound. Older
+binaries cannot read migrated records. User-facing steps: docs/issue-trackers.md § Credential
+migration.
+
+## 📝 Update (2026-10-27): mediated agent access
+
+Replaces the event-automation credential forwarding exception: no agent environment receives
+Jira/Linear credentials. At launch and continuation the server writes the bound issue's context to
+`.ai/cezar/runs/<run>.tracker-context.json`; the agent refreshes it and performs writes through
+`cez tracker` → `GET`/`POST /api/v1/tracker/task`, authorized by a per-execution
+`CEZ_TRACKER_CAPABILITY` bound to one run, project and issue. Writes (comment, status transition)
+are the only vendor writes cezar performs, each opt-in per automation through
+`trackerTrigger.access.writes`, granted only in the cockpit editor, and idempotent by operation
+ID. Inherited capabilities are stripped from agent and check environments and redacted from
+transcripts. Definitions without `access` need review before they poll again. User-facing
+behavior: docs/issue-trackers.md § Tracker automation access. This is a capability boundary, not
+isolation from same-user processes.

@@ -28,7 +28,7 @@ export function Queue({
         <h2 id="dashboard-needs-you" tabIndex={-1} className={widgetHeading}>
           Needs you · {snapshot.counts.questions + snapshot.counts.reviews}
         </h2>
-        <p className="font-mono text-[11px] text-soft-foreground">
+        <p className="font-mono text-meta text-soft-foreground">
           {snapshot.counts.questions} questions · {snapshot.counts.reviews} reviews
         </p>
       </div>
@@ -75,7 +75,7 @@ function QueueSection({
       <h3
         ref={heading}
         tabIndex={-1}
-        className="border-b bg-card-2 px-4 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
+        className="border-b bg-card-2 px-4 py-2 eyebrow text-muted-foreground"
       >
         {group === 'questions' ? 'Questions' : 'Reviews'} · {initial.total}
       </h3>

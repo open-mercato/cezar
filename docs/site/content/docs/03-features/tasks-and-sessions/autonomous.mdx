@@ -1,0 +1,27 @@
+---
+title: "Run a task without stopping for questions"
+description: "Autonomous mode lets the agent work without waiting for answers."
+related:
+  links:
+    - architecture/run-lifecycle
+sources:
+  - label: "Implementation"
+    path: packages/cezar/src/workflows/run.ts
+    line: 7168
+    commit: 0355f9c9e46373c342dcb8a4d466df48e3f90d3e
+---
+Review the result and file changes when the task finishes.
+
+![The skills list next to the task composer](/images/skills-autonomous.png)
+
+## Where to find it
+
+New task → Autonomous
+
+## How to use it
+
+1. Describe the task and the result you want.
+2. Enable Autonomous and start the task.
+3. Review the final diff and result.
+
+> **Good to know**: Autonomous continues work on its own and skips the optional review gate. In a project with auto-land explicitly enabled, it can also save changes to the base branch. Default worktree tasks are not merged automatically.

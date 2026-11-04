@@ -8,7 +8,15 @@
 // `MOCK_CODEX_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // server stays deaf to stdin EOF (the CLI hang the EOF watchdog exists for)
 // and handles SIGTERM itself, exiting 143 rather than dying from the signal.
+import { appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+
+// The same fixture can stand in for the executable at provider-auth time.
+// `codex login status` is the only probe that precedes `codex app-server`.
+if (process.argv.slice(2).join(' ') === 'login status') {
+  process.stdout.write('Logged in using ChatGPT\n');
+  process.exit(0);
+}
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
@@ -79,7 +87,19 @@ function emitRecoveredTurn(turnId) {
   emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
 }
 
+// `MOCK_CODEX_RESUME_LOCKED=<n>|always`: refuse the first n `thread/resume`s (or all of them)
+// with codex's active-writer error, as when a previous app-server still owns the thread.
+let lockedResumes = 0;
+function resumeLocked() {
+  const locked = process.env.MOCK_CODEX_RESUME_LOCKED;
+  if (!locked) return false;
+  lockedResumes += 1;
+  return locked === 'always' || lockedResumes <= Number(locked);
+}
+
 const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
+const requestsFile = process.env.CEZ_MOCK_CODEX_REQUESTS_FILE;
+let heldTurnId;
 if (ignoreEof) {
   process.on('SIGTERM', () => process.exit(143));
   // Keep the event loop alive so EOF alone can never end the process.
@@ -93,6 +113,13 @@ rl.on('line', (line) => {
   } catch {
     return;
   }
+  if (requestsFile) {
+    try {
+      appendFileSync(requestsFile, `${JSON.stringify(msg)}\n`);
+    } catch {
+      // Test capture must never change the protocol behavior.
+    }
+  }
   if (msg.id === 'ask-1' && msg.result) {
     const answer = msg.result.answers?.library?.answers;
     const freeText = msg.result.answers?.first?.answers;
@@ -101,7 +128,7 @@ rl.on('line', (line) => {
       : { method: 'turn/failed', params: { turn: { id: 'turn_mock_1', status: 'failed' }, error: { message: 'bad answer' } } });
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
-  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
+  } else if (msg.method === 'thread/start' || msg.method === 'thread/resume' || msg.method === 'thread/fork') {
     const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
@@ -114,6 +141,11 @@ rl.on('line', (line) => {
     if (msg.method === 'thread/start') {
       emit({ method: 'thread/started', params: { thread: { id: 'th_mock_1' } } });
       emit({ id: msg.id, result: { thread: { id: 'th_mock_1' } } });
+    } else if (msg.method === 'thread/fork') {
+      emit({ id: msg.id, result: { thread: { id: `fork_of_${msg.params?.threadId ?? ''}` } } });
+    } else if (resumeLocked()) {
+      // Another live app-server still holds the thread's writer lock (codex-rs writer_lock.rs).
+      emit({ id: msg.id, error: { code: -32600, message: `thread ${msg.params?.threadId ?? ''} already has an active writer` } });
     } else if (process.env.MOCK_CODEX_REJECT_RESUME === '1') {
       emit({ id: msg.id, error: { code: -32603, message: `no rollout found for thread id ${msg.params?.threadId ?? ''}` } });
       rl.close();
@@ -131,6 +163,8 @@ rl.on('line', (line) => {
       return;
     }
     emit({ id: msg.id, result: {} });
+    // `mock:hold-turn` stays open until a follow-up steers it, so the session can end.
+    if (heldTurnId) emit({ method: 'turn/completed', params: { turn: { id: heldTurnId, status: 'completed' } } });
   } else if (msg.method === 'turn/start') {
     const turnText = msg.params?.input?.map?.((part) => part.text ?? '').join('\n') ?? '';
     turnSeq += 1;
@@ -186,11 +220,31 @@ rl.on('line', (line) => {
       emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: turnId, status: 'completed' } } });
       return;
     }
+    // Current app-servers report a failure as `turn/completed` + status `failed` (run 903d6df4).
+    if (turnText.includes('mock:chatgpt-model')) {
+      // The Responses API body Codex forwards verbatim for an API-only model (1350055f).
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: 'turn_mock_1', status: 'failed', error: { message: JSON.stringify({ type: 'error', status: 400, error: { type: 'invalid_request_error', message: "The 'gpt-5.1-codex' model is not supported when using Codex with a ChatGPT account." } }) } },
+      } });
+      return;
+    }
+    if (turnText.includes('mock:turn-completed-failed')) {
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: 'turn_mock_1', status: 'failed', error: { message: "The 'fable' model is not supported", codexErrorInfo: 'other' } },
+      } });
+      return;
+    }
     if (turnText.includes('mock:turn-failed')) {
       emit({ method: 'turn/failed', params: {
         turn: { id: 'turn_mock_1', status: 'failed' },
         error: { message: 'model unavailable' },
       } });
+      return;
+    }
+    if (turnText.includes('mock:hold-turn')) {
+      heldTurnId = turnId;
       return;
     }
     if (turnText.includes('mock:subagent-activity')) {

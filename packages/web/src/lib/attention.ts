@@ -63,8 +63,8 @@ function hasPendingPermission(_run: AttentionInput): boolean {
  * Still always false here, but now by DESIGN rather than for want of data. The "finished while
  * you weren't looking" question is answered by the read/unread channel (#unread-done-items):
  * `RunRecord.seenAt` + `isUnread()` in `lib/read-state.ts`. That signal is deliberately kept OFF
- * the status dot — the dot keeps saying done/failed, and unread rides its own trailing violet
- * marker (the approved "Option B") so status and "have I seen it" never collapse into one dot.
+ * the status dot — the dot keeps saying done/failed, and unread rides the title's weight, so
+ * status and "have I seen it" never collapse into one dot.
  * Routing unread through this `unseen` bucket would recolor the status dot violet, which is
  * exactly the conflation that design avoids, so the bucket stays reserved and unused.
  */
@@ -78,7 +78,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  optional (#490), so status-only callers keep working unchanged. */
 export type AttentionInput = Pick<
   RunRecord,
-  'status' | 'activity' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'waits'
+  'status' | 'activity' | 'fallbackEpisode' | 'autoResumeAt' | 'awaitingAnswerSince' | 'dispatch' | 'costUsd' | 'worktreeLifecycle' | 'waits'
 >
 
 export type BudgetStop = {
@@ -104,8 +104,8 @@ export function isAwaitingAnswer(run: Pick<RunRecord, 'status' | 'awaitingAnswer
 }
 
 /** The runs a "needs you" list keeps: waiting, in review, or awaiting an answer. */
-export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince'>): boolean {
-  return run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
+export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswerSince' | 'worktreeLifecycle'>): boolean {
+  return !!run.worktreeLifecycle?.needsAttention || run.status === 'waiting' || run.status === 'review' || isAwaitingAnswer(run)
 }
 
 /**
@@ -122,6 +122,9 @@ export function isNeedsYouStatus(run: Pick<RunRecord, 'status' | 'awaitingAnswer
  *  - `done`/`failed` → the green/red outcome, still.
  */
 export function deriveAttention(run: AttentionInput): Attention {
+  const lifecycle = run.worktreeLifecycle
+  if (lifecycle?.needsAttention) return {bucket: 'waiting', tone: 'pending', pulse: false, label: lifecycle.phase === 'setup' ? 'setup needs attention' : 'cleanup needs attention'}
+  if (lifecycle?.activeOperationId) return {bucket: 'running', tone: 'pending', pulse: true, label: lifecycle.phase === 'setup' ? 'preparing worktree' : 'cleaning up worktree'}
   if (hasPendingPermission(run)) {
     return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
   }
@@ -171,6 +174,9 @@ export function deriveAttention(run: AttentionInput): Attention {
   }
   if (isUnseen(run)) {
     return { bucket: 'unseen', tone: 'violet', pulse: false, label: 'unseen' }
+  }
+  if (run.status === 'queued' && run.fallbackEpisode?.pending) {
+    return { bucket: 'running', tone: 'violet', pulse: true, label: 'switching agent' }
   }
   if (run.status === 'queued') {
     return { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }

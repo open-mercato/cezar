@@ -34,6 +34,9 @@ export const agentConfigFileSchema = z.object({
   tracked: agentConfigTrackedSchema,
   seeded: z.boolean(),
   holdsMcp: z.boolean(),
+  /** cezar's own private, per-project file (`.ai/cezar/mcp.local.json`) — injected into every run
+   *  at launch, never committed. */
+  private: z.boolean(),
   /** VERBATIM from the vendor docs. Never computed, never generic. */
   precedence: z.string(),
   /** Documented mid-run reload behaviour, or absent when the vendor is silent. */

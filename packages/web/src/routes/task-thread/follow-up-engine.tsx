@@ -5,11 +5,14 @@ import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
-import type { ApiRun, ContinueResponse, AttachmentInput, Runner } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ContinueResponse, AttachmentEntry, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import {
   modelsForRunner,
   modelCatalogStatus,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
 } from '@/routes/new-task-form'
 import { useContinuationProvider } from './continuation-provider'
@@ -17,8 +20,8 @@ import { runActionFlags } from './run-actions'
 
 /** What the thread needs to offer Continue from its composer. */
 export interface ContinueAction {
-  /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the same gate the
-   *  header's Continue button uses.) Everything else is inert when this is false. */
+  /** Is there a session to reopen at all? (`runActionFlags.continueRun` — the one gate every
+   *  Continue entry point shares.) Everything else is inert when this is false. */
   available: boolean
   /** Whether provider discovery currently permits reopening the session. */
   canContinue: boolean
@@ -32,9 +35,10 @@ export interface ContinueAction {
    * Reopen the session, starting it on this prompt. An empty draft is the legacy one-click
    * Continue: the engine opens with its own "Continue.". REJECTS with the server's message
    * rather than toasting itself, so the composer can restore the draft it optimistically
-   * cleared — nothing the user typed is lost to a 409.
+   * cleared — nothing the user typed is lost to a 409. A retry passes the first attempt's
+   * `idempotencyKey`, so a Continue that already landed is not continued twice.
    */
-  continueWith: (text: string, images: AttachmentInput[]) => Promise<ContinueResponse>
+  continueWith: (text: string, images: AttachmentEntry[], idempotencyKey?: string) => Promise<ContinueResponse>
 }
 
 /**
@@ -55,6 +59,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   // untouched Continue behaves exactly as before this feature existed.
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
+  // `null` preserves the existing session's effort; `''` deliberately resets
+  // the resumed Codex turn to its native default.
+  const [pickedReasoningEffort, setPickedReasoningEffort] = useState<string | null>(null)
   const [pickedAccount, setPickedAccount] = useState<string | null>(null)
 
   const continuation = useContinuationProvider(run, pickedRunner)
@@ -75,6 +82,16 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const effectivePickedModel = modelsLocked ? null : pickedModel
   const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
   const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
+  const carriedReasoningEffort = !runnerChanged
+    ? [...run.steps].reverse().find((step) => step.sessionId)?.reasoningEffort ?? run.reasoningEffort
+    : undefined
+  const reasoningEfforts = reasoningEffortsForModel(runner, model, catalog.data)
+  const reasoningEffort = resolveReasoningEffort(
+    pickedReasoningEffort ?? carriedReasoningEffort ?? null,
+    runner,
+    model,
+    catalog.data,
+  )
 
   // Agent accounts (spec 2026-07-29-agent-profiles): rows of the RUNNER pill, exactly as the /new
   // composer offers them — `claude · Default` / `claude · Klaudiusz` / `codex`. Without them a
@@ -100,7 +117,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     : null
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: AttachmentInput[] }) => {
+    mutationFn: ({ text, images, idempotencyKey }: { text: string; images: AttachmentEntry[]; idempotencyKey?: string }) => {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }
@@ -114,10 +131,15 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
         model: !modelsLocked && pickedModel !== null ? model : undefined,
+        reasoningEffort:
+          !modelsLocked && runner === 'codex' && pickedReasoningEffort !== null
+            ? reasoningEffort
+            : undefined,
         // Only a login the user actually picked rides the request. Omitted, the run keeps the
         // account it is on — and the reopened session still resumes, which an explicit switch
         // deliberately does not (a session id lives inside ONE account's config dir).
         agentProfile: account ?? undefined,
+        idempotencyKey,
       })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
@@ -149,6 +171,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
               if (next !== runner) {
                 setPickedRunner(next)
                 setPickedModel(null)
+                setPickedReasoningEffort(null)
               }
             }}
           />
@@ -160,12 +183,26 @@ export function useContinueAction(run: ApiRun): ContinueAction {
           value={model}
           readOnly={modelsLocked}
           disabledHint="Model selection is locked to native coding-agent settings."
-          onPick={(next) => setPickedModel(next)}
+          onPick={(next) => {
+            setPickedModel(next)
+            // A model change invalidates the carried effort. Keep an explicit native-default
+            // pick so the label and the request agree instead of displaying an old level while
+            // the server silently clears it (#815 review).
+            setPickedReasoningEffort('')
+          }}
           options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
           status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
         />
+        <ReasoningEffortPill
+          runner={runner}
+          model={model}
+          value={reasoningEffort}
+          options={reasoningEfforts}
+          modelsLocked={modelsLocked}
+          onPick={setPickedReasoningEffort}
+        />
       </div>
     ),
-    continueWith: (text, images) => mutation.mutateAsync({ text, images }),
+    continueWith: (text, images, idempotencyKey) => mutation.mutateAsync({ text, images, idempotencyKey }),
   }
 }

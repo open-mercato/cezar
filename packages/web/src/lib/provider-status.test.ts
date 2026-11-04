@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatusResponse } from '@open-mercato/cezar-api-client'
 import {
+  RUNNER_ORDER,
   applyProviderStatusRow,
   mergeProviderStatusResponse,
   parseProviderStatusEventRow,
@@ -223,6 +225,15 @@ describe('parseProviderStatusResponse', () => {
     })
   })
 
+  // The server answers with one row per runner; a runner the parser does not know fails the
+  // whole response, which shows every provider as "Could not verify".
+  it('accepts a row for every runner in the contract, in the cockpit order', () => {
+    expect([...RUNNER_ORDER].sort()).toEqual([...RUNNER_IDS].sort())
+    const providers = RUNNER_ORDER.map((provider) => ({ provider, status: 'connected', enabled: true }))
+    expect(parseProviderStatusResponse({ providers: [...providers].reverse() })).toEqual({ providers })
+    expect(usableRunners({ providers } as ProviderStatusResponse)).toEqual(RUNNER_ORDER)
+  })
+
   it.each([
     ['an empty object', {}],
     ['a null providers value', { providers: null }],
@@ -334,6 +345,19 @@ describe('usableRunners', () => {
     }
 
     expect(usableRunners(status)).toEqual(['junie'])
+  })
+
+  it('allows enabled Antigravity when unknown — its `agy models` probe needs the network', () => {
+    // The live failure: a network blip left agy `unknown`, and Continue fell back to claude.
+    const status: ProviderStatusResponse = {
+      providers: [
+        { provider: 'claude', status: 'connected', enabled: true },
+        { provider: 'antigravity', status: 'unknown', enabled: true },
+      ],
+    }
+
+    expect(usableRunners(status)).toEqual(['claude', 'antigravity'])
+    expect(usableRunners({ providers: [{ provider: 'antigravity', status: 'disconnected', enabled: true }] })).toEqual([])
   })
 
   it('still excludes disabled or not-installed Junie', () => {

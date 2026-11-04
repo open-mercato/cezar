@@ -1,5 +1,7 @@
 import { z } from 'zod';
+import { stepSecretsSchema } from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
+import { workflowGraphSchema } from './graph.ts';
 
 /**
  * A workflow is an ordered list of steps. Two step kinds:
@@ -29,6 +31,8 @@ export const workflowStepSchema = z
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
+    /** Per-step Codex reasoning level; values are discovered from the selected model. */
+    reasoningEffort: z.string().trim().min(1).max(64).optional(),
     /** Per-step agent backend override (falls back to the task / config default).
      *
      *  Deliberately NOT widened to the legacy `claude-cli` the way the run store's
@@ -56,9 +60,17 @@ export const workflowStepSchema = z
         retryOn: z.array(z.number().int().positive()).optional(),
       })
       .optional(),
+    /** Check steps only (spec 2026-10-10-project-secrets-vault-options): which project or
+     *  workspace secrets reach this command, by name, each optionally renamed with `as`.
+     *  Omitted means every secret whose audiences include `checks`. Refused on an agent step at
+     *  load time — the one place YAML could try to route a secret to a backend. */
+    secrets: stepSecretsSchema.optional(),
   })
   .refine((s) => Boolean(s.command) !== Boolean(s.prompt ?? s.skill), {
     message: 'a step is either an agent step (prompt/skill) or a check step (command), not both',
+  })
+  .refine((s) => !s.secrets || Boolean(s.command), {
+    message: 'secrets: is for check steps only — an agent step never receives a secret',
   });
 
 /**
@@ -91,6 +103,10 @@ export const workflowDefSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   steps: z.array(workflowStepSchema),
+  /** A `version: 2` graph workflow (spec 2026-09-30-workflow-node-editor). When present the
+   *  executor walks the graph; `steps` is then derived from its agent/check nodes
+   *  (`graphToSteps`) so every step-reading path keeps working. Absent on v1 workflows. */
+  graph: workflowGraphSchema.optional(),
   source: z.enum(['built-in', 'file']),
   path: z.string().optional(),
 });
@@ -133,7 +149,7 @@ export function skillStackOf(steps: WorkflowStepDef[]): string[] | null {
     if (stepKind(s) !== 'agent' || !s.skill) return null;
     if (s.prompt !== undefined && s.prompt !== '{{task}}') return null;
     if (s.name !== undefined && s.name !== s.skill) return null;
-    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.onFail) return null;
+    if (s.model || s.reasoningEffort || s.runner || s.allowedTools || s.bashAllowlist || s.onFail) return null;
     skills.push(s.skill);
   }
   return skills.length ? skills : null;

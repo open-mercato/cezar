@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChildEnv, looksSecret } from './agent-env.ts';
+import { BACKEND_ALLOW_PREFIXES, buildChildEnv, isClaudeBackend, looksSecret } from './agent-env.ts';
 
 /**
  * #427: the spawned backend must NOT inherit the full host environment. It
@@ -238,9 +238,9 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     GOOGLE_CLOUD_PROJECT: 'my-project',
   };
 
-  it('CLAUDE_CODE_USE_BEDROCK=1 forwards the toggle AND the AWS creds it needs', () => {
+  it.each(['claude', 'claude-cli'] as const)('%s forwards the Bedrock toggle AND the AWS creds it needs', backend => {
     const env = buildChildEnv({
-      backend: 'claude',
+      backend,
       source: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', ...AWS },
     });
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBe('1');
@@ -260,9 +260,9 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
   });
 
-  it('CLAUDE_CODE_USE_VERTEX=1 forwards the GCP config it needs, but not AWS', () => {
+  it.each(['claude', 'claude-cli'] as const)('%s forwards the Vertex GCP config it needs, but not AWS', backend => {
     const env = buildChildEnv({
-      backend: 'claude',
+      backend,
       source: { PATH: '/usr/bin', CLAUDE_CODE_USE_VERTEX: 'true', ...GCP, ...AWS },
     });
     expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/home/dev/gcp.json');
@@ -272,13 +272,35 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined(); // vertex ≠ bedrock
   });
 
-  it('a backend that never sees the toggle never gets the creds either', () => {
-    const env = buildChildEnv({
-      backend: 'codex',
-      source: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', ...AWS },
-    });
-    expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
-    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  it('a non-Claude allowlist containing CLAUDE_ cannot unlock Bedrock or Vertex creds', () => {
+    const original = BACKEND_ALLOW_PREFIXES.codex;
+    BACKEND_ALLOW_PREFIXES.codex = [...original, 'CLAUDE_'];
+    try {
+      const bedrock = buildChildEnv({
+        backend: 'codex',
+        source: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', ...AWS },
+      });
+      const vertex = buildChildEnv({
+        backend: 'codex',
+        source: { PATH: '/usr/bin', CLAUDE_CODE_USE_VERTEX: '1', ...GCP },
+      });
+      expect(bedrock.CLAUDE_CODE_USE_BEDROCK).toBe('1');
+      expect(bedrock.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(vertex.CLAUDE_CODE_USE_VERTEX).toBe('1');
+      expect(vertex.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+      expect(vertex.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    } finally {
+      BACKEND_ALLOW_PREFIXES.codex = original;
+    }
+  });
+
+  it('uses backend identity rather than a CLAUDE_ allowlist prefix for cloud unlocks', () => {
+    // A future non-Claude runner may add CLAUDE_-prefixed settings to its own
+    // allowlist. That must not make it eligible for these credentials.
+    expect(isClaudeBackend('codex')).toBe(false);
+    expect(isClaudeBackend('opencode')).toBe(false);
+    expect(isClaudeBackend('claude')).toBe(true);
+    expect(isClaudeBackend('claude-cli')).toBe(true);
   });
 });
 
@@ -348,4 +370,62 @@ it.each(['claude', 'codex', 'opencode'] as const)('does not forward tracker cred
   } });
   expect(env.JIRA_API_TOKEN).toBeUndefined();
   expect(env.LINEAR_API_KEY).toBeUndefined();
+});
+
+it.each(['0', '1', 'true', 'yes'])('drops inherited tracker capabilities but admits an explicitly issued launch grant (FULL=%s)', full => {
+  const source = { CEZ_AGENT_ENV_FULL: full, PATH: '/usr/bin', NORMAL_HOST_SETTING: 'preserved-in-full', CEZ_TRACKER_CAPABILITY: 'parent-grant', cez_tracker_capability: 'mixed-case-parent', CEZ_API_URL: 'http://127.0.0.1:3456' };
+  const unbound = buildChildEnv({ backend: 'codex', source });
+  expect(unbound.CEZ_TRACKER_CAPABILITY).toBeUndefined();
+  expect(unbound.cez_tracker_capability).toBeUndefined();
+  expect(unbound.CEZ_API_URL).toBe(source.CEZ_API_URL);
+  expect(unbound.PATH).toBe(source.PATH);
+  if (full !== '0') expect(unbound.NORMAL_HOST_SETTING).toBe(source.NORMAL_HOST_SETTING);
+  const bound = buildChildEnv({ backend: 'codex', source, extraEnv: { CEZ_TRACKER_CAPABILITY: 'new-launch-grant' } });
+  expect(bound.CEZ_TRACKER_CAPABILITY).toBe('new-launch-grant');
+  expect(bound.cez_tracker_capability).toBeUndefined();
+  expect(source.CEZ_TRACKER_CAPABILITY).toBe('parent-grant');
+});
+
+describe('buildChildEnv — gemini (#581)', () => {
+  const HOST: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin',
+    HOME: '/home/dev',
+    GEMINI_API_KEY: 'AIza-gemini',
+    GEMINI_MODEL: 'gemini-3-flash-preview',
+    GOOGLE_API_KEY: 'AIza-google',
+    GOOGLE_CLOUD_PROJECT: 'proj',
+    GOOGLE_CLOUD_LOCATION: 'us-central1',
+    GOOGLE_APPLICATION_CREDENTIALS: '/home/dev/sa.json',
+    GOOGLE_CLOUD_QUOTA_PROJECT: 'other',
+    ANTHROPIC_API_KEY: 'sk-ant',
+    OPENAI_API_KEY: 'sk-openai',
+  };
+
+  it('forwards the GEMINI_ family and the exact Google names Gemini CLI reads — nothing wider', () => {
+    const env = buildChildEnv({ backend: 'gemini', source: HOST });
+    expect(env.GEMINI_API_KEY).toBe('AIza-gemini');
+    expect(env.GEMINI_MODEL).toBe('gemini-3-flash-preview');
+    expect(env.GOOGLE_API_KEY).toBe('AIza-google');
+    expect(env.GOOGLE_CLOUD_PROJECT).toBe('proj');
+    expect(env.GOOGLE_CLOUD_LOCATION).toBe('us-central1');
+    expect(env.GOOGLE_CLOUD_QUOTA_PROJECT).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it('forwards the service-account file only while Gemini’s own Vertex selector is on', () => {
+    expect(buildChildEnv({ backend: 'gemini', source: HOST }).GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+    const vertex = buildChildEnv({ backend: 'gemini', source: { ...HOST, GOOGLE_GENAI_USE_VERTEXAI: 'true' } });
+    expect(vertex.GOOGLE_GENAI_USE_VERTEXAI).toBe('true');
+    expect(vertex.GOOGLE_APPLICATION_CREDENTIALS).toBe('/home/dev/sa.json');
+  });
+
+  it('gives no other backend Gemini’s Google names', () => {
+    for (const backend of ['claude', 'codex', 'cursor', 'pi'] as const) {
+      const env = buildChildEnv({ backend, source: { ...HOST, GOOGLE_GENAI_USE_VERTEXAI: 'true' } });
+      expect(env.GOOGLE_API_KEY).toBeUndefined();
+      expect(env.GOOGLE_GENAI_USE_VERTEXAI).toBeUndefined();
+      expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+    }
+  });
 });

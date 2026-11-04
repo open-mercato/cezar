@@ -130,6 +130,29 @@ describe('a waiter parks as an awaiting monitor (cross-task waits, step 6)', () 
     expect(notes(waiter.id).some((n) => n.startsWith('autonomous — continuing'))).toBe(false);
   }, 40_000);
 
+  // The monitoring liveness bound (upstream #810 follow-up) hands a park-mode monitor to the user
+  // after 4× the idle timeout. An `awaiting` park is bounded by its edges' own mandatory deadline
+  // (24 h by default), so the liveness hand-off must never arm on it — it would strand a pending
+  // edge on a `waiting` run long before the target could settle.
+  it('a park-mode awaiting waiter arms no liveness hand-off; a plain park-mode watcher does (guard)', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({
+        initial: { maxParallel: 2, maxMonitoringSessions: 0, monitoringWakeIntervalMinutes: null },
+      }),
+    });
+    const liveness = (id: string) =>
+      (manager as unknown as { active: Map<string, { monitoringLivenessTimer?: NodeJS.Timeout }> }).active.get(id)
+        ?.monitoringLivenessTimer;
+    const waiter = start('mock:pause wait for the API task');
+    store.updateRun(waiter.id, { waits: [edge()] });
+    const watcher = start('mock:monitoring watch CI');
+    await waitFor(waiter.id, (r) => r?.activity === 'monitoring');
+    await waitFor(watcher.id, (r) => r?.activity === 'monitoring');
+    expect(liveness(waiter.id)).toBeUndefined();
+    expect(liveness(watcher.id)).toBeDefined();
+  }, 40_000);
+
   it('a resolved edge does not park the run (guard)', async () => {
     const waiter = start('mock:pause nothing pending');
     store.updateRun(waiter.id, { waits: [edge('settled')] });

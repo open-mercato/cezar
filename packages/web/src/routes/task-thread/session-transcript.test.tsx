@@ -167,6 +167,11 @@ describe('transcript adapters and row building', () => {
       expect(sections[2]?.completedAt).toBe('2026-07-31T08:05:12.000Z')
     })
 
+    it('opens an attachment-only task with its attachments (telemetry 18c930de)', () => {
+      const sections = mainTranscriptSections(run({ task: '', taskImages: ['/task.png'] }), { turns: [] } as unknown as ThreadState)
+      expect(sections[0]?.userMessage).toMatchObject({ text: '', images: ['/task.png'] })
+    })
+
     it('leaves an unstamped turn and an attributed agent section without a clock', () => {
       const sections = mainTranscriptSections(run({ task: '' }), {
         turns: [{ id: 'turn-1', userMessage: { text: 'Follow up', imageCount: 0, images: [] }, items: [] }],

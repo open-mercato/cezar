@@ -229,7 +229,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                 Across your workspace · Includes subtasks
                 <span
                   data-export-exclude
-                  className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.1em]"
+                  className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 eyebrow"
                 >
                   <StatusDot tone={live.connected ? 'success' : 'neutral'} pulse={live.connected} />
                   {live.connected ? 'Live' : 'Offline'}
@@ -424,7 +424,7 @@ function DashboardView({ entryKey }: { entryKey: string }) {
                                 className="min-h-24 p-4 text-left transition-colors hover:bg-muted/40 focus-visible:outline-ring"
                                 onClick={(e) => open(group, e.currentTarget)}
                               >
-                                <span className="block font-mono text-[11px] uppercase tracking-[0.12em] text-muted-foreground">
+                                <span className="block eyebrow text-muted-foreground">
                                   {label}
                                 </span>
                                 <span className="mt-3 block text-3xl font-semibold leading-none tracking-tight tabular-nums">

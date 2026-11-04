@@ -7,13 +7,30 @@
  * The agent emits this as a `CEZ:ASK <compact-json>` control marker (a sibling
  * of `CEZ:DONE` / `CEZ:MONITORING`), parsed on the assembled turn text in
  * `src/workflows/run.ts` — uniform across claude, codex and opencode with no
- * per-backend mapper work. The shape is modeled 1:1 on Claude Code's built-in
- * `AskUserQuestion` (1–4 questions, 2–4 options each, `header` ≤12 chars,
- * unique question texts and unique option labels) so a native bridge can map
- * onto it later. A free-text "Other" is always available via the composer, so
- * it is never an explicit option.
+ * per-backend mapper work. The shape is modeled on Claude Code's built-in
+ * `AskUserQuestion` (`header` ≤12 chars, unique question texts and unique
+ * option labels) so a native bridge can map onto it later. A free-text "Other"
+ * is always available via the composer, so it is never an explicit option.
  */
 import { z } from 'zod';
+
+/**
+ * How many questions one card may carry, and how many options one question may
+ * offer. Finite for payload size and for a card that stays scrollable — NOT for
+ * parity with `AskUserQuestion`'s 1–4 / 2–4. That parity was the only reason
+ * the bounds used to be 4 and 4, and it cost a real run its question: an agent
+ * with five decisions for the user had the whole payload refused and its
+ * questions rendered as raw JSON. `CEZ:ASK` is cezar's own marker, rendered by
+ * cezar's own cockpit, and both the `ask.requested` event types and the ask
+ * card already handle any count.
+ *
+ * Declared here as the single source of truth: a second copy of either number
+ * elsewhere is a bound that silently fails to move (`codexAskQuestions` kept
+ * one). A bridge onto a backend with narrower native limits clamps at that
+ * bridge, never by narrowing the schema back.
+ */
+export const ASK_MAX_QUESTIONS = 20;
+export const ASK_MAX_OPTIONS = 10;
 
 export const askOptionSchema = z
   .object({
@@ -32,7 +49,7 @@ export const askQuestionSchema = z
     options: z
       .array(askOptionSchema)
       .min(2)
-      .max(4)
+      .max(ASK_MAX_OPTIONS)
       .refine((opts) => new Set(opts.map((o) => o.label)).size === opts.length, {
         message: 'option labels must be unique within a question',
       }),
@@ -45,7 +62,7 @@ export const askRequestSchema = z
     questions: z
       .array(askQuestionSchema)
       .min(1)
-      .max(4)
+      .max(ASK_MAX_QUESTIONS)
       .refine((qs) => new Set(qs.map((q) => q.question)).size === qs.length, {
         message: 'question texts must be unique',
       }),

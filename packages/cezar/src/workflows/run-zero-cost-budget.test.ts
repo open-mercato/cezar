@@ -10,7 +10,6 @@ import { remainingBudgetUsd } from '../dispatch/engine.ts';
 it('retains the child reservation after preliminary zero and failure before final cost', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cez-zero-incomplete-'));
   vi.stubEnv('CEZ_HOME', join(dir, 'home'));
-  vi.stubEnv('CEZ_AUTONAME', '0');
   vi.stubEnv('CEZ_FOLLOWUPS', '0');
   const store = RunStore.open(join(dir, '.ai/cezar'));
   const bin = join(dir, 'stub.mjs');
@@ -19,7 +18,8 @@ import {createServer} from 'node:http';
 let stream;
 const server=createServer((req,res)=>{
 req.resume();
-if(req.url==='/event'){stream=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}
+if(req.url==='/api/info'){res.writeHead(404);res.end('{}');}
+else if(req.url==='/event'){stream=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}
 else if(req.url==='/session'){res.end(JSON.stringify({id:'s'}));}
 else if(req.url.endsWith('/abort')){res.end('{}');}
 else {
