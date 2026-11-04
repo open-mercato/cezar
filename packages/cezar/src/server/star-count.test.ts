@@ -236,8 +236,9 @@ describe('star count — rate-limit pacing', () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('refreshes on the ten-second cadence the cockpit polls at', () => {
-    expect(STAR_CACHE_TTL_MS).toBe(10_000);
+  it('asks github.com at most once per fifteen minutes, failures included', () => {
+    expect(STAR_CACHE_TTL_MS).toBe(15 * 60_000);
+    expect(STAR_FAILURE_BACKOFF_MS).toBe(STAR_CACHE_TTL_MS);
   });
 
   it('spreads the remaining hourly budget evenly to the reset', () => {
@@ -271,18 +272,18 @@ describe('star count — rate-limit pacing', () => {
   it('slows an unauthenticated reader to its budget instead of spending it into a 403', async () => {
     let clock = 0;
     const fetchImpl = stubFetch([
-      withHeaders(200, { 'x-ratelimit-remaining': '60', 'x-ratelimit-reset': '3600' }, { stargazers_count: 1 }),
+      withHeaders(200, { 'x-ratelimit-remaining': '2', 'x-ratelimit-reset': '3600' }, { stargazers_count: 1 }),
       ok({ stargazers_count: 2 }),
     ]);
     const r = new StarCountReader({ fetchImpl, cachePath, env: {}, now: () => clock });
 
     await expect(r.read()).resolves.toMatchObject({ count: 1 });
-    // Past the 10 s TTL but inside the paced minute: the held number, no request.
+    // Past the TTL but inside the paced half hour: the held number, no request.
     clock += STAR_CACHE_TTL_MS + 1;
     await expect(r.read()).resolves.toMatchObject({ count: 1 });
     expect(fetchImpl.calls).toBe(1);
 
-    clock = 60_000;
+    clock = 1_800_000;
     await expect(r.read()).resolves.toMatchObject({ count: 2 });
     expect(fetchImpl.calls).toBe(2);
   });
@@ -291,7 +292,7 @@ describe('star count — rate-limit pacing', () => {
     let clock = 0;
     const fetchImpl = stubFetch([
       ok({ stargazers_count: 5 }),
-      withHeaders(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '600' }),
+      withHeaders(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '3600' }),
       ok({ stargazers_count: 6 }),
     ]);
     const r = new StarCountReader({ fetchImpl, cachePath, env: {}, now: () => clock });
@@ -301,11 +302,11 @@ describe('star count — rate-limit pacing', () => {
     await expect(r.read()).resolves.toMatchObject({ available: true, count: 5 });
     expect(fetchImpl.calls).toBe(2);
 
-    clock = 599_000;
+    clock = 3_599_000;
     await expect(r.read()).resolves.toMatchObject({ count: 5 });
     expect(fetchImpl.calls).toBe(2);
 
-    clock = 600_000 + STAR_CACHE_TTL_MS;
+    clock = 3_600_000;
     await expect(r.read()).resolves.toMatchObject({ count: 6 });
     expect(fetchImpl.calls).toBe(3);
   });
