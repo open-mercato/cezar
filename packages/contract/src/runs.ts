@@ -22,6 +22,8 @@ export type WorkspaceEventsQuery = z.infer<typeof workspaceEventsQuerySchema>;
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
+// Same direction again: the waits family owns the edge shape (spec 2026-10-05-cross-task-waits).
+import { waitEdgeSchema, waitedBySchema } from './waits.ts';
 import { trackerAssociationSchema, trackerAutomationEventSchema } from './tracker.ts';
 
 /**
@@ -280,6 +282,14 @@ export const runRecordSchema = z.object({
    * always has.
    */
   dispatch: dispatchSchema.optional(),
+  /**
+   * The tasks this run waits for (spec `.ai/specs/2026-10-05-cross-task-waits.md`): pending edges
+   * park it without a slot until the engine wakes it; resolved ones stay as its timeline. Absent on
+   * every run that never waited.
+   */
+  waits: z.array(waitEdgeSchema).optional(),
+  /** On a task another task CREATED in this project and waits for (Phase 2): that creator. */
+  waitedBy: waitedBySchema.optional(),
   /** What this run assessed (spec 2026-10-22-html-artifacts-and-impact, Q10). Absent on every
    *  ordinary task. */
   subject: runSubjectSchema.optional(),

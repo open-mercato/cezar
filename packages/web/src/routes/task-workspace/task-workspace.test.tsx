@@ -87,6 +87,7 @@ const health = (terminal: boolean): HealthResponse => ({
     automations: false,
     webhooks: false,
     dispatch: false,
+    taskWaits: false,
   },
 })
 

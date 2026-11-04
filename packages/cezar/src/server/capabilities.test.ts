@@ -237,6 +237,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       automations: true,
       webhooks: false,
       dispatch: true,
+      taskWaits: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -368,6 +369,25 @@ describe('resolveCapabilities — usage presentation', () => {
   });
 });
 
+describe('resolveCapabilities — taskWaits (spec 2026-10-05-cross-task-waits)', () => {
+  it('is ON by default', () => {
+    expect(resolveCapabilities({}).taskWaits).toBe(true);
+  });
+
+  it('is off with CEZ_TASK_WAITS=0', () => {
+    expect(resolveCapabilities({ CEZ_TASK_WAITS: '0' }).taskWaits).toBe(false);
+  });
+
+  it.each(['1', 'true', '', 'off'])('stays on for CEZ_TASK_WAITS=%j — only an exact "0" turns it off', (value) => {
+    expect(resolveCapabilities({ CEZ_TASK_WAITS: value }).taskWaits).toBe(true);
+  });
+
+  it('is independent of dispatch', () => {
+    expect(resolveCapabilities({ CEZ_DISPATCH: '0' }).taskWaits).toBe(true);
+    expect(resolveCapabilities({ CEZ_TASK_WAITS: '0' }).dispatch).toBe(true);
+  });
+});
+
 describe('resolveCapabilities — lifecycle webhooks', () => {
   it.each([undefined, '', '0', 'true', 'yes'])('is off unless explicitly opted in (%s)', value => {
     expect(resolveCapabilities({ CEZ_WEBHOOKS: value, CEZ_WORKFLOW_WEBHOOKS: '1' }).webhooks).toBe(false);
@@ -389,7 +409,7 @@ describe('webhook platform availability', () => {
         expect(capabilities.webhooks).toBe(supported && flag === '1');
         expect(capabilities).toEqual({
           localHandoff: true, terminal: true, designMode: true, followups: false, singleProject: false, automations: true,
-          dispatch: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          dispatch: true, taskWaits: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
           webhooks: supported && flag === '1',
           ...(supported ? {} : { webhooksUnavailableReason: 'unsupported_platform' }),
         });

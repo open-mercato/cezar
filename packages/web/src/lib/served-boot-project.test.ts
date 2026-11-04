@@ -25,6 +25,7 @@ const HEALTH: HealthResponse = {
     automations: false,
     webhooks: false,
     dispatch: false,
+    taskWaits: false,
   },
 }
 

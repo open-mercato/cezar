@@ -9,6 +9,7 @@ import {
   CircleStopIcon,
   CopyIcon,
   FolderMinusIcon,
+  HourglassIcon,
   EllipsisIcon,
   EllipsisVerticalIcon,
   MailIcon,
@@ -40,6 +41,7 @@ import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
+import { CreatedByLine, TaskWaitsLine, WaitForTaskDialog, useTaskWaitsAvailable } from '@/components/task-waits'
 import { Button } from '@/components/ui/button'
 import { IconTooltip } from '@/components/ui/icon-tooltip'
 import {
@@ -167,6 +169,11 @@ function RunHeaderView({
   // The Session tab's composer carries Continue (its send button) and ■ Stop, so the header only
   // repeats them on the tabs that have no composer of their own to hold them.
   const composerOwnsRunControls = tab === 'session'
+  // "Wait for task…" (spec 2026-10-05-cross-task-waits): offered on a live task — the engine
+  // refuses a queued or settled waiter anyway — and only while the server has waits on.
+  const waitsAvailable = useTaskWaitsAvailable()
+  const canWait = waitsAvailable && (run.status === 'running' || run.status === 'waiting')
+  const [waitDialogOpen, setWaitDialogOpen] = useState(false)
 
   // The phone-width meta disclosure (#765). The map is the state — a re-render bump rather than a
   // mirrored `useState` — so switching runs reads that run's own answer instead of the last one's.
@@ -245,7 +252,12 @@ function RunHeaderView({
               </Button>
               {/* The git step and the phone menu share ONE `useRunGitStep` — the desktop button and the
                   menu's first item are the same step, the same mutation, the same commit dialog. */}
-              <GitStepAndKebab run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
+              <GitStepAndKebab
+                run={run}
+                actions={actions}
+                showRunControls={!composerOwnsRunControls}
+                onWaitFor={canWait ? () => setWaitDialogOpen(true) : undefined}
+              />
             </span>
           </div>
 
@@ -274,6 +286,18 @@ function RunHeaderView({
                   <TaskItemActions run={run} actions={actions} showRunControls={!composerOwnsRunControls} />
                   {/* Terminal is folded into the Open in… menu to save room. */}
                   <OpenInMenuForRun run={run} canResume={canTerminal} onResume={() => actions.terminal.mutate()} />
+                  {canWait ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      data-slot="wait-for-task"
+                      title="Park this task until another task — here or in another project — settles"
+                      onClick={() => setWaitDialogOpen(true)}
+                    >
+                      <HourglassIcon aria-hidden="true" />
+                      Wait for…
+                    </Button>
+                  ) : null}
                 </div>
               }
               continuationEngine={continuationEngine}
@@ -293,6 +317,10 @@ function RunHeaderView({
               are what the run IS doing right now, not metadata about how it started. */}
           <DispatchParentLine run={run} />
           <DispatchChildrenLine run={run} />
+          {/* Cross-task waits: what this task is parked on, and who created it to wait for it. */}
+          <TaskWaitsLine run={run} />
+          <CreatedByLine run={run} />
+          {canWait ? <WaitForTaskDialog run={run} open={waitDialogOpen} onOpenChange={setWaitDialogOpen} /> : null}
 
           <div
             data-slot="run-tabs"
@@ -1263,10 +1291,13 @@ function GitStepAndKebab({
   run,
   actions,
   showRunControls,
+  onWaitFor,
 }: {
   run: ApiRun
   actions: RunActions
   showRunControls: boolean
+  /** "Wait for task…" — present only when the run may wait (live, capability on). */
+  onWaitFor?: () => void
 }) {
   const git = useRunGitStep(run)
   return (
@@ -1275,7 +1306,7 @@ function GitStepAndKebab({
       <span className="hidden md:contents">
         <GitActions action={git.action} pending={git.pending} onAction={git.onAction} />
       </span>
-      <ActionsKebab run={run} actions={actions} git={git} showRunControls={showRunControls} />
+      <ActionsKebab run={run} actions={actions} git={git} showRunControls={showRunControls} onWaitFor={onWaitFor} />
       {git.dialogs}
     </>
   )
@@ -1292,11 +1323,14 @@ function ActionsKebab({
   actions,
   git,
   showRunControls,
+  onWaitFor,
 }: {
   run: ApiRun
   actions: RunActions
   git: RunGitStep
   showRunControls: boolean
+  /** "Wait for task…" — present only when the run may wait (live, capability on). */
+  onWaitFor?: () => void
 }) {
   const canTerminal = useCanOpenTerminal(run)
   const commands = buildTaskCommands(
@@ -1378,6 +1412,11 @@ function ActionsKebab({
             {KEBAB_LABELS[command.id] ?? command.label}
           </DropdownMenuItem>
         ))}
+        {onWaitFor ? (
+          <DropdownMenuItem data-slot="wait-for-task-item" onSelect={onWaitFor}>
+            <HourglassIcon aria-hidden="true" /> Wait for task…
+          </DropdownMenuItem>
+        ) : null}
         {canRemoveTaskWorktree(run) ? (
           <DropdownMenuItem disabled={actions.removeWorktree.isPending} onSelect={() => actions.setWorktreeRemovalOpen(true)}>
             <FolderMinusIcon aria-hidden="true" /> Remove worktree…

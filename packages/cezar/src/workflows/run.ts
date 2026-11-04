@@ -104,9 +104,9 @@ import { backstopRender } from '../impact/publish.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
-import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
+import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch, WaitEdge } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
-import { composeDispatchPrompt } from '../dispatch/prompts.ts';
+import { composeDispatchPrompt, waitsPrompt } from '../dispatch/prompts.ts';
 import {
   appendLedger,
   inboxDigest,
@@ -129,6 +129,7 @@ import {
   childrenOf,
   handoffSectionExcerpt,
   inFlightChildren,
+  pendingCreated,
   isTerminalStatus,
   pendingReportsBlock,
   remainingBudgetUsd,
@@ -1327,6 +1328,14 @@ export const VARIANT_HINTS: Record<string, string | undefined> = {
   C: 'Approach hint: prefer a thorough, structural approach.',
 };
 
+/**
+ * Why a run parked as a monitor (`activity: 'monitoring'`): `watching` — a plain `CEZ:MONITORING`,
+ * capped by `maxMonitoringSessions`; `spawned` — this turn dispatched children (spec
+ * 2026-09-10-dispatch A5); `awaiting` — the run holds pending wait edges on other tasks (spec
+ * 2026-10-05-cross-task-waits). The last two are slot-exempt outright (`busySlots`).
+ */
+export type MonitoringParkReason = 'watching' | 'spawned' | 'awaiting';
+
 const RESTART_CONTINUATION_PROMPT =
   'The cezar process restarted while you were working on this task. Read the handoff file (CEZ_HANDOFF_FILE) to recover context, then continue the task from where you left off.';
 
@@ -1413,21 +1422,25 @@ export class RunManager {
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
   /**
-   * The subset of `monitoring` parked because it SPAWNED children (spec
-   * 2026-09-10-dispatch A5), rather than because an agent asked to watch its own
-   * downstream work.
+   * The subset of `monitoring` whose park is EXEMPT from the slot count outright, with WHY:
    *
-   * These are exempt from the slot count OUTRIGHT — `maxMonitoringSessions` does not bound them
-   * (see `busySlots`), and it must not: a commander parks precisely so that its children can
-   * have its slot. Counting the third such parent as busy is what makes a tree whose tasks
-   * each dispatch children queue itself forever (`busySlots === maxParallel`, no exit), and
-   * starve every other project on the shared semaphore with it. A parked commander's process is
-   * idle; the runs it waits for are the ones that need the capacity.
+   *  - `spawned` — it dispatched children this turn (spec 2026-09-10-dispatch A5), rather than
+   *    asking to watch its own downstream work;
+   *  - `awaiting` — it holds pending wait edges on other tasks (spec
+   *    2026-10-05-cross-task-waits): parked until the engine wakes it with a target's outcome.
    *
-   * Invariant `unitParents ⊆ monitoring`, held by routing every add/delete through
-   * `enterMonitoring` / `leaveMonitoring` — nothing else writes either set.
+   * Exempt OUTRIGHT — `maxMonitoringSessions` does not bound them (see `busySlots`), and it must
+   * not: a commander parks precisely so that its children can have its slot, and a waiter parks
+   * so that the task it waits for can run. Counting the third such run as busy is what makes a
+   * tree whose tasks each dispatch children — or three tasks that each wait on another — queue
+   * themselves forever (`busySlots === maxParallel`, no exit), and starve every other project on
+   * the shared semaphore with them. A parked run's process is idle; the runs it waits for are the
+   * ones that need the capacity. A plain `watching` park is absent from this map and stays capped.
+   *
+   * Invariant `exemptParks ⊆ monitoring`, held by routing every add/delete through
+   * `enterMonitoring` / `leaveMonitoring` — nothing else writes either.
    */
-  private readonly unitParents = new Set<string>();
+  private readonly exemptParks = new Map<string, 'spawned' | 'awaiting'>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** The creation-time namer's branch answer per queued run (spec
    *  2026-10-11-branch-naming-instructions) — `execute` awaits it, bounded, before the fork. */
@@ -1658,7 +1671,7 @@ export class RunManager {
     // The monitoring subsets are cleared with `waiting`, whose subset they are: a disposed
     // manager holds no slots and must not keep claiming exemptions for runs it no longer owns.
     this.monitoring.clear();
-    this.unitParents.clear();
+    this.exemptParks.clear();
     this.starting.clear();
     this.cancelledStarting.clear();
     this.queue.length = 0;
@@ -1733,7 +1746,9 @@ export class RunManager {
     const dispatch = this.dispatchOf(runId);
     // The same ONE gate the dispatch prompt uses, so an agent is never told about a CLI whose
     // address it was not given (and never given an address it was not told about).
-    const apiUrl = this.dispatchReachable() ? process.env.CEZ_API_URL : undefined;
+    // Cross-task waits (spec 2026-10-05-cross-task-waits) reach the same routes through the same
+    // CLI, so either capability being reachable hands the agent the address.
+    const apiUrl = this.dispatchReachable() || this.waitsReachable() ? process.env.CEZ_API_URL : undefined;
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
@@ -2093,42 +2108,57 @@ export class RunManager {
     // but a spawned parent's children ARE those tasks, so bounding it makes the tree wait on
     // itself: three parents parked on their children is `busySlots === maxParallel` with no
     // exit, in this project and in every other one sharing the semaphore.
-    let spawnParked = 0;
-    for (const runId of this.unitParents) if (this.monitoring.has(runId)) spawnParked += 1;
-    const watchers = this.monitoring.size - spawnParked;
+    // A task parked on its own WAITS is exempt the same way and for the same reason (spec
+    // 2026-10-05-cross-task-waits): a waiter capped here can hold the slot its own target needs.
+    let exemptParked = 0;
+    for (const runId of this.exemptParks.keys()) if (this.monitoring.has(runId)) exemptParked += 1;
+    const watchers = this.monitoring.size - exemptParked;
     const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
-    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - exemptParked;
   }
 
   /**
-   * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
+   * Park a run in the monitoring set — the ONE entry, so `exemptParks ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
    *
-   * `spawnParked` says WHY it parked: `true` only when this turn dispatched children.
-   * A commander that parks again after some children reported is still waiting on the
-   * unfinished ones, so it stays slot-exempt while any direct child is in flight (#1697);
-   * once all have settled it is an ordinary watcher again. Re-evaluated on every park, never sticky.
+   * `reason` says WHY it parked: `spawned` when this turn dispatched children, `awaiting` when the
+   * run holds pending wait edges, `watching` for a plain `CEZ:MONITORING`. A commander that parks
+   * again on a plain `CEZ:MONITORING` after some children reported is still waiting on the
+   * unfinished ones, so it stays `spawned` (slot-exempt) while any direct child is in flight
+   * (#1697); once all have settled it is an ordinary watcher again. Re-evaluated on every park,
+   * never sticky.
    */
-  private enterMonitoring(runId: string, spawnParked: boolean): void {
+  private enterMonitoring(runId: string, reason: MonitoringParkReason): void {
     this.monitoring.add(runId);
-    if (spawnParked || this.hasInFlightChildren(runId)) this.unitParents.add(runId);
-    else this.unitParents.delete(runId);
+    const effective: MonitoringParkReason =
+      reason === 'watching' && this.hasInFlightChildren(runId) ? 'spawned' : reason;
+    if (effective === 'watching') this.exemptParks.delete(runId);
+    else this.exemptParks.set(runId, effective);
     const state = this.active.get(runId);
     if (state) this.armMonitoringLivenessTimer(runId, state);
   }
 
+  /** Why a monitoring run is parked — `undefined` when it is not parked as a monitor at all. */
+  private monitoringParkReason(runId: string): MonitoringParkReason | undefined {
+    if (!this.monitoring.has(runId)) return undefined;
+    return this.exemptParks.get(runId) ?? 'watching';
+  }
+
   /**
    * Leave the monitoring set — the ONE exit, and every transition out of the state goes through
-   * it: a child's report or a user message (`deliverMessage`), the next turn ending in anything
-   * but a park, a native `ask.requested`, the session's own teardown, `dropActive` (cancel,
-   * settle, restart recovery), and `parkMonitorAsWaiting` (the wake-up cap and the liveness
-   * timer). An ordinary wake-up is deliberately NOT one: its nudge is delivered into the same
-   * parked session and the turn it starts ends back here.
+   * it: a child's report, a wait's resolution (`deliverWaitNotice`) or a user message
+   * (`deliverMessage`), the next turn ending in anything but a park, a native `ask.requested`, the
+   * session's own teardown, `dropActive` (cancel, settle, restart recovery), and
+   * `parkMonitorAsWaiting` (the wake-up cap and the liveness timer). An ordinary wake-up is
+   * deliberately NOT one: its nudge is delivered into the same parked session and the turn it
+   * starts ends back here. An `awaiting` park arms neither a wake timer nor the liveness bound —
+   * its exits are the resolver's, every one engine-fired (settle, delete, removal, mandatory
+   * deadline).
    */
   private leaveMonitoring(runId: string): void {
     this.monitoring.delete(runId);
-    this.unitParents.delete(runId);
+    this.exemptParks.delete(runId);
     const state = this.active.get(runId);
     if (state) this.clearMonitoringLivenessTimer(state);
   }
@@ -2425,7 +2455,7 @@ export class RunManager {
       });
       // The third terminal transition outside `dropActive` (see `recover`): a queued run failing
       // here never became active, so its parent hears about it only from this call.
-      this.reportSettledChildToParent(run.id);
+      this.notifyRunSettled(run.id);
       return;
     }
     // Re-apply the inbox ceiling (#471). `execute()` gates again at spawn time, so the agent is
@@ -2557,7 +2587,7 @@ export class RunManager {
           });
           // Same as the settled branch below: this terminal transition never passes through
           // `dropActive`, so a handed-off child still owes its parent a report.
-          this.reportSettledChildToParent(run.id);
+          this.notifyRunSettled(run.id);
           continue;
         }
         for (const step of run.steps) {
@@ -2574,7 +2604,7 @@ export class RunManager {
         // PREVIOUS process and is in none of this one's registries. A settled child still owes
         // its parent a report (spec 2026-09-10-dispatch §Engine) — and a restart is precisely
         // the case the durable pending report exists for.
-        this.reportSettledChildToParent(run.id);
+        this.notifyRunSettled(run.id);
         continue;
       }
       // `running` with no agent session anywhere on the record: the process died while the run
@@ -2610,7 +2640,7 @@ export class RunManager {
       const resumed = this.continueRun(
         run.id,
         {
-          text: RESTART_CONTINUATION_PROMPT,
+          text: RESTART_CONTINUATION_PROMPT + this.restartWaitsNote(run.id),
         },
         true,
       );
@@ -2677,7 +2707,7 @@ export class RunManager {
     if (!this.cancelledStarting.delete(runId)) return false;
     this.starting.delete(runId);
     this.redeliverDeferred(runId, 'the run was cancelled');
-    this.reportSettledChildToParent(runId);
+    this.notifyRunSettled(runId);
     this.releaseSlot();
     return true;
   }
@@ -2754,7 +2784,7 @@ export class RunManager {
     // through this one method, and a parent parked on `monitoring` has no other way to learn that
     // the run it is waiting for has ended. BEFORE `releaseSlot`, so a parent that has to be
     // resumed through the queue is already queued when the pump sweeps.
-    this.reportSettledChildToParent(runId);
+    this.notifyRunSettled(runId);
     this.releaseSlot();
     if (landOnAccept) void this.finishReview(runId);
     // A run leaving the active registry is a terminal transition (done/review/
@@ -2966,10 +2996,16 @@ export class RunManager {
    * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
-    if (!this.dispatchReachable()) return;
+    const waits = this.waitsReachable();
+    if (!this.dispatchReachable()) {
+      // Waits on, dispatch off: the waits paragraph alone, without the create-elsewhere path
+      // (dispatch-class exposure — it rides dispatch's switch too).
+      if (waits) state.dispatchPrompt = waitsPrompt({ create: false, standalone: true });
+      return;
+    }
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
-    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent, waits);
   }
 
   /**
@@ -3041,6 +3077,91 @@ export class RunManager {
     if (kept.length === pending.length) return;
     const { pendingReports: _acked, ...rest } = dispatch;
     this.store.updateRun(runId, { dispatch: kept.length ? { ...rest, pendingReports: kept } : rest });
+  }
+
+  // ---- cross-task waits (spec 2026-10-05-cross-task-waits) -------------------------------------
+
+  /** Is the waits feature on at all? One read, like `dispatchEnabled`. */
+  private waitsEnabled(): boolean {
+    return resolveCapabilities().taskWaits;
+  }
+
+  /** Can a task REACH the wait routes? The `dispatchReachable` rule: the flag AND a cockpit. */
+  private waitsReachable(): boolean {
+    return this.waitsEnabled() && Boolean(process.env.CEZ_API_URL);
+  }
+
+  /** The run's pending wait edges — empty when the feature is off (`CEZ_TASK_WAITS=0` leaves
+   *  edges on the record inert) or the run waits for nothing. Re-read off the record every time:
+   *  the workspace resolver writes edges from outside this manager, mid-turn included. */
+  private pendingWaits(runId: string): WaitEdge[] {
+    if (!this.waitsEnabled()) return [];
+    return (this.store.getRun(runId)?.waits ?? []).filter((edge) => edge.state === 'pending');
+  }
+
+  /**
+   * Why this finished turn parks as a monitor, or `undefined` when it does not — for BOTH turn-end
+   * handlers, so the precedence cannot drift between them (AGENTS.md § "Find every construction
+   * site"). Pending wait edges win (`awaiting`): the edge is the wake source, and a waiter that
+   * ended its turn without a marker must park, not be nudged up to `MAX_AUTO_CONTINUES` times.
+   * Then a turn that dispatched children (`spawned`), then a plain `CEZ:MONITORING` (`watching`).
+   * The caller still applies `CEZ:DONE`, `CEZ:ASK` and the over-budget brake on top.
+   */
+  private turnParkReason(
+    runId: string,
+    turnText: string,
+    dispatchTurn: DispatchTurnResult,
+  ): MonitoringParkReason | undefined {
+    if (this.pendingWaits(runId).length > 0) return 'awaiting';
+    if (dispatchTurn.dispatched) return 'spawned';
+    if (endsWithMonitoringMarker(turnText)) return 'watching';
+    return undefined;
+  }
+
+  /**
+   * The note a restarted waiter's resumed turn carries: which tasks it is still waiting for, and
+   * that it should end its turn — its edges park it again and the engine wakes it. Empty when the
+   * run waits for nothing (or the feature is off), so the restart prompt is unchanged.
+   */
+  private restartWaitsNote(runId: string): string {
+    const pending = this.pendingWaits(runId);
+    if (pending.length === 0) return '';
+    const targets = pending.map((edge) => `"${edge.targetTitle}" (${edge.target.projectId}/${edge.target.runId.slice(0, 8)})`);
+    return ` You are still waiting for ${targets.join(', ')} — end your turn; cezar wakes you when ${pending.length === 1 ? 'it settles' : 'each one settles'}.`;
+  }
+
+  /**
+   * A run reached a terminal status — the ONE notification, called from every terminal transition
+   * (`dropActive` and the paths that never reach it: the queued cancel, the restart settles, an
+   * unrecoverable queued run, a cancelled start, and the agent-fallback exits). A run whose
+   * fallback is still choosing a successor is `queued`, not terminal, so it announces nothing. It tells a dispatch parent (`reportSettledChildToParent`) and
+   * announces the settle on the store's event bus, which is where the workspace wait resolver
+   * listens (spec 2026-10-05-cross-task-waits). An explicit event rather than a status filter on
+   * `'run'`: restart recovery writes a transient `failed` onto a run it is about to re-queue, and
+   * that write is not a settle.
+   */
+  private notifyRunSettled(runId: string): void {
+    this.reportSettledChildToParent(runId);
+    const status = this.store.getRun(runId)?.status;
+    if (status && isTerminalStatus(status)) this.store.notifySettled(runId);
+  }
+
+  /**
+   * Deliver a wait outcome (or a wait notice) into a waiter — the workspace resolver's one entry
+   * into this manager. The dispatch ladder, minus its last rung: an open session, else the
+   * still-queued prompt stack (a restarted or reopened waiter), else the starting-up buffer.
+   * A SETTLED waiter is not continued — its edges already resolved `waiter-ended`. Not
+   * user-authored: no bubble in the waiter's thread; the resolver writes its own note.
+   *
+   * A waiter parked on its own `CEZ:ASK` is woken like a dispatch parent is by a child's report
+   * (`reportSettledChildToParent` uses the same `deliverMessage`): the outcome is new information
+   * the question may depend on, and holding it back would leave the agent answering blind.
+   */
+  deliverWaitNotice(runId: string, text: string): boolean {
+    const blocks: PastedContent[] = [{ type: 'text', text }];
+    const state = this.active.get(runId);
+    if (state) state.monitoringWakeups = 0;
+    return this.deliverMessage(runId, blocks, false) || this.enqueueMessage(runId, blocks) !== null || this.deferMessage(runId, blocks);
   }
 
   /**
@@ -3265,7 +3386,9 @@ export class RunManager {
       return { refused };
     }
     const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
-    const inFlight = inFlightChildren(runs, parentId).length;
+    // Tasks this run created in OTHER projects and still waits for count too (spec
+    // 2026-10-05-cross-task-waits, Phase 2): one brake across both ways of starting work.
+    const inFlight = inFlightChildren(runs, parentId).length + (this.waitsEnabled() ? pendingCreated(parent).length : 0);
     if (inFlight + 1 > inFlightCap) {
       const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
       note(`dispatch refused — ${refused}`, 'danger');
@@ -3390,6 +3513,84 @@ export class RunManager {
   }
 
   /**
+   * The CREATOR's half of `cez task create --project` (spec 2026-10-05-cross-task-waits, Phase 2):
+   * may this run start one more task in another project, and with what budget? The dispatch
+   * brakes, applied unchanged — the in-flight cap counts dispatch children and pending created
+   * tasks alike, and a creator with a budget must name one (`--budget`), carved out of what it has
+   * left. Writes nothing; a refusal is noted on the creator's transcript, like a dispatch refusal.
+   */
+  reserveWaitCreate(creatorId: string, budget: number | undefined): { budgetUsd: number | undefined } | { refused: string } {
+    const creator = this.store.getRun(creatorId);
+    if (!creator) return { refused: `no such run: ${creatorId}` };
+    const note = (message: string) =>
+      this.store.appendEvent(creatorId, { type: 'note', stepId: this.active.get(creatorId)?.currentStepId, message, tone: 'danger' });
+    const runs = this.store.listRuns();
+    const intent = runs.find((r) => r.id === (creator.dispatch?.rootRunId ?? creator.id))?.dispatch?.intent;
+    const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
+    const inFlight = inFlightChildren(runs, creatorId).length + pendingCreated(creator).length;
+    if (inFlight + 1 > inFlightCap) {
+      const refused = `${inFlight} task${inFlight === 1 ? '' : 's'} already in flight under this one (dispatched children and tasks created in other projects); the cap is ${inFlightCap}. Wait for one to settle first.`;
+      note(`create refused — ${refused}`);
+      return { refused };
+    }
+    if (creator.dispatch?.budgetUsd !== undefined && budget === undefined) {
+      const refused = `this task has a budget (${usd(creator.dispatch.budgetUsd)}), so a task it creates elsewhere must name its own: add --budget <usd>, carved out of what is left.`;
+      note(`create refused — ${refused}`);
+      return { refused };
+    }
+    const carved = this.carveChildBudget(creator, runs, budget);
+    if ('refused' in carved) {
+      note(`create refused — ${carved.refused}`);
+      return carved;
+    }
+    return carved;
+  }
+
+  /**
+   * The TARGET project's half of `cez task create --project`: start an independent, autonomous
+   * ROOT task here — its own worktree off this project's base branch, its own review gate — that
+   * remembers who created it (`waitedBy`). Not a dispatch child: it merges nowhere but its own PR.
+   * A budget, when the creator carved one, becomes this run's own ceiling (the dispatch brake).
+   */
+  startWaitTarget(
+    input: { objective: string; title?: string; runner?: RunnerId; model?: string; scope?: string; success?: string },
+    creator: { projectId: string; runId: string; title: string },
+    budgetUsd: number | undefined,
+  ): RunRecord {
+    const title = input.title ?? input.objective.split('\n')[0]?.slice(0, 120) ?? 'created task';
+    const order = [
+      ...(input.scope ? [`- Scope: ${input.scope}`] : []),
+      ...(budgetUsd !== undefined ? [`- Max cost: ${usd(budgetUsd)}`] : []),
+      ...(input.success ? [`- Success criteria: ${input.success}`] : []),
+      `- Created by: task "${creator.title}" (${creator.projectId}/${creator.runId.slice(0, 8)}) in project ${creator.projectId}, which waits for this task to settle and then reads its outcome — status, branch, PR, cost and any \`cez task report\` you file.`,
+    ];
+    const workflow: WorkflowDef = {
+      name: '(planned)',
+      source: 'built-in',
+      steps: [{ id: 'task', name: title, prompt: '{{task}}' }],
+    };
+    const record = this.startRun(workflow, {
+      task: `${input.objective}\n\n## Task order\n${order.join('\n')}`,
+      ...(input.runner ? { runner: input.runner } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      autonomous: true,
+    });
+    this.store.updateRun(record.id, {
+      title,
+      waitedBy: { projectId: creator.projectId, runId: creator.runId },
+      // Always a dispatch ROOT of its own, budget or not: that is what lets it file the
+      // `cez task report` its order mentions (`recordReport` needs a `dispatch` record), and what
+      // carries a carved budget as its ceiling (the dispatch brake).
+      dispatch: { rootRunId: record.id, ...(budgetUsd !== undefined ? { budgetUsd } : {}) },
+    });
+    this.store.appendEvent(record.id, {
+      type: 'note',
+      message: `created by task "${creator.title}" (${creator.projectId}/${creator.runId.slice(0, 8)}), which waits for it${budgetUsd !== undefined ? ` — budget ${usd(budgetUsd)}` : ''}`,
+    });
+    return this.store.getRun(record.id) ?? record;
+  }
+
+  /**
    * Carve one child's ceiling out of what the parent has left. A parent with no ceiling of its
    * own carves nothing: the child inherits whatever cap it named, or none. A child that names no
    * cost under a capped parent gets the whole remainder — one child at a time, there is nobody
@@ -3400,7 +3601,7 @@ export class RunManager {
     runs: readonly RunRecord[],
     maxCost: number | undefined,
   ): { budgetUsd: number | undefined } | { refused: string } {
-    const remaining = remainingBudgetUsd(parent, childrenOf(runs, parent.id));
+    const remaining = remainingBudgetUsd(parent, childrenOf(runs, parent.id), this.waitsEnabled() ? parent.waits ?? [] : []);
     if (remaining === undefined) return { budgetUsd: maxCost };
     if (remaining <= 0) {
       return {
@@ -3719,7 +3920,7 @@ export class RunManager {
       .finally(() => {
         this.fallbackPending.delete(run.id);
         // No successor started (exhausted, superseded or failed): the held report goes out now.
-        if (!this.disposed) this.reportSettledChildToParent(run.id);
+        if (!this.disposed) this.notifyRunSettled(run.id);
       });
     return true;
   }
@@ -3851,7 +4052,7 @@ export class RunManager {
       message: 'automatic fallback was switched off before the next agent started — continue this task manually',
     });
     // A terminal transition outside `dropActive`: a dispatched child still owes its parent a report.
-    this.reportSettledChildToParent(runId);
+    this.notifyRunSettled(runId);
     return true;
   }
 
@@ -4499,7 +4700,7 @@ export class RunManager {
       // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
       // transition that misses the settle hook. Without this a parent waiting on a child the user
       // cancelled from the queue would wait for a report nobody would ever send.
-      this.reportSettledChildToParent(runId);
+      this.notifyRunSettled(runId);
       return true;
     }
     const state = this.active.get(runId);
@@ -4511,7 +4712,7 @@ export class RunManager {
           fallbackEpisode: { attempted: run.fallbackEpisode.attempted, done: true },
         });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while selecting a fallback agent' });
-        this.reportSettledChildToParent(runId);
+        this.notifyRunSettled(runId);
         return true;
       }
       // Dequeued but not yet registered: a continuation awaits its lifecycle gate first (#1495).
@@ -4600,7 +4801,7 @@ export class RunManager {
     state.releaseWorktree?.();
     state.releaseRepoRoot?.();
     this.active.delete(runId); this.starting.delete(runId); this.waiting.delete(runId);
-    this.monitoring.delete(runId); this.unitParents.delete(runId);
+    this.monitoring.delete(runId); this.exemptParks.delete(runId);
     this.store.updateRun(runId, {status: 'waiting', error: `Worktree scripts need attention${operationId ? ` (${operationId})` : ''}`});
     this.store.appendEvent(runId, {type: 'note', message: `Worktree preparation paused${operationId ? ` — operation ${operationId}` : ''}; use Worktrees settings to Retry, Start task anyway, or Cancel task.`});
     this.releaseSlot();
@@ -5607,12 +5808,11 @@ export class RunManager {
         // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
         // children, not on the user, and it has to surrender its slot to them. An over-budget run
         // parks `waiting` instead, whatever it asked for (Q6 ii).
-        const monitoring =
-          sessionOpen &&
-          !done &&
-          !ask &&
-          !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        // Pending wait edges park the run as a monitor whatever the turn said (spec
+        // 2026-10-05-cross-task-waits) — through the ONE helper both turn-end handlers call, and
+        // ahead of the autonomous nudge below, exactly as a dispatch park is.
+        const park = this.turnParkReason(runId, turnText, dispatchTurn);
+        const monitoring = sessionOpen && !done && !ask && !dispatchTurn.overBudget && park !== undefined;
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         // The twin of `runAgentStep`'s rule (#1282): a turn retires the question park an earlier
@@ -5666,7 +5866,7 @@ export class RunManager {
               this.store.updateStep(runId, stepId, { status: 'running' });
               // A park caused by this turn's own dispatch is slot-exempt outright — see
               // `enterMonitoring` and `busySlots`.
-              this.enterMonitoring(runId, dispatchTurn.dispatched);
+              this.enterMonitoring(runId, park ?? 'watching');
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
@@ -7835,12 +8035,11 @@ export class RunManager {
         // downstream is being blocked (#473).
         // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
-        const monitoring =
-          sessionOpen &&
-          !done &&
-          !ask &&
-          !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        // Pending wait edges park the run as a monitor whatever the turn said (spec
+        // 2026-10-05-cross-task-waits) — through the ONE helper both turn-end handlers call, and
+        // ahead of the autonomous nudge below, exactly as a dispatch park is.
+        const park = this.turnParkReason(runId, turnText, dispatchTurn);
+        const monitoring = sessionOpen && !done && !ask && !dispatchTurn.overBudget && park !== undefined;
         const parksWorkflow = !interactive && (ask !== null || monitoring);
         // A turn that does not park retires a park an earlier turn left standing. The park is
         // otherwise cleared only by `sendMessage`, and a parked session can wake without one:
@@ -7923,7 +8122,7 @@ export class RunManager {
             this.store.updateStep(runId, step.id, { status: 'running' });
             // The twin of `runContinuation`'s park: a spawn-caused park is slot-exempt outright
             // (`enterMonitoring` / `busySlots`), a plain `CEZ:MONITORING` one is capped.
-            this.enterMonitoring(runId, dispatchTurn.dispatched);
+            this.enterMonitoring(runId, park ?? 'watching');
             this.clearIdleTimer(state);
             this.armMonitoringWakeTimer(runId, state);
           } else {
@@ -9329,6 +9528,15 @@ export class RunManager {
 
   private armMonitoringWakeTimer(runId: string, state: ActiveRun): void {
     const minutes = this.semaphore.monitoringWakeIntervalMinutes();
+    // An `awaiting` park has its own, engine-owned wake source — the wait edge (spec
+    // 2026-10-05-cross-task-waits) — and periodic nudges are exactly the polling cost that
+    // feature removes. Every arm site funnels through here (both turn-end handlers and
+    // `reconcileMonitoringWakeTimers`), so the rule lives in one place.
+    if (this.monitoringParkReason(runId) === 'awaiting') {
+      this.clearMonitoringWakeTimer(state, runId);
+      this.clearMonitoringLivenessTimer(state);
+      return;
+    }
     if (minutes === null) {
       this.clearMonitoringWakeTimer(state, runId);
       // Reconcile can be reached on any pump, so arm only a park that has none — a pump must not
@@ -9417,6 +9625,11 @@ export class RunManager {
 
   private armMonitoringLivenessTimer(runId: string, state: ActiveRun, atCap = false): void {
     this.clearMonitoringLivenessTimer(state);
+    // An `awaiting` park is already bounded by its wait edges' mandatory deadline (spec
+    // 2026-10-05-cross-task-waits, 24 h by default): the resolver, not this timer, is its exit.
+    // Handing it to the user here would strand a pending edge on a `waiting` run long before the
+    // target it waits for could settle.
+    if (this.monitoringParkReason(runId) === 'awaiting') return;
     state.monitoringLivenessAtCap = atCap;
     // With a wake interval configured, a wake-up turn re-parks and resets this timer, so at the
     // interval's maximum (60m) the two would fire together and the liveness hand-off would win —

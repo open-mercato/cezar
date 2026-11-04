@@ -31,6 +31,7 @@ const health = (runtimeId: string) => ({
     automations: true,
     webhooks: false,
     dispatch: true,
+    taskWaits: true,
     tokenMetrics: true,
     tokenUsageMetrics: true,
     costMetrics: true,

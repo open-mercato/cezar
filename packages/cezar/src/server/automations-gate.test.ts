@@ -199,14 +199,19 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
     /** Boot on an ephemeral port, wait for `listening` to have run its warm-up, then close. */
     const boot = async (): Promise<void> => {
       const started = vi.spyOn(WorkspaceAutomationScheduler.prototype, 'start');
-      let listedResolve!: () => void;
-      const listed = new Promise<void>((resolve) => { listedResolve = resolve; });
+      // Other boot work lists projects too (the cross-task wait resolver's boot sweep), so "the
+      // first list finished" is not "the warm-up's list finished": count every list begun by the
+      // time `listening` has run, and wait for all of them. Otherwise the opted-out boot returns
+      // early and its warm-up chain reads CEZ_AUTOMATIONS after the suite has restored it.
+      let listsBegun = 0;
+      let listsDone = 0;
       const originalListProjects = projects.listProjects;
       vi.spyOn(projects, 'listProjects').mockImplementation(async (selector) => {
+        listsBegun += 1;
         try {
           return await originalListProjects(selector);
         } finally {
-          listedResolve();
+          listsDone += 1;
         }
       });
       const server = startServer(
@@ -218,7 +223,11 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
         // The warm-up chain is `listProjects().then(…)`. Wait for its observable list operation;
         // the default-on branch additionally waits for scheduler.start(), while the opt-out
         // branch must settle without ever starting it.
-        await listed;
+        const begun = listsBegun;
+        expect(begun).toBeGreaterThan(0);
+        await vi.waitFor(() => expect(listsDone).toBeGreaterThanOrEqual(begun), { timeout: 4000, interval: 10 });
+        // One more turn so the warm-up's `.then` after its list has run.
+        await new Promise((resolve) => setTimeout(resolve, 0));
         if (process.env.CEZ_AUTOMATIONS !== '0') {
           await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1), { timeout: 4000, interval: 10 });
         }
